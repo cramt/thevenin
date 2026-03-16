@@ -96,11 +96,11 @@ impl Mos6Model {
         Self {
             mos_type,
             vto: 0.0,
-            kc: 0.0,
-            nc: 2.0,
-            kv: 1.0,
-            nv: 1.0,
-            nvth: 0.0,
+            kc: 5e-5,
+            nc: 1.0,
+            kv: 2.0,
+            nv: 0.5,
+            nvth: 0.5,
             ps: 0.0,
             gamma: 0.0,
             gamma1: 0.0,
@@ -550,10 +550,11 @@ mod tests {
     fn test_default_mos6_model() {
         let m = Mos6Model::new(MosfetType::Nmos);
         assert_eq!(m.vto, 0.0);
-        assert_eq!(m.kc, 0.0);
-        assert_eq!(m.nc, 2.0);
-        assert_eq!(m.kv, 1.0);
-        assert_eq!(m.nv, 1.0);
+        assert_eq!(m.kc, 5e-5);
+        assert_eq!(m.nc, 1.0);
+        assert_eq!(m.kv, 2.0);
+        assert_eq!(m.nv, 0.5);
+        assert_eq!(m.nvth, 0.5);
         assert_eq!(m.lambda0, 0.0);
         assert_eq!(m.lambda1, 0.0);
         assert_eq!(m.gamma1, 0.0);

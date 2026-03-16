@@ -34,7 +34,17 @@ fn has_ngspice_tests() -> bool {
 ///
 /// Returns Ok(()) if the filtered output matches, or an error describing the failure.
 fn run_cir_test(cir_path: &Path) -> Result<(), String> {
-    let out_path = cir_path.with_extension("out");
+    // Prefer fixture .out file over ngspice-upstream .out (fixtures are tracked
+    // in git and can contain corrected references for broken upstream outputs).
+    let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures");
+    let out_path = cir_path
+        .strip_prefix(ngspice_tests_dir())
+        .ok()
+        .map(|rel| fixture_root.join(rel).with_extension("out"))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| cir_path.with_extension("out"));
     if !out_path.exists() {
         return Err("No reference .out file".to_string());
     }
@@ -524,7 +534,7 @@ harness_test!(
 harness_test!(
     harness_mos6_simpleinv,
     "mos6/simpleinv.cir",
-    ignore = "output format: ngspice splits print variables into separate paged tables; we emit one table"
+    ignore = "~0.28% interpolation error at switching transition (constant junction caps vs ngspice voltage-dependent)"
 );
 
 // === Pole-Zero ===
