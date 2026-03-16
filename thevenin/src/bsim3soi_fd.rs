@@ -1620,8 +1620,7 @@ pub fn bsim3soi_fd_companion(
 
         let t9_cl = t0 * t1;
         let vaclm = t9_cl * diff_vds;
-        let dvaclm_dvg = t0 * dt1_dvg * diff_vds - t9_cl * dvdseff_dvg
-            + t1 * diff_vds * dt0_dvg;
+        let dvaclm_dvg = t0 * dt1_dvg * diff_vds - t9_cl * dvdseff_dvg + t1 * diff_vds * dt0_dvg;
         let dvaclm_dvb = (dt0_dvb * t1 + t0 * dt1_dvb) * diff_vds - t9_cl * dvdseff_dvb;
         let dvaclm_dvd = t0 * dt1_dvd * diff_vds + t9_cl * (1.0 - dvdseff_dvd);
 
@@ -1635,8 +1634,7 @@ pub fn bsim3soi_fd_companion(
         let t8 = abulk * vdsat;
         let t0 = vgst2vtm * t8;
         let t1 = vgst2vtm + t8;
-        let dt0_dvg = vgst2vtm * abulk * dvdsat_dvg + t8
-            + vgst2vtm * vdsat * dabulk_dvg;
+        let dt0_dvg = vgst2vtm * abulk * dvdsat_dvg + t8 + vgst2vtm * vdsat * dabulk_dvg;
         let dt1_dvg = 1.0 + abulk * dvdsat_dvg + vdsat * dabulk_dvg;
         let dt1_dvb = dabulk_dvb * vdsat + abulk * dvdsat_dvb;
         let dt0_dvb = vgst2vtm * dt1_dvb;
@@ -1732,12 +1730,10 @@ pub fn bsim3soi_fd_companion(
     let dbeta_dvb = cox_wov_l * dueff_dvb + beta * dweff_dvb / weff_ch;
 
     // Derivatives of T0_ids = 1 - 0.5 * Abulk * Vdseff / Vgst2Vtm
-    let dt0_ids_dvg = -0.5
-        * (abulk * dvdseff_dvg - abulk * vdseff / vgst2vtm + vdseff * dabulk_dvg)
-        / vgst2vtm;
+    let dt0_ids_dvg =
+        -0.5 * (abulk * dvdseff_dvg - abulk * vdseff / vgst2vtm + vdseff * dabulk_dvg) / vgst2vtm;
     let dt0_ids_dvd = -0.5 * abulk * dvdseff_dvd / vgst2vtm;
-    let dt0_ids_dvb =
-        -0.5 * (abulk * dvdseff_dvb + dabulk_dvb * vdseff) / vgst2vtm;
+    let dt0_ids_dvb = -0.5 * (abulk * dvdseff_dvb + dabulk_dvb * vdseff) / vgst2vtm;
 
     // Derivatives of fgche1 = Vgsteff * T0_ids
     let dfgche1_dvg = vgsteff * dt0_ids_dvg + t0_ids;
@@ -1750,19 +1746,15 @@ pub fn bsim3soi_fd_companion(
     let dfgche2_dvb = (dvdseff_dvb - t9_fgche * desat_l_dvb) / esat_l;
 
     // Derivatives of gche = beta * fgche1 / fgche2
-    let dgche_dvg =
-        (beta * dfgche1_dvg + fgche1 * dbeta_dvg - gche * dfgche2_dvg) / fgche2;
-    let dgche_dvd =
-        (beta * dfgche1_dvd + fgche1 * dbeta_dvd - gche * dfgche2_dvd) / fgche2;
-    let dgche_dvb =
-        (beta * dfgche1_dvb + fgche1 * dbeta_dvb - gche * dfgche2_dvb) / fgche2;
+    let dgche_dvg = (beta * dfgche1_dvg + fgche1 * dbeta_dvg - gche * dfgche2_dvg) / fgche2;
+    let dgche_dvd = (beta * dfgche1_dvd + fgche1 * dbeta_dvd - gche * dfgche2_dvd) / fgche2;
+    let dgche_dvb = (beta * dfgche1_dvb + fgche1 * dbeta_dvb - gche * dfgche2_dvb) / fgche2;
 
     // Derivatives of Idl (ngspice b3soifdld.c lines 2086-2090)
-    let didl_dvg = (gche * dvdseff_dvg + t9_gche * dgche_dvg) / t0_gche
-        - idl * gche / t0_gche * drds_dvg;
+    let didl_dvg =
+        (gche * dvdseff_dvg + t9_gche * dgche_dvg) / t0_gche - idl * gche / t0_gche * drds_dvg;
     let didl_dvd = (gche * dvdseff_dvd + t9_gche * dgche_dvd) / t0_gche;
-    let didl_dvb =
-        (gche * dvdseff_dvb + t9_gche * dgche_dvb - idl * drds_dvb * gche) / t0_gche;
+    let didl_dvb = (gche * dvdseff_dvb + t9_gche * dgche_dvb - idl * drds_dvb * gche) / t0_gche;
 
     // Gm0, Gds0, Gmbs0 (ngspice b3soifdld.c lines 2101-2104)
     let gm0 = t0_ids2 * didl_dvg - idl * (dvdseff_dvg + t9_ids * dva_dvg) / va;
@@ -1776,7 +1768,11 @@ pub fn bsim3soi_fd_companion(
     // FD floating body: dIds/dVb = 0 because Vbsdio = Vbs0eff is independent of Vb
     // (dVbsdio/dVb = 0, see b3soifdld.c line 1095)
     // FD: dVbseff_dVb is not tracked (floating body sets gmbs=0; non-floating rare)
-    let gmbs = if floating_body { 0.0 } else { gm0 * dvgsteff_dvb + gmbs0 };
+    let gmbs = if floating_body {
+        0.0
+    } else {
+        gm0 * dvgsteff_dvb + gmbs0
+    };
 
     // FD: Junction currents are ALL ZERO
     let gbs_jct = 0.0;

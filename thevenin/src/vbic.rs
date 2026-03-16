@@ -601,15 +601,16 @@ impl VbicModel {
         let tratio = t_k / tnom_k;
         let tln_ratio = tratio.ln();
 
-        // Current temperature scaling helper — ngspice vbictemp.c formula:
-        // I_T = I_nom * (rT^xp * exp(-ea*(1-rT)/Vtv))^(1/nf)
-        //     = I_nom * rT^(xp/nf) * exp(ea/nf * (1/Vtnom - 1/Vt))
+        // Current temperature scaling — matches ngspice vbictemp.c exactly:
+        //   base = rT^xp * exp(-ea*(1-rT)/Vtv)
+        //   I_T = I_nom * base^(1/nf)
+        // Using ngspice's computation order to minimize FP differences.
         let temp_current = |i_nom: f64, xp: f64, ea_val: f64, nf_val: f64| -> f64 {
             if i_nom == 0.0 {
                 return 0.0;
             }
-            let arg = ea_val / (nf_val * vt_nom) - ea_val / (nf_val * vt);
-            i_nom * tratio.powf(xp / nf_val) * safe_exp(arg)
+            let base = tratio.powf(xp) * safe_exp(-ea_val * (1.0 - tratio) / vt);
+            i_nom * base.powf(1.0 / nf_val)
         };
 
         // Resistance temperature scaling: R_t = R_nom * (tratio^xr)
@@ -685,9 +686,9 @@ impl VbicModel {
 
         // GAMM temperature scaling — ngspice vbictemp.c:
         //   p[4] = pnom[4] * rT^XIS * exp(-EA*(1-rT)/Vtv)
-        //        = GAMM * rT^XIS * exp(EA/Vtnom - EA/Vt)
+        // Uses ngspice's exact computation order.
         self.gamm_t = if self.gamm > 0.0 {
-            self.gamm * tratio.powf(self.xis) * safe_exp(self.ea / vt_nom - self.ea / vt)
+            self.gamm * tratio.powf(self.xis) * safe_exp(-self.ea * (1.0 - tratio) / vt)
         } else {
             0.0
         };
