@@ -689,6 +689,163 @@ fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
     (nrd, nrs)
 }
 
+/// Generate synthetic `CapacitorInstance` entries for BJT junction
+/// capacitances (CJE, CJC, CJS).
+///
+/// In ngspice, these are voltage-dependent depletion capacitances integrated
+/// at each NR iteration during transient analysis.  We approximate them as
+/// constant capacitors at their zero-bias value (area-scaled), which provides
+/// the correct transient charge storage paths and prevents singular matrices
+/// when internal nodes are only connected through junction capacitances.
+fn push_bjt_caps(
+    capacitors: &mut Vec<CapacitorInstance>,
+    base_prime_idx: Option<usize>,
+    col_prime_idx: Option<usize>,
+    emit_prime_idx: Option<usize>,
+    model: &BjtModel,
+    area: f64,
+    m: f64,
+) {
+    // B-E junction capacitance: CJE * area
+    let cje_total = model.cje * area * m;
+    if cje_total > 0.0 {
+        capacitors.push(CapacitorInstance {
+            pos_idx: base_prime_idx,
+            neg_idx: emit_prime_idx,
+            capacitance: cje_total,
+            ic: None,
+        });
+    }
+
+    // B-C junction capacitance: CJC * area
+    let cjc_total = model.cjc * area * m;
+    if cjc_total > 0.0 {
+        capacitors.push(CapacitorInstance {
+            pos_idx: base_prime_idx,
+            neg_idx: col_prime_idx,
+            capacitance: cjc_total,
+            ic: None,
+        });
+    }
+
+    // Collector-substrate capacitance: CJS * area (to ground)
+    let cjs_total = model.cjs * area * m;
+    if cjs_total > 0.0 {
+        capacitors.push(CapacitorInstance {
+            pos_idx: col_prime_idx,
+            neg_idx: None, // substrate = ground
+            capacitance: cjs_total,
+            ic: None,
+        });
+    }
+}
+
+/// Generate synthetic `CapacitorInstance` entries for MOSFET overlap and
+/// junction capacitances.
+///
+/// Overlap caps (CGSO, CGDO, CGBO) are constant-valued capacitors between
+/// gate-source, gate-drain, and gate-bulk terminals.  Junction caps (CBD, CBS)
+/// are voltage-dependent in ngspice (depletion model), but we approximate them
+/// as constant capacitors at their zero-bias value to provide the necessary
+/// conductive paths during transient analysis.  This prevents singular matrices
+/// when internal nodes are only connected through MOSFET junction capacitances.
+///
+/// ngspice computes area-scaled junction caps as:
+///   Cbd_total = CJ * AD + CJSW * PD  (if AD/PD given)
+///   Cbd_total = CBD                    (if CBD given directly)
+/// We follow the same priority: use CJ*area + CJSW*perimeter when area > 0,
+/// otherwise fall back to the CBD/CBS model parameters.
+#[expect(clippy::too_many_arguments)]
+fn push_mosfet_caps(
+    capacitors: &mut Vec<CapacitorInstance>,
+    gate_idx: Option<usize>,
+    drain_prime_idx: Option<usize>,
+    source_prime_idx: Option<usize>,
+    bulk_idx: Option<usize>,
+    cgso: f64,
+    cgdo: f64,
+    cgbo: f64,
+    cbd: f64,
+    cbs: f64,
+    cj: f64,
+    _mj: f64,
+    cjsw: f64,
+    _mjsw: f64,
+    _pb: f64,
+    _fc: f64,
+    w: f64,
+    l: f64,
+    ad: f64,
+    as_: f64,
+    pd: f64,
+    ps: f64,
+    m: f64,
+) {
+    // Gate-source overlap capacitance: CGSO * W
+    let cgs_ov = cgso * w * m;
+    if cgs_ov > 0.0 {
+        capacitors.push(CapacitorInstance {
+            pos_idx: gate_idx,
+            neg_idx: source_prime_idx,
+            capacitance: cgs_ov,
+            ic: None,
+        });
+    }
+
+    // Gate-drain overlap capacitance: CGDO * W
+    let cgd_ov = cgdo * w * m;
+    if cgd_ov > 0.0 {
+        capacitors.push(CapacitorInstance {
+            pos_idx: gate_idx,
+            neg_idx: drain_prime_idx,
+            capacitance: cgd_ov,
+            ic: None,
+        });
+    }
+
+    // Gate-bulk overlap capacitance: CGBO * L
+    let cgb_ov = cgbo * l * m;
+    if cgb_ov > 0.0 {
+        capacitors.push(CapacitorInstance {
+            pos_idx: gate_idx,
+            neg_idx: bulk_idx,
+            capacitance: cgb_ov,
+            ic: None,
+        });
+    }
+
+    // Bulk-drain junction capacitance (zero-bias value).
+    // Priority: CJ*AD + CJSW*PD if AD > 0, else CBD directly.
+    let cbd_total = if ad > 0.0 || pd > 0.0 {
+        (cj * ad + cjsw * pd) * m
+    } else {
+        cbd * m
+    };
+    if cbd_total > 0.0 {
+        capacitors.push(CapacitorInstance {
+            pos_idx: bulk_idx,
+            neg_idx: drain_prime_idx,
+            capacitance: cbd_total,
+            ic: None,
+        });
+    }
+
+    // Bulk-source junction capacitance (zero-bias value).
+    let cbs_total = if as_ > 0.0 || ps > 0.0 {
+        (cj * as_ + cjsw * ps) * m
+    } else {
+        cbs * m
+    };
+    if cbs_total > 0.0 {
+        capacitors.push(CapacitorInstance {
+            pos_idx: bulk_idx,
+            neg_idx: source_prime_idx,
+            capacitance: cbs_total,
+            ic: None,
+        });
+    }
+}
+
 /// Assemble an MNA system from a parsed netlist.
 ///
 /// Currently supports: resistors (R), independent voltage sources (V),
@@ -1101,8 +1258,24 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                     anode_idx,
                     cathode_idx,
                     internal_idx: int_idx,
-                    model: dm,
+                    model: dm.clone(),
                 });
+
+                // Synthetic capacitor for diode junction cap (CJO at zero bias).
+                // The junction node is internal_idx when RS > 0, else anode_idx.
+                let jct_node = if int_idx.is_some() {
+                    int_idx
+                } else {
+                    anode_idx
+                };
+                if dm.cjo > 0.0 {
+                    capacitors.push(CapacitorInstance {
+                        pos_idx: jct_node,
+                        neg_idx: cathode_idx,
+                        capacitance: dm.cjo,
+                        ic: None,
+                    });
+                }
                 // Diode stamps are applied during NR iteration, not here.
             }
             ElementKind::Bjt {
@@ -1268,7 +1441,7 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         base_prime_idx,
                         col_prime_idx,
                         emit_prime_idx,
-                        model: bm,
+                        model: bm.clone(),
                         area,
                         areab,
                         areac,
@@ -1276,6 +1449,17 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         temp: inst_temp,
                         off: *off,
                     });
+
+                    // Synthetic capacitors for BJT junction caps.
+                    push_bjt_caps(
+                        &mut capacitors,
+                        base_prime_idx,
+                        col_prime_idx,
+                        emit_prime_idx,
+                        &bm,
+                        area,
+                        m_mult,
+                    );
                 }
                 // BJT/VBIC stamps are applied during NR iteration, not here.
             }
@@ -1663,7 +1847,7 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         bulk_idx,
                         drain_prime_idx,
                         source_prime_idx,
-                        model: mm,
+                        model: mm.clone(),
                         w,
                         l,
                         ad,
@@ -1672,6 +1856,33 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         ps,
                         m: m_mult,
                     });
+
+                    // Synthetic capacitors for MOS6 overlap and junction caps.
+                    push_mosfet_caps(
+                        &mut capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
                 } else {
                     let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
                         MosfetModel::from_model_def(mdef)
@@ -1702,7 +1913,7 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         bulk_idx,
                         drain_prime_idx,
                         source_prime_idx,
-                        model: mm,
+                        model: mm.clone(),
                         w,
                         l,
                         ad,
@@ -1711,6 +1922,33 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         ps,
                         m: m_mult,
                     });
+
+                    // Synthetic capacitors for MOSFET overlap and junction caps.
+                    push_mosfet_caps(
+                        &mut capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
                 }
                 // MOSFET stamps are applied during NR iteration, not here.
             }

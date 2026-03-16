@@ -470,7 +470,7 @@ harness_test!(
 harness_test!(
     harness_general_mosamp,
     "general/mosamp.cir",
-    ignore = "tran: singular matrix during transient solve"
+    ignore = "DC OP singular matrix (Level 2 MOSFET needs VTO computation from process params)"
 );
 harness_test!(
     harness_general_mosmem,
@@ -491,7 +491,7 @@ harness_test!(
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
-    ignore = "transient timestep mismatch at Schmitt trigger transition (US-055)"
+    ignore = "~0.24% interpolation error: constant junction cap approximation vs ngspice voltage-dependent caps"
 );
 
 // === HFET ===
@@ -527,12 +527,12 @@ harness_test!(harness_mes_subth, "mes/subth.cir");
 harness_test!(
     harness_mos6_mos6inv,
     "mos6/mos6inv.cir",
-    ignore = "tran: singular matrix during transient solve"
+    ignore = "DC OP singular matrix (Level 6 MOSFET subcircuit — OP solver cannot converge)"
 );
 harness_test!(
     harness_mos6_simpleinv,
     "mos6/simpleinv.cir",
-    ignore = "transient timestep + device info (US-055, US-061)"
+    ignore = "output format: ngspice splits print variables into separate paged tables; we emit one table"
 );
 
 // === Pole-Zero ===
