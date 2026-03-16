@@ -1613,6 +1613,7 @@ pub fn bsim3soi_dd_companion(
     let dvdsat_dvg;
     let dvdsat_dvd;
     let dvdsat_dvb;
+    let tmp1_lambda; // dLambda_dVg / (Lambda * Lambda), needed for Vasat derivatives
 
     let (tmp2_rds, tmp3_rds) = if rds > 0.0 {
         (
@@ -1624,6 +1625,7 @@ pub fn bsim3soi_dd_companion(
     };
 
     if rds == 0.0 && lambda == 1.0 {
+        tmp1_lambda = 0.0;
         let t0 = 1.0 / (abeff * esat_l + vgst2vtm);
         let t1 = t0 * t0;
         let t2 = vgst2vtm * t0;
@@ -1636,6 +1638,7 @@ pub fn bsim3soi_dd_companion(
         dvdsat_dvd = t3 * dt0_dvd + t2 * desat_l_dvd;
         dvdsat_dvb = t3 * dt0_dvb + t2 * desat_l_dvb;
     } else {
+        tmp1_lambda = dlambda_dvg / (lambda * lambda);
         let t9 = abeff * wvcox_rds;
         let t8 = abeff * t9;
         let t7 = vgst2vtm * t9;
@@ -1690,52 +1693,131 @@ pub fn bsim3soi_dd_companion(
     };
     let diff_vds = vds_i - vdseff;
 
-    // VA (Early voltage)
-    let vaclm = if sp.pclm > 0.0 && diff_vds > 1e-10 {
+    // Vasat (saturation Early voltage)
+    let tmp4 = 1.0 - 0.5 * abeff * vdsat / vgst2vtm;
+    let t9_va = wvcox_rds * vgsteff;
+    let t8_va = t9_va / vgst2vtm;
+    let t0_va = esat_l + vdsat + 2.0 * t9_va * tmp4;
+
+    let t7_va = 2.0 * wvcox_rds * tmp4;
+    let dt0_va_dvg = desat_l_dvg + dvdsat_dvg + t7_va * (1.0 + tmp2_rds * vgsteff)
+        - t8_va * (abeff * dvdsat_dvg - abeff * vdsat / vgst2vtm + vdsat * dabeff_dvg);
+    let dt0_va_dvb = desat_l_dvb + dvdsat_dvb + t7_va * tmp3_rds * vgsteff
+        - t8_va * (dabeff_dvb * vdsat + abeff * dvdsat_dvb);
+    let dt0_va_dvd = desat_l_dvd + dvdsat_dvd - t8_va * abeff * dvdsat_dvd;
+
+    let t9_ab = wvcox_rds * abeff;
+    let t1_ab = 2.0 / lambda - 1.0 + t9_ab;
+    let dt1_ab_dvg = -2.0 * tmp1_lambda + wvcox_rds * (abeff * tmp2_rds + dabeff_dvg);
+    let dt1_ab_dvb = dabeff_dvb * wvcox_rds + t9_ab * tmp3_rds;
+
+    let vasat = t0_va / t1_ab;
+    let dvasat_dvg = (dt0_va_dvg - vasat * dt1_ab_dvg) / t1_ab;
+    let dvasat_dvb = (dt0_va_dvb - vasat * dt1_ab_dvb) / t1_ab;
+    let dvasat_dvd = dt0_va_dvd / t1_ab;
+
+    // VACLM (channel length modulation Early voltage)
+    let (vaclm, dvaclm_dvg, dvaclm_dvd, dvaclm_dvb) = if sp.pclm > 0.0 && diff_vds > 1e-10 {
         let t0 = 1.0 / (sp.pclm * abeff * sp.litl);
+        let dt0_dvb = -t0 / abeff * dabeff_dvb;
+        let dt0_dvg = -t0 / abeff * dabeff_dvg;
+
         let t2 = vgsteff / esat_l;
         let t1 = leff * (abeff + t2);
-        t0 * t1 * diff_vds
+        let dt1_dvg = leff * ((1.0 - t2 * desat_l_dvg) / esat_l + dabeff_dvg);
+        let dt1_dvb = leff * (dabeff_dvb - t2 * desat_l_dvb / esat_l);
+        let dt1_dvd = -t2 * desat_l_dvd / esat;
+
+        let t9_cl = t0 * t1;
+        let vaclm = t9_cl * diff_vds;
+        let dvaclm_dvg = t0 * dt1_dvg * diff_vds - t9_cl * dvdseff_dvg
+            + t1 * diff_vds * dt0_dvg;
+        let dvaclm_dvb = (dt0_dvb * t1 + t0 * dt1_dvb) * diff_vds - t9_cl * dvdseff_dvb;
+        let dvaclm_dvd = t0 * dt1_dvd * diff_vds + t9_cl * (1.0 - dvdseff_dvd);
+
+        (vaclm, dvaclm_dvg, dvaclm_dvd, dvaclm_dvb)
     } else {
-        MAX_EXP
+        (MAX_EXP, 0.0, 0.0, 0.0)
     };
 
-    let vadibl = if sp.theta_rout > 0.0 {
+    // VADIBL (DIBL Early voltage)
+    let (vadibl, dvadibl_dvg, dvadibl_dvd, dvadibl_dvb) = if sp.theta_rout > 0.0 {
         let t8 = abeff * vdsat;
         let t0 = vgst2vtm * t8;
         let t1 = vgst2vtm + t8;
-        let vadibl = (vgst2vtm - t0 / t1) / sp.theta_rout;
+        let dt0_dvg = vgst2vtm * abeff * dvdsat_dvg + t8
+            + vgst2vtm * vdsat * dabeff_dvg;
+        let dt1_dvg = 1.0 + abeff * dvdsat_dvg + vdsat * dabeff_dvg;
+        let dt1_dvb = dabeff_dvb * vdsat + abeff * dvdsat_dvb;
+        let dt0_dvb = vgst2vtm * dt1_dvb;
+        let dt1_dvd = abeff * dvdsat_dvd;
+        let dt0_dvd = vgst2vtm * dt1_dvd;
+
+        let t9_dibl = t1 * t1;
+        let t2_dibl = sp.theta_rout;
+        let vadibl = (vgst2vtm - t0 / t1) / t2_dibl;
+        let mut dvadibl_dvg = (1.0 - dt0_dvg / t1 + t0 * dt1_dvg / t9_dibl) / t2_dibl;
+        let mut dvadibl_dvb = (-dt0_dvb / t1 + t0 * dt1_dvb / t9_dibl) / t2_dibl;
+        let mut dvadibl_dvd = (-dt0_dvd / t1 + t0 * dt1_dvd / t9_dibl) / t2_dibl;
+
         let t7 = sp.pdiblcb * vbseff;
-        if t7 >= -0.9 {
-            vadibl / (1.0 + t7)
+        let (vadibl, dvadibl_dvg, dvadibl_dvd, dvadibl_dvb) = if t7 >= -0.9 {
+            let t3 = 1.0 / (1.0 + t7);
+            let vadibl = vadibl * t3;
+            dvadibl_dvg *= t3;
+            dvadibl_dvb = (dvadibl_dvb - vadibl * sp.pdiblcb) * t3;
+            dvadibl_dvd *= t3;
+            (vadibl, dvadibl_dvg, dvadibl_dvd, dvadibl_dvb)
         } else {
             let t4 = 1.0 / (0.8 + t7);
-            vadibl * (17.0 + 20.0 * t7) * t4
-        }
+            let t3 = (17.0 + 20.0 * t7) * t4;
+            dvadibl_dvg *= t3;
+            dvadibl_dvb = dvadibl_dvb * t3 - vadibl * sp.pdiblcb * t4 * t4;
+            dvadibl_dvd *= t3;
+            let vadibl = vadibl * t3;
+            (vadibl, dvadibl_dvg, dvadibl_dvd, dvadibl_dvb)
+        };
+
+        (vadibl, dvadibl_dvg, dvadibl_dvd, dvadibl_dvb)
     } else {
-        MAX_EXP
+        (MAX_EXP, 0.0, 0.0, 0.0)
     };
 
-    let t8 = sp.pvag / esat_l;
-    let t9 = t8 * vgsteff;
-    let t0 = if t9 > -0.9 {
-        1.0 + t9
+    // PVAG factor T0 and its derivatives
+    let t8_pvag = sp.pvag / esat_l;
+    let t9_pvag = t8_pvag * vgsteff;
+    let (t0_pvag, dt0_pvag_dvg, dt0_pvag_dvb, dt0_pvag_dvd) = if t9_pvag > -0.9 {
+        let t0 = 1.0 + t9_pvag;
+        let dt0_dvg = t8_pvag * (1.0 - vgsteff * desat_l_dvg / esat_l);
+        let dt0_dvb = -t9_pvag * desat_l_dvb / esat_l;
+        let dt0_dvd = -t9_pvag * desat_l_dvd / esat_l;
+        (t0, dt0_dvg, dt0_dvb, dt0_dvd)
     } else {
-        let t1 = 1.0 / (17.0 + 20.0 * t9);
-        (0.8 + t9) * t1
+        let t1 = 1.0 / (17.0 + 20.0 * t9_pvag);
+        let t0 = (0.8 + t9_pvag) * t1;
+        let t1sq = t1 * t1;
+        let dt0_dvg = t8_pvag * (1.0 - vgsteff * desat_l_dvg / esat_l) * t1sq;
+        let t9_scaled = t9_pvag * t1sq / esat_l;
+        let dt0_dvb = -t9_scaled * desat_l_dvb;
+        let dt0_dvd = -t9_scaled * desat_l_dvd;
+        (t0, dt0_dvg, dt0_dvb, dt0_dvd)
     };
 
+    // Combine VACLM and VADIBL into T1_va
     let tmp3_va = vaclm + vadibl;
     let t1_va = vaclm * vadibl / tmp3_va;
+    let tmp3_va_sq = tmp3_va * tmp3_va;
+    let tmp1_va = vaclm * vaclm;
+    let tmp2_va = vadibl * vadibl;
+    let dt1_va_dvg = (tmp1_va * dvadibl_dvg + tmp2_va * dvaclm_dvg) / tmp3_va_sq;
+    let dt1_va_dvd = (tmp1_va * dvadibl_dvd + tmp2_va * dvaclm_dvd) / tmp3_va_sq;
+    let dt1_va_dvb = (tmp1_va * dvadibl_dvb + tmp2_va * dvaclm_dvb) / tmp3_va_sq;
 
-    let tmp4 = 1.0 - 0.5 * abeff * vdsat / vgst2vtm;
-    let t9_va = wvcox_rds * vgsteff;
-    let t0_va = esat_l + vdsat + 2.0 * t9_va * tmp4;
-    let t9_ab = wvcox_rds * abeff;
-    let t1_ab = 2.0 / lambda - 1.0 + t9_ab;
-    let vasat = t0_va / t1_ab;
-
-    let va = vasat + t0 * t1_va;
+    // Va = Vasat + T0_pvag * T1_va
+    let va = vasat + t0_pvag * t1_va;
+    let dva_dvg = dvasat_dvg + t1_va * dt0_pvag_dvg + t0_pvag * dt1_va_dvg;
+    let dva_dvd = dvasat_dvd + t1_va * dt0_pvag_dvd + t0_pvag * dt1_va_dvd;
+    let dva_dvb = dvasat_dvb + t1_va * dt0_pvag_dvb + t0_pvag * dt1_va_dvb;
 
     // Ids calculation
     let cox_wov_l = cox * weff_ch / leff;
@@ -1754,24 +1836,54 @@ pub fn bsim3soi_dd_companion(
     let t0_ids2 = 1.0 + t9_ids;
     let ids = idl * t0_ids2;
 
-    // Derivatives
-    let dgche_dvg = (beta * (t0_ids + vgsteff * (-0.5 * abeff / vgst2vtm))
-        + fgche1 * dueff_dvg * cox_wov_l)
-        / fgche2;
-    let didl_dvg =
-        (gche * dvdseff_dvg + t9_gche * dgche_dvg) / t0_gche - idl * gche / t0_gche * drds_dvg;
-    let didl_dvd = (gche * dvdseff_dvd) / t0_gche;
-    let didl_dvb = (gche * dvdseff_dvb - idl * drds_dvb * gche) / t0_gche;
+    // Derivatives of beta
+    let dbeta_dvg = cox_wov_l * dueff_dvg + beta * dweff_dvg / weff_ch;
+    let dbeta_dvd = cox_wov_l * dueff_dvd;
+    let dbeta_dvb = cox_wov_l * dueff_dvb + beta * dweff_dvb / weff_ch;
 
-    let dids_dvg = t0_ids2 * didl_dvg * dvgsteff_dvg;
-    let dids_dvd = t0_ids2 * didl_dvd
-        + idl * (1.0 - dvdseff_dvd) / va
-        + dids_dvg / dvgs_eff_dvg * dvgsteff_dvd;
-    let dids_dvb = (t0_ids2 * didl_dvb + t0_ids2 * didl_dvg * dvgsteff_dvb) * dvbseff_dvb;
+    // Derivatives of T0_ids = 1 - 0.5 * Abeff * Vdseff / Vgst2Vtm
+    let dt0_ids_dvg = -0.5
+        * (abeff * dvdseff_dvg - abeff * vdseff / vgst2vtm + vdseff * dabeff_dvg)
+        / vgst2vtm;
+    let dt0_ids_dvd = -0.5 * abeff * dvdseff_dvd / vgst2vtm;
+    let dt0_ids_dvb =
+        -0.5 * (abeff * dvdseff_dvb + dabeff_dvb * vdseff) / vgst2vtm;
 
-    let gm = dids_dvg;
-    let gds = dids_dvd + dids_dvg * dvgsteff_dvd / dvgs_eff_dvg.max(1e-20);
-    let gmbs = dids_dvb;
+    // Derivatives of fgche1 = Vgsteff * T0_ids
+    let dfgche1_dvg = vgsteff * dt0_ids_dvg + t0_ids;
+    let dfgche1_dvd = vgsteff * dt0_ids_dvd;
+    let dfgche1_dvb = vgsteff * dt0_ids_dvb;
+
+    // Derivatives of fgche2 = 1 + Vdseff / EsatL
+    let dfgche2_dvg = (dvdseff_dvg - t9_fgche * desat_l_dvg) / esat_l;
+    let dfgche2_dvd = (dvdseff_dvd - t9_fgche * desat_l_dvd) / esat_l;
+    let dfgche2_dvb = (dvdseff_dvb - t9_fgche * desat_l_dvb) / esat_l;
+
+    // Derivatives of gche = beta * fgche1 / fgche2
+    let dgche_dvg =
+        (beta * dfgche1_dvg + fgche1 * dbeta_dvg - gche * dfgche2_dvg) / fgche2;
+    let dgche_dvd =
+        (beta * dfgche1_dvd + fgche1 * dbeta_dvd - gche * dfgche2_dvd) / fgche2;
+    let dgche_dvb =
+        (beta * dfgche1_dvb + fgche1 * dbeta_dvb - gche * dfgche2_dvb) / fgche2;
+
+    // Derivatives of Idl (ngspice lines 2123-2127)
+    let didl_dvg = (gche * dvdseff_dvg + t9_gche * dgche_dvg) / t0_gche
+        - idl * gche / t0_gche * drds_dvg;
+    let didl_dvd = (gche * dvdseff_dvd + t9_gche * dgche_dvd) / t0_gche;
+    let didl_dvb =
+        (gche * dvdseff_dvb + t9_gche * dgche_dvb - idl * drds_dvb * gche) / t0_gche;
+
+    // Gm0, Gds0, Gmbs0 (ngspice lines 2138-2141)
+    let gm0 = t0_ids2 * didl_dvg - idl * (dvdseff_dvg + t9_ids * dva_dvg) / va;
+    let gds0 = t0_ids2 * didl_dvd + idl * (1.0 - dvdseff_dvd - t9_ids * dva_dvd) / va;
+    let gmbs0 = t0_ids2 * didl_dvb - idl * (dvdseff_dvb + t9_ids * dva_dvb) / va;
+
+    // Final Gm, Gds, Gmbs (ngspice lines 2148-2150)
+    // Note: dVbseff_dVg, dVbseff_dVd, dVcs_* are not tracked; omitting Gmb0/Gmc cross-terms
+    let gm = gm0 * dvgsteff_dvg;
+    let gds = gm0 * dvgsteff_dvd + gds0;
+    let gmbs = gm0 * dvgsteff_dvb + gmbs0 * dvbseff_dvb;
 
     // GIDL current (drain side)
     let (igidl, ggidl_d, ggidl_g) = {

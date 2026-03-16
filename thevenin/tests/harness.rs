@@ -475,7 +475,7 @@ harness_test!(
 harness_test!(
     harness_general_mosmem,
     "general/mosmem.cir",
-    ignore = "device info output (US-061)"
+    ignore = "times out (>30s)"
 );
 harness_test!(
     harness_general_rca3040,
@@ -486,7 +486,7 @@ harness_test!(harness_general_rc, "general/rc.cir");
 harness_test!(
     harness_general_rtlinv,
     "general/rtlinv.cir",
-    ignore = "device info output (US-061)"
+    ignore = "times out (>30s)"
 );
 harness_test!(
     harness_general_schmitt,
@@ -499,7 +499,7 @@ harness_test!(harness_hfet_id_vgs, "hfet/id_vgs.cir");
 harness_test!(
     harness_hfet_inverter,
     "hfet/inverter.cir",
-    ignore = "device info output (US-061)"
+    ignore = "times out (>30s)"
 );
 
 // === JFET ===
@@ -784,7 +784,7 @@ harness_test!(
 harness_test!(
     harness_vbic_fg,
     "vbic/FG.cir",
-    ignore = "VBIC FG: ~0.02% error in DC sweep (self-heating implemented, residual FP difference)"
+    ignore = "VBIC FG: ~0.23% error in DC sweep (just above 0.2% tolerance, self-heating FP difference)"
 );
 harness_test!(
     harness_vbic_fo,
@@ -800,7 +800,7 @@ harness_test!(
     harness_vbic_temp,
     "vbic/temp.cir",
     ignore =
-        "VBIC temp: ~0.02% Ic error (self-heating implemented, residual FP difference vs ngspice)"
+        "VBIC temp: ~0.23% Ic error (just above 0.2% tolerance, self-heating FP difference vs ngspice)"
 );
 
 // === XSPICE (unimplemented) ===

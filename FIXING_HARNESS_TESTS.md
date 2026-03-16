@@ -402,3 +402,54 @@ The VBIC tests have moved categories:
 
 The `rca3040` timeout is pre-existing (confirmed by testing on the parent
 commit) and unrelated to the VBIC changes.
+
+---
+
+## Applied fix: BSIM3SOI derivative computation
+
+**Affected tests:** All 15 BSIM3SOI tests (DD, FD, PD variants)
+
+**Root cause (derivatives):** The Ids derivative computation (`dgche_dvg`,
+`didl_dvd`, `didl_dvb`, and final Gm0/Gds0/Gmbs0) was significantly
+simplified compared to ngspice. Missing terms included:
+- `dfgche1_dvg/dvd/dvb` (proper derivatives of fgche1)
+- `dfgche2_dvg/dvd/dvb` (fgche2 derivatives, completely absent)
+- `dbeta_dvg/dvb` (beta derivatives including dweff terms)
+- `dgche_dvd/dvb` terms in `didl_dvd/dvb`
+- Va derivative terms in final Gm0/Gds0/Gmbs0
+
+**Fix applied:** Rewrote the derivative section of `bsim3soi_dd.rs` to match
+ngspice's `b3soiddld.c` exactly (lines 2063–2140). Added full Va derivative
+tracking (Vasat, VACLM, VADIBL, PVAG factor derivatives). Similar fixes
+applied to FD and PD variants.
+
+**Impact on Ids accuracy:** The derivative fix did NOT change the ~10% Ids
+error in the DD t3 test. This confirms the error is in the function values
+(Ids computation), not the derivatives. The Ids formula matches ngspice
+structurally, so the bug is likely in an upstream intermediate value
+(vgsteff, vdseff, vth, or a model parameter default).
+
+**Remaining investigation:** To find the Ids bug, compare intermediate values
+(vth, vgsteff, vdseff, beta, esat_l, etc.) against ngspice at a specific
+operating point (e.g., Vgs=0.5V, Vds=0.01V with the t3.cir model params).
+The error pattern (10% excess current near threshold, growing with Vds)
+suggests either a Vth offset (~4mV too low) or a subthreshold slope
+difference.
+
+---
+
+## Triage update (post derivative fix)
+
+The "device info output (US-061)" tests actually time out (>30s), not fail
+on output format. Their ignore reason should be updated.
+
+| Category | Actual status |
+|---|---|
+| `harness_general_mosmem` | times out (>30s) |
+| `harness_general_rtlinv` | times out (>30s) |
+| `harness_hfet_inverter` | times out (>30s) |
+| VBIC FG/temp | ~0.23% error (just above 0.2% tolerance) |
+| VBIC ceamp | ~0.21% error (just above 0.2% tolerance) |
+| BSIM3SOI DD | ~10% Ids error (function value bug) |
+| BSIM3SOI FD | ~4% Ids error (function value bug) |
+| BSIM3SOI PD | NR non-convergence |
