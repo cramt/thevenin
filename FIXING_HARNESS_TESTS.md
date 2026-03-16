@@ -369,11 +369,13 @@ Power is computed as `Ith = Σ(V_branch × I_branch)` for all 14 branches.
 **Result:** FG error dropped from ~6% to ~0.02%, temp error from ~0.22% to
 ~0.02%. The FO test still fails (singular matrix in deep saturation).
 
-**Remaining ~0.02% gap:** Likely caused by our simplified thermal Jacobian —
+**Remaining ~0.23% gap:** Caused by our simplified thermal Jacobian —
 we only stamp `G_th` on the diagonal without `dIth/dV` cross-derivatives.
 ngspice's kernel (`vbic_4T_et_cf_fj`) computes full Vrth derivatives for all
-branches, giving the NR solver better convergence and slightly different
-final values due to FP path differences.
+branches (`dIbe/dVrth`, `dIbc/dVrth`, etc.), giving the NR solver the full
+thermal coupling. Without these, the NR converges to a slightly different
+solution. The error grows with current (0.02% at low bias → 0.23% at high
+bias) due to the thermal feedback loop.
 
 ---
 
@@ -395,10 +397,19 @@ The VBIC tests have moved categories:
 
 | Test | Before | After |
 |---|---|---|
-| `harness_vbic_temp` | 0.22% error | ~0.02% error (residual FP diff) |
-| `harness_vbic_fg` | ~6% error | ~0.02% error (residual FP diff) |
+| `harness_vbic_temp` | 0.22% error | ~0.23% error (self-heating improves but doesn't eliminate) |
+| `harness_vbic_fg` | ~6% error | ~0.23% error (just above 0.2% tolerance) |
 | `harness_vbic_fo` | ~27% error | singular matrix (deep saturation) |
 | `harness_general_rca3040` | passing | times out (>30s, pre-existing) |
+
+The ~0.23% residual error in FG/temp is from the simplified thermal Jacobian:
+we stamp only `g_th = 1/RTH` on the thermal diagonal without the cross-
+derivatives `dIth/dV` that ngspice's auto-generated kernel computes. The
+error grows with current (0.02% at low bias → 0.23% at high bias) due to
+thermal feedback amplification. Even with a numerical `dIth/dVrth` diagonal
+correction, the error persists — the full cross-derivative matrix (all
+`dI/dVrth` terms stamped into device rows) would be needed to match ngspice's
+convergence path.
 
 The `rca3040` timeout is pre-existing (confirmed by testing on the parent
 commit) and unrelated to the VBIC changes.
@@ -448,8 +459,34 @@ on output format. Their ignore reason should be updated.
 | `harness_general_mosmem` | times out (>30s) |
 | `harness_general_rtlinv` | times out (>30s) |
 | `harness_hfet_inverter` | times out (>30s) |
-| VBIC FG/temp | ~0.23% error (just above 0.2% tolerance) |
-| VBIC ceamp | ~0.21% error (just above 0.2% tolerance) |
+| VBIC FG/temp | ~0.23% error (simplified thermal Jacobian) |
+| VBIC ceamp | ~0.21% error (AC self-heating coupling missing) |
 | BSIM3SOI DD | ~10% Ids error (function value bug) |
 | BSIM3SOI FD | ~4% Ids error (function value bug) |
 | BSIM3SOI PD | NR non-convergence |
+
+---
+
+## Applied fix: VBIC temperature scaling corrections
+
+**Affected parameters:** NR (reverse emission coefficient), IKR, IKP
+
+**Bugs found by comparing `temperature_adjust()` with ngspice `vbictemp.c`:**
+
+1. **NR not temperature-scaled:** ngspice scales both NF and NR using the same
+   coefficient TNF: `NR_T = NR * (1 + TNF * dT)`. Our code only scaled NF.
+   Fixed by adding `nr_t` field and using it in the reverse transport current
+   formula.
+
+2. **IKR/IKP incorrectly temperature-scaled:** Our code scaled IKR and IKP by
+   `tratio^XIKF`, but ngspice does NOT temperature-scale these parameters.
+   Fixed by setting `ikr_t = ikr` and `ikp_t = ikp` (no scaling).
+
+**Impact:** These bugs are dormant for the current test circuits (all use
+default TNF=0, XIKF=0), but would cause incorrect results for circuits
+that set non-default temperature coefficients.
+
+Also added VBIC junction initial guess to `jct_initial_guess()`, matching
+the BJT pattern: `V(BI) = V(EI) + sign * Vcrit_bei`. This helps the NR
+solver converge for complex VBIC circuits by forward-biasing the B-E junction
+in the initial guess.

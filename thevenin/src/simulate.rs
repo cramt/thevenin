@@ -233,6 +233,16 @@ fn jct_initial_guess(
         }
     }
 
+    // Apply VBIC MODEINITJCT initial conditions:
+    // Set V(BI) = V(EI) + sign * Vcrit_bei to forward-bias the B-E junction.
+    // This provides non-zero junction conductances so the NR matrix is non-singular.
+    for vbic in &mna.vbics {
+        if let (Some(bi), Some(ei)) = (vbic.base_bi_idx, vbic.emit_ei_idx) {
+            let sign = vbic.model.vbic_type.sign();
+            result[bi] = result[ei] + sign * vbic.model.vcrit_bei();
+        }
+    }
+
     result
 }
 

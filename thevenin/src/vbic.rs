@@ -252,6 +252,7 @@ pub struct VbicModel {
     pub cjep_t: f64,
     pub cjcp_t: f64,
     pub nf_t: f64,
+    pub nr_t: f64,
     pub ikf_t: f64,
     pub ikr_t: f64,
     pub ikp_t: f64,
@@ -399,6 +400,7 @@ impl VbicModel {
             cjep_t: 0.0,
             cjcp_t: 0.0,
             nf_t: 1.0,
+            nr_t: 1.0,
             ikf_t: 0.0,
             ikr_t: 0.0,
             ikp_t: 0.0,
@@ -701,25 +703,18 @@ impl VbicModel {
         self.cjep_t = temp_cap(self.cjep, self.pe, self.pe_t, self.me);
         self.cjcp_t = temp_cap(self.cjcp, self.ps, self.ps_t, self.ms);
 
-        // NF temperature
+        // NF, NR temperature — ngspice scales both using the same coefficient (TNF)
         self.nf_t = self.nf * (1.0 + self.tnf * delt);
+        self.nr_t = self.nr * (1.0 + self.tnf * delt);
 
-        // IKF, IKR, IKP temperature
+        // IKF temperature — ngspice only scales IKF, not IKR or IKP
         self.ikf_t = if self.ikf > 0.0 {
             self.ikf * tratio.powf(self.xikf)
         } else {
             0.0
         };
-        self.ikr_t = if self.ikr > 0.0 {
-            self.ikr * tratio.powf(self.xikf) // same exponent as IKF
-        } else {
-            0.0
-        };
-        self.ikp_t = if self.ikp > 0.0 {
-            self.ikp * tratio.powf(self.xikf)
-        } else {
-            0.0
-        };
+        self.ikr_t = self.ikr;
+        self.ikp_t = self.ikp;
 
         // AVC2 temperature
         self.avc2_t = self.avc2 * (1.0 + self.tavc * delt);
@@ -782,10 +777,10 @@ impl VbicModel {
 
         let is_r = self.is_t * self.isrr_t;
         let (iri, diri_dvbci) = {
-            let arg = vbci / (self.nr * vt);
+            let arg = vbci / (self.nr_t * vt);
             let e = safe_exp(arg);
             let i = is_r * (e - 1.0);
-            let g = is_r / (self.nr * vt) * e;
+            let g = is_r / (self.nr_t * vt) * e;
             (i, g)
         };
 
