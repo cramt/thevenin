@@ -472,16 +472,8 @@ harness_test!(
     "general/mosamp.cir",
     ignore = "DC OP singular matrix (Level 2 MOSFET needs VTO computation from process params)"
 );
-harness_test!(
-    harness_general_mosmem,
-    "general/mosmem.cir",
-    ignore = "times out (>30s)"
-);
-harness_test!(
-    harness_general_rca3040,
-    "general/rca3040.cir",
-    ignore = "times out (>30s) — transient analysis too slow"
-);
+harness_test!(harness_general_mosmem, "general/mosmem.cir");
+harness_test!(harness_general_rca3040, "general/rca3040.cir");
 harness_test!(harness_general_rc, "general/rc.cir");
 harness_test!(
     harness_general_rtlinv,
@@ -491,7 +483,7 @@ harness_test!(
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
-    ignore = "~0.24% interpolation error: constant junction cap approximation vs ngspice voltage-dependent caps"
+    ignore = "~0.72% switching error at t=280ns: constant junction cap approximation vs ngspice voltage-dependent caps"
 );
 
 // === HFET ===

@@ -100,16 +100,19 @@ pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
             system.solve().map_err(MnaError::from)
         }
     } else {
-        solve_nonlinear_op(mna, &NrOptions::default())
+        let opts = NrOptions {
+            diag_gmin: 0.0,
+            ..NrOptions::default()
+        };
+        solve_nonlinear_op(mna, &opts)
     }
 }
 
 /// Compute the DC operating point with `diag_gmin = 0`, matching ngspice's
 /// behaviour for explicit `.op` analysis (`CKTdiagGmin` starts at 0).
 ///
-/// Unlike `solve_op_raw` (used for transient initial conditions, which needs
-/// the default `diag_gmin = gmin` for convergence stability), this variant
-/// produces branch currents that match ngspice's `.op` output exactly.
+/// This variant produces branch currents that match ngspice's `.op` output
+/// exactly, with output formatted for `.op` analysis.
 pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
     let opts = NrOptions {

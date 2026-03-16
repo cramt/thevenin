@@ -16,7 +16,7 @@ use crate::expr_val;
 use crate::ltra::{LtraCoeffs, LtraState};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::newton::{NrOptions, newton_raphson_solve};
-use crate::simulate::simulate_op;
+use crate::simulate::solve_op_raw;
 use crate::txl::TxlTransientStamp;
 use crate::waveform::{self, TranParams};
 
@@ -318,78 +318,14 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mut mna = assemble_mna(netlist)?;
 
     // Compute DC operating point for initial conditions.
-    let op_result = simulate_op(netlist)?;
-    let op_plot = &op_result.plots[0];
-
-    // Extract initial solution vector from DC OP.
-    let num_ext_nodes = mna.node_map.len();
-    let num_internal = mna
-        .diodes
-        .iter()
-        .filter(|d| d.internal_idx.is_some())
-        .count()
-        + mna
-            .bjts
-            .iter()
-            .map(|b| b.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .mosfets
-            .iter()
-            .map(|m| m.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .jfets
-            .iter()
-            .map(|j| j.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .bsim3s
-            .iter()
-            .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
-            .sum::<usize>()
-        + mna
-            .bsim3soi_pds
-            .iter()
-            .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
-            .sum::<usize>()
-        + mna
-            .bsim3soi_fds
-            .iter()
-            .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
-            .sum::<usize>()
-        + mna
-            .bsim3soi_dds
-            .iter()
-            .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
-            .sum::<usize>()
-        + mna
-            .bsim4s
-            .iter()
-            .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
-            .sum::<usize>();
-    let num_nodes = num_ext_nodes + num_internal;
+    // Use solve_op_raw directly to get the full solution vector including
+    // internal device node voltages (e.g. BJT internal base/collector).
+    // Going through simulate_op() loses internal node voltages, causing
+    // transient disturbances at the first timestep.
+    let mut solution = solve_op_raw(&mna)?;
     let dim = mna.system.dim();
-
-    let mut solution = vec![0.0; dim];
-    // Fill node voltages from OP result.
-    for (name, idx) in mna.node_map.iter() {
-        let vec_name = format!("v({})", name);
-        if let Some(sv) = op_plot.vecs.iter().find(|v| v.name == vec_name)
-            && !sv.real.is_empty()
-        {
-            solution[idx] = sv.real[0];
-        }
-    }
-    // Fill branch currents from OP result.
-    for (i, vsrc) in mna.vsource_names.iter().enumerate() {
-        let vec_name = format!("{}#branch", vsrc.to_lowercase());
-        if let Some(sv) = op_plot.vecs.iter().find(|v| v.name == vec_name)
-            && !sv.real.is_empty()
-        {
-            solution[num_nodes + i] = sv.real[0];
-        }
-    }
+    let num_nodes = mna.total_num_nodes();
+    solution.resize(dim, 0.0);
 
     // Apply IC overrides for capacitors (override DC OP voltage).
     for cap in &mna.capacitors {
