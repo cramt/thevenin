@@ -784,23 +784,19 @@ harness_test!(
 harness_test!(
     harness_vbic_fg,
     "vbic/FG.cir",
-    ignore = "VBIC FG: ~0.23% error in DC sweep (just above 0.2% tolerance, self-heating FP difference)"
+    ignore =
+        "VBIC FG: ~0.23% error in DC sweep (just above 0.2% tolerance, self-heating FP difference)"
 );
 harness_test!(
     harness_vbic_fo,
     "vbic/FO.cir",
     ignore = "VBIC FO: singular matrix in 2D DC sweep (deep saturation convergence)"
 );
-harness_test!(
-    harness_vbic_noise_scale,
-    "vbic/noise_scale_test.cir",
-    ignore = "VBIC noise: simulate_noise does not yet handle VBIC devices"
-);
+harness_test!(harness_vbic_noise_scale, "vbic/noise_scale_test.cir");
 harness_test!(
     harness_vbic_temp,
     "vbic/temp.cir",
-    ignore =
-        "VBIC temp: ~0.23% Ic error (just above 0.2% tolerance, self-heating FP difference vs ngspice)"
+    ignore = "VBIC temp: ~0.23% Ic error (just above 0.2% tolerance, self-heating FP difference vs ngspice)"
 );
 
 // === XSPICE (unimplemented) ===

@@ -123,8 +123,8 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
         let inoise_sq = onoise_sq * gain_sq_inv;
 
         freq_data.push(freq);
-        onoise_data.push(onoise_sq.sqrt()); // V/√Hz
-        inoise_data.push(inoise_sq.sqrt()); // V/√Hz
+        onoise_data.push(onoise_sq); // V²/Hz (matches ngspice output format)
+        inoise_data.push(inoise_sq); // V²/Hz
     }
 
     // Compute integrated noise (total RMS noise over frequency range).
@@ -581,9 +581,16 @@ fn compute_total_noise(
     for vbic in &mna.vbics {
         let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
             vbic.junction_voltages(op_solution);
-        let comp = vbic
-            .model
-            .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
+        // Use temperature-adjusted model when self-heating is active
+        let model = if vbic.model.rth > 0.0 && vbic.rth_idx.is_some() {
+            let vrth = vbic.vrth(op_solution);
+            let mut m = vbic.model.clone();
+            m.temperature_adjust(vbic.t_ambient + vrth);
+            m
+        } else {
+            vbic.model.clone()
+        };
+        let comp = model.companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
         let s = vbic.m * vbic.area;
 
         let bi = vbic.base_bi_idx;
@@ -615,45 +622,45 @@ fn compute_total_noise(
         total += iccp_shot * adjoint_transfer_sq(adjoint, bp, si);
 
         // Thermal noise from resistances
-        if vbic.model.rcx > 0.0 && vbic.model.rcx_t > 0.0 {
-            let g = s / vbic.model.rcx_t;
+        if model.rcx > 0.0 && model.rcx_t > 0.0 {
+            let g = s / model.rcx_t;
             total += 4.0 * K_BOLTZ * T_NOM * g * adjoint_transfer_sq(adjoint, vbic.coll_idx, cx);
         }
-        if vbic.model.rci > 0.0 {
+        if model.rci > 0.0 {
             // Internal collector resistance thermal noise
             let g_rci = comp.dirci_dvrci.abs() * s;
             if g_rci > 0.0 {
                 total += 4.0 * K_BOLTZ * T_NOM * g_rci * adjoint_transfer_sq(adjoint, cx, ci);
             }
         }
-        if vbic.model.rbx > 0.0 && vbic.model.rbx_t > 0.0 {
-            let g = s / vbic.model.rbx_t;
+        if model.rbx > 0.0 && model.rbx_t > 0.0 {
+            let g = s / model.rbx_t;
             total += 4.0 * K_BOLTZ * T_NOM * g * adjoint_transfer_sq(adjoint, vbic.base_idx, bx);
         }
-        if vbic.model.rbi > 0.0 {
+        if model.rbi > 0.0 {
             let g_rbi = comp.dirbi_dvrbi.abs() * s;
             if g_rbi > 0.0 {
                 total += 4.0 * K_BOLTZ * T_NOM * g_rbi * adjoint_transfer_sq(adjoint, bx, bi);
             }
         }
-        if vbic.model.re > 0.0 && vbic.model.re_t > 0.0 {
-            let g = s / vbic.model.re_t;
+        if model.re > 0.0 && model.re_t > 0.0 {
+            let g = s / model.re_t;
             total += 4.0 * K_BOLTZ * T_NOM * g * adjoint_transfer_sq(adjoint, vbic.emit_idx, ei);
         }
-        if vbic.model.rbp > 0.0 {
+        if model.rbp > 0.0 {
             let g_rbp = comp.dirbp_dvrbp.abs() * s;
             if g_rbp > 0.0 {
                 total += 4.0 * K_BOLTZ * T_NOM * g_rbp * adjoint_transfer_sq(adjoint, bp, cx);
             }
         }
-        if vbic.model.rs > 0.0 && vbic.model.rs_t > 0.0 {
-            let g = s / vbic.model.rs_t;
+        if model.rs > 0.0 && model.rs_t > 0.0 {
+            let g = s / model.rs_t;
             total += 4.0 * K_BOLTZ * T_NOM * g * adjoint_transfer_sq(adjoint, vbic.subs_idx, si);
         }
 
         // Flicker noise: KFN * |Ibe|^AFN / f^BFN
-        if vbic.model.kfn > 0.0 && freq > 0.0 {
-            let flicker = vbic.model.kfn * ibe.powf(vbic.model.afn) / freq.powf(vbic.model.bfn);
+        if model.kfn > 0.0 && freq > 0.0 {
+            let flicker = model.kfn * ibe.powf(model.afn) / freq.powf(model.bfn);
             total += flicker * adjoint_transfer_sq(adjoint, bi, ei);
         }
     }
@@ -948,8 +955,8 @@ fn adjoint_transfer_sq(adjoint: &[(f64, f64)], n1: Option<usize>, n2: Option<usi
 
 /// Integrate noise spectral density over frequency using piecewise power-law interpolation.
 ///
-/// Input: V/√Hz values (not V²/Hz), output: total RMS noise (V).
-fn integrate_noise(freqs: &[f64], noise_sqrt: &[f64]) -> f64 {
+/// Input: V²/Hz values, output: total RMS noise (V).
+fn integrate_noise(freqs: &[f64], noise_sq: &[f64]) -> f64 {
     if freqs.len() < 2 {
         return 0.0;
     }
@@ -959,8 +966,8 @@ fn integrate_noise(freqs: &[f64], noise_sqrt: &[f64]) -> f64 {
     for i in 1..freqs.len() {
         let f0 = freqs[i - 1];
         let f1 = freqs[i];
-        let n0_sq = noise_sqrt[i - 1] * noise_sqrt[i - 1]; // V²/Hz
-        let n1_sq = noise_sqrt[i] * noise_sqrt[i]; // V²/Hz
+        let n0_sq = noise_sq[i - 1]; // V²/Hz
+        let n1_sq = noise_sq[i]; // V²/Hz
 
         if f0 <= 0.0 || f1 <= 0.0 || n0_sq <= 0.0 || n1_sq <= 0.0 {
             // Fall back to trapezoidal rule.
@@ -1033,9 +1040,9 @@ R2 2 0 1k
             .find(|v| v.name == "onoise_spectrum")
             .unwrap();
 
-        // Expected output noise = sqrt(4kT * R_parallel) where R_parallel = R1||R2 = 500Ω
+        // Expected output noise V²/Hz = 4kT * R_parallel where R_parallel = R1||R2 = 500Ω
         let r_parallel = 500.0;
-        let expected = (4.0 * K_BOLTZ * T_NOM * r_parallel).sqrt();
+        let expected = 4.0 * K_BOLTZ * T_NOM * r_parallel;
         for &val in &onoise.real {
             // Thermal noise is flat (frequency-independent).
             assert_abs_diff_eq!(val, expected, epsilon = expected * 0.02);
@@ -1134,18 +1141,18 @@ R2 2 0 1k
             "thermal noise should be flat: first={first}, last={last}"
         );
 
-        // Input-referred noise = output noise / |H|.
-        // |H| = 0.5, so inoise = 2 * onoise.
+        // Input-referred noise (V²/Hz) = output noise / |H|².
+        // |H| = 0.5, so |H|² = 0.25, inoise = 4 * onoise.
         let inoise_first = inoise.real[0];
-        assert_abs_diff_eq!(inoise_first, first * 2.0, epsilon = first * 0.05);
+        assert_abs_diff_eq!(inoise_first, first * 4.0, epsilon = first * 0.2);
     }
 
     #[test]
     fn test_noise_integration() {
-        // White noise integration test: constant 1e-9 V/√Hz from 1kHz to 10kHz.
+        // White noise integration test: constant 1e-18 V²/Hz from 1kHz to 10kHz.
         // Total = sqrt(1e-18 * (10000 - 1000)) = sqrt(9e-15) ≈ 9.49e-8.
         let freqs: Vec<f64> = (0..100).map(|i| 1000.0 + i as f64 * 90.0).collect();
-        let noise: Vec<f64> = vec![1e-9; 100];
+        let noise: Vec<f64> = vec![1e-18; 100];
 
         let total = integrate_noise(&freqs, &noise);
         let expected = (1e-18 * 9000.0_f64).sqrt();

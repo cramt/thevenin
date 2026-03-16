@@ -262,7 +262,7 @@ R3 R3_P R3_N 500k
         freq.real.len()
     );
 
-    // Reference: at 1kHz, inoise_spectrum ≈ 8.13e-8 V/√Hz (= sqrt(6.6e-14 V²/Hz))
+    // Reference: at 1kHz, inoise_spectrum ≈ 6.606e-14 V²/Hz (ngspice format)
     let inoise = noise1
         .vecs
         .iter()
@@ -271,13 +271,13 @@ R3 R3_P R3_N 500k
 
     let inoise_1k = inoise.real[0];
     assert!(
-        inoise_1k > 1e-16,
-        "Input noise at 1kHz should be > 1e-16: got {:.6e}",
+        inoise_1k > 1e-20,
+        "Input noise at 1kHz should be > 1e-20: got {:.6e}",
         inoise_1k
     );
     // Check order of magnitude (within factor of 10 of reference)
-    // ngspice outputs inoise_spectrum in V/√Hz
-    let ref_inoise_1k = 6.606383e-14_f64.sqrt(); // V/√Hz
+    // ngspice outputs inoise_spectrum in V²/Hz
+    let ref_inoise_1k = 6.606383e-14; // V²/Hz
     let ratio = inoise_1k / ref_inoise_1k;
     assert!(
         ratio > 0.1 && ratio < 10.0,
