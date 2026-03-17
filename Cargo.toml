@@ -1,5 +1,5 @@
 [workspace]
-members = ["thevenin-types", "thevenin-xspice", "thevenin"]
+members = ["thevenin-types", "thevenin-xspice", "thevenin", "thevenin-cirq"]
 resolver = "3"
 
 [workspace.dependencies]

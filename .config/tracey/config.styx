@@ -1,0 +1,10 @@
+specs (
+  { name cirq
+    include (CIRCUITNET_SPEC_DRAFT.md)
+    impls ({
+      name rust
+      include (thevenin-cirq/src/**/*.rs)
+      test_include (thevenin-cirq/src/**/tests/*.rs thevenin-cirq/tests/**/*.rs)
+    })
+  }
+)

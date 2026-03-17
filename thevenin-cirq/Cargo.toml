@@ -1,0 +1,17 @@
+[package]
+name = "thevenin-cirq"
+version = "0.1.0"
+edition = "2024"
+description = "CirQ circuit format: unified IR for SPICE and CirQ netlists"
+license = "BSD-3-Clause"
+repository = "https://github.com/cramt/thevenin"
+
+[dependencies]
+thiserror.workspace = true
+thevenin-types = { path = "../thevenin-types" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+[dev-dependencies]
+approx = "0.5"
