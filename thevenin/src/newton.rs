@@ -27,6 +27,8 @@ pub struct NrOptions {
     /// with LAMBDA=0 MOSFETs feeding LTRA floating nodes) need more iterations to damp NR
     /// oscillations at each Gmin step.
     pub itl2: usize,
+    /// Maximum iterations per transient timestep (ngspice ITL4, default 10).
+    pub itl4: usize,
     /// Minimum conductance from each node to ground (ngspice GMIN, default 1e-12).
     /// Used by device models in junction conductance computations.
     pub gmin: f64,
@@ -48,6 +50,7 @@ impl Default for NrOptions {
             vntol: 1e-6,
             itl1: 100,
             itl2: 200,
+            itl4: 10,
             gmin: 1e-12,
             diag_gmin: 1e-12,
         }
@@ -237,19 +240,40 @@ where
         solution = result.solution;
     }
 
-    // Phase 2: reduce Gmin from elevated level to target (gmin_stepping schedule).
-    let gmin_factor = 10.0;
+    // Phase 2: reduce Gmin from elevated level to target.
+    // Dynamic retry-on-failure: when a 10x step fails, back up and try a
+    // smaller factor (sqrt(sqrt(factor))), matching ngspice dynamic_gmin.
+    let default_factor = 10.0_f64;
+    let mut gmin_factor = default_factor;
     let mut gmin = gmin_elevated / gmin_factor;
+    let mut last_good_gmin = gmin_elevated;
+    let mut backup = solution.clone();
+
     while gmin >= options.gmin * 0.9 {
         let attempt = NrAttempt {
             gmin,
             source_factor: 1.0,
             max_iters: options.itl2,
         };
-        let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt)?;
-        total_iters += result.iterations;
-        solution = result.solution;
-        gmin /= gmin_factor;
+        match try_nr(options, dim, num_nodes, load_system, &solution, &attempt) {
+            Ok(result) => {
+                total_iters += result.iterations;
+                backup.copy_from_slice(&result.solution);
+                solution = result.solution;
+                last_good_gmin = gmin;
+                gmin_factor = default_factor;
+                gmin /= gmin_factor;
+            }
+            Err(_) => {
+                if (last_good_gmin - gmin).abs() / last_good_gmin < 1e-4 {
+                    // Can't subdivide further — break and try final solve.
+                    break;
+                }
+                gmin_factor = gmin_factor.sqrt().sqrt();
+                gmin = last_good_gmin / gmin_factor;
+                solution.copy_from_slice(&backup);
+            }
+        }
     }
 
     // Final solve at target Gmin.
@@ -266,6 +290,35 @@ where
         iterations: total_iters,
         converged: true,
     })
+}
+
+/// Solve a nonlinear system for a single transient timestep.
+///
+/// Uses only direct NR iteration with ITL4 iterations and `diag_gmin`.
+/// No Gmin/source stepping fallbacks.
+pub fn transient_nr_solve<F>(
+    options: &NrOptions,
+    dim: usize,
+    num_nodes: usize,
+    load_system: F,
+    initial_guess: &[f64],
+) -> Result<NrResult, NrError>
+where
+    F: Fn(&[f64], &mut LinearSystem, f64, f64),
+{
+    let attempt = NrAttempt {
+        gmin: options.diag_gmin,
+        source_factor: 1.0,
+        max_iters: options.itl4,
+    };
+    try_nr(
+        options,
+        dim,
+        num_nodes,
+        &load_system,
+        initial_guess,
+        &attempt,
+    )
 }
 
 /// Solve a nonlinear system using source stepping directly, bypassing direct NR

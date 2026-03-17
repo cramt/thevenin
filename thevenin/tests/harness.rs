@@ -742,32 +742,32 @@ harness_test!(
 harness_test!(
     harness_transmission_cpl3_4,
     "transmission/cpl3_4_line.cir",
-    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
+    ignore = "times out (>30s): CPL transient with CMOS driver"
 );
 harness_test!(
     harness_transmission_cpl_ibm2,
     "transmission/cpl_ibm2.cir",
-    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
+    ignore = "times out (>30s): CPL transient with CMOS driver"
 );
 harness_test!(
     harness_transmission_ltra1_1,
     "transmission/ltra1_1_line.cir",
-    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
+    ignore = "~2.5% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
 );
 harness_test!(
     harness_transmission_ltra2_2,
     "transmission/ltra2_2_line.cir",
-    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
+    ignore = "~2.5% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
 );
 harness_test!(
     harness_transmission_txl1_1,
     "transmission/txl1_1_line.cir",
-    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
+    ignore = "~2% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
 );
 harness_test!(
     harness_transmission_txl2_3,
     "transmission/txl2_3_line.cir",
-    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
+    ignore = "~3% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
 );
 
 // === VBIC ===

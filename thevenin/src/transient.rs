@@ -15,7 +15,7 @@ use crate::device_stamp::{DeviceVoltageState, stamp_current_source};
 use crate::expr_val;
 use crate::ltra::{LtraCoeffs, LtraState};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
-use crate::newton::{NrOptions, newton_raphson_solve};
+use crate::newton::{NrOptions, transient_nr_solve};
 use crate::simulate::solve_op_raw;
 use crate::txl::TxlTransientStamp;
 use crate::waveform::{self, TranParams};
@@ -982,8 +982,8 @@ fn solve_timestep(
 
     if has_nonlinear {
         // Nonlinear: use NR solver.
-        let result = newton_raphson_solve(nr_options, dim, num_nodes, load, prev_solution)
-            .map_err(|e| {
+        let result =
+            transient_nr_solve(nr_options, dim, num_nodes, load, prev_solution).map_err(|e| {
                 MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string()))
             })?;
         Ok(result.solution)

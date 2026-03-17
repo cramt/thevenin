@@ -2481,8 +2481,7 @@ mod tests {
 
     #[test]
     fn test_filter_removes_expected_patterns() {
-        let input =
-            "Circuit: test\nDoing analysis\n0\t1.000e+00\t2.000e+00\n---\nIndex\ttime\n";
+        let input = "Circuit: test\nDoing analysis\n0\t1.000e+00\t2.000e+00\n---\nIndex\ttime\n";
         let filtered = filter_output(input);
         // Data rows need 3+ tokens (index, x, y) to pass the filter.
         assert!(filtered.contains("0\t1.000e+00\t2.000e+00"));
