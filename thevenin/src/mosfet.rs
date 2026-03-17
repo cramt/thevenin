@@ -255,14 +255,12 @@ impl MosfetModel {
 
         // Compute GAMMA (body effect coefficient) if not given
         if !gamma_given {
-            self.gamma =
-                (2.0 * EPSSIL * CHARGE * nsub_m3).sqrt() / oxide_cap_factor;
+            self.gamma = (2.0 * EPSSIL * CHARGE * nsub_m3).sqrt() / oxide_cap_factor;
         }
 
         // Compute VTO (threshold voltage) if not given
         if !vto_given {
-            let vfb = wkfngs
-                - self.nss * 1e4 * CHARGE / oxide_cap_factor;
+            let vfb = wkfngs - self.nss * 1e4 * CHARGE / oxide_cap_factor;
             self.vto = vfb + type_sign * (self.gamma * self.phi.sqrt() + self.phi);
         }
     }
@@ -366,8 +364,7 @@ impl MosfetModel {
         //   mode >= 0: ceq_d = cdrain - gm*vgs_eff - gds*vds_eff - gmbs*vbs_eff
         //   mode <  0: ceq_d = cdrain - gm*vgs_eff + gds*vds_eff - gmbs*vbs_eff
         let gds_vds_sign = if mode > 0 { -1.0 } else { 1.0 };
-        let ceq_d =
-            cdrain - gm * vgs_eff + gds_vds_sign * gds * vds_eff - gmbs * vbs_eff;
+        let ceq_d = cdrain - gm * vgs_eff + gds_vds_sign * gds * vds_eff - gmbs * vbs_eff;
         let ceq_bs = cbs_current - gbs * vbs;
         let ceq_bd = cbd_current - gbd * vbd;
 
@@ -609,36 +606,45 @@ pub fn stamp_mosfet(
     }
 }
 
-/// MOSFET voltage limiting for NR convergence.
-///
-/// Limits Vgs and Vds changes to prevent Newton-Raphson divergence.
-/// Returns limited (vgs, vds).
-pub fn mos_limit(vgs_new: f64, vds_new: f64, vgs_old: f64, vds_old: f64, vto: f64) -> (f64, f64) {
-    let mut vgs = vgs_new;
-    let mut vds = vds_new;
-
-    // Limit Vgs change
-    let vgs_diff = vgs - vgs_old;
-    if vgs_diff.abs() > 0.5 {
-        if vgs_diff > 0.0 {
-            vgs = vgs_old + 0.5;
+/// Limit the per-iteration change of VDS (ngspice `DEVlimvds`).
+fn limvds(vnew: f64, vold: f64) -> f64 {
+    if vold >= 3.5 {
+        if vnew > vold {
+            vnew.min(3.0 * vold + 2.0)
+        } else if vnew < 3.5 {
+            vnew.max(2.0)
         } else {
-            vgs = vgs_old - 0.5;
+            vnew
         }
+    } else if vnew > vold {
+        vnew.min(4.0)
+    } else {
+        vnew.max(-0.5)
     }
+}
 
-    // Limit Vds change near transition regions
-    let vgst = vgs - vto;
-    if vgst > 0.0 {
-        // In active region, limit Vds more carefully
-        let vds_diff = vds - vds_old;
-        if vds_diff.abs() > 2.0 * vgst.abs().max(0.5) {
-            if vds_diff > 0.0 {
-                vds = vds_old + 2.0 * vgst.abs().max(0.5);
-            } else {
-                vds = vds_old - 2.0 * vgst.abs().max(0.5);
-            }
-        }
+/// MOSFET voltage limiting for NR convergence (matches ngspice mos1load.c).
+///
+/// Uses `DEVfetlim` on Vgs or Vgd (depending on mode) and `DEVlimvds` on Vds,
+/// matching the limiting sequence in ngspice's `mos1load.c` lines 361-384.
+/// Returns limited (vgs, vds).
+pub fn mos_limit(vgs_new: f64, vds_new: f64, vgs_old: f64, vds_old: f64, von: f64) -> (f64, f64) {
+    let vgd_new = vgs_new - vds_new;
+    let vgd_old = vgs_old - vds_old;
+
+    let (vgs, mut vds);
+
+    if vds_old >= 0.0 {
+        // Forward mode: limit Vgs, then constrain Vds.
+        vgs = crate::device_stamp::fetlim(vgs_new, vgs_old, von);
+        vds = vgs - vgd_new;
+        vds = limvds(vds, vds_old);
+    } else {
+        // Reverse mode: limit Vgd (gate-drain voltage), then constrain Vds.
+        let vgd = crate::device_stamp::fetlim(vgd_new, vgd_old, von);
+        vds = vgs_new - vgd;
+        vds = -limvds(-vds, -vds_old);
+        vgs = vgd + vds;
     }
 
     (vgs, vds)

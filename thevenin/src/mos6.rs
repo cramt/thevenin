@@ -266,8 +266,7 @@ impl Mos6Model {
         let wkfngs = wkfng - (3.25 + 0.5 * egfet1 + fermis);
 
         if !gamma_given {
-            self.gamma =
-                (2.0 * EPSSIL * CHARGE * nsub_m3).sqrt() / oxide_cap_factor;
+            self.gamma = (2.0 * EPSSIL * CHARGE * nsub_m3).sqrt() / oxide_cap_factor;
         }
 
         if !vto_given {

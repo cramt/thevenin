@@ -352,20 +352,18 @@ fn solve_nonlinear_op_with_guess(
         //    nominal gmin (not the elevated gmin from gmin stepping), matching
         //    ngspice where CKTgmin stays at its nominal value during stepping and
         //    only CKTdiagGmin (solver diagonal) is elevated.
-        //    Voltage limiting is disabled here to allow the NR solver to take
-        //    large steps during initial convergence. TODO: ngspice's MODEINITFLOAT
-        //    does apply DEVfetlim, but enabling it here causes BSIM4 regressions.
+        //    Voltage limiting is disabled for the DC OP to allow the NR solver
+        //    to take large steps during initial convergence. BSIM3/4 and other
+        //    advanced models have their own unconditional limiters.
         let _ = gmin; // elevated gmin used only by solver diagonal, not device stamps
         dev_state.stamp_devices(solution, system, mna, options.gmin, false);
     };
 
     // For circuits with transmission lines (LTRA/TXL/CPL) combined with MOSFETs,
-    // use source stepping for the DC OP.  Without voltage-step limiting
-    // (use_voltage_limit=false matches ngspice MODEINITFLOAT), Gmin stepping can
-    // converge to spurious negative-voltage fixed points in multi-stage MOSFET
-    // circuits (e.g. two cascaded CMOS inverters driving LTRA lines).  Source
-    // stepping avoids this by ramping all independent sources from zero, keeping
-    // the circuit on the physical solution path at every step.
+    // use source stepping for the DC OP.  Source stepping ramps all independent
+    // sources from zero, keeping the circuit on the physical solution path and
+    // avoiding spurious negative-voltage fixed points in cascaded-inverter
+    // circuits.
     let has_tlines = !mna.ltras.is_empty() || !mna.txls.is_empty() || !mna.cpls.is_empty();
     let result = if has_tlines && !mna.mosfets.is_empty() {
         source_stepping_solve(options, dim, num_nodes, load, &initial)
@@ -1521,5 +1519,4 @@ vin 1 0 dc 5.0
         eprintln!("Spaced kv: V(2) = {v2:.6e}");
         assert!(v2 < 1.0, "NMOS should pull V(2) low, got {v2:.6e}");
     }
-
 }
