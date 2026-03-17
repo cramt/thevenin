@@ -93,15 +93,11 @@ fn lower_item(
             circuit.models.push(lower_model(m));
         }
         Item::Subckt(s) => {
-            circuit
-                .subcircuits
-                .push(lower_subckt(s, model_types)?);
+            circuit.subcircuits.push(lower_subckt(s, model_types)?);
         }
         Item::Param(ps) => {
             for p in ps {
-                circuit
-                    .params
-                    .insert(p.name.clone(), lower_expr(&p.value));
+                circuit.params.insert(p.name.clone(), lower_expr(&p.value));
             }
         }
         Item::Global(nodes) => {
@@ -128,9 +124,7 @@ fn lower_item(
         }
         Item::Options(ps) => {
             for p in ps {
-                circuit
-                    .options
-                    .insert(p.name.clone(), lower_expr(&p.value));
+                circuit.options.insert(p.name.clone(), lower_expr(&p.value));
             }
         }
         Item::Temp(t) => {
@@ -579,10 +573,7 @@ fn lower_model(m: &ModelDef) -> Model {
     }
 }
 
-fn parse_model_type_and_level(
-    kind: &str,
-    params: &[Param],
-) -> (ModelType, Option<u32>) {
+fn parse_model_type_and_level(kind: &str, params: &[Param]) -> (ModelType, Option<u32>) {
     let mt = match kind {
         "D" | "DIODE" => ModelType::Diode,
         "NPN" => ModelType::Npn,
@@ -658,9 +649,7 @@ fn lower_subckt(
                 subckt.models.push(lower_model(m));
             }
             Item::Subckt(inner) => {
-                subckt
-                    .subcircuits
-                    .push(lower_subckt(inner, &local_types)?);
+                subckt.subcircuits.push(lower_subckt(inner, &local_types)?);
             }
             Item::Param(ps) => {
                 for p in ps {
@@ -680,7 +669,10 @@ fn resolve_bjt_polarity(
     model_name: &str,
     model_types: &BTreeMap<String, String>,
 ) -> Result<BjtPolarity, SpiceLowerError> {
-    match model_types.get(&model_name.to_lowercase()).map(|s| s.as_str()) {
+    match model_types
+        .get(&model_name.to_lowercase())
+        .map(|s| s.as_str())
+    {
         Some("NPN") => Ok(BjtPolarity::Npn),
         Some("PNP") => Ok(BjtPolarity::Pnp),
         Some(_) | None => {

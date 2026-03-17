@@ -451,19 +451,18 @@ impl Component {
             | ComponentKind::Ltra { .. }
             | ComponentKind::Txl { .. } => DomainClass::Analog,
 
-            ComponentKind::Xspice { .. }
-            | ComponentKind::Cell { .. } => DomainClass::Unknown,
+            ComponentKind::Xspice { .. } | ComponentKind::Cell { .. } => DomainClass::Unknown,
 
             ComponentKind::SubcktInstance { .. } => DomainClass::Unknown,
 
-            ComponentKind::Port { domain_override, .. } => {
-                match domain_override {
-                    Some(Domain::Analog) => DomainClass::Analog,
-                    Some(Domain::Digital) => DomainClass::Digital,
-                    Some(Domain::Mixed) => DomainClass::Unknown,
-                    _ => DomainClass::Unknown,
-                }
-            }
+            ComponentKind::Port {
+                domain_override, ..
+            } => match domain_override {
+                Some(Domain::Analog) => DomainClass::Analog,
+                Some(Domain::Digital) => DomainClass::Digital,
+                Some(Domain::Mixed) => DomainClass::Unknown,
+                _ => DomainClass::Unknown,
+            },
         }
     }
 
@@ -486,7 +485,9 @@ impl Component {
                 v
             }
 
-            ComponentKind::Mosfet { d, g, s, b, body, .. } => {
+            ComponentKind::Mosfet {
+                d, g, s, b, body, ..
+            } => {
                 let mut v = vec![d.as_str(), g.as_str(), s.as_str(), b.as_str()];
                 if let Some(bd) = body {
                     v.push(bd);
@@ -494,18 +495,19 @@ impl Component {
                 v
             }
 
-            ComponentKind::Jfet { d, g, s, .. }
-            | ComponentKind::Mesfet { d, g, s, .. } => vec![d, g, s],
+            ComponentKind::Jfet { d, g, s, .. } | ComponentKind::Mesfet { d, g, s, .. } => {
+                vec![d, g, s]
+            }
 
             ComponentKind::VSource { p, n, .. }
             | ComponentKind::ISource { p, n, .. }
             | ComponentKind::BehavioralSource { p, n, .. } => vec![p, n],
 
-            ComponentKind::Vcvs { p, n, cp, cn, .. }
-            | ComponentKind::Vccs { p, n, cp, cn, .. } => vec![p, n, cp, cn],
+            ComponentKind::Vcvs { p, n, cp, cn, .. } | ComponentKind::Vccs { p, n, cp, cn, .. } => {
+                vec![p, n, cp, cn]
+            }
 
-            ComponentKind::Cccs { p, n, .. }
-            | ComponentKind::Ccvs { p, n, .. } => vec![p, n],
+            ComponentKind::Cccs { p, n, .. } | ComponentKind::Ccvs { p, n, .. } => vec![p, n],
 
             ComponentKind::VSwitch { p, n, cp, cn, .. } => vec![p, n, cp, cn],
             ComponentKind::ISwitch { p, n, .. } => vec![p, n],
@@ -535,9 +537,7 @@ impl Component {
 
             ComponentKind::Port { net, .. } => vec![net],
 
-            ComponentKind::Cell { pins, .. } => {
-                pins.values().map(|s| s.as_str()).collect()
-            }
+            ComponentKind::Cell { pins, .. } => pins.values().map(|s| s.as_str()).collect(),
         }
     }
 }

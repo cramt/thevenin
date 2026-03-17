@@ -400,11 +400,8 @@ fn solve_nonlinear_op_with_guess(
         //    nominal gmin (not the elevated gmin from gmin stepping), matching
         //    ngspice where CKTgmin stays at its nominal value during stepping and
         //    only CKTdiagGmin (solver diagonal) is elevated.
-        //    Voltage limiting is disabled for the DC OP to allow the NR solver
-        //    to take large steps during initial convergence. BSIM3/4 and other
-        //    advanced models have their own unconditional limiters.
         let _ = gmin; // elevated gmin used only by solver diagonal, not device stamps
-        dev_state.stamp_devices(solution, system, mna, options.gmin, false);
+        dev_state.stamp_devices(solution, system, mna, options.gmin);
     };
 
     // For circuits with transmission lines (LTRA/TXL/CPL) combined with MOSFETs,

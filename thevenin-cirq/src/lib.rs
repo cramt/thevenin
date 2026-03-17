@@ -9,8 +9,8 @@
 //! Simulation commands (`.OP`, `.TRAN`, etc.) from SPICE are ignored — this IR
 //! represents circuit *structure* only.
 
-pub mod ir;
-pub mod from_spice;
 pub mod cirq_parse;
+pub mod from_spice;
+pub mod ir;
 
 pub use ir::*;

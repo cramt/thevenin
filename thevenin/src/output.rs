@@ -2082,6 +2082,14 @@ pub fn filter_output(text: &str) -> String {
         if !contains_sci_notation(line) {
             continue;
         }
+        // Filter Initial Transient Solution node voltage lines that survive
+        // the scientific notation check.  These have exactly 2 tokens
+        // (node_name, voltage), while actual data rows always have 3+ tokens
+        // (index, sweep/time, value(s)).
+        let token_count = line.split_whitespace().count();
+        if token_count < 3 {
+            continue;
+        }
         lines.push(line);
     }
 
@@ -2384,12 +2392,22 @@ fn split_data_groups(data: &[(u64, f64, Vec<f64>)]) -> Vec<Vec<(u64, f64, Vec<f6
     let mut groups: Vec<Vec<(u64, f64, Vec<f64>)>> = Vec::new();
     let mut current: Vec<(u64, f64, Vec<f64>)> = Vec::new();
     for row in data {
-        if current.is_empty() || current[0].2.len() == row.2.len() {
-            current.push(row.clone());
+        let new_group = if current.is_empty() {
+            false
+        } else if current[0].2.len() != row.2.len() {
+            // Different column count → new analysis section.
+            true
+        } else if row.0 == 0 && current.last().is_some_and(|prev| prev.0 > 0) {
+            // Index resets to 0 → new analysis section (e.g., DC sweep
+            // followed by transient, both with the same column count).
+            true
         } else {
+            false
+        };
+        if new_group {
             groups.push(std::mem::take(&mut current));
-            current.push(row.clone());
         }
+        current.push(row.clone());
     }
     if !current.is_empty() {
         groups.push(current);
@@ -2463,9 +2481,11 @@ mod tests {
 
     #[test]
     fn test_filter_removes_expected_patterns() {
-        let input = "Circuit: test\nDoing analysis\n0\t1.000e+00\n---\nIndex\ttime\n";
+        let input =
+            "Circuit: test\nDoing analysis\n0\t1.000e+00\t2.000e+00\n---\nIndex\ttime\n";
         let filtered = filter_output(input);
-        assert!(filtered.contains("0\t1.000e+00"));
+        // Data rows need 3+ tokens (index, x, y) to pass the filter.
+        assert!(filtered.contains("0\t1.000e+00\t2.000e+00"));
         assert!(!filtered.contains("Circuit"));
         assert!(!filtered.contains("Doing"));
         assert!(!filtered.contains("---"));

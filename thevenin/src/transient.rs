@@ -972,12 +972,11 @@ fn solve_timestep(
 
         // 4. Stamp all nonlinear device companions. Device stamps always use
         //    nominal gmin (not the elevated gmin from gmin stepping).
-        //    Voltage limiting IS applied (use_voltage_limit=true) during transient
-        //    timestep NR, matching ngspice MODETRANOP which uses DEVfetlim/pnjlim
-        //    to prevent NR divergence across large timesteps.
+        //    Voltage limiting is always applied, matching ngspice MODETRANOP
+        //    which uses DEVfetlim/pnjlim to prevent NR divergence.
         if has_nonlinear {
             let _ = gmin;
-            dev_state.stamp_devices(solution, system, mna, nr_options.gmin, true);
+            dev_state.stamp_devices(solution, system, mna, nr_options.gmin);
         }
     };
 

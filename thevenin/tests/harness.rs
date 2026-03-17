@@ -480,7 +480,7 @@ harness_test!(
 harness_test!(
     harness_general_mosamp,
     "general/mosamp.cir",
-    ignore = "tran: singular matrix (Level 2 MOSFET — DC OP converges but transient solver fails)"
+    ignore = "tran: singular matrix during transient (DC OP converges, Level 2 MOSFET)"
 );
 harness_test!(harness_general_mosmem, "general/mosmem.cir");
 harness_test!(harness_general_rca3040, "general/rca3040.cir");
@@ -488,7 +488,7 @@ harness_test!(harness_general_rc, "general/rc.cir");
 harness_test!(
     harness_general_rtlinv,
     "general/rtlinv.cir",
-    ignore = "times out (>30s)"
+    ignore = "~0.22% transient accuracy error: NR oscillation in BJT switching dynamics"
 );
 harness_test!(
     harness_general_schmitt,
@@ -600,8 +600,7 @@ harness_test!(harness_regression_misc_bugs_1, "regression/misc/bugs-1.cir");
 harness_test!(harness_regression_misc_bugs_2, "regression/misc/bugs-2.cir");
 harness_test!(
     harness_regression_misc_dollar_1,
-    "regression/misc/dollar-1.cir",
-    ignore = "Requires .control scripting language"
+    "regression/misc/dollar-1.cir"
 );
 harness_test!(
     harness_regression_misc_empty_1,
@@ -661,8 +660,7 @@ harness_test!(
 );
 harness_test!(
     harness_regression_parser_xpressn_3,
-    "regression/parser/xpressn-3.cir",
-    ignore = "Requires .control scripting language"
+    "regression/parser/xpressn-3.cir"
 );
 
 // === Regression: pz ===

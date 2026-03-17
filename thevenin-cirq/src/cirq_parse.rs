@@ -229,11 +229,7 @@ fn lower_cirq_component(
                 .direction
                 .ok_or(CirqParseError::MissingField("direction"))?;
             let direction = parse_direction(&dir_str)?;
-            let domain_override = comp
-                .domain
-                .as_deref()
-                .map(parse_domain)
-                .transpose()?;
+            let domain_override = comp.domain.as_deref().map(parse_domain).transpose()?;
             let order = comp.order.unwrap_or_else(|| {
                 let o = *next_port_order;
                 *next_port_order += 1;
@@ -281,10 +277,12 @@ fn lower_cirq_component(
         }
 
         "coupling" => {
-            let inductors = comp.inductors.ok_or_else(|| CirqParseError::InvalidComponent {
-                id: comp.id.clone(),
-                msg: "coupling requires 'inductors' field".into(),
-            })?;
+            let inductors = comp
+                .inductors
+                .ok_or_else(|| CirqParseError::InvalidComponent {
+                    id: comp.id.clone(),
+                    msg: "coupling requires 'inductors' field".into(),
+                })?;
             if inductors.len() != 2 {
                 return Err(CirqParseError::InvalidComponent {
                     id: comp.id.clone(),
@@ -534,8 +532,8 @@ fn lower_cirq_component(
         }
 
         // Digital primitives — not natively in SPICE, but valid CirQ
-        "and" | "or" | "not" | "nand" | "nor" | "xor" | "xnor" | "buf" | "dff"
-        | "dff_sr" | "mux2" | "latch" => {
+        "and" | "or" | "not" | "nand" | "nor" | "xor" | "xnor" | "buf" | "dff" | "dff_sr"
+        | "mux2" | "latch" => {
             let pins = extract_pin_map(&comp)?;
             ComponentKind::Cell {
                 model: comp.comp_type.clone(),
@@ -617,11 +615,10 @@ fn lower_cirq_component(
                         .map(|(i, v)| (i.to_string(), yaml_to_string(v)))
                         .collect()
                 }
-                Some(serde_yaml::Value::Mapping(map)) => {
-                    map.iter()
-                        .map(|(k, v)| (yaml_to_string(k), yaml_to_string(v)))
-                        .collect()
-                }
+                Some(serde_yaml::Value::Mapping(map)) => map
+                    .iter()
+                    .map(|(k, v)| (yaml_to_string(k), yaml_to_string(v)))
+                    .collect(),
                 _ => BTreeMap::new(),
             };
             ComponentKind::SubcktInstance {
@@ -750,9 +747,7 @@ fn extract_pin_map(comp: &CirqComponent) -> Result<BTreeMap<String, String>, Cir
     }
 }
 
-fn extract_two_pin_map(
-    comp: &CirqComponent,
-) -> Result<(String, String), CirqParseError> {
+fn extract_two_pin_map(comp: &CirqComponent) -> Result<(String, String), CirqParseError> {
     let pins = extract_pin_map(comp)?;
     let p = pin_or_err(&pins, "p", &comp.id)?;
     let n = pin_or_err(&pins, "n", &comp.id)?;
@@ -764,12 +759,12 @@ fn pin_or_err(
     key: &str,
     comp_id: &str,
 ) -> Result<String, CirqParseError> {
-    pins.get(key).cloned().ok_or_else(|| {
-        CirqParseError::InvalidComponent {
+    pins.get(key)
+        .cloned()
+        .ok_or_else(|| CirqParseError::InvalidComponent {
             id: comp_id.to_string(),
             msg: format!("missing required pin '{key}'"),
-        }
-    })
+        })
 }
 
 fn extract_value(comp: &CirqComponent) -> Result<Value, CirqParseError> {
@@ -783,9 +778,11 @@ fn extract_value(comp: &CirqComponent) -> Result<Value, CirqParseError> {
 }
 
 fn build_source_spec(comp: &CirqComponent) -> SourceSpec {
-    let dc = comp.value.as_ref().map(yaml_to_value).or_else(|| {
-        comp.params.get("dc").map(yaml_to_value)
-    });
+    let dc = comp
+        .value
+        .as_ref()
+        .map(yaml_to_value)
+        .or_else(|| comp.params.get("dc").map(yaml_to_value));
     let ac_mag = comp.params.get("ac_mag").map(yaml_to_value);
     let ac_phase = comp.params.get("ac_phase").map(yaml_to_value);
     let waveform = comp.waveform.as_ref().and_then(|w| lower_waveform(w).ok());
@@ -867,10 +864,7 @@ fn lower_waveform(w: &CirqWaveform) -> Result<Waveform, CirqParseError> {
     }
 }
 
-fn req_param(
-    p: &BTreeMap<String, serde_yaml::Value>,
-    key: &str,
-) -> Result<Value, CirqParseError> {
+fn req_param(p: &BTreeMap<String, serde_yaml::Value>, key: &str) -> Result<Value, CirqParseError> {
     p.get(key)
         .map(yaml_to_value)
         .ok_or_else(|| CirqParseError::InvalidValue(format!("missing waveform param '{key}'")))
@@ -880,9 +874,7 @@ fn opt_param(p: &BTreeMap<String, serde_yaml::Value>, key: &str) -> Option<Value
     p.get(key).map(yaml_to_value)
 }
 
-fn extract_xspice_connections(
-    comp: &CirqComponent,
-) -> Result<Vec<XspicePort>, CirqParseError> {
+fn extract_xspice_connections(comp: &CirqComponent) -> Result<Vec<XspicePort>, CirqParseError> {
     match &comp.pins {
         Some(serde_yaml::Value::Sequence(seq)) => {
             let mut ports = Vec::new();
@@ -892,10 +884,7 @@ fn extract_xspice_connections(
                         ports.push(XspicePort::Scalar(s.clone()));
                     }
                     serde_yaml::Value::Sequence(inner) => {
-                        let arr: Vec<String> = inner
-                            .iter()
-                            .map(yaml_to_string)
-                            .collect();
+                        let arr: Vec<String> = inner.iter().map(yaml_to_string).collect();
                         ports.push(XspicePort::Array(arr));
                     }
                     _ => {
@@ -1340,10 +1329,7 @@ components:
         // Both should have the same nets
         assert_eq!(from_sp.nets.len(), from_cq.nets.len());
         for (name, net) in &from_sp.nets {
-            assert!(
-                from_cq.nets.contains_key(name),
-                "CirQ missing net {name}"
-            );
+            assert!(from_cq.nets.contains_key(name), "CirQ missing net {name}");
             assert_eq!(
                 net.domain, from_cq.nets[name].domain,
                 "Domain mismatch for net {name}"
@@ -1362,10 +1348,7 @@ components:
                     ..
                 },
             ) => {
-                assert!(
-                    (a - b).abs() < 1e-9,
-                    "R1 value mismatch: {a} vs {b}"
-                );
+                assert!((a - b).abs() < 1e-9, "R1 value mismatch: {a} vs {b}");
             }
             (a, b) => panic!("expected Resistor/Resistor, got {a:?} / {b:?}"),
         }

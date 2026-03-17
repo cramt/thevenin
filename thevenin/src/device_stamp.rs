@@ -329,20 +329,18 @@ impl DeviceVoltageState {
     ///
     /// This is the shared NR load logic used by both DC operating point and
     /// transient analysis. For each device type: extract terminal voltages from
-    /// the current solution, optionally apply voltage limiting, compute the
-    /// companion model, and stamp it into the linear system.
+    /// the current solution, apply voltage limiting, compute the companion
+    /// model, and stamp it into the linear system.
     ///
-    /// `use_voltage_limit` should be `true` for transient timestep NR (matching
-    /// ngspice MODETRANOP which uses DEVfetlim/pnjlim) and `false` for DC OP
-    /// gmin-stepping (matching ngspice MODEINITFLOAT which does NOT call
-    /// DEVfetlim, allowing large NR steps to find the correct operating point).
+    /// All device types apply their own voltage limiting unconditionally,
+    /// matching ngspice's MODEINITFLOAT behaviour where DEVfetlim/pnjlim are
+    /// active even during DC OP iterations.
     pub fn stamp_devices(
         &self,
         solution: &[f64],
         system: &mut LinearSystem,
         mna: &MnaSystem,
         gmin: f64,
-        use_voltage_limit: bool,
     ) {
         // Diodes
         {
@@ -393,11 +391,12 @@ impl DeviceVoltageState {
             for (mi, mos) in mna.mosfets.iter().enumerate() {
                 let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
 
-                let (vgs, vds) = if use_voltage_limit {
-                    mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto)
-                } else {
-                    (raw_vgs, raw_vds)
-                };
+                // Always apply voltage limiting for Level 1 MOSFETs, matching
+                // ngspice's MODEINITFLOAT which enables DEVfetlim/DEVlimvds even
+                // during DC OP iterations.  This prevents NR divergence for PMOS
+                // transistors with LAMBDA=0 (gds=0 in saturation).  BSIM3/4 have
+                // their own unconditional limiting and are not affected.
+                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
                 prev[mi] = (vgs, vds);
 
                 let mut eff_model = mos.model.clone();
@@ -414,11 +413,9 @@ impl DeviceVoltageState {
             for (mi, mos) in mna.mos6s.iter().enumerate() {
                 let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
 
-                let (vgs, vds) = if use_voltage_limit {
-                    mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto)
-                } else {
-                    (raw_vgs, raw_vds)
-                };
+                // Always apply voltage limiting for Level 6 MOSFETs (same
+                // rationale as Level 1 above).
+                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
                 prev[mi] = (vgs, vds);
 
                 let betac = mos.betac();
@@ -581,8 +578,17 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_vbic.borrow_mut();
             for (vi, vbic) in mna.vbics.iter().enumerate() {
-                let (raw_vbei, raw_vbex, raw_vbci, raw_vbcx, raw_vbep, raw_vrci, raw_vrbi, raw_vrbp, raw_vbcp) =
-                    vbic.junction_voltages(solution);
+                let (
+                    raw_vbei,
+                    raw_vbex,
+                    raw_vbci,
+                    raw_vbcx,
+                    raw_vbep,
+                    raw_vrci,
+                    raw_vrbi,
+                    raw_vrbp,
+                    raw_vbcp,
+                ) = vbic.junction_voltages(solution);
 
                 // Clamp all junction voltages to a safe range to prevent NaN/Inf
                 // from corrupted solution vectors (e.g., after a failed NR attempt
@@ -591,10 +597,18 @@ impl DeviceVoltageState {
                 // Junction voltages: clamp to ±5V (safe for exp(v/vt) < exp(200))
                 // Resistance voltages: allow wider range (±50V)
                 let clamp_jct = |v: f64| {
-                    if v.is_nan() || v.is_infinite() { 0.0 } else { v.clamp(-5.0, 5.0) }
+                    if v.is_nan() || v.is_infinite() {
+                        0.0
+                    } else {
+                        v.clamp(-5.0, 5.0)
+                    }
                 };
                 let clamp_res = |v: f64| {
-                    if v.is_nan() || v.is_infinite() { 0.0 } else { v.clamp(-50.0, 50.0) }
+                    if v.is_nan() || v.is_infinite() {
+                        0.0
+                    } else {
+                        v.clamp(-50.0, 50.0)
+                    }
                 };
                 let vbex = clamp_jct(raw_vbex);
                 let vbcx = clamp_jct(raw_vbcx);
@@ -606,8 +620,10 @@ impl DeviceVoltageState {
 
                 // If prev voltages are corrupted (NaN/Inf from a prior failed NR
                 // attempt), reset them to zero so that pnjlim works correctly.
-                if prev[vi].0.is_nan() || prev[vi].0.is_infinite()
-                    || prev[vi].1.is_nan() || prev[vi].1.is_infinite()
+                if prev[vi].0.is_nan()
+                    || prev[vi].0.is_infinite()
+                    || prev[vi].1.is_nan()
+                    || prev[vi].1.is_infinite()
                 {
                     prev[vi] = (0.0, 0.0);
                 }
@@ -615,7 +631,11 @@ impl DeviceVoltageState {
                 // Self-heating: clone model and adjust temperature based on Vrth
                 let vrth = if vbic.model.rth > 0.0 && vbic.rth_idx.is_some() {
                     let v = vbic.vrth(solution);
-                    if v.is_nan() || v.is_infinite() { 0.0 } else { v.clamp(-1e3, 1e3) }
+                    if v.is_nan() || v.is_infinite() {
+                        0.0
+                    } else {
+                        v.clamp(-1e3, 1e3)
+                    }
                 } else {
                     0.0
                 };
