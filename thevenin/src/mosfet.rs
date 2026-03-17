@@ -355,10 +355,19 @@ impl MosfetModel {
         let (gbs, cbs_current) = bulk_diode_current(vbs, self.is, vt);
         let (gbd, cbd_current) = bulk_diode_current(vbd, self.is, vt);
 
-        // Equivalent current source for NR:
-        // ceq_d = cdrain - gm*vgs_eff - gds*vds_eff - gmbs*vbs_eff
-        // (this is for the mode-adjusted voltages)
-        let ceq_d = cdrain - gm * vgs_eff - gds * vds_eff - gmbs * vbs_eff;
+        // Equivalent current source for NR (Norton companion).
+        // In ngspice mos1load.c, the cdreq formula differs by mode:
+        //   mode >= 0: cdreq = type * (cdrain - gds*vds - gm*vgs - gmbs*vbs)
+        //   mode <  0: cdreq = -type * (cdrain - gds*(-vds_stored) - gm*vgs - gmbs*vbs)
+        // where vds_stored = vds_eff (positive), so (-vds_stored) flips the gds term.
+        // The stamp applies: rhs[dp] -= mode * sign * m * ceq_d
+        //
+        // We compute ceq_d such that mode*sign*ceq_d matches ngspice's cdreq/m:
+        //   mode >= 0: ceq_d = cdrain - gm*vgs_eff - gds*vds_eff - gmbs*vbs_eff
+        //   mode <  0: ceq_d = cdrain - gm*vgs_eff + gds*vds_eff - gmbs*vbs_eff
+        let gds_vds_sign = if mode > 0 { -1.0 } else { 1.0 };
+        let ceq_d =
+            cdrain - gm * vgs_eff + gds_vds_sign * gds * vds_eff - gmbs * vbs_eff;
         let ceq_bs = cbs_current - gbs * vbs;
         let ceq_bd = cbd_current - gbd * vbd;
 
@@ -581,7 +590,11 @@ pub fn stamp_mosfet(
     }
 
     // 7. Equivalent current sources on the RHS.
-    let ceq_d = sign * m * comp.ceq_d;
+    // ceq_d uses mode*sign to match ngspice's sign convention for reversed mode:
+    //   mode >= 0: cdreq = +type * ceq_d_inner
+    //   mode <  0: cdreq = -type * ceq_d_inner  (see companion() for ceq_d computation)
+    let mode_f = comp.mode as f64;
+    let ceq_d = mode_f * sign * m * comp.ceq_d;
     let ceq_bs = sign * m * comp.ceq_bs;
     let ceq_bd = sign * m * comp.ceq_bd;
 

@@ -613,3 +613,87 @@ temperature evaluation (clone model → temperature_adjust → companion) vs
 ngspice's single-pass kernel.  Both approaches produce the same formulas but
 differ in FP evaluation order, which accumulates through the thermal feedback
 loop.  Per project policy, these remain as known FP implementation deviations.
+
+---
+
+## Applied fix: tokenizer spaced key=value parsing
+
+**Affected tests:** All circuits using `w = 10u` (with spaces around `=`) in MOSFET
+instance parameters — primarily the 6 transmission line test fixtures.
+
+**Root cause:** The tokenizer split `w = 10u` into three separate tokens `["w", "=",
+"10u"]`. The MOSFET parser's positional-vs-kv heuristic treated `"w"` as a positional
+token (node name), causing:
+1. The actual model name (e.g., `"mn0p9"`) was misidentified as the 5th terminal (body)
+2. `"w"` was misidentified as the model name
+3. Model lookup for `"W"` failed → silent fallback to a default NMOS model
+4. W/L parameters were not parsed → default 100μm values used
+
+This meant PMOS transistors were silently simulated as default NMOS, producing wrong
+results that happened to converge (because the default NMOS has different gds behavior).
+
+**Fix applied:** Added a post-tokenization pass in `tokenize()` that collapses
+`"key" "=" "value"` triplets into `"key=value"`, matching standard SPICE behavior.
+This is a general fix that affects all element types, not just MOSFETs.
+
+---
+
+## Applied fix: MOSFET reversed-mode ceq_d sign convention
+
+**Root cause:** In ngspice mos1load.c, the Norton equivalent current `cdreq` has a
+different formula for mode=-1 (reversed source/drain):
+- mode >= 0: `cdreq = type * (cdrain - gds*vds - gm*vgs - gmbs*vbs)`
+- mode <  0: `cdreq = -type * (cdrain + gds*vds_eff - gm*vgs_eff - gmbs*vbs_eff)`
+
+Note two differences: (1) the overall sign flips from `+type` to `-type`, and (2) the
+`gds*vds` term sign flips from `-` to `+` (because ngspice stores vds_eff as positive
+and uses `-vds_stored` in the formula).
+
+Our code was using `type * ceq_d` for both modes, producing wrong RHS currents when
+the MOSFET operates in reversed mode. This caused current to flow in the wrong direction,
+making the NR solver diverge for PMOS pull-up circuits.
+
+**Fix applied:** Modified `companion()` to compute ceq_d with the gds term sign flipped
+for mode=-1. Modified `stamp_mosfet()` to multiply ceq_d by `mode * sign` instead of
+just `sign`.
+
+**Impact:** Corrects PMOS behavior in reversed mode. All NMOS-only tests (mode=+1)
+are unaffected.
+
+---
+
+## Applied fix: MOSFET jct_initial_guess mode initialization
+
+**Root cause:** The `jct_initial_guess()` function was initializing MOSFETs with
+`vds = 0`, placing them right at the mode=+1/-1 transition boundary. For PMOS
+transistors, this incorrectly put them in mode=+1 during the initial guess, when
+they should be in mode=-1.
+
+ngspice's MODEINITJCT sets `vds = vgs = type * tVbi`, which gives:
+- NMOS: vds > 0 → mode=+1 (correct)
+- PMOS: vds < 0 → mode=-1 (correct)
+
+**Fix applied:** Changed jct_initial_guess to set `vds = vgs = von` (where
+`von = sign * (vto + gamma * sqrt(phi))`), matching ngspice's initialization.
+For NMOS (vto>0): von>0 → mode=+1. For PMOS (vto<0): von<0 → mode=-1.
+
+---
+
+## Known issue: PMOS NR convergence in CMOS inverters
+
+**Affected tests:** All 6 transmission line tests (ltra1_1, ltra2_2, txl1_1, txl2_3,
+cpl3_4, cpl_ibm2) — these use CMOS inverter driver stages.
+
+**Status:** The tokenizer and ceq_d sign fixes are correct but insufficient to make
+these tests converge. The PMOS with LAMBDA=0 in saturation has gds=0, leaving the
+output node with nearly zero self-conductance in the MNA matrix. The NR solver cannot
+converge because the matrix is nearly singular at the output node.
+
+**Root cause:** With gds=0 in saturation and mode=-1 (reversed), the sp diagonal of
+the MNA matrix has only gbs≈1e-12 from the bulk junction. ngspice handles this through
+MODEINITFLOAT voltage limiting (DEVfetlim), which we cannot enable without regressing
+BSIM4 tests. A proper fix would require implementing ngspice's full MODEINITJCT →
+MODEINITFLOAT convergence sequence with per-device-type limiting.
+
+**Workaround:** The transmission line test ignore reasons should be updated to reflect
+the actual failure mode (PMOS NR convergence, not timestep control).

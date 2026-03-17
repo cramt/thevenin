@@ -744,32 +744,32 @@ harness_test!(
 harness_test!(
     harness_transmission_cpl3_4,
     "transmission/cpl3_4_line.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
 );
 harness_test!(
     harness_transmission_cpl_ibm2,
     "transmission/cpl_ibm2.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
 );
 harness_test!(
     harness_transmission_ltra1_1,
     "transmission/ltra1_1_line.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
 );
 harness_test!(
     harness_transmission_ltra2_2,
     "transmission/ltra2_2_line.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
 );
 harness_test!(
     harness_transmission_txl1_1,
     "transmission/txl1_1_line.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
 );
 harness_test!(
     harness_transmission_txl2_3,
     "transmission/txl2_3_line.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "PMOS NR non-convergence: CMOS inverter driver with LAMBDA=0 (gds=0 in saturation)"
 );
 
 // === VBIC ===

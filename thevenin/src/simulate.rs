@@ -236,7 +236,7 @@ fn jct_initial_guess(
     base_matrix: &crate::SparseMatrix,
     base_rhs: &[f64],
 ) -> Vec<f64> {
-    use crate::mosfet::{mos_limit, stamp_mosfet};
+    use crate::mosfet::stamp_mosfet;
 
     let mut system = LinearSystem::new(dim);
 
@@ -253,14 +253,16 @@ fn jct_initial_guess(
 
     // Stamp each Level-1 MOSFET at its threshold voltage.
     // von (in our signed convention) = sign * (vto + gamma * sqrt(phi)).
-    // We want vgs = von + 0.1V for the companion.  mos_limit with
-    //   prev_vgs = von + 0.6  and  raw_vgs = 0
-    // gives vgs_limited = (von + 0.6) - 0.5 = von + 0.1  (since |diff| = von+0.6 > 0.5).
+    // We want vgs slightly above threshold for the companion.
+    // vds is set to von as well (matching ngspice's MODEINITJCT where
+    // vds = vgs = type * tVbi), which puts the MOSFET in the correct
+    // mode (NMOS: mode=+1, PMOS: mode=-1).
     let zeros = vec![0.0_f64; dim];
     for mos in &mna.mosfets {
         let sign = mos.model.mos_type.sign();
         let von = sign * (mos.model.vto + mos.model.gamma * mos.model.phi.sqrt());
-        let (vgs, vds) = mos_limit(0.0, 0.0, von + 0.6, 0.0, mos.model.vto);
+        let vgs = von;
+        let vds = von;
         let mut eff_model = mos.model.clone();
         eff_model.kp = mos.beta();
         let comp = eff_model.companion(vgs, vds, 0.0);
@@ -350,9 +352,9 @@ fn solve_nonlinear_op_with_guess(
         //    nominal gmin (not the elevated gmin from gmin stepping), matching
         //    ngspice where CKTgmin stays at its nominal value during stepping and
         //    only CKTdiagGmin (solver diagonal) is elevated.
-        //    Voltage limiting (mos_limit / pnjlim) is NOT applied here, matching
-        //    ngspice's MODEINITFLOAT which calls DEVload without DEVfetlim so that
-        //    NR can take large steps to find the correct DC operating point.
+        //    Voltage limiting is disabled here to allow the NR solver to take
+        //    large steps during initial convergence. TODO: ngspice's MODEINITFLOAT
+        //    does apply DEVfetlim, but enabling it here causes BSIM4 regressions.
         let _ = gmin; // elevated gmin used only by solver diagonal, not device stamps
         dev_state.stamp_devices(solution, system, mna, options.gmin, false);
     };
@@ -1495,4 +1497,29 @@ VG 1 0 -2
             );
         }
     }
+
+    #[test]
+    fn test_spaced_kv_mosfet_params() {
+        // Verify that `w = 10u` (with spaces around =) parses correctly.
+        // NMOS pull-down through R: VDD → R → out → NMOS → GND
+        let netlist = Netlist::parse(
+            "Spaced kv test
+m1 2 1 0 0 nm w = 10u l = 1u
+R1 3 2 1k
+vdd 3 0 dc 5.0
+vin 1 0 dc 5.0
+.OP
+.MODEL nm NMOS VTO=0.8 KP=110U
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_op(&netlist).unwrap();
+        let v2 = op_voltage(&result, "2");
+        // With gate=5V, VTO=0.8V, NMOS is on. V(2) should be pulled low.
+        eprintln!("Spaced kv: V(2) = {v2:.6e}");
+        assert!(v2 < 1.0, "NMOS should pull V(2) low, got {v2:.6e}");
+    }
+
 }

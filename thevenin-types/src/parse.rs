@@ -254,7 +254,7 @@ fn process_conditionals(lines: Vec<(usize, String)>) -> Vec<(usize, String)> {
 /// Split a logical line into tokens on whitespace, but keep parenthesised
 /// groups (waveform args like `PULSE(0 1 1n)`) as single tokens.
 fn tokenize(line: &str) -> Vec<String> {
-    let mut tokens: Vec<String> = Vec::new();
+    let mut raw: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut depth: i32 = 0;
     let mut in_squote = false;
@@ -284,7 +284,7 @@ fn tokenize(line: &str) -> Vec<String> {
             }
             ' ' | '\t' if depth == 0 && !in_squote && !in_brace => {
                 if !current.is_empty() {
-                    tokens.push(current.clone());
+                    raw.push(current.clone());
                     current.clear();
                 }
             }
@@ -292,7 +292,22 @@ fn tokenize(line: &str) -> Vec<String> {
         }
     }
     if !current.is_empty() {
-        tokens.push(current);
+        raw.push(current);
+    }
+
+    // Collapse spaced key=value triplets: "key" "=" "value" → "key=value".
+    // SPICE allows `W = 10u` as equivalent to `W=10u`.
+    let mut tokens: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        if i + 2 < raw.len() && raw[i + 1] == "=" {
+            // Merge "key" "=" "value" into "key=value"
+            tokens.push(format!("{}={}", raw[i], raw[i + 2]));
+            i += 3;
+        } else {
+            tokens.push(raw[i].clone());
+            i += 1;
+        }
     }
     tokens
 }
