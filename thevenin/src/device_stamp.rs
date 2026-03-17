@@ -714,5 +714,55 @@ impl DeviceVoltageState {
 
             stamp_current_source(&mut system.rhs, bsrc.pos_idx, bsrc.neg_idx, i_eq);
         }
+
+        // XSPICE code model instances
+        if let Some(ref registry) = mna.xspice_registry {
+            for inst in &mna.xspice_instances {
+                let cm_def = match registry.get(&inst.model_type) {
+                    Some(def) => def,
+                    None => continue,
+                };
+
+                // Extract port values from current solution
+                let port_values: Vec<f64> = inst
+                    .port_connections
+                    .iter()
+                    .map(|conn| {
+                        let port_def = &cm_def.ports[conn.port_def_index];
+                        match port_def.port_type {
+                            thevenin_xspice::PortType::Voltage
+                            | thevenin_xspice::PortType::Conductance
+                            | thevenin_xspice::PortType::DifferentialVoltage => {
+                                let vp = conn.pos_idx.map(|i| solution[i]).unwrap_or(0.0);
+                                let vn = conn.neg_idx.map(|i| solution[i]).unwrap_or(0.0);
+                                vp - vn
+                            }
+                            thevenin_xspice::PortType::Current
+                            | thevenin_xspice::PortType::Resistance => {
+                                conn.branch_idx.map(|i| solution[i]).unwrap_or(0.0)
+                            }
+                        }
+                    })
+                    .collect();
+
+                let mut state_borrow = inst.state.borrow_mut();
+                let inputs = thevenin_xspice::CmInputs {
+                    port_values: &port_values,
+                    params: &inst.params,
+                    mode: thevenin_xspice::AnalysisMode::DcOp,
+                };
+
+                let outputs = cm_def.evaluate(&inputs, &mut **state_borrow);
+
+                thevenin_xspice::stamp_xspice_instance(
+                    &mut system.matrix,
+                    &mut system.rhs,
+                    inst,
+                    &cm_def.ports,
+                    &outputs,
+                    &port_values,
+                );
+            }
+        }
     }
 }

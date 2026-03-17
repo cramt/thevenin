@@ -89,6 +89,12 @@ impl SparseMatrix {
     }
 }
 
+impl thevenin_xspice::MatrixStamp for SparseMatrix {
+    fn add(&mut self, row: usize, col: usize, value: f64) {
+        self.add(row, col, value);
+    }
+}
+
 /// A linear system Ax = b assembled in triplet form.
 #[derive(Debug, Clone)]
 pub struct LinearSystem {

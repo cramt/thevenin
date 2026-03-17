@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use thevenin_types::{Element, ElementKind, Expr, Netlist};
+use thevenin_types::{Element, ElementKind, Expr, Netlist, XspiceConnection};
+use thevenin_xspice::{
+    CodeModelRegistry, ParamValue, PortConnection, PortDirection, PortType, XspiceInstance,
+};
 use thiserror::Error;
 
 use crate::LinearSystem;
@@ -30,6 +34,10 @@ pub enum MnaError {
     SubcktError(#[from] crate::subckt::SubcktError),
     #[error("expression error in {element}: {detail}")]
     ExprError { element: String, detail: String },
+    #[error("XSPICE model type '{0}' not found in registry")]
+    XspiceModelNotFound(String),
+    #[error("XSPICE instance '{instance}': {detail}")]
+    XspiceError { instance: String, detail: String },
 }
 
 /// Maps node names to matrix indices. Ground node "0" is excluded.
@@ -304,6 +312,10 @@ pub struct MnaSystem {
     pub ccvs_sources: Vec<CcvsInstance>,
     /// Resolved behavioral source (B-element) instances for NR iteration.
     pub behavioral_sources: Vec<BehavioralSourceInstance>,
+    /// Resolved XSPICE code model instances.
+    pub xspice_instances: Vec<XspiceInstance>,
+    /// XSPICE code model registry (shared across instances).
+    pub xspice_registry: Option<Arc<CodeModelRegistry>>,
 }
 
 impl MnaSystem {
@@ -337,6 +349,7 @@ impl MnaSystem {
             || !self.mesfets.is_empty()
             || !self.hfets.is_empty()
             || !self.behavioral_sources.is_empty()
+            || !self.xspice_instances.is_empty()
     }
 
     /// Total number of nodes including internal nodes created by nonlinear
@@ -852,16 +865,36 @@ fn push_mosfet_caps(
 /// independent current sources (I), capacitors (C, open in DC),
 /// inductors (L, short in DC), and diodes (D, nonlinear).
 pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
-    assemble_mna_inner(netlist, false)
+    assemble_mna_inner(netlist, false, None)
+}
+
+/// Assemble MNA with an XSPICE code model registry.
+pub fn assemble_mna_with_xspice(
+    netlist: &Netlist,
+    registry: Arc<CodeModelRegistry>,
+) -> Result<MnaSystem, MnaError> {
+    assemble_mna_inner(netlist, false, Some(registry))
 }
 
 /// Assemble MNA using MODEDC behavior: waveform sources are evaluated at t=0,
 /// ignoring any explicit DC value. This matches ngspice's initial transient solution.
 pub fn assemble_mna_modedc(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
-    assemble_mna_inner(netlist, true)
+    assemble_mna_inner(netlist, true, None)
 }
 
-fn assemble_mna_inner(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaError> {
+/// Assemble MNA using MODEDC behavior with XSPICE registry.
+pub fn assemble_mna_modedc_with_xspice(
+    netlist: &Netlist,
+    registry: Arc<CodeModelRegistry>,
+) -> Result<MnaSystem, MnaError> {
+    assemble_mna_inner(netlist, true, Some(registry))
+}
+
+fn assemble_mna_inner(
+    netlist: &Netlist,
+    modedc: bool,
+    xspice_registry: Option<Arc<CodeModelRegistry>>,
+) -> Result<MnaSystem, MnaError> {
     // Resolve parameter expressions before flattening.
     let mut resolved = netlist.clone();
     crate::expr::resolve_netlist_exprs(&mut resolved).map_err(|e| MnaError::ExprError {
@@ -870,11 +903,15 @@ fn assemble_mna_inner(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaE
     })?;
     // Flatten subcircuit calls before assembly.
     let flat_netlist = flatten_netlist(&resolved)?;
-    assemble_mna_flat(&flat_netlist, modedc)
+    assemble_mna_flat(&flat_netlist, modedc, xspice_registry)
 }
 
 /// Assemble an MNA system from a flattened (no subcircuit calls) netlist.
-fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaError> {
+fn assemble_mna_flat(
+    netlist: &Netlist,
+    modedc: bool,
+    xspice_registry: Option<Arc<CodeModelRegistry>>,
+) -> Result<MnaSystem, MnaError> {
     // Build a map of model definitions for lookup.
     let models: BTreeMap<String, &thevenin_types::ModelDef> = netlist
         .items
@@ -1188,6 +1225,50 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                 // CPL adds 2 branch equations per line
                 vsource_count += 2 * in_nodes.len();
             }
+            ElementKind::Xspice {
+                connections,
+                model: model_name,
+            } => {
+                if let Some(ref registry) = xspice_registry {
+                    // Look up .model def to get the code model type name
+                    let model_type = if let Some(mdef) = models.get(&model_name.to_uppercase()) {
+                        mdef.kind.to_uppercase()
+                    } else {
+                        model_name.to_uppercase()
+                    };
+                    if let Some(cm_def) = registry.get(&model_type) {
+                        // Register nodes from connections
+                        for (ci, conn) in connections.iter().enumerate() {
+                            if ci >= cm_def.ports.len() {
+                                break;
+                            }
+                            match conn {
+                                XspiceConnection::Scalar(node) => {
+                                    node_map.index(node);
+                                }
+                                XspiceConnection::Array(nodes) => {
+                                    for node in nodes {
+                                        node_map.index(node);
+                                    }
+                                }
+                            }
+                        }
+                        // Count branch equations needed for voltage-out / current-in ports
+                        for port_def in &cm_def.ports {
+                            match (port_def.port_type, port_def.direction) {
+                                (PortType::Voltage, PortDirection::Out) => {
+                                    vsource_count += 1;
+                                }
+                                (PortType::Current, PortDirection::In) => {
+                                    vsource_count += 1;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    // If model not found, we'll error in pass 2
+                }
+            }
             _ => {}
         }
     }
@@ -1224,6 +1305,7 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
     let mut cccs_sources = Vec::new();
     let mut ccvs_sources = Vec::new();
     let mut behavioral_sources = Vec::new();
+    let mut xspice_instances = Vec::new();
     let mut internal_idx = node_map.len(); // internal nodes start after external nodes
 
     // Second pass: stamp each element.
@@ -2618,6 +2700,108 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                     expr: expr_clean.to_string(),
                 });
             }
+            ElementKind::Xspice {
+                connections,
+                model: model_name,
+            } => {
+                if let Some(ref registry) = xspice_registry {
+                    // Look up .model def to get the code model type name and params
+                    let (model_type, model_params) =
+                        if let Some(mdef) = models.get(&model_name.to_uppercase()) {
+                            (mdef.kind.to_uppercase(), &mdef.params[..])
+                        } else {
+                            (model_name.to_uppercase(), &[][..])
+                        };
+
+                    let cm_def = registry
+                        .get(&model_type)
+                        .ok_or_else(|| MnaError::XspiceModelNotFound(model_type.clone()))?;
+
+                    // Resolve port connections
+                    let mut port_connections = Vec::new();
+                    let mut branch_indices = Vec::new();
+                    let mut conn_iter = connections.iter();
+
+                    for (pi, port_def) in cm_def.ports.iter().enumerate() {
+                        let conn = conn_iter.next().ok_or_else(|| MnaError::XspiceError {
+                            instance: element.name.clone(),
+                            detail: format!("not enough connections for port '{}'", port_def.name),
+                        })?;
+
+                        let (pos_idx, neg_idx) = match conn {
+                            XspiceConnection::Scalar(node) => (node_map.get(node), None),
+                            XspiceConnection::Array(nodes) => {
+                                let pos = nodes.first().and_then(|n| node_map.get(n));
+                                let neg = nodes.get(1).and_then(|n| node_map.get(n));
+                                (pos, neg)
+                            }
+                        };
+
+                        // Allocate branch if needed
+                        let branch_idx = match (port_def.port_type, port_def.direction) {
+                            (PortType::Voltage, PortDirection::Out)
+                            | (PortType::Current, PortDirection::In) => {
+                                let br = n + vsource_idx;
+                                vsource_idx += 1;
+                                vsource_names.push(format!("{}#{}", element.name, port_def.name));
+                                branch_indices.push(br);
+                                Some(br)
+                            }
+                            _ => None,
+                        };
+
+                        port_connections.push(PortConnection {
+                            port_def_index: pi,
+                            pos_idx,
+                            neg_idx,
+                            branch_idx,
+                        });
+                    }
+
+                    // Resolve parameters against ParamDef defaults
+                    let params: Vec<ParamValue> = cm_def
+                        .params
+                        .iter()
+                        .map(|pdef| {
+                            // Look for matching param in .model params
+                            model_params
+                                .iter()
+                                .find(|p| p.name.eq_ignore_ascii_case(&pdef.name))
+                                .and_then(|p| {
+                                    if let thevenin_types::Expr::Num(v) = &p.value {
+                                        match pdef.param_type {
+                                            thevenin_xspice::ParamType::Real => {
+                                                Some(ParamValue::Real(*v))
+                                            }
+                                            thevenin_xspice::ParamType::Integer => {
+                                                Some(ParamValue::Integer(*v as i64))
+                                            }
+                                            thevenin_xspice::ParamType::Boolean => {
+                                                Some(ParamValue::Boolean(*v != 0.0))
+                                            }
+                                            _ => None,
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or_else(|| pdef.default.clone())
+                        })
+                        .collect();
+
+                    let state = std::cell::RefCell::new(cm_def.create_state());
+
+                    xspice_instances.push(XspiceInstance {
+                        name: element.name.clone(),
+                        model_type,
+                        port_connections,
+                        params,
+                        state,
+                        branch_indices,
+                    });
+                }
+                // If no registry, silently skip (backward compat)
+            }
             _ => {
                 stamp_element(
                     element,
@@ -2667,6 +2851,8 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
         txls,
         cpls,
         behavioral_sources,
+        xspice_instances,
+        xspice_registry,
     })
 }
 

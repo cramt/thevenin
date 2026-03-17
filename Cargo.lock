@@ -1367,6 +1367,7 @@ dependencies = [
  "getrandom",
  "libm",
  "thevenin-types",
+ "thevenin-xspice",
  "thiserror 2.0.18",
  "wasm-bindgen",
  "wasm-bindgen-test",
@@ -1394,6 +1395,10 @@ dependencies = [
  "thiserror 2.0.18",
  "wasm-bindgen-test",
 ]
+
+[[package]]
+name = "thevenin-xspice"
+version = "0.1.0"
 
 [[package]]
 name = "thiserror"

@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use thevenin_types::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_xspice::CodeModelRegistry;
 
 use crate::LinearSystem;
 use crate::device_stamp::DeviceVoltageState;
 use crate::expr_val;
-use crate::mna::{MnaError, MnaSystem, assemble_mna};
+use crate::mna::{MnaError, MnaSystem, assemble_mna, assemble_mna_with_xspice};
 use crate::newton::{NrOptions, newton_raphson_solve, source_stepping_solve};
 
 /// Extract Newton-Raphson options from netlist `.OPTIONS` directives.
@@ -58,6 +61,54 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     }
 
     // Voltage source branch currents
+    let num_nodes = mna.total_num_nodes();
+    for (i, vsrc) in mna.vsource_names.iter().enumerate() {
+        let idx = num_nodes + i;
+        let current = if idx < solution_vec.len() {
+            solution_vec[idx]
+        } else {
+            0.0
+        };
+        vecs.push(SimVector {
+            name: format!("{}#branch", vsrc.to_lowercase()),
+            real: vec![current],
+            complex: vec![],
+        });
+    }
+
+    Ok(SimResult {
+        plots: vec![SimPlot {
+            name: "op1".to_string(),
+            vecs,
+        }],
+    })
+}
+
+/// Compute the DC operating point with an XSPICE code model registry.
+pub fn simulate_op_with_xspice(
+    netlist: &Netlist,
+    registry: Arc<CodeModelRegistry>,
+) -> Result<SimResult, MnaError> {
+    let mna = assemble_mna_with_xspice(netlist, registry)?;
+    let solution_vec = solve_op_raw(&mna)?;
+
+    let mut vecs = Vec::new();
+
+    let mut nodes: Vec<(&str, usize)> = mna.node_map.iter().collect();
+    nodes.sort_by(|a, b| b.1.cmp(&a.1));
+    for (name, idx) in &nodes {
+        let v = if *idx < solution_vec.len() {
+            solution_vec[*idx]
+        } else {
+            0.0
+        };
+        vecs.push(SimVector {
+            name: format!("v({})", name),
+            real: vec![v],
+            complex: vec![],
+        });
+    }
+
     let num_nodes = mna.total_num_nodes();
     for (i, vsrc) in mna.vsource_names.iter().enumerate() {
         let idx = num_nodes + i;

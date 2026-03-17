@@ -119,7 +119,8 @@ pub use mesa::{MesaCompanion, MesaInstance, MesaModel, stamp_mesa};
 pub use mesfet::{MesfetCompanion, MesfetInstance, MesfetModel, MesfetType};
 pub use mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
-    ResistorInstance, VoltageSourceInstance, assemble_mna, stamp_conductance,
+    ResistorInstance, VoltageSourceInstance, assemble_mna, assemble_mna_with_xspice,
+    stamp_conductance,
 };
 pub use mos6::{Mos6Instance, Mos6Model, stamp_mos6};
 pub use mosfet::{MosfetInstance, MosfetModel, MosfetType, stamp_mosfet};
@@ -128,7 +129,8 @@ pub use noise::simulate_noise;
 pub use pz::simulate_pz;
 pub use sens::simulate_sens;
 pub use simulate::{
-    nr_options_from_netlist, simulate_dc, simulate_op, simulate_op_dc, solve_nonlinear_op,
+    nr_options_from_netlist, simulate_dc, simulate_op, simulate_op_dc, simulate_op_with_xspice,
+    solve_nonlinear_op,
 };
 pub use sparse::{ComplexLinearSystem, LinearSystem, SparseMatrix, SparseMatrixError};
 pub use subckt::{SubcktError, flatten_netlist};
