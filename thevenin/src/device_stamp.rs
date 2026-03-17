@@ -262,7 +262,15 @@ impl DeviceVoltageState {
                     .map(|b| b.terminal_voltages(prev_solution))
                     .collect(),
             ),
-            prev_vbic: RefCell::new(vec![(0.0, 0.0); mna.vbics.len()]),
+            prev_vbic: RefCell::new(
+                mna.vbics
+                    .iter()
+                    .map(|v| {
+                        let (vbei, _, vbci, ..) = v.junction_voltages(prev_solution);
+                        (vbei, vbci)
+                    })
+                    .collect(),
+            ),
             prev_mesa: RefCell::new(
                 mna.mesas
                     .iter()
@@ -284,6 +292,36 @@ impl DeviceVoltageState {
                     .map(|h| h.junction_voltages(prev_solution))
                     .collect(),
             ),
+        }
+    }
+
+    /// Reset previous voltage states from a solution vector.
+    /// Called before each NR attempt to prevent state corruption from carrying
+    /// over between failed attempts (direct NR → gmin stepping → source stepping).
+    pub fn reset_from_solution(&self, mna: &MnaSystem, solution: &[f64]) {
+        // Reset VBIC prev voltages (most critical — self-heating + many internal
+        // nodes makes VBIC very sensitive to corrupted prev state).
+        {
+            let mut prev = self.prev_vbic.borrow_mut();
+            for (vi, vbic) in mna.vbics.iter().enumerate() {
+                let (vbei, _, vbci, ..) = vbic.junction_voltages(solution);
+                prev[vi] = (vbei, vbci);
+            }
+        }
+        // Reset BJT prev voltages
+        {
+            let mut prev = self.prev_bjt.borrow_mut();
+            for (i, bjt) in mna.bjts.iter().enumerate() {
+                prev[i] = bjt.junction_voltages(solution);
+            }
+        }
+        // Reset MOSFET prev voltages
+        {
+            let mut prev = self.prev_mos.borrow_mut();
+            for (i, mos) in mna.mosfets.iter().enumerate() {
+                let (vgs, vds, _) = mos.terminal_voltages(solution);
+                prev[i] = (vgs, vds);
+            }
         }
     }
 
@@ -543,12 +581,45 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_vbic.borrow_mut();
             for (vi, vbic) in mna.vbics.iter().enumerate() {
-                let (raw_vbei, vbex, raw_vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
+                let (raw_vbei, raw_vbex, raw_vbci, raw_vbcx, raw_vbep, raw_vrci, raw_vrbi, raw_vrbp, raw_vbcp) =
                     vbic.junction_voltages(solution);
 
+                // Clamp all junction voltages to a safe range to prevent NaN/Inf
+                // from corrupted solution vectors (e.g., after a failed NR attempt
+                // where prev voltages became invalid). ngspice handles this via
+                // the MODEINITJCT → MODEINITFLOAT transition; we clamp instead.
+                // Junction voltages: clamp to ±5V (safe for exp(v/vt) < exp(200))
+                // Resistance voltages: allow wider range (±50V)
+                let clamp_jct = |v: f64| {
+                    if v.is_nan() || v.is_infinite() { 0.0 } else { v.clamp(-5.0, 5.0) }
+                };
+                let clamp_res = |v: f64| {
+                    if v.is_nan() || v.is_infinite() { 0.0 } else { v.clamp(-50.0, 50.0) }
+                };
+                let vbex = clamp_jct(raw_vbex);
+                let vbcx = clamp_jct(raw_vbcx);
+                let vbep = clamp_jct(raw_vbep);
+                let vrci = clamp_res(raw_vrci);
+                let vrbi = clamp_res(raw_vrbi);
+                let vrbp = clamp_res(raw_vrbp);
+                let vbcp = clamp_jct(raw_vbcp);
+
+                // If prev voltages are corrupted (NaN/Inf from a prior failed NR
+                // attempt), reset them to zero so that pnjlim works correctly.
+                if prev[vi].0.is_nan() || prev[vi].0.is_infinite()
+                    || prev[vi].1.is_nan() || prev[vi].1.is_infinite()
+                {
+                    prev[vi] = (0.0, 0.0);
+                }
+
                 // Self-heating: clone model and adjust temperature based on Vrth
-                let model = if vbic.model.rth > 0.0 && vbic.rth_idx.is_some() {
-                    let vrth = vbic.vrth(solution);
+                let vrth = if vbic.model.rth > 0.0 && vbic.rth_idx.is_some() {
+                    let v = vbic.vrth(solution);
+                    if v.is_nan() || v.is_infinite() { 0.0 } else { v.clamp(-1e3, 1e3) }
+                } else {
+                    0.0
+                };
+                let model = if vrth != 0.0 {
                     let mut m = vbic.model.clone();
                     m.temperature_adjust(vbic.t_ambient + vrth);
                     m
@@ -556,8 +627,8 @@ impl DeviceVoltageState {
                     vbic.model.clone()
                 };
 
-                let vbei = model.limit_vbei(raw_vbei, prev[vi].0);
-                let vbci = model.limit_vbci(raw_vbci, prev[vi].1);
+                let vbei = model.limit_vbei(clamp_jct(raw_vbei), prev[vi].0);
+                let vbci = model.limit_vbci(clamp_jct(raw_vbci), prev[vi].1);
                 prev[vi] = (vbei, vbci);
 
                 let comp =

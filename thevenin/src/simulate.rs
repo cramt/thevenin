@@ -289,13 +289,47 @@ fn jct_initial_guess(
         }
     }
 
-    // Apply VBIC MODEINITJCT initial conditions:
-    // Set V(BI) = V(EI) + sign * Vcrit_bei to forward-bias the B-E junction.
-    // This provides non-zero junction conductances so the NR matrix is non-singular.
+    // Apply VBIC MODEINITJCT initial conditions (matching ngspice vbicload.c):
+    // Set all internal nodes to provide proper junction biasing and non-zero
+    // conductances so the NR Jacobian is non-singular.
     for vbic in &mna.vbics {
-        if let (Some(bi), Some(ei)) = (vbic.base_bi_idx, vbic.emit_ei_idx) {
-            let sign = vbic.model.vbic_type.sign();
-            result[bi] = result[ei] + sign * vbic.model.vcrit_bei();
+        let sign = vbic.model.vbic_type.sign();
+        let vcrit = vbic.model.vcrit_bei();
+        let nv = |r: &[f64], idx: Option<usize>| idx.map(|i| r[i]).unwrap_or(0.0);
+
+        // 1. Set conditional internal nodes equal to external counterparts
+        //    (zero voltage across series resistances: Vrcx=Vrbx=Vre=Vrs=0).
+        if let Some(ei) = vbic.emit_ei_idx
+            && vbic.emit_ei_idx != vbic.emit_idx
+        {
+            result[ei] = nv(&result, vbic.emit_idx);
+        }
+        if let Some(cx) = vbic.coll_cx_idx
+            && vbic.coll_cx_idx != vbic.coll_idx
+        {
+            result[cx] = nv(&result, vbic.coll_idx);
+        }
+        if let Some(bx) = vbic.base_bx_idx
+            && vbic.base_bx_idx != vbic.base_idx
+        {
+            result[bx] = nv(&result, vbic.base_idx);
+        }
+        if let Some(si) = vbic.subs_si_idx
+            && vbic.subs_si_idx != vbic.subs_idx
+        {
+            result[si] = nv(&result, vbic.subs_idx);
+        }
+        // 2. CI = CX (zero voltage across RCI: Vrci=0).
+        if let Some(ci) = vbic.coll_ci_idx {
+            result[ci] = nv(&result, vbic.coll_cx_idx);
+        }
+        // 3. BI = EI + sign * Vcrit (forward-bias B-E junction: Vbei = Vcrit).
+        if let Some(bi) = vbic.base_bi_idx {
+            result[bi] = nv(&result, vbic.emit_ei_idx) + sign * vcrit;
+        }
+        // 4. BP = BX (parasitic B-E not biased: Vbep=0).
+        if let Some(bp) = vbic.base_bp_idx {
+            result[bp] = nv(&result, vbic.base_bx_idx);
         }
     }
 
@@ -322,7 +356,7 @@ fn solve_nonlinear_op_with_guess(
         } else {
             vec![0.0; dim]
         }
-    } else if !mna.mosfets.is_empty() || !mna.bjts.is_empty() {
+    } else if !mna.mosfets.is_empty() || !mna.bjts.is_empty() || !mna.vbics.is_empty() {
         jct_initial_guess(mna, dim, num_nodes, options, base_matrix, base_rhs)
     } else {
         vec![0.0; dim]
@@ -334,7 +368,21 @@ fn solve_nonlinear_op_with_guess(
         DeviceVoltageState::new_zero(mna)
     };
 
+    // Track last-seen gmin to detect when a new NR attempt starts (gmin changes
+    // between direct NR, gmin stepping, and source stepping). Reset device
+    // voltage state at transitions to prevent corrupted prev values from a
+    // failed attempt poisoning the next one.
+    let last_gmin = std::cell::Cell::new(f64::NAN);
+
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64| {
+        // Detect NR attempt boundary: gmin changes when switching between
+        // direct NR (gmin=diag_gmin), gmin stepping (gmin=1e-2..1e-12), and
+        // source stepping. Reset device prev voltages to match current solution.
+        if gmin != last_gmin.get() {
+            last_gmin.set(gmin);
+            dev_state.reset_from_solution(mna, solution);
+        }
+
         // 1. Copy base linear stamps.
         for triplet in base_matrix.triplets() {
             system.matrix.add(triplet.row, triplet.col, triplet.value);

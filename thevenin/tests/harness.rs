@@ -781,7 +781,7 @@ harness_test!(
 harness_test!(
     harness_vbic_diffamp,
     "vbic/diffamp.cir",
-    ignore = "VBIC diffamp: singular matrix during DC OP solve"
+    ignore = "VBIC diffamp: NR non-convergence during DC OP (complex 9-transistor circuit with self-heating)"
 );
 harness_test!(
     harness_vbic_fg,
@@ -792,7 +792,7 @@ harness_test!(
 harness_test!(
     harness_vbic_fo,
     "vbic/FO.cir",
-    ignore = "VBIC FO: singular matrix in 2D DC sweep (deep saturation convergence)"
+    ignore = "VBIC FO: NR non-convergence in 2D DC sweep (deep saturation convergence)"
 );
 harness_test!(harness_vbic_noise_scale, "vbic/noise_scale_test.cir");
 harness_test!(
