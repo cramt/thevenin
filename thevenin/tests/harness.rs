@@ -480,7 +480,7 @@ harness_test!(
 harness_test!(
     harness_general_mosamp,
     "general/mosamp.cir",
-    ignore = "DC OP singular matrix (Level 2 MOSFET needs VTO computation from process params)"
+    ignore = "tran: singular matrix (Level 2 MOSFET — DC OP converges but transient solver fails)"
 );
 harness_test!(harness_general_mosmem, "general/mosmem.cir");
 harness_test!(harness_general_rca3040, "general/rca3040.cir");
@@ -529,7 +529,7 @@ harness_test!(harness_mes_subth, "mes/subth.cir");
 harness_test!(
     harness_mos6_mos6inv,
     "mos6/mos6inv.cir",
-    ignore = "DC OP singular matrix (Level 6 MOSFET subcircuit — OP solver cannot converge)"
+    ignore = "tran: singular matrix (Level 6 MOSFET subcircuit — DC OP converges but transient solver fails)"
 );
 harness_test!(
     harness_mos6_simpleinv,

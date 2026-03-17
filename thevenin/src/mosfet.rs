@@ -81,6 +81,10 @@ pub struct MosfetModel {
     pub kf: f64,
     /// Flicker noise exponent (default 1).
     pub af: f64,
+    /// Surface state density (default 0 1/cm²).
+    pub nss: f64,
+    /// Gate type: 0=Al, +1=opposite, -1=same (default 1).
+    pub tpg: f64,
 }
 
 impl MosfetModel {
@@ -113,6 +117,8 @@ impl MosfetModel {
             fc: 0.5,
             kf: 0.0,
             af: 1.0,
+            nss: 0.0,
+            tpg: 1.0,
         }
     }
 
@@ -124,13 +130,30 @@ impl MosfetModel {
             MosfetType::Nmos
         };
         let mut m = Self::new(mos_type);
+        let mut vto_given = false;
+        let mut gamma_given = false;
+        let mut phi_given = false;
+        let mut nsub_given = false;
+        let mut kp_given = false;
         for p in &model_def.params {
             if let Expr::Num(v) = &p.value {
                 match p.name.to_uppercase().as_str() {
-                    "VTO" | "VT0" => m.vto = *v,
-                    "KP" => m.kp = *v,
-                    "GAMMA" => m.gamma = *v,
-                    "PHI" => m.phi = *v,
+                    "VTO" | "VT0" => {
+                        m.vto = *v;
+                        vto_given = true;
+                    }
+                    "KP" => {
+                        m.kp = *v;
+                        kp_given = true;
+                    }
+                    "GAMMA" => {
+                        m.gamma = *v;
+                        gamma_given = true;
+                    }
+                    "PHI" => {
+                        m.phi = *v;
+                        phi_given = true;
+                    }
                     "LAMBDA" => m.lambda = *v,
                     "RD" => m.rd = *v,
                     "RS" => m.rs = *v,
@@ -147,16 +170,101 @@ impl MosfetModel {
                     "MJSW" => m.mjsw = *v,
                     "TOX" => m.tox = *v,
                     "LD" => m.ld = *v,
-                    "NSUB" => m.nsub = *v,
+                    "NSUB" => {
+                        m.nsub = *v;
+                        nsub_given = true;
+                    }
                     "U0" | "UO" => m.u0 = *v,
                     "FC" => m.fc = *v,
                     "KF" => m.kf = *v,
                     "AF" => m.af = *v,
-                    _ => {} // ignore unknown params (LEVEL, TPG, etc.)
+                    "NSS" => m.nss = *v,
+                    "TPG" => m.tpg = *v,
+                    _ => {} // ignore unknown params (LEVEL, UCRIT, UEXP, XJ, etc.)
                 }
             }
         }
+        // Derive parameters from process params, matching ngspice mos2temp.c
+        m.compute_process_params(vto_given, gamma_given, phi_given, nsub_given, kp_given);
         m
+    }
+
+    /// Compute derived model parameters from process parameters.
+    ///
+    /// When NSUB is given and VTO/GAMMA/PHI are not explicitly specified,
+    /// compute them from NSUB, TOX, and NSS following ngspice's
+    /// mos1temp.c / mos2temp.c / mos6temp.c.
+    fn compute_process_params(
+        &mut self,
+        vto_given: bool,
+        gamma_given: bool,
+        phi_given: bool,
+        nsub_given: bool,
+        kp_given: bool,
+    ) {
+        // Physical constants (ngspice values)
+        const CHARGE: f64 = 1.602_176_634e-19;
+        const EPSSIL: f64 = 11.70 * 8.854_214_871e-12;
+        const EPSOX: f64 = 3.9 * 8.854_214_871e-12;
+        // Intrinsic carrier concentration at 300K in m⁻³
+        const NI: f64 = 1.45e16;
+        // Reference temperature
+        const REFTEMP: f64 = 300.15;
+
+        let vtnom = VT_NOM; // kT/q at nominal temperature
+
+        // Oxide capacitance per unit area
+        let oxide_cap_factor = EPSOX / self.tox;
+
+        // Compute KP from surface mobility and oxide cap if not given
+        if !kp_given {
+            self.kp = self.u0 * 1e-4 * oxide_cap_factor;
+        }
+
+        if !nsub_given {
+            return;
+        }
+
+        // NSUB is in cm⁻³, convert to m⁻³ for comparison with NI
+        let nsub_m3 = self.nsub * 1e6;
+        if nsub_m3 <= NI {
+            return;
+        }
+
+        // Compute PHI (surface potential) if not given
+        if !phi_given {
+            self.phi = 2.0 * vtnom * (nsub_m3 / NI).ln();
+            if self.phi < 0.1 {
+                self.phi = 0.1;
+            }
+        }
+
+        // Band gap at reference temperature
+        let egfet1 = 1.16 - (7.02e-4 * REFTEMP * REFTEMP) / (REFTEMP + 1108.0);
+
+        // Work function difference
+        let type_sign = self.mos_type.sign();
+        let fermis = type_sign * 0.5 * self.phi;
+        let wkfng = if self.tpg != 0.0 {
+            let fermig = type_sign * self.tpg * 0.5 * egfet1;
+            3.25 + 0.5 * egfet1 - fermig
+        } else {
+            3.2
+        };
+        let wkfngs = wkfng - (3.25 + 0.5 * egfet1 + fermis);
+
+        // Compute GAMMA (body effect coefficient) if not given
+        if !gamma_given {
+            self.gamma =
+                (2.0 * EPSSIL * CHARGE * nsub_m3).sqrt() / oxide_cap_factor;
+        }
+
+        // Compute VTO (threshold voltage) if not given
+        if !vto_given {
+            let vfb = wkfngs
+                - self.nss * 1e4 * CHARGE / oxide_cap_factor;
+            self.vto = vfb + type_sign * (self.gamma * self.phi.sqrt() + self.phi);
+        }
     }
 
     /// Number of internal nodes needed (for series resistances RD, RS).
