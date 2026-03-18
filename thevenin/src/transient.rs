@@ -47,6 +47,19 @@ struct IndHistory {
     voltage: f64,
 }
 
+/// History state for a BJT junction charge at the previous timestep.
+#[derive(Debug, Clone)]
+struct BjtChargeHistory {
+    /// B-E junction charge at previous timestep.
+    qbe: f64,
+    /// B-E charge current at previous timestep (for trapezoidal).
+    cqbe: f64,
+    /// B-C junction charge at previous timestep.
+    qbc: f64,
+    /// B-C charge current at previous timestep (for trapezoidal).
+    cqbc: f64,
+}
+
 /// Compute capacitor companion model coefficients.
 ///
 /// Returns `(geq, ieq)` where:
@@ -374,6 +387,31 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
+    // Initialize BJT diffusion charge histories from DC operating point.
+    // At DC steady state, dQ/dt = 0, so charge currents are all zero.
+    // Tracks the TF/TR diffusion charge on top of the constant CJE/CJC
+    // depletion caps in MNA assembly.
+    let mut bjt_charge_histories: Vec<BjtChargeHistory> = mna
+        .bjts
+        .iter()
+        .map(|bjt| {
+            let (vbe, vbc) = bjt.junction_voltages(&solution);
+            let comp = bjt.model.companion(vbe, vbc);
+            let (qbe, _, qbc, _) = bjt.model.compute_diffusion_charges(
+                comp.cbe_raw,
+                comp.gbe_raw,
+                comp.cbc_raw,
+                comp.gbc_raw,
+            );
+            BjtChargeHistory {
+                qbe,
+                cqbe: 0.0, // DC steady state: no charge current
+                qbc,
+                cqbc: 0.0,
+            }
+        })
+        .collect();
+
     // Initialize LTRA transient state.
     let has_ltra = !mna.ltras.is_empty();
     let mut ltra_states: Vec<LtraState> = mna
@@ -643,6 +681,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             method,
             &cap_histories,
             &ind_histories,
+            &bjt_charge_histories,
             has_nonlinear,
             &nr_options,
             dim,
@@ -750,6 +789,40 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             ind_histories[li] = IndHistory {
                 current: i_new,
                 voltage: v_new,
+            };
+        }
+
+        // Update BJT diffusion charge histories.
+        for (bi, bjt) in mna.bjts.iter().enumerate() {
+            let (vbe, vbc) = bjt.junction_voltages(&solution);
+            let comp = bjt.model.companion(vbe, vbc);
+            let (qbe, _, qbc, _) = bjt.model.compute_diffusion_charges(
+                comp.cbe_raw,
+                comp.gbe_raw,
+                comp.cbc_raw,
+                comp.gbc_raw,
+            );
+
+            let cqbe = match method {
+                IntegrationMethod::BackwardEuler => (qbe - bjt_charge_histories[bi].qbe) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qbe - bjt_charge_histories[bi].qbe) / step_h
+                        - bjt_charge_histories[bi].cqbe
+                }
+            };
+            let cqbc = match method {
+                IntegrationMethod::BackwardEuler => (qbc - bjt_charge_histories[bi].qbc) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qbc - bjt_charge_histories[bi].qbc) / step_h
+                        - bjt_charge_histories[bi].cqbc
+                }
+            };
+
+            bjt_charge_histories[bi] = BjtChargeHistory {
+                qbe,
+                cqbe,
+                qbc,
+                cqbc,
             };
         }
 
@@ -877,6 +950,7 @@ fn solve_timestep(
     method: IntegrationMethod,
     cap_histories: &[CapHistory],
     ind_histories: &[IndHistory],
+    bjt_charge_histories: &[BjtChargeHistory],
     has_nonlinear: bool,
     nr_options: &NrOptions,
     dim: usize,
@@ -977,6 +1051,75 @@ fn solve_timestep(
         if has_nonlinear {
             let _ = gmin;
             dev_state.stamp_devices(solution, system, mna, nr_options.gmin);
+        }
+
+        // 5. Stamp BJT diffusion capacitance companion models (TF*gbe, TR*gbc).
+        //    This must happen after stamp_devices() to read limited junction voltages.
+        //    Depletion caps (CJE, CJC) are handled as constant caps in MNA;
+        //    diffusion caps are dynamic within NR iterations.
+        if !mna.bjts.is_empty() {
+            let prev_bjt = dev_state.prev_bjt_voltages();
+            for (bi, bjt) in mna.bjts.iter().enumerate() {
+                let (vbe, vbc) = prev_bjt[bi];
+                let sign = bjt.model.bjt_type.sign();
+                let m = bjt.m * bjt.area;
+
+                // Compute companion at current operating point to get cbe, gbe, cbc, gbc.
+                let comp = bjt.model.companion(vbe, vbc);
+                // Compute diffusion charges (TF*cbe, TR*cbc) and their derivatives.
+                // The constant CJE/CJC depletion caps are in MNA assembly;
+                // this adds only the TF/TR diffusion terms dynamically.
+                let (qbe, capbe, qbc, capbc) = bjt.model.compute_diffusion_charges(
+                    comp.cbe_raw,
+                    comp.gbe_raw,
+                    comp.cbc_raw,
+                    comp.gbc_raw,
+                );
+
+                let hist = &bjt_charge_histories[bi];
+
+                // Integrate B-E charge.
+                let (geq_be, cqbe) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = capbe / h;
+                        let cq = (qbe - hist.qbe) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * capbe / h;
+                        let cq = 2.0 * (qbe - hist.qbe) / h - hist.cqbe;
+                        (geq, cq)
+                    }
+                };
+
+                // Integrate B-C charge.
+                let (geq_bc, cqbc) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = capbc / h;
+                        let cq = (qbc - hist.qbc) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * capbc / h;
+                        let cq = 2.0 * (qbc - hist.qbc) / h - hist.cqbc;
+                        (geq, cq)
+                    }
+                };
+
+                // Stamp B-E charge: conductance + Norton current source.
+                let bp = bjt.base_prime_idx;
+                let cp = bjt.col_prime_idx;
+                let ep = bjt.emit_prime_idx;
+
+                stamp_conductance(&mut system.matrix, bp, ep, m * geq_be);
+                let ieq_be = sign * m * (cqbe - geq_be * vbe);
+                stamp_current_source(&mut system.rhs, bp, ep, ieq_be);
+
+                // Stamp B-C charge: conductance + Norton current source.
+                stamp_conductance(&mut system.matrix, bp, cp, m * geq_bc);
+                let ieq_bc = sign * m * (cqbc - geq_bc * vbc);
+                stamp_current_source(&mut system.rhs, bp, cp, ieq_bc);
+            }
         }
     };
 

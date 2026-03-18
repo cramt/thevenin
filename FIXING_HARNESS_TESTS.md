@@ -697,3 +697,39 @@ MODEINITFLOAT convergence sequence with per-device-type limiting.
 
 **Workaround:** The transmission line test ignore reasons should be updated to reflect
 the actual failure mode (PMOS NR convergence, not timestep control).
+
+---
+
+## Applied fix: BJT diffusion capacitance in transient analysis
+
+**Affected tests:** `harness_general_schmitt` (primary improvement)
+
+**Root cause:** BJT transit time diffusion capacitances (TF*gbe for B-E, TR*gbc
+for B-C) were missing from transient analysis. In ngspice, `bjtload.c` computes
+`capbe = tf*gbe + czbe*sarg` at each NR iteration and integrates it via
+`NIintegrate()`. Without the diffusion terms, the total effective junction
+capacitance was underestimated during forward-active operation, causing timing
+errors at switching transitions.
+
+For example, in the schmitt trigger circuit (TF=0.12ns), at Ic=1mA:
+- gbe = Ic/Vt ≈ 38mS
+- TF*gbe = 0.12ns × 38mS = 4.6pF (diffusion capacitance)
+- CJE = 0.4pF (depletion capacitance)
+- Missing cap = 4.6pF / (4.6 + 0.4) = 92% of total!
+
+**Fix applied:** Added dynamic diffusion capacitance stamping during transient
+NR iterations. After `stamp_devices()` computes the BJT companion model, the
+diffusion charges (TF*cbe, TR*cbc) and their derivatives (TF*gbe, TR*gbc)
+are integrated using the same backward Euler / trapezoidal method as regular
+capacitors, and stamped as conductance + Norton current source between the
+B'-E' and B'-C' junctions.
+
+The depletion caps (CJE, CJC) remain as constant zero-bias capacitors in MNA
+assembly. Dynamic voltage-dependent depletion caps were attempted but caused
+NR convergence issues (negative correction capacitance in reverse bias).
+
+**Result:**
+- `harness_general_schmitt`: 0.72% → 0.25% error (2.85x improvement)
+- `harness_general_rtlinv`: unchanged (TF=0.1ns, IS=1e-16 → diffusion cap
+  is small relative to CJE=0.9pF for this circuit)
+- No regressions in any of the 67 non-ignored harness tests or 223 unit tests

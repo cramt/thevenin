@@ -332,6 +332,12 @@ impl DeviceVoltageState {
     /// the current solution, apply voltage limiting, compute the companion
     /// model, and stamp it into the linear system.
     ///
+    /// Get the current limited BJT junction voltages (vbe, vbc) for each BJT.
+    /// Call after `stamp_devices()` to read the voltages used for the last stamp.
+    pub fn prev_bjt_voltages(&self) -> Vec<(f64, f64)> {
+        self.prev_bjt.borrow().clone()
+    }
+
     /// All device types apply their own voltage limiting unconditionally,
     /// matching ngspice's MODEINITFLOAT behaviour where DEVfetlim/pnjlim are
     /// active even during DC OP iterations.

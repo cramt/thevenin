@@ -493,7 +493,7 @@ harness_test!(
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
-    ignore = "~0.72% switching error at t=280ns: constant junction cap approximation vs ngspice voltage-dependent caps"
+    ignore = "~0.25% switching error at t=280ns: constant depletion cap approximation (diffusion caps now dynamic)"
 );
 
 // === HFET ===

@@ -268,6 +268,8 @@ pub struct MnaSystem {
     pub inductors: Vec<InductorInstance>,
     /// Resolved BJT instances for NR iteration.
     pub bjts: Vec<BjtInstance>,
+    /// Capacitor indices for each BJT's depletion caps (CJE, CJC).
+    pub bjt_cap_indices: Vec<BjtCapIndices>,
     /// Resolved MOSFET instances for NR iteration.
     pub mosfets: Vec<MosfetInstance>,
     /// Resolved MOS6 MOSFET instances for NR iteration.
@@ -702,14 +704,25 @@ fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
     (nrd, nrs)
 }
 
+/// Capacitor indices for a BJT's junction capacitances.
+/// `None` means the cap was zero and not created.
+#[derive(Debug, Clone, Default)]
+pub struct BjtCapIndices {
+    /// Index of CJE capacitor in the capacitors array.
+    pub cje_idx: Option<usize>,
+    /// Index of CJC capacitor in the capacitors array.
+    pub cjc_idx: Option<usize>,
+}
+
 /// Generate synthetic `CapacitorInstance` entries for BJT junction
 /// capacitances (CJE, CJC, CJS).
 ///
-/// In ngspice, these are voltage-dependent depletion capacitances integrated
-/// at each NR iteration during transient analysis.  We approximate them as
-/// constant capacitors at their zero-bias value (area-scaled), which provides
-/// the correct transient charge storage paths and prevents singular matrices
-/// when internal nodes are only connected through junction capacitances.
+/// CJE and CJC are stamped as constant zero-bias capacitors here. During
+/// transient analysis, their values are updated to voltage-dependent values
+/// at each accepted timestep, and diffusion capacitance (TF*gbe, TR*gbc)
+/// is added dynamically.
+///
+/// Returns `BjtCapIndices` with the indices of the created caps.
 fn push_bjt_caps(
     capacitors: &mut Vec<CapacitorInstance>,
     base_prime_idx: Option<usize>,
@@ -718,10 +731,12 @@ fn push_bjt_caps(
     model: &BjtModel,
     area: f64,
     m: f64,
-) {
+) -> BjtCapIndices {
+    let mut indices = BjtCapIndices::default();
     // B-E junction capacitance: CJE * area
     let cje_total = model.cje * area * m;
     if cje_total > 0.0 {
+        indices.cje_idx = Some(capacitors.len());
         capacitors.push(CapacitorInstance {
             pos_idx: base_prime_idx,
             neg_idx: emit_prime_idx,
@@ -733,6 +748,7 @@ fn push_bjt_caps(
     // B-C junction capacitance: CJC * area
     let cjc_total = model.cjc * area * m;
     if cjc_total > 0.0 {
+        indices.cjc_idx = Some(capacitors.len());
         capacitors.push(CapacitorInstance {
             pos_idx: base_prime_idx,
             neg_idx: col_prime_idx,
@@ -751,6 +767,8 @@ fn push_bjt_caps(
             ic: None,
         });
     }
+
+    indices
 }
 
 /// Generate synthetic `CapacitorInstance` entries for MOSFET overlap and
@@ -1281,6 +1299,7 @@ fn assemble_mna_flat(
     let mut resistors = Vec::new();
     let mut diodes = Vec::new();
     let mut bjts = Vec::new();
+    let mut bjt_cap_indices = Vec::new();
     let mut vbics = Vec::new();
     let mut mosfets = Vec::new();
     let mut mos6s = Vec::new();
@@ -1533,7 +1552,7 @@ fn assemble_mna_flat(
                     });
 
                     // Synthetic capacitors for BJT junction caps.
-                    push_bjt_caps(
+                    let cap_idx = push_bjt_caps(
                         &mut capacitors,
                         base_prime_idx,
                         col_prime_idx,
@@ -1542,6 +1561,7 @@ fn assemble_mna_flat(
                         area,
                         m_mult,
                     );
+                    bjt_cap_indices.push(cap_idx);
                 }
                 // BJT/VBIC stamps are applied during NR iteration, not here.
             }
@@ -2827,6 +2847,7 @@ fn assemble_mna_flat(
         resistors,
         diodes,
         bjts,
+        bjt_cap_indices,
         mosfets,
         mos6s,
         jfets,

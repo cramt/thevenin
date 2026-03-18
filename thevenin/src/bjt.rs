@@ -340,6 +340,10 @@ impl BjtModel {
             cc,
             cb,
             qb,
+            cbe_raw: cbe,
+            gbe_raw: gbe,
+            cbc_raw: cbc,
+            gbc_raw: gbc,
         }
     }
 
@@ -380,6 +384,106 @@ impl BjtModel {
         junction_cap(v, self.cjc, self.vjc, self.mjc, self.fc)
     }
 
+    /// Compute junction charges and differential capacitances for transient analysis.
+    ///
+    /// Returns `(qbe, capbe, qbc, capbc)` — the FULL charge and capacitance
+    /// including depletion + diffusion terms.
+    ///
+    /// `cbe` and `gbe` are the junction current and conductance from the companion
+    /// model (needed for the diffusion capacitance terms TF*cbe and TF*gbe).
+    pub fn compute_charges(
+        &self,
+        vbe: f64,
+        vbc: f64,
+        cbe: f64,
+        gbe: f64,
+        cbc: f64,
+        gbc: f64,
+    ) -> (f64, f64, f64, f64) {
+        // B-E charge: depletion + forward transit time diffusion
+        let qbe_dep = junction_charge(vbe, self.cje, self.vje, self.mje, self.fc);
+        let capbe_dep = junction_cap(vbe, self.cje, self.vje, self.mje, self.fc);
+        let qbe = self.tf * cbe + qbe_dep;
+        let capbe = self.tf * gbe + capbe_dep;
+
+        // B-C charge: depletion + reverse transit time diffusion
+        let qbc_dep = junction_charge(vbc, self.cjc, self.vjc, self.mjc, self.fc);
+        let capbc_dep = junction_cap(vbc, self.cjc, self.vjc, self.mjc, self.fc);
+        let qbc = self.tr * cbc + qbc_dep;
+        let capbc = self.tr * gbc + capbc_dep;
+
+        (qbe, capbe, qbc, capbc)
+    }
+
+    /// Compute only the diffusion charge and capacitance for transient analysis.
+    ///
+    /// Returns `(qbe_diff, capbe_diff, qbc_diff, capbc_diff)` — only the
+    /// TF/TR diffusion terms. The depletion caps (CJE, CJC) are handled
+    /// separately as constant capacitors in MNA assembly.
+    pub fn compute_diffusion_charges(
+        &self,
+        cbe: f64,
+        gbe: f64,
+        cbc: f64,
+        gbc: f64,
+    ) -> (f64, f64, f64, f64) {
+        (self.tf * cbe, self.tf * gbe, self.tr * cbc, self.tr * gbc)
+    }
+
+    /// Compute the charge correction for transient analysis.
+    ///
+    /// Returns the CORRECTION charge and capacitance that must be added on top
+    /// of the constant CJE/CJC caps already in MNA. This includes:
+    /// - Diffusion capacitance (TF*cbe, TF*gbe for B-E; TR*cbc, TR*gbc for B-C)
+    /// - Depletion cap voltage dependence (junction_charge(v) - CJ0*v for charge,
+    ///   junction_cap(v) - CJ0 for capacitance)
+    ///
+    /// Returns `(delta_qbe, delta_capbe, delta_qbc, delta_capbc)`.
+    pub fn compute_charge_correction(
+        &self,
+        vbe: f64,
+        vbc: f64,
+        cbe: f64,
+        gbe: f64,
+        cbc: f64,
+        gbc: f64,
+    ) -> (f64, f64, f64, f64) {
+        // Diffusion terms (always present when TF/TR > 0)
+        let qbe_diff = self.tf * cbe;
+        let capbe_diff = self.tf * gbe;
+        let qbc_diff = self.tr * cbc;
+        let capbc_diff = self.tr * gbc;
+
+        // Depletion correction: voltage-dependent minus constant CJ0
+        let qbe_dep_corr = if self.cje > 0.0 {
+            junction_charge(vbe, self.cje, self.vje, self.mje, self.fc) - self.cje * vbe
+        } else {
+            0.0
+        };
+        let capbe_dep_corr = if self.cje > 0.0 {
+            junction_cap(vbe, self.cje, self.vje, self.mje, self.fc) - self.cje
+        } else {
+            0.0
+        };
+        let qbc_dep_corr = if self.cjc > 0.0 {
+            junction_charge(vbc, self.cjc, self.vjc, self.mjc, self.fc) - self.cjc * vbc
+        } else {
+            0.0
+        };
+        let capbc_dep_corr = if self.cjc > 0.0 {
+            junction_cap(vbc, self.cjc, self.vjc, self.mjc, self.fc) - self.cjc
+        } else {
+            0.0
+        };
+
+        (
+            qbe_diff + qbe_dep_corr,
+            capbe_diff + capbe_dep_corr,
+            qbc_diff + qbc_dep_corr,
+            capbc_diff + capbc_dep_corr,
+        )
+    }
+
     /// Limit B-E junction voltage.
     pub fn limit_vbe(&self, v_new: f64, v_old: f64) -> f64 {
         pnjlim(v_new, v_old, self.nf * VT_NOM, self.vcrit_be())
@@ -406,6 +510,32 @@ fn junction_cap(v: f64, cj0: f64, vj: f64, m: f64, fc: f64) -> f64 {
     }
 }
 
+/// Junction depletion charge (integral of junction_cap from 0 to v).
+///
+/// Matches ngspice bjtload.c charge computation:
+/// - For v < fc*vj: Q = vj*cj0*(1 - (1-v/vj)^(1-m)) / (1-m)
+/// - For v >= fc*vj: Q = Q(fc*vj) + cj0/f2 * (f3*(v-fc*vj) + m/(2*vj)*(v^2 - (fc*vj)^2))
+///
+/// where f1 = vj*(1-(1-fc)^(1-m))/(1-m), f2 = (1-fc)^(1+m), f3 = 1-fc*(1+m).
+fn junction_charge(v: f64, cj0: f64, vj: f64, m: f64, fc: f64) -> f64 {
+    if cj0 <= 0.0 {
+        return 0.0;
+    }
+    let fc_vj = fc * vj;
+    if v < fc_vj {
+        let arg = 1.0 - v / vj;
+        let sarg = arg.powf(1.0 - m);
+        vj * cj0 * (1.0 - arg * sarg) / (1.0 - m)
+    } else {
+        // Precomputed coefficients (matching ngspice BJTtf1..BJTtf7)
+        let f1 = vj * (1.0 - (1.0 - fc).powf(1.0 - m)) / (1.0 - m);
+        let f2 = (1.0 - fc).powf(1.0 + m);
+        let f3 = 1.0 - fc * (1.0 + m);
+        let cj0_f2 = cj0 / f2;
+        cj0 * f1 + cj0_f2 * (f3 * (v - fc_vj) + (m / (vj + vj)) * (v * v - fc_vj * fc_vj))
+    }
+}
+
 /// NR companion model result for a BJT at an operating point.
 #[derive(Debug, Clone)]
 pub struct BjtCompanion {
@@ -427,6 +557,15 @@ pub struct BjtCompanion {
     pub cb: f64,
     /// Normalized base charge QB (used for base-resistance modulation).
     pub qb: f64,
+    /// B-E junction current (before Gummel-Poon division by qb).
+    /// Used for transient diffusion capacitance computation.
+    pub cbe_raw: f64,
+    /// B-E junction conductance (before Gummel-Poon division by qb).
+    pub gbe_raw: f64,
+    /// B-C junction current (before Gummel-Poon division by qb).
+    pub cbc_raw: f64,
+    /// B-C junction conductance (before Gummel-Poon division by qb).
+    pub gbc_raw: f64,
 }
 
 /// Resolved node indices for a BJT instance in the MNA system.
