@@ -480,7 +480,7 @@ harness_test!(
 harness_test!(
     harness_general_mosamp,
     "general/mosamp.cir",
-    ignore = "tran: singular matrix during transient (DC OP converges, Level 2 MOSFET)"
+    ignore = "DC OP singular matrix (Level 2 MOSFET — needs Level 2 velocity saturation/mobility degradation)"
 );
 harness_test!(harness_general_mosmem, "general/mosmem.cir");
 harness_test!(harness_general_rca3040, "general/rca3040.cir");

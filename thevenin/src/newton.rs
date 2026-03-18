@@ -294,8 +294,10 @@ where
 
 /// Solve a nonlinear system for a single transient timestep.
 ///
-/// Uses only direct NR iteration with ITL4 iterations and `diag_gmin`.
-/// No Gmin/source stepping fallbacks.
+/// First attempts direct NR with `diag_gmin`. On failure (singular matrix),
+/// falls back to Gmin stepping: starts with elevated diagonal Gmin (1e-2)
+/// and progressively reduces to target, matching ngspice's approach for
+/// transient steps where MOSFET cutoff can leave internal nodes floating.
 pub fn transient_nr_solve<F>(
     options: &NrOptions,
     dim: usize,
@@ -306,19 +308,28 @@ pub fn transient_nr_solve<F>(
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64),
 {
+    // First try: direct NR with the nominal diag_gmin.
     let attempt = NrAttempt {
         gmin: options.diag_gmin,
         source_factor: 1.0,
         max_iters: options.itl4,
     };
-    try_nr(
+    match try_nr(
         options,
         dim,
         num_nodes,
         &load_system,
         initial_guess,
         &attempt,
-    )
+    ) {
+        Ok(result) => Ok(result),
+        Err(_) => {
+            // Fallback: Gmin stepping for transient.
+            // Start with elevated diagonal Gmin and step down, matching ngspice's
+            // approach when MOSFET cutoff creates floating internal nodes.
+            gmin_stepping(options, dim, num_nodes, &load_system, initial_guess)
+        }
+    }
 }
 
 /// Solve a nonlinear system using source stepping directly, bypassing direct NR
