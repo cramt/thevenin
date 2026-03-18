@@ -1,0 +1,17 @@
+{
+  "name": "thevenin",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "fix-tests": "tsx scripts/fix-tests-overnight.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.29.2",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.79",
+    "tsx": "^4.21.0"
+  }
+}
