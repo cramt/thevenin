@@ -380,6 +380,7 @@ impl MosfetModel {
             ceq_bd,
             mode,
             vdsat,
+            von,
         }
     }
 }
@@ -427,6 +428,8 @@ pub struct MosfetCompanion {
     pub mode: i32,
     /// Saturation voltage.
     pub vdsat: f64,
+    /// Threshold voltage in signed space (von = sign * (vto + gamma * sarg)).
+    pub von: f64,
 }
 
 /// Resolved node indices for a MOSFET instance in the MNA system.
@@ -648,6 +651,52 @@ pub fn mos_limit(vgs_new: f64, vds_new: f64, vgs_old: f64, vds_old: f64, von: f6
     }
 
     (vgs, vds)
+}
+
+/// Compute Meyer gate capacitances (non-constant portions only).
+///
+/// Implements ngspice DEVqmeyer (devsup.c lines 674-738).
+/// Returns (capgs, capgd, capgb) — the voltage-dependent part of the
+/// gate capacitances, WITHOUT overlap capacitances.
+///
+/// For reversed mode (mode < 0), the caller should swap vgs↔vgd and
+/// swap the returned capgs↔capgd, matching ngspice mos1load.c lines 753-766.
+pub fn qmeyer(vgs: f64, vgd: f64, von: f64, vdsat: f64, phi: f64, cox: f64) -> (f64, f64, f64) {
+    const MAGIC_VDS: f64 = 0.025;
+    let vgst = vgs - von;
+    let vdsat = vdsat.max(MAGIC_VDS);
+
+    if vgst <= -phi {
+        (0.0, 0.0, cox / 2.0)
+    } else if vgst <= -phi / 2.0 {
+        (0.0, 0.0, -vgst * cox / (2.0 * phi))
+    } else if vgst <= 0.0 {
+        let capgb = -vgst * cox / (2.0 * phi);
+        let mut capgs = vgst * cox / (1.5 * phi) + cox / 3.0;
+        let vds = vgs - vgd;
+        if vds >= vdsat {
+            (capgs, 0.0, capgb)
+        } else {
+            let vddif = 2.0 * vdsat - vds;
+            let vddif1 = vdsat - vds;
+            let vddif2 = vddif * vddif;
+            let capgd = capgs * (1.0 - vdsat * vdsat / vddif2);
+            capgs *= 1.0 - vddif1 * vddif1 / vddif2;
+            (capgs, capgd, capgb)
+        }
+    } else {
+        let vds = vgs - vgd;
+        if vdsat <= vds {
+            (cox / 3.0, 0.0, 0.0)
+        } else {
+            let vddif = 2.0 * vdsat - vds;
+            let vddif1 = vdsat - vds;
+            let vddif2 = vddif * vddif;
+            let capgd = cox * (1.0 - vdsat * vdsat / vddif2) / 3.0;
+            let capgs = cox * (1.0 - vddif1 * vddif1 / vddif2) / 3.0;
+            (capgs, capgd, 0.0)
+        }
+    }
 }
 
 #[cfg(test)]
