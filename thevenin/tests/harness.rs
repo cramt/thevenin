@@ -534,7 +534,7 @@ harness_test!(
 harness_test!(
     harness_mos6_simpleinv,
     "mos6/simpleinv.cir",
-    ignore = "~0.28% interpolation error at switching transition (constant junction caps vs ngspice voltage-dependent)"
+    ignore = "~0.22% interpolation error at switching transition (Meyer gate caps now dynamic; remaining error from constant junction caps)"
 );
 
 // === Pole-Zero ===

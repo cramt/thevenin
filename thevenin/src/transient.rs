@@ -538,6 +538,55 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
+    // Initialize MOS6 Meyer gate charge histories from DC operating point.
+    let mut mos6_charge_histories: Vec<MosfetChargeHistory> = mna
+        .mos6s
+        .iter()
+        .map(|mos| {
+            let (vgs_signed, vds_signed, vbs_signed) = mos.terminal_voltages(&solution);
+            let vgd_signed = vgs_signed - vds_signed;
+            let vgb_signed = vgs_signed - vbs_signed;
+
+            let comp = mos.model.companion(vgs_signed, vds_signed, vbs_signed, mos.betac());
+
+            let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);
+            let cox = (3.9 * 8.854214871e-12) / mos.model.tox * l_eff * mos.w;
+
+            let (capgs, capgd, capgb) = if comp.mode > 0 {
+                crate::mosfet::qmeyer(
+                    vgs_signed,
+                    vgd_signed,
+                    comp.von,
+                    comp.vdsat,
+                    mos.model.phi,
+                    cox,
+                )
+            } else {
+                let (gd, gs, gb) = crate::mosfet::qmeyer(
+                    vgd_signed,
+                    vgs_signed,
+                    comp.von,
+                    comp.vdsat,
+                    mos.model.phi,
+                    cox,
+                );
+                (gs, gd, gb)
+            };
+
+            MosfetChargeHistory {
+                qgs: capgs * vgs_signed,
+                cqgs: 0.0,
+                qgd: capgd * vgd_signed,
+                cqgd: 0.0,
+                qgb: capgb * vgb_signed,
+                cqgb: 0.0,
+                vgs: vgs_signed,
+                vgd: vgd_signed,
+                vgb: vgb_signed,
+            }
+        })
+        .collect();
+
     // Initialize LTRA transient state.
     let has_ltra = !mna.ltras.is_empty();
     let mut ltra_states: Vec<LtraState> = mna
@@ -823,6 +872,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             if has_cpl { Some(&cpl_stamps) } else { None },
             &mesa_charge_histories,
             &mosfet_charge_histories,
+            &mos6_charge_histories,
         ) {
             Ok(sol) => sol,
             Err(e) if step_h > h_min * 2.0 => {
@@ -1061,6 +1111,68 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
         }
 
+        // Update MOS6 Meyer charge histories.
+        for (mi, mos) in mna.mos6s.iter().enumerate() {
+            let (vgs_signed, vds_signed, vbs_signed) = mos.terminal_voltages(&solution);
+            let vgd_signed = vgs_signed - vds_signed;
+            let vgb_signed = vgs_signed - vbs_signed;
+
+            let comp = mos.model.companion(vgs_signed, vds_signed, vbs_signed, mos.betac());
+            let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);
+            let cox = (3.9 * 8.854214871e-12) / mos.model.tox * l_eff * mos.w;
+
+            let (capgs, capgd, capgb) = if comp.mode > 0 {
+                crate::mosfet::qmeyer(
+                    vgs_signed,
+                    vgd_signed,
+                    comp.von,
+                    comp.vdsat,
+                    mos.model.phi,
+                    cox,
+                )
+            } else {
+                let (gd, gs, gb) = crate::mosfet::qmeyer(
+                    vgd_signed,
+                    vgs_signed,
+                    comp.von,
+                    comp.vdsat,
+                    mos.model.phi,
+                    cox,
+                );
+                (gs, gd, gb)
+            };
+
+            let hist = &mos6_charge_histories[mi];
+            let qgs = hist.qgs + capgs * (vgs_signed - hist.vgs);
+            let qgd = hist.qgd + capgd * (vgd_signed - hist.vgd);
+            let qgb = hist.qgb + capgb * (vgb_signed - hist.vgb);
+
+            let cqgs = match method {
+                IntegrationMethod::BackwardEuler => (qgs - hist.qgs) / step_h,
+                IntegrationMethod::Trapezoidal => 2.0 * (qgs - hist.qgs) / step_h - hist.cqgs,
+            };
+            let cqgd = match method {
+                IntegrationMethod::BackwardEuler => (qgd - hist.qgd) / step_h,
+                IntegrationMethod::Trapezoidal => 2.0 * (qgd - hist.qgd) / step_h - hist.cqgd,
+            };
+            let cqgb = match method {
+                IntegrationMethod::BackwardEuler => (qgb - hist.qgb) / step_h,
+                IntegrationMethod::Trapezoidal => 2.0 * (qgb - hist.qgb) / step_h - hist.cqgb,
+            };
+
+            mos6_charge_histories[mi] = MosfetChargeHistory {
+                qgs,
+                cqgs,
+                qgd,
+                cqgd,
+                qgb,
+                cqgb,
+                vgs: vgs_signed,
+                vgd: vgd_signed,
+                vgb: vgb_signed,
+            };
+        }
+
         // Update LTRA histories.
         if has_ltra {
             ltra_time_points.push(t);
@@ -1197,6 +1309,7 @@ fn solve_timestep(
     cpl_stamps: Option<&[crate::cpl::CplTransientStamp]>,
     mesa_charge_histories: &[MesaChargeHistory],
     mosfet_charge_histories: &[MosfetChargeHistory],
+    mos6_charge_histories: &[MosfetChargeHistory],
 ) -> Result<Vec<f64>, MnaError> {
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
@@ -1564,6 +1677,90 @@ fn solve_timestep(
                 stamp_current_source(&mut system.rhs, gp, dp, ieq_gd);
 
                 // Stamp G-B charge: conductance between gate and bulk.
+                stamp_conductance(&mut system.matrix, gp, b, m * geq_gb);
+                let ieq_gb = sign * m * (cqgb - geq_gb * vgb_signed);
+                stamp_current_source(&mut system.rhs, gp, b, ieq_gb);
+            }
+        }
+
+        // 8. Stamp MOS6 (Level 6) Meyer gate capacitance companion models.
+        //    Same pattern as Level 1 MOSFET Meyer caps (section 7).
+        if !mna.mos6s.is_empty() {
+            let prev_mos6 = dev_state.prev_mos6_voltages();
+            for (mi, mos) in mna.mos6s.iter().enumerate() {
+                let (vgs_signed, vds_signed, vbs_signed) = mos.terminal_voltages(solution);
+                let vgd_signed = vgs_signed - vds_signed;
+                let vgb_signed = vgs_signed - vbs_signed;
+
+                let (vgs_lim, vds_lim) = prev_mos6[mi];
+                let vbs_lim = vbs_signed;
+                let comp = mos.model.companion(vgs_lim, vds_lim, vbs_lim, mos.betac());
+
+                let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);
+                let cox = (3.9 * 8.854214871e-12) / mos.model.tox * l_eff * mos.w;
+
+                let vgd_lim = vgs_lim - vds_lim;
+                let (capgs, capgd, capgb) = if comp.mode > 0 {
+                    crate::mosfet::qmeyer(
+                        vgs_lim,
+                        vgd_lim,
+                        comp.von,
+                        comp.vdsat,
+                        mos.model.phi,
+                        cox,
+                    )
+                } else {
+                    let (gd, gs, gb) = crate::mosfet::qmeyer(
+                        vgd_lim,
+                        vgs_lim,
+                        comp.von,
+                        comp.vdsat,
+                        mos.model.phi,
+                        cox,
+                    );
+                    (gs, gd, gb)
+                };
+
+                let hist = &mos6_charge_histories[mi];
+
+                let qgs = hist.qgs + capgs * (vgs_signed - hist.vgs);
+                let qgd = hist.qgd + capgd * (vgd_signed - hist.vgd);
+                let qgb = hist.qgb + capgb * (vgb_signed - hist.vgb);
+
+                let (geq_gs, cqgs) = match method {
+                    IntegrationMethod::BackwardEuler => (capgs / h, (qgs - hist.qgs) / h),
+                    IntegrationMethod::Trapezoidal => {
+                        (2.0 * capgs / h, 2.0 * (qgs - hist.qgs) / h - hist.cqgs)
+                    }
+                };
+                let (geq_gd, cqgd) = match method {
+                    IntegrationMethod::BackwardEuler => (capgd / h, (qgd - hist.qgd) / h),
+                    IntegrationMethod::Trapezoidal => {
+                        (2.0 * capgd / h, 2.0 * (qgd - hist.qgd) / h - hist.cqgd)
+                    }
+                };
+                let (geq_gb, cqgb) = match method {
+                    IntegrationMethod::BackwardEuler => (capgb / h, (qgb - hist.qgb) / h),
+                    IntegrationMethod::Trapezoidal => {
+                        (2.0 * capgb / h, 2.0 * (qgb - hist.qgb) / h - hist.cqgb)
+                    }
+                };
+
+                let gp = mos.gate_idx;
+                let dp = mos.drain_prime_idx;
+                let sp = mos.source_prime_idx;
+                let b = mos.bulk_idx;
+                let sign = mos.model.mos_type.sign();
+                let m = mos.m;
+
+                stamp_conductance(&mut system.matrix, gp, sp, m * geq_gs);
+                let ieq_gs = sign * m * (cqgs - geq_gs * vgs_signed);
+                stamp_current_source(&mut system.rhs, gp, sp, ieq_gs);
+
+                stamp_conductance(&mut system.matrix, gp, dp, m * geq_gd);
+                let ieq_gd = sign * m * (cqgd - geq_gd * vgd_signed);
+                stamp_current_source(&mut system.rhs, gp, dp, ieq_gd);
+
                 stamp_conductance(&mut system.matrix, gp, b, m * geq_gb);
                 let ieq_gb = sign * m * (cqgb - geq_gb * vgb_signed);
                 stamp_current_source(&mut system.rhs, gp, b, ieq_gb);

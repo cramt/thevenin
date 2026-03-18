@@ -350,6 +350,12 @@ impl DeviceVoltageState {
         self.prev_mos.borrow().clone()
     }
 
+    /// Get the current limited MOS6 voltages (vgs, vds) for each Level 6 MOSFET.
+    /// Call after `stamp_devices()` to read the voltages used for the last stamp.
+    pub fn prev_mos6_voltages(&self) -> Vec<(f64, f64)> {
+        self.prev_mos6.borrow().clone()
+    }
+
     /// All device types apply their own voltage limiting unconditionally,
     /// matching ngspice's MODEINITFLOAT behaviour where DEVfetlim/pnjlim are
     /// active even during DC OP iterations.

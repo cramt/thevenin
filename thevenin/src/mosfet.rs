@@ -655,7 +655,12 @@ pub fn mos_limit(vgs_new: f64, vds_new: f64, vgs_old: f64, vds_old: f64, von: f6
 
 /// Compute Meyer gate capacitances (non-constant portions only).
 ///
-/// Implements ngspice DEVqmeyer (devsup.c lines 674-738).
+/// Implements ngspice DEVqmeyer (devsup.c lines 674-738), which returns
+/// **half** of the non-constant capacitance.  In ngspice the other half
+/// comes from the previous timestep's state vector (`state0 + state1`).
+/// We multiply by 2 here so callers get the full non-constant cap value,
+/// matching the steady-state total without requiring history averaging.
+///
 /// Returns (capgs, capgd, capgb) — the voltage-dependent part of the
 /// gate capacitances, WITHOUT overlap capacitances.
 ///
@@ -666,7 +671,9 @@ pub fn qmeyer(vgs: f64, vgd: f64, von: f64, vdsat: f64, phi: f64, cox: f64) -> (
     let vgst = vgs - von;
     let vdsat = vdsat.max(MAGIC_VDS);
 
-    if vgst <= -phi {
+    // DEVqmeyer formulas return half the non-constant cap; multiply by 2
+    // at the end to return the full value.
+    let (gs, gd, gb) = if vgst <= -phi {
         (0.0, 0.0, cox / 2.0)
     } else if vgst <= -phi / 2.0 {
         (0.0, 0.0, -vgst * cox / (2.0 * phi))
@@ -696,7 +703,8 @@ pub fn qmeyer(vgs: f64, vgd: f64, von: f64, vdsat: f64, phi: f64, cox: f64) -> (
             let capgs = cox * (1.0 - vddif1 * vddif1 / vddif2) / 3.0;
             (capgs, capgd, 0.0)
         }
-    }
+    };
+    (2.0 * gs, 2.0 * gd, 2.0 * gb)
 }
 
 #[cfg(test)]

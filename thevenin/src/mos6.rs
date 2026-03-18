@@ -344,7 +344,7 @@ impl Mos6Model {
                 ceq_bd,
                 mode,
                 vdsat: 0.0,
-                von: 0.0,
+                von,
             };
         }
 
@@ -403,7 +403,7 @@ impl Mos6Model {
             ceq_bd,
             mode,
             vdsat,
-            von: 0.0,
+            von,
         }
     }
 }
