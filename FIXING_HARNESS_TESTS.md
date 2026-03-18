@@ -763,3 +763,32 @@ gate'-drain' node pairs.
 - Remaining error is from timestep control differences accumulating through the 11-stage
   ring oscillator (each stage adds ~0.6% timing shift)
 - No regressions in 67 non-ignored harness tests or 223 unit tests
+
+---
+
+## Applied fix: MOS6 Meyer gate capacitance + qmeyer 2x correction
+
+**Affected tests:** `harness_mos6_simpleinv` (primary), all Level 1/6 MOSFET transient tests
+
+**Root cause (MOS6):** Level 6 MOSFETs had no dynamic gate capacitance during
+transient analysis. The Meyer gate charge model (DEVqmeyer) was implemented for
+Level 1 MOSFETs (commit a74eb58) but not for Level 6. Additionally, the MOS6
+companion returned `von: 0.0` and `vdsat: 0.0` instead of the actual computed
+values, which are required by the qmeyer function.
+
+**Root cause (qmeyer 2x):** ngspice's DEVqmeyer returns **half** of the non-constant
+gate capacitance. In ngspice, the full capacitance is recovered by adding
+`state0[cap] + state1[cap]` (current half + previous half). Our implementation
+was using the half-cap directly without doubling. Fixed by multiplying qmeyer
+output by 2 to return the full non-constant cap value.
+
+**Fix applied:**
+1. Fixed MOS6 companion to return actual `von` and `vdsat` values
+2. Added MOS6 Meyer gate charge history initialization, NR stamping, and update
+3. Added `prev_mos6_voltages()` accessor for limited voltage tracking
+4. Fixed `qmeyer()` to return full (2x) non-constant capacitance
+
+**Result:**
+- `harness_mos6_simpleinv`: 0.28% → 0.22% error (still above 0.2% tolerance)
+- No regressions in any existing tests
+- Remaining error is from constant bulk junction cap approximation (CBD, CBS)
