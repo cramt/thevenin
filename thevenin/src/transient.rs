@@ -60,6 +60,23 @@ struct BjtChargeHistory {
     cqbc: f64,
 }
 
+/// History state for a MESA junction charge at the previous timestep.
+#[derive(Debug, Clone)]
+struct MesaChargeHistory {
+    /// G-S junction charge at previous timestep.
+    qgs: f64,
+    /// G-S charge current at previous timestep (for trapezoidal).
+    cqgs: f64,
+    /// G-D junction charge at previous timestep.
+    qgd: f64,
+    /// G-D charge current at previous timestep (for trapezoidal).
+    cqgd: f64,
+    /// Previous G-S capacitor voltage (V(gp) - V(spp)).
+    vgspp: f64,
+    /// Previous G-D capacitor voltage (V(gp) - V(dpp)).
+    vgdpp: f64,
+}
+
 /// Compute capacitor companion model coefficients.
 ///
 /// Returns `(geq, ieq)` where:
@@ -412,6 +429,41 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
+    // Initialize MESA junction charge histories from DC operating point.
+    // At DC, Q = capgs * vgspp and Q = capgd * vgdpp. dQ/dt = 0.
+    let mut mesa_charge_histories: Vec<MesaChargeHistory> = mna
+        .mesas
+        .iter()
+        .map(|mesa| {
+            let (vgs, vgd) = mesa.junction_voltages(&solution);
+            let comp = crate::mesa::mesa_companion(mesa, vgs, vgd, 1e-12);
+            // vgspp = V(gp) - V(spp). At DC OP, spp voltage ≈ sp voltage
+            // (no transient current through Ri), so vgspp ≈ vgs.
+            let vgspp = if mesa.source_prm_prm_idx.is_some() {
+                let v_gp = mesa.gate_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+                let v_spp = mesa.source_prm_prm_idx.map(|i| solution[i]).unwrap_or(0.0);
+                v_gp - v_spp
+            } else {
+                vgs
+            };
+            let vgdpp = if mesa.drain_prm_prm_idx.is_some() {
+                let v_gp = mesa.gate_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+                let v_dpp = mesa.drain_prm_prm_idx.map(|i| solution[i]).unwrap_or(0.0);
+                v_gp - v_dpp
+            } else {
+                vgd
+            };
+            MesaChargeHistory {
+                qgs: comp.capgs * vgspp,
+                cqgs: 0.0,
+                qgd: comp.capgd * vgdpp,
+                cqgd: 0.0,
+                vgspp,
+                vgdpp,
+            }
+        })
+        .collect();
+
     // Initialize LTRA transient state.
     let has_ltra = !mna.ltras.is_empty();
     let mut ltra_states: Vec<LtraState> = mna
@@ -695,6 +747,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             },
             if has_txl { Some(&txl_stamps) } else { None },
             if has_cpl { Some(&cpl_stamps) } else { None },
+            &mesa_charge_histories,
         ) {
             Ok(sol) => sol,
             Err(e) if step_h > h_min * 2.0 => {
@@ -823,6 +876,55 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 cqbe,
                 qbc,
                 cqbc,
+            };
+        }
+
+        // Update MESA junction charge histories.
+        for (mi, mesa) in mna.mesas.iter().enumerate() {
+            let v_gp = mesa
+                .gate_prime_idx
+                .map(|i| solution[i])
+                .unwrap_or(0.0);
+            let vgspp = if let Some(spp_i) = mesa.source_prm_prm_idx {
+                v_gp - solution[spp_i]
+            } else {
+                let v_sp = mesa.source_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+                v_gp - v_sp
+            };
+            let vgdpp = if let Some(dpp_i) = mesa.drain_prm_prm_idx {
+                v_gp - solution[dpp_i]
+            } else {
+                let v_dp = mesa.drain_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+                v_gp - v_dp
+            };
+
+            let (vgs, vgd) = mesa.junction_voltages(&solution);
+            let comp = crate::mesa::mesa_companion(mesa, vgs, vgd, nr_options.gmin);
+
+            let hist = &mesa_charge_histories[mi];
+            let qgs = hist.qgs + comp.capgs * (vgspp - hist.vgspp);
+            let qgd = hist.qgd + comp.capgd * (vgdpp - hist.vgdpp);
+
+            let cqgs = match method {
+                IntegrationMethod::BackwardEuler => (qgs - hist.qgs) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qgs - hist.qgs) / step_h - hist.cqgs
+                }
+            };
+            let cqgd = match method {
+                IntegrationMethod::BackwardEuler => (qgd - hist.qgd) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qgd - hist.qgd) / step_h - hist.cqgd
+                }
+            };
+
+            mesa_charge_histories[mi] = MesaChargeHistory {
+                qgs,
+                cqgs,
+                qgd,
+                cqgd,
+                vgspp,
+                vgdpp,
             };
         }
 
@@ -960,6 +1062,7 @@ fn solve_timestep(
     ltra_time_points: Option<&[f64]>,
     txl_stamps: Option<&[TxlTransientStamp]>,
     cpl_stamps: Option<&[crate::cpl::CplTransientStamp]>,
+    mesa_charge_histories: &[MesaChargeHistory],
 ) -> Result<Vec<f64>, MnaError> {
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
@@ -1119,6 +1222,96 @@ fn solve_timestep(
                 stamp_conductance(&mut system.matrix, bp, cp, m * geq_bc);
                 let ieq_bc = sign * m * (cqbc - geq_bc * vbc);
                 stamp_current_source(&mut system.rhs, bp, cp, ieq_bc);
+            }
+        }
+
+        // 6. Stamp MESA junction capacitance companion models.
+        //    In ngspice mesaload.c, the junction charges qgs/qgd are integrated
+        //    via NIintegrate to produce ggspp/ggdpp (conductances) and
+        //    cgspp/cgdpp (currents) that couple gate' to source''/drain'' PPM nodes.
+        if !mna.mesas.is_empty() {
+            for (mi, mesa) in mna.mesas.iter().enumerate() {
+                let gp = mesa.gate_prime_idx;
+                // Use PPM nodes if they exist, otherwise fall back to prime nodes.
+                let spp = mesa.source_prm_prm_idx.or(mesa.source_prime_idx);
+                let dpp = mesa.drain_prm_prm_idx.or(mesa.drain_prime_idx);
+
+                // Compute vgspp and vgdpp from the current NR solution.
+                let v_gp = gp.map(|i| solution[i]).unwrap_or(0.0);
+                let vgspp = if let Some(spp_i) = spp {
+                    v_gp - solution[spp_i]
+                } else {
+                    // No PPM node — fall back to vgs (gate' - source').
+                    let v_sp = mesa.source_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+                    v_gp - v_sp
+                };
+                let vgdpp = if let Some(dpp_i) = dpp {
+                    v_gp - solution[dpp_i]
+                } else {
+                    let v_dp = mesa.drain_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+                    v_gp - v_dp
+                };
+
+                // Get capgs/capgd from companion using LIMITED voltages
+                // (same voltages stamp_devices used for the main device stamp).
+                let prev_mesa = dev_state.prev_mesa_voltages();
+                let (vgs_lim, vgd_lim) = prev_mesa[mi];
+                let comp = crate::mesa::mesa_companion(mesa, vgs_lim, vgd_lim, nr_options.gmin);
+                let capgs = comp.capgs;
+                let capgd = comp.capgd;
+
+                // Compute charges: Q = C * V (constant cap model, matching ngspice).
+                let hist = &mesa_charge_histories[mi];
+                let qgs = hist.qgs + capgs * (vgspp - hist.vgspp);
+                let qgd = hist.qgd + capgd * (vgdpp - hist.vgdpp);
+
+                // Integrate G-S charge.
+                let (ggspp, cqgs) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = capgs / h;
+                        let cq = (qgs - hist.qgs) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * capgs / h;
+                        let cq = 2.0 * (qgs - hist.qgs) / h - hist.cqgs;
+                        (geq, cq)
+                    }
+                };
+
+                // Integrate G-D charge.
+                let (ggdpp, cqgd) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = capgd / h;
+                        let cq = (qgd - hist.qgd) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * capgd / h;
+                        let cq = 2.0 * (qgd - hist.qgd) / h - hist.cqgd;
+                        (geq, cq)
+                    }
+                };
+
+                // Stamp ggspp conductance between gp and cap_s_node.
+                stamp_conductance(&mut system.matrix, gp, spp, ggspp);
+                // Stamp ggdpp conductance between gp and cap_d_node.
+                stamp_conductance(&mut system.matrix, gp, dpp, ggdpp);
+
+                // RHS: charge current Norton equivalents at cap nodes.
+                let ieq_gs = cqgs - ggspp * vgspp;
+                let ieq_gd = cqgd - ggdpp * vgdpp;
+                if let Some(spp_i) = spp {
+                    system.rhs[spp_i] += ieq_gs;
+                }
+                if let Some(dpp_i) = dpp {
+                    system.rhs[dpp_i] += ieq_gd;
+                }
+                // gp sees the negative sum of both charge currents.
+                if let Some(gp_i) = gp {
+                    system.rhs[gp_i] -= ieq_gs;
+                    system.rhs[gp_i] -= ieq_gd;
+                }
             }
         }
     };

@@ -733,3 +733,33 @@ NR convergence issues (negative correction capacitance in reverse bias).
 - `harness_general_rtlinv`: unchanged (TF=0.1ns, IS=1e-16 → diffusion cap
   is small relative to CJE=0.9pF for this circuit)
 - No regressions in any of the 67 non-ignored harness tests or 223 unit tests
+
+---
+
+## Applied fix: MESA transient junction capacitance
+
+**Affected test:** `harness_mesa_mesosc` (ring oscillator)
+
+**Root cause:** The MESA device model was completely missing transient junction
+capacitance handling. In ngspice `mesaload.c`, gate-source and gate-drain junction
+charges (qgs, qgd) are integrated via `NIintegrate()` at each NR iteration to produce
+companion conductances (`ggspp`, `ggdpp`) and Norton current sources (`cgspp`, `cgdpp`)
+that couple the gate' node to the source''/drain'' PPM feedback nodes. Without these,
+the MESA FET had no capacitive charge storage during transient analysis.
+
+**Fix applied:** Added `MesaChargeHistory` struct to track junction charges between
+timesteps. During transient NR iterations, the charge integration follows the same
+backward Euler / trapezoidal pattern as BJT diffusion capacitances:
+- Compute charges: `Q(t) = Q(t-1) + C × (V(t) - V(t-1))` (incremental, matching ngspice)
+- Integrate: `geq = C/h`, `cq = dQ/dt`
+- Stamp conductance between gate' and cap node (spp/dpp if PPM exists, sp/dp otherwise)
+- Stamp Norton current at cap node and gate'
+
+When `ri=0` and `rf=0` (no PPM nodes), the cap stamps fall back to gate'-source' and
+gate'-drain' node pairs.
+
+**Result:**
+- `harness_mesa_mesosc`: 39% → 7% error (5.6× improvement)
+- Remaining error is from timestep control differences accumulating through the 11-stage
+  ring oscillator (each stage adds ~0.6% timing shift)
+- No regressions in 67 non-ignored harness tests or 223 unit tests

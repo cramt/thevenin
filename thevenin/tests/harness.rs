@@ -519,7 +519,7 @@ harness_test!(harness_mesa_mesinv, "mesa/mesinv.cir");
 harness_test!(
     harness_mesa_mesosc,
     "mesa/mesosc.cir",
-    ignore = "tran: output mismatch (numerical accuracy)"
+    ignore = "~7% transient timing error at ring oscillator edge (11-stage accumulation of timestep differences)"
 );
 
 // === MES (MESFET) ===
