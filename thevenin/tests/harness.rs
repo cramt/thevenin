@@ -488,12 +488,12 @@ harness_test!(harness_general_rc, "general/rc.cir");
 harness_test!(
     harness_general_rtlinv,
     "general/rtlinv.cir",
-    ignore = "~0.22% transient accuracy error: NR oscillation in BJT switching dynamics"
+    ignore = "~0.21% transient accuracy: forward-bias depletion cap correction improves timing but reverse-bias constant cap still slightly too large"
 );
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
-    ignore = "~0.25% switching error at t=280ns: constant depletion cap approximation (diffusion caps now dynamic)"
+    ignore = "~0.20% switching error at t=280ns: forward-bias depletion cap correction applied; remaining error from reverse-bias constant cap approximation"
 );
 
 // === HFET ===
@@ -752,22 +752,22 @@ harness_test!(
 harness_test!(
     harness_transmission_ltra1_1,
     "transmission/ltra1_1_line.cir",
-    ignore = "~2.5% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
+    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
 );
 harness_test!(
     harness_transmission_ltra2_2,
     "transmission/ltra2_2_line.cir",
-    ignore = "~2.5% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
+    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
 );
 harness_test!(
     harness_transmission_txl1_1,
     "transmission/txl1_1_line.cir",
-    ignore = "~2% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
+    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
 );
 harness_test!(
     harness_transmission_txl2_3,
     "transmission/txl2_3_line.cir",
-    ignore = "~3% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
+    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
 );
 
 // === VBIC ===

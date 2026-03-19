@@ -792,3 +792,50 @@ output by 2 to return the full non-constant cap value.
 - `harness_mos6_simpleinv`: 0.28% → 0.22% error (still above 0.2% tolerance)
 - No regressions in any existing tests
 - Remaining error is from constant bulk junction cap approximation (CBD, CBS)
+
+---
+
+## Applied fix: BJT forward-bias depletion cap correction
+
+**Affected tests:** `harness_general_schmitt`, `harness_general_rtlinv`
+
+**Root cause:** BJT junction depletion capacitances (CJE, CJC) were modeled as
+constant zero-bias values.  In ngspice, these are voltage-dependent: the graded
+junction formula gives `C(v) = CJ0 / (1 - v/VJ)^M` for reverse bias and a
+linearized formula for forward bias past FC*VJ.  In forward bias (vbe > FC*VJE),
+the depletion cap can be 60% larger than CJ0, significantly affecting switching
+transition timing.
+
+**Fix applied:** Added forward-bias depletion cap correction to the BJT charge
+integration in transient analysis.  During each NR iteration, the correction
+`cap_correction = max(0, junction_cap(v) - CJ0)` is computed and added to the
+diffusion capacitance (TF*gbe / TR*gbc).  The charge is integrated using the
+incremental formulation: `Q = Q_prev + C_corr * (v - v_prev)`, which tracks
+both charge and voltage history (same pattern as MOSFET Meyer caps).
+
+The correction is clamped to non-negative values (forward bias only) because
+negative corrections in reverse bias caused NR convergence issues.  The constant
+CJE/CJC caps remain in MNA for reverse-bias coupling.
+
+**Result:**
+- `harness_general_schmitt`: 0.252% → 0.204% error (improved 19%)
+- `harness_general_rtlinv`: 0.220% → 0.207% error (improved 6%)
+- Both still slightly above 0.2% tolerance due to reverse-bias constant cap
+- No regressions in 223 unit tests or 63 passing harness tests
+
+**Remaining error:** In reverse bias (BJT cutoff), the constant CJE cap is
+larger than the actual voltage-dependent cap, causing slightly too much charge
+storage and slower switching.  Implementing the full voltage-dependent cap
+(including reverse bias) was attempted but caused NR convergence issues because
+the negative correction capacitance (junction_cap(v) - CJE < 0) destabilizes
+the NR iteration.
+
+---
+
+## Triage update (post forward-bias depletion cap fix)
+
+| Test | Before | After |
+|---|---|---|
+| `harness_general_schmitt` | 0.252% error | 0.204% error |
+| `harness_general_rtlinv` | 0.220% error | 0.207% error |
+| transmission line tests | ignore reason: accuracy | updated: timeout (PMOS NR convergence) |

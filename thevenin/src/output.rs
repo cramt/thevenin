@@ -2163,7 +2163,7 @@ fn normalize_exponents(text: &str) -> String {
 /// time-series data sections (transient, DC sweep, etc.), linearly interpolating
 /// the actual data at the expected data's independent variable points.
 ///
-/// Relative tolerance for numeric comparisons. Set to 3e-4 to account for
+/// Relative tolerance for numeric comparisons. Set to 2e-3 to account for
 /// NR solver convergence differences — ngspice uses reltol=1e-3, so output
 /// values can differ by up to ~reltol between implementations, especially in
 /// high-sensitivity operating regions (e.g., near Vds=0 crossover).

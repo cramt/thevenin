@@ -48,16 +48,22 @@ struct IndHistory {
 }
 
 /// History state for a BJT junction charge at the previous timestep.
+/// Tracks both charges and voltages to enable incremental charge computation
+/// with voltage-dependent depletion capacitances, matching ngspice's bjtload.c.
 #[derive(Debug, Clone)]
 struct BjtChargeHistory {
-    /// B-E junction charge at previous timestep.
+    /// B-E junction charge at previous timestep (depletion + diffusion).
     qbe: f64,
     /// B-E charge current at previous timestep (for trapezoidal).
     cqbe: f64,
-    /// B-C junction charge at previous timestep.
+    /// B-E junction voltage at previous timestep.
+    vbe: f64,
+    /// B-C junction charge at previous timestep (depletion + diffusion).
     qbc: f64,
     /// B-C charge current at previous timestep (for trapezoidal).
     cqbc: f64,
+    /// B-C junction voltage at previous timestep.
+    vbc: f64,
 }
 
 /// History state for a MESA junction charge at the previous timestep.
@@ -427,27 +433,36 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
-    // Initialize BJT diffusion charge histories from DC operating point.
+    // Initialize BJT charge histories from DC operating point.
     // At DC steady state, dQ/dt = 0, so charge currents are all zero.
-    // Tracks the TF/TR diffusion charge on top of the constant CJE/CJC
-    // depletion caps in MNA assembly.
+    // Tracks diffusion charge + positive depletion correction (cap_be(v) - CJE
+    // when positive) on top of the constant CJE/CJC caps in MNA.
     let mut bjt_charge_histories: Vec<BjtChargeHistory> = mna
         .bjts
         .iter()
         .map(|bjt| {
             let (vbe, vbc) = bjt.junction_voltages(&solution);
             let comp = bjt.model.companion(vbe, vbc);
-            let (qbe, _, qbc, _) = bjt.model.compute_diffusion_charges(
+            // Diffusion charge + positive depletion correction charge.
+            // Use compute_charge_correction for exact integral.
+            let (qbe, _, qbc, _) = bjt.model.compute_charge_correction(
+                vbe,
+                vbc,
                 comp.cbe_raw,
                 comp.gbe_raw,
                 comp.cbc_raw,
                 comp.gbc_raw,
             );
+            // Clamp depletion correction to positive only (diffusion is always positive)
+            let qbe = (bjt.model.tf * comp.cbe_raw).max(qbe);
+            let qbc = (bjt.model.tr * comp.cbc_raw).max(qbc);
             BjtChargeHistory {
                 qbe,
                 cqbe: 0.0, // DC steady state: no charge current
+                vbe,
                 qbc,
                 cqbc: 0.0,
+                vbc,
             }
         })
         .collect();
@@ -970,16 +985,28 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
         }
 
-        // Update BJT diffusion charge histories.
+        // Update BJT charge correction histories (diffusion + positive depletion correction).
         for (bi, bjt) in mna.bjts.iter().enumerate() {
             let (vbe, vbc) = bjt.junction_voltages(&solution);
             let comp = bjt.model.companion(vbe, vbc);
-            let (qbe, _, qbc, _) = bjt.model.compute_diffusion_charges(
-                comp.cbe_raw,
-                comp.gbe_raw,
-                comp.cbc_raw,
-                comp.gbc_raw,
-            );
+            // Compute incremental charge at accepted point
+            // Use incremental charge for the accepted point
+            let capbe_corr = if bjt.model.cje > 0.0 {
+                (bjt.model.cap_be(vbe) - bjt.model.cje).max(0.0)
+            } else {
+                0.0
+            };
+            let capbc_corr = if bjt.model.cjc > 0.0 {
+                (bjt.model.cap_bc(vbc) - bjt.model.cjc).max(0.0)
+            } else {
+                0.0
+            };
+            let capbe = bjt.model.tf * comp.gbe_raw + capbe_corr;
+            let capbc = bjt.model.tr * comp.gbc_raw + capbc_corr;
+            let qbe = bjt_charge_histories[bi].qbe
+                + capbe * (vbe - bjt_charge_histories[bi].vbe);
+            let qbc = bjt_charge_histories[bi].qbc
+                + capbc * (vbc - bjt_charge_histories[bi].vbc);
 
             let cqbe = match method {
                 IntegrationMethod::BackwardEuler => (qbe - bjt_charge_histories[bi].qbe) / step_h,
@@ -999,8 +1026,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             bjt_charge_histories[bi] = BjtChargeHistory {
                 qbe,
                 cqbe,
+                vbe,
                 qbc,
                 cqbc,
+                vbc,
             };
         }
 
@@ -1403,10 +1432,14 @@ fn solve_timestep(
             dev_state.stamp_devices(solution, system, mna, nr_options.gmin);
         }
 
-        // 5. Stamp BJT diffusion capacitance companion models (TF*gbe, TR*gbc).
-        //    This must happen after stamp_devices() to read limited junction voltages.
-        //    Depletion caps (CJE, CJC) are handled as constant caps in MNA;
-        //    diffusion caps are dynamic within NR iterations.
+        // 5. Stamp BJT junction capacitance companion models.
+        //    Uses the incremental charge formulation with voltage-dependent
+        //    depletion capacitances + TF/TR diffusion capacitances, matching
+        //    ngspice's bjtload.c.  The charge at the current operating point is:
+        //      Q_new = Q_prev + C(v) * (v - v_prev)
+        //    where C(v) = junction_cap(v) + TF*gbe (or TR*gbc).
+        //    This avoids computing absolute charges during NR iterations and
+        //    always produces positive geq (since C(v) >= 0).
         if !mna.bjts.is_empty() {
             let prev_bjt = dev_state.prev_bjt_voltages();
             for (bi, bjt) in mna.bjts.iter().enumerate() {
@@ -1416,17 +1449,31 @@ fn solve_timestep(
 
                 // Compute companion at current operating point to get cbe, gbe, cbc, gbc.
                 let comp = bjt.model.companion(vbe, vbc);
-                // Compute diffusion charges (TF*cbe, TR*cbc) and their derivatives.
-                // The constant CJE/CJC depletion caps are in MNA assembly;
-                // this adds only the TF/TR diffusion terms dynamically.
-                let (qbe, capbe, qbc, capbc) = bjt.model.compute_diffusion_charges(
-                    comp.cbe_raw,
-                    comp.gbe_raw,
-                    comp.cbc_raw,
-                    comp.gbc_raw,
-                );
+
+                // Diffusion capacitance (TF*gbe, TR*gbc) plus depletion cap
+                // correction (voltage-dependent minus constant CJE/CJC).
+                // The constant CJE/CJC caps are already in MNA; here we add
+                // the diffusion terms and the positive depletion correction
+                // (forward bias only, where junction_cap > CJE).  In reverse
+                // bias, the constant CJE/CJC from MNA is used as-is.
+                let capbe_dep_corr = if bjt.model.cje > 0.0 {
+                    (bjt.model.cap_be(vbe) - bjt.model.cje).max(0.0)
+                } else {
+                    0.0
+                };
+                let capbc_dep_corr = if bjt.model.cjc > 0.0 {
+                    (bjt.model.cap_bc(vbc) - bjt.model.cjc).max(0.0)
+                } else {
+                    0.0
+                };
+                let capbe = bjt.model.tf * comp.gbe_raw + capbe_dep_corr;
+                let capbc = bjt.model.tr * comp.gbc_raw + capbc_dep_corr;
 
                 let hist = &bjt_charge_histories[bi];
+
+                // Incremental charge: Q = Q_prev + C_corr(v) * (v - v_prev)
+                let qbe = hist.qbe + capbe * (vbe - hist.vbe);
+                let qbc = hist.qbc + capbc * (vbc - hist.vbc);
 
                 // Integrate B-E charge.
                 let (geq_be, cqbe) = match method {
