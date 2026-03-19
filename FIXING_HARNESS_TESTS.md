@@ -839,3 +839,71 @@ the NR iteration.
 | `harness_general_schmitt` | 0.252% error | 0.204% error |
 | `harness_general_rtlinv` | 0.220% error | 0.207% error |
 | transmission line tests | ignore reason: accuracy | updated: timeout (PMOS NR convergence) |
+
+---
+
+## Applied fix: MOSFET gds floor for LAMBDA=0
+
+**Affected devices:** All Level 1 (MosfetModel) and Level 6 (Mos6Model) MOSFETs
+
+**Root cause:** When LAMBDA=0, gds computes to exactly 0 in saturation and
+cutoff regions. This leaves output nodes with nearly zero self-conductance
+in the MNA matrix (only gbs ≈ 1e-12 from the bulk junction). For CMOS
+circuits — especially PMOS pull-ups in inverter stages — this prevents NR
+convergence because the matrix is nearly singular at the output node.
+
+ngspice handles this through its `CKTdiagGmin` mechanism, which adds a small
+conductance (1e-12) from every node to ground during the NR solve. Our code
+sets `diag_gmin = 0` for DC sweeps to match ngspice's DC analysis behavior,
+but this means the gds=0 case has no safety net.
+
+**Fix applied:** Added `gds = max(gds, 1e-12)` in both `MosfetModel::companion()`
+and `Mos6Model::companion()`. This floor is applied after the drain current
+computation but before the Norton equivalent current source, ensuring the
+ceq_d term correctly accounts for the floored gds.
+
+**Impact:** Improves numerical stability for all circuits with LAMBDA=0
+MOSFETs. Does not fix the transmission line tests by itself (those require
+additional convergence improvements like voltage limiting), but prevents
+the specific singular-matrix failure mode from gds=0.
+
+**No regressions:** All 223 unit tests pass. All non-timeout harness tests pass.
+
+Also updated `harness_general_mosamp` ignore reason to reflect actual failure
+mode: "tran: singular matrix" (DC OP converges after VTO fix, but transient
+fails due to missing Level 2 specific model features).
+
+---
+
+## Investigation: BJT reverse-bias depletion cap improvement (no improvement)
+
+**Affected tests:** `harness_general_schmitt` (~0.204%), `harness_general_rtlinv`
+(~0.207%)
+
+**Investigation:** Three approaches attempted to correct the constant CJE/CJC
+approximation in reverse bias:
+
+1. **Full negative correction (allow cap_be(v) - CJE < 0):** The incremental
+   charge formulation `Q = Q_prev + C * dV` breaks when C < 0 because a
+   negative capacitance inverts the charge-voltage relationship, causing the
+   charge to move in the wrong direction during voltage sweeps.
+
+2. **Exact charge formulation:** Using absolute charges `Q = junction_charge(v)
+   + TF*cbe` instead of incremental charges. The `TF*cbe` term (diffusion
+   charge) swings by orders of magnitude during NR iterations as the BJT
+   transitions between cutoff and forward-active, causing NR divergence.
+
+3. **Hybrid approach (exact depletion + incremental diffusion):** Separating
+   the depletion charge (exact integral) from diffusion charge (incremental).
+   The negative depletion correction cap still destabilizes the NR iteration
+   because the matrix sees a negative conductance contribution from the
+   correction term, even though the total (MNA constant + correction) is
+   positive.
+
+**Conclusion:** The constant CJE/CJC approximation in reverse bias is a
+fundamental limitation of the two-component charge tracking approach (constant
+MNA cap + dynamic correction). Fixing it requires either implementing full
+charge-based integration with ngspice's convergence aids (MODEINITFLOAT,
+charge limiting, per-device voltage limiting) or accepting the ~0.2% timing
+error as an implementation trade-off. Per project policy, these remain as
+known numerical deviations.
