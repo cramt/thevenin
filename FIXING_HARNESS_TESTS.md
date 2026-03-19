@@ -907,3 +907,50 @@ charge-based integration with ngspice's convergence aids (MODEINITFLOAT,
 charge limiting, per-device voltage limiting) or accepting the ~0.2% timing
 error as an implementation trade-off. Per project policy, these remain as
 known numerical deviations.
+
+---
+
+## Applied fix: BSIM3SOI size_dep_param corrections (cdep0, theta0vb0, theta_rout)
+
+**Affected tests:** All 15 BSIM3SOI tests (DD, FD, PD variants)
+
+**Bugs found by comparing `size_dep_param()` / temp preprocessing with ngspice
+`b3soiddtemp.c` / `b3soifdtemp.c` / `b3soipdtemp.c`:**
+
+1. **cdep0 formula (all three variants):** The divisor `/ 2.0 / phi` was outside the
+   `sqrt()` instead of inside. ngspice computes `sqrt(q * EPSSI * npeak * 1e6 / 2.0 / phi)`.
+   Our code had `sqrt(q * EPSSI * npeak * 1e6) / (2.0 * phi)`.  The FD variant was
+   even worse: it divided by `2 * vtm` instead of `2 * phi` and had an extra factor of 2
+   inside the sqrt.  Fixed all three to match ngspice exactly.
+
+2. **theta0vb0 (DIBL coefficient, DD and PD variants):** Three sub-bugs:
+   - Used `dvt1` as the exponential decay parameter; ngspice uses `dsub`
+   - Used `litl = sqrt(EPSSI * xj / cox)` as characteristic length; ngspice uses
+     `sqrt(EPSSI / EPSOX * tox * Xdep0)` (depletion width, not junction depth)
+   - Multiplied by `dvt0`; ngspice does NOT multiply by dvt0 for theta0vb0
+     (dvt0 is only used in the SCE term `Delt_vth`, not the DIBL term)
+   The FD variant already used `dsub` but still had the wrong characteristic length
+   and the dvt0 multiplier.
+
+3. **theta_rout (PDIBL coefficient, all three variants):** Used `litl` (xj-based)
+   instead of the correct `sqrt(EPSSI / EPSOX * tox * Xdep0)` characteristic length.
+   This affects the PDIBL (drain-induced barrier lowering) voltage dependence.
+
+**Impact on tests:** The fixes are correct per ngspice but did not reduce the overall
+BSIM3SOI test errors, because there are additional compensating bugs in the model:
+- DD t3: ~10% → ~12% excess current (cdep0 fix increases subthreshold current,
+  amplifying a pre-existing Vth/slope error)
+- FD t5: ~90% error → worse (FD cdep0 was 36,000× too large due to vtm/phi bug,
+  which was accidentally compensating for other FD-specific bugs)
+- PD: still times out (NR non-convergence)
+
+**Remaining known bugs (not yet fixed):**
+- `dueff_dvd` and `dueff_dvb` hardcoded to zero (derivative-only, affects
+  conductances but not DC Ids)
+- Missing `Gmb0*dVbseff_dVg` and `Gmc*dVcs_dVg` cross-coupling in final Gm/Gds/Gmbs
+- `rds0` denominator scaling wrong for `wr != 1` (current tests use wr=1)
+- Underlying Vth or subthreshold slope discrepancy (~3-4mV) not yet identified
+
+**Policy:** These fixes bring the code closer to ngspice's exact formulas even though
+the overall test error doesn't improve yet.  Multiple compensating bugs must all be
+fixed before the tests can pass.

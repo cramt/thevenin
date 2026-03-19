@@ -800,24 +800,29 @@ impl Bsim3SoiPdModel {
         // Xdep0
         let xdep0 = (2.0 * EPSSI / (CHARGE_Q * self.npeak * 1e6)).sqrt() * sqrt_phi;
 
-        // litl
+        // litl: ngspice b3soipdtemp.c: sqrt(3.0 * xj * tox), used for VACLM.
         let litl = (EPSSI * self.xj / self.cox).sqrt();
 
-        // theta0vb0 for DIBL
-        let t0 = -0.5 * self.dvt1 * leff / litl;
-        let theta0 = if t0 > -EXP_THRESHOLD {
-            let t1 = t0.exp();
-            t1 * (1.0 + 2.0 * t1)
-        } else {
-            MIN_EXP * (1.0 + 2.0 * MIN_EXP)
-        };
-        let theta0vb0 = self.dvt0 * theta0;
+        // Characteristic length for DIBL (theta0vb0) and PDIBL (theta_rout).
+        // ngspice b3soipdtemp.c: T1 = sqrt(EPSSI / EPSOX * tox * Xdep0)
+        let t1_soi = (EPSSI * xdep0 / self.cox).sqrt();
 
-        // theta_rout for VADIBL
-        let t0 = -0.5 * self.drout * leff / litl;
+        // theta0vb0: ngspice uses dsub (NOT dvt1) and does NOT multiply by dvt0.
+        // b3soipdtemp.c lines 844-845.
+        let t0 = -0.5 * self.dsub * leff / t1_soi;
+        let theta0vb0 = if t0 > -EXP_THRESHOLD {
+            let t1 = t0.exp();
+            t1 + 2.0 * t1 * t1
+        } else {
+            MIN_EXP + 2.0 * MIN_EXP * MIN_EXP
+        };
+
+        // theta_rout for VADIBL: ngspice uses drout with same characteristic length.
+        // b3soipdtemp.c lines 847-850.
+        let t0 = -0.5 * self.drout * leff / t1_soi;
         let theta_rout = if t0 > -EXP_THRESHOLD {
             let t1 = t0.exp();
-            self.pdiblc1 * (t1 * (1.0 + 2.0 * t1)) + self.pdiblc2
+            self.pdiblc1 * (t1 + 2.0 * t1 * t1) + self.pdiblc2
         } else {
             self.pdiblc2
         };
@@ -828,8 +833,8 @@ impl Bsim3SoiPdModel {
         // vfb
         let vfb = -1.0; // Simplified default
 
-        // cdep0
-        let cdep0 = (CHARGE_Q * EPSSI * self.npeak * 1e6).sqrt() / (2.0 * phi);
+        // cdep0: ngspice b3soipdtemp.c line 759: sqrt(q * EPSSI * npeak * 1e6 / 2.0 / phi)
+        let cdep0 = (CHARGE_Q * EPSSI * self.npeak * 1e6 / 2.0 / phi).sqrt();
 
         // V0 = vbi - phi
         let eg = 1.16 - 7.02e-4 * temp * temp / (temp + 1108.0);
