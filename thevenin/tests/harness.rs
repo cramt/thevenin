@@ -488,12 +488,20 @@ harness_test!(harness_general_rc, "general/rc.cir");
 harness_test!(
     harness_general_rtlinv,
     "general/rtlinv.cir",
+<<<<<<< HEAD
     ignore = "~5.5% transient timing error at first switching transition: our transition starts ~2ns later than ngspice due to constant reverse-bias cap approximation"
+=======
+    ignore = "~0.2-2% transient accuracy error at switching edges (constant depletion cap approximation vs ngspice voltage-dependent)"
+>>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
+<<<<<<< HEAD
     ignore = "~1.2% error at switching transition: output oscillates during state transition instead of settling cleanly; constant reverse-bias cap approximation"
+=======
+    ignore = "up to ~24% waveform divergence in later switching cycles (constant depletion cap + timing accumulation)"
+>>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 
 // === HFET ===
@@ -529,7 +537,16 @@ harness_test!(harness_mes_subth, "mes/subth.cir");
 harness_test!(
     harness_mos6_mos6inv,
     "mos6/mos6inv.cir",
+<<<<<<< HEAD
     ignore = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix"
+=======
+    ignore = "tran: singular matrix (Level 6 MOSFET subcircuit — DC OP converges but transient solver fails)"
+);
+harness_test!(
+    harness_mos6_simpleinv,
+    "mos6/simpleinv.cir",
+    ignore = "~0.2-1.1% transient accuracy error (constant bulk junction cap approximation)"
+>>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 harness_test!(harness_mos6_simpleinv, "mos6/simpleinv.cir");
 
@@ -770,29 +787,36 @@ harness_test!(
 harness_test!(
     harness_vbic_ceamp,
     "vbic/CEamp.cir",
+<<<<<<< HEAD
     ignore = "VBIC AC numerical accuracy: ~1.2% AC gain error (avalanche derivative coupling + self-heating FP difference)"
+=======
+    ignore = "VBIC AC accuracy: ~0.2-0.4% gain error growing at high frequency (self-heating FP evaluation order difference)"
+>>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 harness_test!(
     harness_vbic_diffamp,
     "vbic/diffamp.cir",
-    ignore = "VBIC diffamp: NR non-convergence during DC OP (complex 9-transistor circuit with self-heating)"
+    ignore = "VBIC diffamp: times out (>30s) — 13-transistor circuit with self-heating (NPN+PNP)"
 );
 harness_test!(
     harness_vbic_fg,
     "vbic/FG.cir",
-    ignore =
-        "VBIC FG: ~0.23% error in DC sweep (just above 0.2% tolerance, self-heating FP difference)"
+    ignore = "VBIC FG: ~0.2-0.7% DC sweep error growing with current (self-heating FP evaluation order difference)"
 );
 harness_test!(
     harness_vbic_fo,
     "vbic/FO.cir",
+<<<<<<< HEAD
     ignore = "VBIC FO: ~0.2% DC sweep error (self-heating FP difference, avalanche now correct)"
+=======
+    ignore = "VBIC FO: ~4.3% Ic error in DC sweep (self-heating accuracy at low VCE)"
+>>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 harness_test!(harness_vbic_noise_scale, "vbic/noise_scale_test.cir");
 harness_test!(
     harness_vbic_temp,
     "vbic/temp.cir",
-    ignore = "VBIC temp: ~0.23% Ic error (just above 0.2% tolerance, self-heating FP difference vs ngspice)"
+    ignore = "VBIC temp: ~0.2-0.6% Ic error growing with current (self-heating FP evaluation order difference)"
 );
 
 // === XSPICE (unimplemented) ===
