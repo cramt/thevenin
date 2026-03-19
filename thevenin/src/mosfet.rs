@@ -325,7 +325,7 @@ impl MosfetModel {
         let beta = self.kp;
 
         // Drain current and small-signal conductances.
-        let (cdrain, gm, gds, gmbs);
+        let (cdrain, gm, mut gds, gmbs);
         if vgst <= 0.0 {
             // Cutoff region
             cdrain = 0.0;
@@ -346,6 +346,14 @@ impl MosfetModel {
             gm = betap * vds_eff;
             gds = betap * (vgst - vds_eff) + self.lambda * beta * vds_eff * (vgst - 0.5 * vds_eff);
             gmbs = gm * arg;
+        }
+
+        // Ensure minimum output conductance to prevent singular matrix when
+        // LAMBDA=0 (gds=0 in saturation/cutoff).  ngspice relies on diagonal
+        // Gmin to provide this floor; we add it directly to gds to match the
+        // effective behavior and prevent NR divergence for CMOS circuits.
+        if gds < 1e-12 {
+            gds = 1e-12;
         }
 
         // Bulk-source and bulk-drain junction diode currents (ngspice convention).
@@ -783,7 +791,8 @@ mod tests {
         let comp = m.companion(0.5, 5.0, 0.0);
         assert_abs_diff_eq!(comp.cdrain, 0.0, epsilon = 1e-15);
         assert_abs_diff_eq!(comp.gm, 0.0, epsilon = 1e-15);
-        assert_abs_diff_eq!(comp.gds, 0.0, epsilon = 1e-15);
+        // gds is floored to 1e-12 to prevent singular matrix with LAMBDA=0.
+        assert_abs_diff_eq!(comp.gds, 1e-12, epsilon = 1e-15);
         assert_abs_diff_eq!(comp.gmbs, 0.0, epsilon = 1e-15);
     }
 
@@ -801,8 +810,8 @@ mod tests {
         assert_eq!(comp.mode, 1);
         // gm = KP * (Vgs-Vt) = 1e-4 * 2 = 2e-4
         assert_abs_diff_eq!(comp.gm, 2e-4, epsilon = 1e-10);
-        // gds = 0 (lambda=0)
-        assert_abs_diff_eq!(comp.gds, 0.0, epsilon = 1e-15);
+        // gds floored to 1e-12 (lambda=0 → computed gds would be 0).
+        assert_abs_diff_eq!(comp.gds, 1e-12, epsilon = 1e-15);
     }
 
     #[test]

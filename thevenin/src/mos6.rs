@@ -329,12 +329,12 @@ impl Mos6Model {
         let (gbd, cbd_current) = bulk_diode_current(vbd, self.is, vt);
 
         if vgon <= 0.0 {
-            // Cutoff region
+            // Cutoff region: gds floored to 1e-12 to prevent singular matrix.
             let ceq_bs = cbs_current - gbs * vbs;
             let ceq_bd = cbd_current - gbd * vbd;
             return MosfetCompanion {
                 gm: 0.0,
-                gds: 0.0,
+                gds: 1e-12,
                 gmbs: 0.0,
                 gbd,
                 gbs,
@@ -384,6 +384,11 @@ impl Mos6Model {
             gm = gm * vdst2 + ivdst1 * vdstg;
             gds = gds * vdst2 + ivdst1 * (1.0 / vdsat + vdstg * self.sigma);
             gmbs = gmbs * vdst2 + ivdst1 * vdstg * vonbm;
+        }
+
+        // Floor gds to prevent singular matrix (same as Level 1 MOSFET).
+        if gds < 1e-12 {
+            gds = 1e-12;
         }
 
         // Equivalent current sources for NR linearization
@@ -683,7 +688,8 @@ mod tests {
         let comp = m.companion(0.5, 5.0, 0.0, 1e-4);
         assert_abs_diff_eq!(comp.cdrain, 0.0, epsilon = 1e-15);
         assert_abs_diff_eq!(comp.gm, 0.0, epsilon = 1e-15);
-        assert_abs_diff_eq!(comp.gds, 0.0, epsilon = 1e-15);
+        // gds floored to 1e-12 to prevent singular matrix.
+        assert_abs_diff_eq!(comp.gds, 1e-12, epsilon = 1e-15);
     }
 
     #[test]
