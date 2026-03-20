@@ -1233,3 +1233,53 @@ depletion charge, and parasitic base current temperature adjustment.
 
 Also updated `harness_mesa_mesosc` ignore reason to reflect that it now
 times out (>30s) instead of the previously reported 7% transient timing error.
+
+---
+
+## Applied fix: VBIC avalanche current (Igc) sign and formula corrections
+
+**Affected tests:** `harness_vbic_fo` (primary), all VBIC tests with AVC1/AVC2
+
+**Two bugs found by comparing `companion()` with ngspice `vbicload.c`:**
+
+1. **Ibc sign error (line 3644):** ngspice computes `Ibc = Ibcj - Igc` (avalanche
+   current subtracted from base-collector current).  Our code had `ibc = ibcj + igc`
+   (addition instead of subtraction).  The avalanche current Igc flows from collector
+   to base via impact ionization, reducing the net base-to-collector current.
+   Fixed `ibc`, `dibc_dvbci`, and `dibc_dvbei` to use subtraction.
+
+2. **Avalanche formula exponent (lines 3601-3616):** ngspice computes the avalanche
+   multiplication factor as `avalf = AVC1 * vl * exp(-AVC2 * vl^(MC-1))`, where MC
+   is the B-C junction grading coefficient (default 0.33).  Our code had
+   `avalf = AVC1 * vl * exp(-AVC2 * vl)` — using `vl` directly instead of
+   `vl^(MC-1)`.  With MC=0.33, `vl^(MC-1) = vl^(-0.67)`, which is MUCH smaller
+   than `vl` for typical reverse-bias voltages.  For example, at vl=3.95V:
+   - Our old formula: exp(-15 * 3.95) ≈ 0 (no avalanche)
+   - Correct formula: exp(-15 * 3.95^(-0.67)) = exp(-5.13) ≈ 0.006
+
+   This meant our model produced essentially zero avalanche current at all operating
+   points, preventing the base current reversal that ngspice correctly shows at
+   high collector voltages.
+
+**Impact on tests:**
+- `harness_vbic_fo`: 4.3% → 0.21% error (20× improvement).  Base current now
+  correctly reverses sign at high Vc due to avalanche multiplication.  Remaining
+  error is from self-heating FP evaluation order difference.
+- `harness_vbic_fg`: 0.231% → 0.234% (negligible change, avalanche small at low Vc)
+- `harness_vbic_temp`: 0.229% → 0.226% (slight improvement)
+- `harness_vbic_ceamp`: 0.21% → 1.2% (regression — the corrected avalanche
+  derivative changes the AC small-signal gain, breaking an accidental error
+  cancellation between the old wrong avalanche sign and the self-heating FP
+  difference.  Test was already failing; regression is from fixing the model.)
+- No regressions in any of the 223 unit tests or passing harness tests.
+
+---
+
+## Triage update (post avalanche fix)
+
+| Test | Before | After |
+|---|---|---|
+| `harness_vbic_fo` | 4.3% error (was NR non-convergence) | 0.21% error |
+| `harness_vbic_ceamp` | 0.21% AC error | 1.2% AC error (correct model exposes thermal FP gap) |
+| `harness_vbic_fg` | 0.231% DC error | 0.234% DC error |
+| `harness_vbic_temp` | 0.229% DC error | 0.226% DC error |

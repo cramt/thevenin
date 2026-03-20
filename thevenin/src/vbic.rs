@@ -985,36 +985,69 @@ impl VbicModel {
         };
 
         // --- Avalanche current Igc ---
+        // ngspice vbicload.c lines 3596-3637:
+        //   vl = 0.5*(sqrt((PC_T - Vbci)^2 + 0.01) + PC_T - Vbci)
+        //   xvar3 = vl^(MC - 1)
+        //   xvar4 = exp(-AVC2 * xvar3)
+        //   avalf = AVC1 * vl * xvar4
+        //   Igc = (Itzf - Itzr - Ibcj) * avalf
         let (igc, digc_dvbci, digc_dvbei) = if self.avc1 > 0.0 && self.avc2_t > 0.0 {
-            // Smooth clamping: vl = 0.5*(sqrt((PC-Vbci)^2 + 0.01) + PC - Vbci)
+            // Smooth clamping: vl = max(0, PC_T - Vbci), smoothed
             let pc_minus_vbci = self.pc_t - vbci;
             let vl = 0.5 * ((pc_minus_vbci * pc_minus_vbci + 0.01).sqrt() + pc_minus_vbci);
             let dvl_dvbci =
                 0.5 * (-pc_minus_vbci / (pc_minus_vbci * pc_minus_vbci + 0.01).sqrt() - 1.0);
 
-            let avalf = self.avc1 * vl * safe_exp(-self.avc2_t * vl);
-            let davalf_dvl = self.avc1 * safe_exp(-self.avc2_t * vl) * (1.0 - self.avc2_t * vl);
+            if vl > 0.0 {
+                // ngspice uses vl^(MC-1) in the exponential, NOT vl directly.
+                // MC is the B-C junction grading coefficient (default 0.33).
+                let mc_m1 = self.mc - 1.0; // MC - 1 (typically -0.67)
+                let xvar3 = vl.powf(mc_m1); // vl^(MC-1)
+                let xvar3_vl = xvar3 * mc_m1 / vl; // d(vl^(MC-1))/dvl = (MC-1)*vl^(MC-2)
+                let xvar1 = -self.avc2_t * xvar3; // -AVC2 * vl^(MC-1)
+                let xvar4 = safe_exp(xvar1); // exp(-AVC2 * vl^(MC-1))
 
-            // Igc = (Itzf - Itzr - Ibcj) * avalf
-            let i_drive = itzf - itzr - ibcj;
-            let igc_val = i_drive * avalf;
+                let avalf = self.avc1 * vl * xvar4;
 
-            // dIgc/dVbci = d(i_drive)/dVbci * avalf + i_drive * davalf/dVbci
-            let di_drive_dvbci = ditzf_dvbci - ditzr_dvbci - dibcj_dvbci;
-            let digc_dvbci_val = di_drive_dvbci * avalf + i_drive * davalf_dvl * dvl_dvbci;
+                // davalf/dvl via chain rule:
+                //   avalf = AVC1 * vl * xvar4
+                //   davalf/dvl = AVC1 * xvar4 + AVC1 * vl * xvar4 * dxvar1/dvl
+                //   dxvar1/dvl = -AVC2 * xvar3_vl
+                let avalf_vl = self.avc1 * xvar4; // partial: d(AVC1*vl)/dvl * xvar4
+                let avalf_xvar4 = self.avc1 * vl; // partial: AVC1*vl * d(xvar4)
+                let xvar4_xvar1 = xvar4;
+                let xvar1_xvar3 = -self.avc2_t;
+                // Total davalf/dvl = avalf_vl + avalf_xvar4 * xvar4_xvar1 * xvar1_xvar3 * xvar3_vl
+                let davalf_dvl =
+                    avalf_vl + avalf_xvar4 * xvar4_xvar1 * xvar1_xvar3 * xvar3_vl;
 
-            // dIgc/dVbei = d(i_drive)/dVbei * avalf
-            let di_drive_dvbei = ditzf_dvbei - ditzr_dvbei;
-            let digc_dvbei_val = di_drive_dvbei * avalf;
+                // Igc = (Itzf - Itzr - Ibcj) * avalf
+                let i_drive = itzf - itzr - ibcj;
+                let igc_val = i_drive * avalf;
 
-            (igc_val, digc_dvbci_val, digc_dvbei_val)
+                // dIgc/dVbci = d(i_drive)/dVbci * avalf + i_drive * davalf/dVbci
+                let di_drive_dvbci = ditzf_dvbci - ditzr_dvbci - dibcj_dvbci;
+                let davalf_dvbci = davalf_dvl * dvl_dvbci;
+                let digc_dvbci_val = di_drive_dvbci * avalf + i_drive * davalf_dvbci;
+
+                // dIgc/dVbei = d(i_drive)/dVbei * avalf
+                let di_drive_dvbei = ditzf_dvbei - ditzr_dvbei;
+                let digc_dvbei_val = di_drive_dvbei * avalf;
+
+                (igc_val, digc_dvbci_val, digc_dvbei_val)
+            } else {
+                (0.0, 0.0, 0.0)
+            }
         } else {
             (0.0, 0.0, 0.0)
         };
 
-        let ibc = ibcj + igc;
-        let dibc_dvbci = dibcj_dvbci + digc_dvbci;
-        let dibc_dvbei = digc_dvbei;
+        // ngspice vbicload.c line 3644: Ibc = Ibcj - Igc
+        // Avalanche current Igc flows from collector to base (opposite to Ibc
+        // direction), so it REDUCES the net base-collector current.
+        let ibc = ibcj - igc;
+        let dibc_dvbci = dibcj_dvbci - digc_dvbci;
+        let dibc_dvbei = -digc_dvbei;
 
         // --- Ibep: parasitic B-E ---
         let (ibep, dibep_dvbep) = {

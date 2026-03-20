@@ -770,7 +770,7 @@ harness_test!(
 harness_test!(
     harness_vbic_ceamp,
     "vbic/CEamp.cir",
-    ignore = "VBIC AC numerical accuracy: ~0.2% AC gain error (self-heating FP difference)"
+    ignore = "VBIC AC numerical accuracy: ~1.2% AC gain error (avalanche derivative coupling + self-heating FP difference)"
 );
 harness_test!(
     harness_vbic_diffamp,
@@ -786,7 +786,7 @@ harness_test!(
 harness_test!(
     harness_vbic_fo,
     "vbic/FO.cir",
-    ignore = "VBIC FO: NR non-convergence in 2D DC sweep (deep saturation convergence)"
+    ignore = "VBIC FO: ~0.2% DC sweep error (self-heating FP difference, avalanche now correct)"
 );
 harness_test!(harness_vbic_noise_scale, "vbic/noise_scale_test.cir");
 harness_test!(
