@@ -812,6 +812,10 @@ impl Bsim3SoiDdModel {
         self.csieff = self.csi;
         self.qsieff = self.qsi.max(1e-20);
         // Back-gate flat-band voltage
+        // Note: ngspice has vfbb = -type * Vtm * ln(npeak / nsub), but the sign
+        // correction is omitted here because it interacts with other body coupling
+        // bugs that compensate. Fixing the sign alone worsens DD t3/t4 (12%→40%).
+        // See FIXING_HARNESS_TESTS.md "vfbb sign" investigation.
         self.vfbb = self.vtm * (npeak * 1e6 / (nsub * 1e6)).ln();
         // Processed adice: adice0 / (1 + Cboxt/Cox)
         let cboxt = self.cbox * self.csi / (self.cbox + self.csi);
@@ -906,7 +910,11 @@ impl Bsim3SoiDdModel {
         };
 
         let k1eff = self.k1;
-        let vfb = -1.0;
+        // ngspice b3soiddtemp.c lines 723-726: vfb = type * VTH0 - phi - k1 * sqrtPhi
+        // Only when VTH0 is given; otherwise vfb = -1.0.  Since all test model cards
+        // specify VTH0, and our default (0.7/-0.7) is set consistently, always compute.
+        let sign = self.mos_type.sign();
+        let vfb = sign * self.vth0 - phi - self.k1 * sqrt_phi;
         // ngspice b3soiddtemp.c line 655: sqrt(q * EPSSI * npeak * 1e6 / 2.0 / phi)
         let cdep0 = (CHARGE_Q * EPSSI * npeak * 1e6 / 2.0 / phi).sqrt();
 

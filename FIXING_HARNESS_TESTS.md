@@ -795,7 +795,6 @@ output by 2 to return the full non-constant cap value.
 
 ---
 
-<<<<<<< HEAD
 ## Applied fix: BJT forward-bias depletion cap correction
 
 **Affected tests:** `harness_general_schmitt`, `harness_general_rtlinv`
@@ -1352,76 +1351,59 @@ that ngspice's voltage-dependent cap implementation avoids.
 | Missing features (BSIM1/2, .control, TEMPER, param expressions) | 5 | Need new code |
 | No reference (diffpair) | 1 | ngspice reference file says "To be done" |
 | LU precision (sensitivity diffpair) | 1 | 47× error, needs LU factor reuse from OP |
-=======
-## Investigation: voltage-dependent depletion caps for BJT transient
-
-**Affected tests:** `harness_general_rtlinv`, `harness_general_schmitt`,
-`harness_mos6_simpleinv` (and potentially all BJT/MOSFET transient tests)
-
-**Goal:** Replace constant CJE/CJC depletion caps with ngspice's voltage-dependent
-junction model (`Cj = CJ0 / (1 - V/VJ)^M` with forward-bias extrapolation) to
-improve transient accuracy.
-
-**Approaches attempted:**
-
-1. **Full dynamic charge integration (zero constant caps + dynamic model):**
-   Zeroed CJE/CJC in MNA assembly, used `compute_charges()` for full voltage-
-   dependent depletion + diffusion in the BJT charge companion model.
-   **Result:** NR non-convergence for `harness_general_rca3040` (previously passing).
-   The voltage-dependent cap changes magnitude between NR iterations as the
-   junction voltage oscillates, destabilizing convergence.
-
-2. **Correction approach (keep constant + add delta):**
-   Kept constant CJE/CJC in MNA, added `junction_cap(v) - CJ0` correction in
-   the BJT charge loop. The correction can be negative in reverse bias.
-   **Result:** Same NR instability as approach 1 — the negative correction geq
-   destabilizes the matrix during NR iterations.
-
-3. **Lagged voltage-dependent cap (update at accepted timesteps):**
-   Kept constant CJE/CJC in MNA, updated their capacitance value to
-   `junction_cap(v_converged)` at each accepted timestep. Within each timestep,
-   the cap is constant (from previous converged voltage).
-   **Result:** Made `harness_general_rtlinv` worse (error increased 6×). In forward
-   bias, the lagged cap is larger than CJ0, which over-damps the switching
-   transition. During fast switching, the one-step lag causes the cap to be
-   wrong for the current bias region.
-
-**Conclusion:** All three approaches cause either NR instability or make results
-worse. The fundamental issue is that voltage-dependent caps are nonlinear functions
-of the NR variable (junction voltage), which destabilizes convergence when the
-cap changes significantly between iterations.
-
-In ngspice, this is handled by the charge state machine (MODEINITJCT →
-MODEINITFLOAT) with voltage limiting (DEVpnjlim/DEVfetlim) and careful
-initialization. Our code lacks this mode transition, so the cap can change
-discontinuously between NR iterations.
-
-**Additional finding:** The "near-passing" tests (0.2-0.25% at first error) actually
-have much larger errors deeper in the waveform:
-- `harness_general_schmitt`: up to ~24% at t=289.6ns (waveform diverges)
-- `harness_mos6_simpleinv`: up to ~1.1% at later switching transitions
-- `harness_vbic_fg`: up to ~0.7% at high bias (self-heating amplification)
-- `harness_vbic_temp`: up to ~0.6% at high bias
-
-The ignore reasons have been updated to reflect these true maximum errors.
 
 ---
 
-## Triage update (post voltage-dependent cap investigation)
+## Applied fix: BSIM3SOI vfb computation from VTH0
 
-The "near-passing" tests are NOT actually near-passing. The first mismatch
-happens at 0.2-0.25%, but subsequent points have much larger errors:
+**Affected tests:** All 15 BSIM3SOI tests (DD, FD, PD variants)
 
-| Test | First error | Max error | Root cause |
+**Root cause:** The flat-band voltage `vfb` used in the poly gate depletion effect
+was hardcoded to -1.0 in the DD and PD variants, and computed as
+`vbi_default - phi` in the FD variant.  In ngspice (`b3soiddtemp.c` lines 723-726,
+`b3soifdtemp.c` lines 722-725, `b3soipdtemp.c` lines 831-834), when VTH0 is given:
+```
+vfb = type * VTH0 - phi - k1 * sqrtPhi
+```
+
+For the DD test model (NMOS, VTH0=0.52, K1=0.39, phi≈0.892):
+- Correct vfb = 0.52 - 0.892 - 0.39×0.944 = -0.740
+- Our old vfb = -1.0
+
+This shifts the poly gate depletion activation threshold (`T0 = vfb + phi`) from
+-0.108V to +0.152V, causing the depletion correction to subtract ~4mV extra from
+Vgs_eff at typical gate voltages.  The 4mV Vgs_eff shift matches the previously
+documented "~3-4mV Vth discrepancy."
+
+**Fix applied:** Computed `vfb = sign * vth0 - phi - k1 * sqrt_phi` in all three
+variants (DD, FD, PD), matching ngspice's formula.
+
+**Impact on tests:**
+
+| Test | Before | After | Direction |
 |---|---|---|---|
-| `harness_general_rtlinv` | 0.22% at 2.59ns | ~2% at later edges | constant depletion cap |
-| `harness_general_schmitt` | 0.25% at 279.6ns | ~24% at 289.6ns | constant depletion cap + timing accumulation |
-| `harness_mos6_simpleinv` | 0.22% at 58.1ns | ~1.1% at 58.6ns | constant bulk junction cap |
-| `harness_vbic_ceamp` | 0.21% at 9.77MHz | ~0.4% at 12.3MHz | self-heating FP difference |
-| `harness_vbic_fg` | 0.23% at 0.74V | ~0.7% at 0.78V | self-heating FP growth with current |
-| `harness_vbic_temp` | 0.23% at 0.58V | ~0.6% at 0.65V | self-heating FP growth with current |
+| DD t5 | ~6% too low | ~1.1% too low | 5× improvement |
+| DD t3 | ~12% too high | ~18% too high | worse (excess current bug exposed) |
+| DD t4 | ~13% too high | ~22% too high | worse (excess current bug exposed) |
+| FD t3 | ~7% too low | ~9% too low | slightly worse |
+| FD t4, t5 | wrong sign / 99% | unchanged | no change |
+| PD tests | timeout | timeout | no change |
 
-Also discovered status changes for two VBIC tests:
-- `harness_vbic_fo`: was "NR non-convergence", now produces data with ~4.3% error
-- `harness_vbic_diffamp`: was "NR non-convergence", actually times out (>30s)
->>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
+**Analysis:** The vfb fix reveals two distinct bugs in BSIM3SOI DD:
+1. The poly gate depletion was overcorrecting Vgs_eff by ~4mV (fixed here)
+2. An unidentified excess current bug (~18% after correction) that was partially
+   compensated by the wrong vfb
+
+The t3/t4 tests sweep Vd (drain bias) while t5 sweeps Ve (back gate).  The excess
+current bug manifests more strongly at moderate Vds (t3: Vd=0-3V) and was partially
+hidden by the wrong vfb reducing Vgs_eff.  In t5, the current was already too low
+(from the vfbb sign error in back-gate coupling), and the vfb fix correctly increases
+Ids by ~5%, bringing it much closer to the reference.
+
+**Also investigated but NOT fixed:** The vfbb sign error (back-gate flat-band voltage
+missing `-type *` prefix) was tested but reverted.  Fixing vfbb alone changes DD t3
+from 12% to 40% error because the 0.658V swing in vesfb dramatically shifts the body
+coupling chain, exposing additional compensating bugs in the Vbs0→Vbseff chain.  The
+FD variant already has the correct vfbb sign.
+
+**No regressions:** All 68 passing harness tests, 223 unit tests still pass.

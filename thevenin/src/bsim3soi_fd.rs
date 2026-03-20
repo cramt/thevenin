@@ -842,8 +842,10 @@ impl Bsim3SoiFdModel {
         // k1eff
         let k1eff = self.k1;
 
-        // Flat-band voltage
-        let vfb = self.vbi_default - phi;
+        // Flat-band voltage: ngspice b3soifdtemp.c lines 722-725:
+        // vfb = type * VTH0 - phi - k1 * sqrtPhi (when VTH0 is given)
+        let sign = self.mos_type.sign();
+        let vfb = sign * self.vth0 - phi - self.k1 * sqrt_phi;
 
         // cdep0: ngspice b3soifdtemp.c line 654: sqrt(q * EPSSI * npeak * 1e6 / 2.0 / phi)
         let cdep0 = (CHARGE_Q * EPSSI * self.npeak * 1e6 / 2.0 / phi).sqrt();

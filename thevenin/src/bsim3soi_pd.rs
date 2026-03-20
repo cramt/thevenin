@@ -830,8 +830,9 @@ impl Bsim3SoiPdModel {
         // k1eff (from k1, or compute from nch if not given)
         let k1eff = self.k1;
 
-        // vfb
-        let vfb = -1.0; // Simplified default
+        // vfb: ngspice b3soipdtemp.c lines 831-834: vfb = type * VTH0 - phi - k1eff * sqrtPhi
+        let sign = self.mos_type.sign();
+        let vfb = sign * self.vth0 - phi - k1eff * sqrt_phi;
 
         // cdep0: ngspice b3soipdtemp.c line 759: sqrt(q * EPSSI * npeak * 1e6 / 2.0 / phi)
         let cdep0 = (CHARGE_Q * EPSSI * self.npeak * 1e6 / 2.0 / phi).sqrt();

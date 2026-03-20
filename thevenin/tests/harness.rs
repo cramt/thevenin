@@ -396,17 +396,17 @@ harness_test!(
 harness_test!(
     harness_bsim3soidd_t3,
     "bsim3soidd/t3.cir",
-    ignore = "~12% Ids error near threshold (BSIM3SOI-DD model value bug in vth/vgsteff/vdseff)"
+    ignore = "~18% Ids error near threshold (BSIM3SOI-DD excess current bug exposed by vfb fix)"
 );
 harness_test!(
     harness_bsim3soidd_t4,
     "bsim3soidd/t4.cir",
-    ignore = "~13% Ids error (BSIM3SOI-DD model value bug)"
+    ignore = "~22% Ids error (BSIM3SOI-DD excess current bug exposed by vfb fix)"
 );
 harness_test!(
     harness_bsim3soidd_t5,
     "bsim3soidd/t5.cir",
-    ignore = "~6% Ids error (BSIM3SOI-DD model value bug)"
+    ignore = "~1.1% Ids error at Ve=-4 (vfbb sign error in back-gate coupling, see FIXING_HARNESS_TESTS.md)"
 );
 
 // === BSIM3SOI-FD ===
@@ -423,7 +423,7 @@ harness_test!(
 harness_test!(
     harness_bsim3soifd_t3,
     "bsim3soifd/t3.cir",
-    ignore = "~7% Ids error near threshold (BSIM3SOI-FD model value bug)"
+    ignore = "~9% Ids error near threshold (BSIM3SOI-FD model value bug)"
 );
 harness_test!(
     harness_bsim3soifd_t4,
@@ -488,20 +488,12 @@ harness_test!(harness_general_rc, "general/rc.cir");
 harness_test!(
     harness_general_rtlinv,
     "general/rtlinv.cir",
-<<<<<<< HEAD
     ignore = "~5.5% transient timing error at first switching transition: our transition starts ~2ns later than ngspice due to constant reverse-bias cap approximation"
-=======
-    ignore = "~0.2-2% transient accuracy error at switching edges (constant depletion cap approximation vs ngspice voltage-dependent)"
->>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
-<<<<<<< HEAD
     ignore = "~1.2% error at switching transition: output oscillates during state transition instead of settling cleanly; constant reverse-bias cap approximation"
-=======
-    ignore = "up to ~24% waveform divergence in later switching cycles (constant depletion cap + timing accumulation)"
->>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 
 // === HFET ===
@@ -537,16 +529,7 @@ harness_test!(harness_mes_subth, "mes/subth.cir");
 harness_test!(
     harness_mos6_mos6inv,
     "mos6/mos6inv.cir",
-<<<<<<< HEAD
     ignore = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix"
-=======
-    ignore = "tran: singular matrix (Level 6 MOSFET subcircuit — DC OP converges but transient solver fails)"
-);
-harness_test!(
-    harness_mos6_simpleinv,
-    "mos6/simpleinv.cir",
-    ignore = "~0.2-1.1% transient accuracy error (constant bulk junction cap approximation)"
->>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 harness_test!(harness_mos6_simpleinv, "mos6/simpleinv.cir");
 
@@ -787,11 +770,7 @@ harness_test!(
 harness_test!(
     harness_vbic_ceamp,
     "vbic/CEamp.cir",
-<<<<<<< HEAD
     ignore = "VBIC AC numerical accuracy: ~1.2% AC gain error (avalanche derivative coupling + self-heating FP difference)"
-=======
-    ignore = "VBIC AC accuracy: ~0.2-0.4% gain error growing at high frequency (self-heating FP evaluation order difference)"
->>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 harness_test!(
     harness_vbic_diffamp,
@@ -806,11 +785,7 @@ harness_test!(
 harness_test!(
     harness_vbic_fo,
     "vbic/FO.cir",
-<<<<<<< HEAD
     ignore = "VBIC FO: ~0.2% DC sweep error (self-heating FP difference, avalanche now correct)"
-=======
-    ignore = "VBIC FO: ~4.3% Ic error in DC sweep (self-heating accuracy at low VCE)"
->>>>>>> de6daff (docs: update ignore reasons and triage after voltage-dependent cap investigation)
 );
 harness_test!(harness_vbic_noise_scale, "vbic/noise_scale_test.cir");
 harness_test!(
