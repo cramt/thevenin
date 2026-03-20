@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "fix-tests": "tsx scripts/fix-tests-overnight.ts"
+    "fix-tests": "tsx scripts/fix-tests-overnight.ts",
+    "fix-tests:stop": "touch scripts/.stop-fix-tests && echo 'Stop requested — will finish current iteration then exit.'"
   },
   "keywords": [],
   "author": "",
