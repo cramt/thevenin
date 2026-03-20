@@ -48,16 +48,22 @@ struct IndHistory {
 }
 
 /// History state for a BJT junction charge at the previous timestep.
+/// Tracks both charges and voltages to enable incremental charge computation
+/// with voltage-dependent depletion capacitances, matching ngspice's bjtload.c.
 #[derive(Debug, Clone)]
 struct BjtChargeHistory {
-    /// B-E junction charge at previous timestep.
+    /// B-E junction charge at previous timestep (depletion + diffusion).
     qbe: f64,
     /// B-E charge current at previous timestep (for trapezoidal).
     cqbe: f64,
-    /// B-C junction charge at previous timestep.
+    /// B-E junction voltage at previous timestep.
+    vbe: f64,
+    /// B-C junction charge at previous timestep (depletion + diffusion).
     qbc: f64,
     /// B-C charge current at previous timestep (for trapezoidal).
     cqbc: f64,
+    /// B-C junction voltage at previous timestep.
+    vbc: f64,
 }
 
 /// History state for a MESA junction charge at the previous timestep.
@@ -98,6 +104,23 @@ struct MosfetChargeHistory {
     vgd: f64,
     /// Previous signed V(gate) - V(bulk).
     vgb: f64,
+}
+
+/// History state for an HFET junction charge at the previous timestep.
+#[derive(Debug, Clone)]
+struct HfetChargeHistory {
+    /// G-S junction charge at previous timestep.
+    qgs: f64,
+    /// G-S charge current at previous timestep (for trapezoidal).
+    cqgs: f64,
+    /// G-D junction charge at previous timestep.
+    qgd: f64,
+    /// G-D charge current at previous timestep (for trapezoidal).
+    cqgd: f64,
+    /// Previous G-S capacitor voltage (V(gp) - V(spp)).
+    vgspp: f64,
+    /// Previous G-D capacitor voltage (V(gp) - V(dpp)).
+    vgdpp: f64,
 }
 
 /// Compute capacitor companion model coefficients.
@@ -233,19 +256,25 @@ const MIN_SHRINK: f64 = 0.125; // 1/8
 /// Maximum factor to grow timestep.
 const MAX_GROW: f64 = 2.0;
 
-/// Estimate the new timestep based on LTE for capacitors and inductors.
+/// Estimate the new timestep based on LTE for capacitors, inductors, and
+/// BJT dynamic junction charges.
 ///
 /// Uses the difference between Trap and BE predictions as the LTE estimate.
 /// For each capacitor: LTE ≈ |q_trap - q_be| where q is the integrated charge.
 /// For each inductor: LTE ≈ |flux_trap - flux_be| where flux is the integrated flux.
+/// For BJT charges: LTE ≈ |q_trap - q_be| for the dynamic correction charges
+/// (diffusion + depletion cap correction), matching ngspice's approach of
+/// including device-internal charges in the timestep control.
 ///
 /// Returns the recommended new timestep.
+#[expect(clippy::too_many_arguments)]
 fn estimate_new_timestep(
     h: f64,
     solution: &[f64],
     mna: &MnaSystem,
     cap_histories: &[CapHistory],
     ind_histories: &[IndHistory],
+    bjt_charge_histories: &[BjtChargeHistory],
     reltol: f64,
     abstol: f64,
 ) -> f64 {
@@ -314,6 +343,79 @@ fn estimate_new_timestep(
             let ratio = tol / lte;
             let h_new = h * ratio.sqrt();
             new_h = new_h.min(h_new);
+        }
+    }
+
+    // LTE for BJT dynamic junction charges (diffusion + depletion correction).
+    // In ngspice, bjtload.c integrates junction charges via NIintegrate, and
+    // the LTE from these charges feeds into the adaptive timestep control.
+    // Without this, the timestep controller ignores the dominant charge storage
+    // in BJT circuits (e.g., TF*gbe diffusion cap can be 10× larger than CJE),
+    // allowing too-large steps during BJT switching transitions.
+    for (bi, bjt) in mna.bjts.iter().enumerate() {
+        let hist = &bjt_charge_histories[bi];
+        let (vbe, vbc) = bjt.junction_voltages(solution);
+        let comp = bjt.model.companion(vbe, vbc);
+        let m = bjt.m * bjt.area;
+
+        // Compute correction cap at new voltage (same formula as NR stamping).
+        let capbe_dep_corr = if bjt.model.cje > 0.0 {
+            (bjt.model.cap_be(vbe) - bjt.model.cje).max(0.0)
+        } else {
+            0.0
+        };
+        let capbc_dep_corr = if bjt.model.cjc > 0.0 {
+            (bjt.model.cap_bc(vbc) - bjt.model.cjc).max(0.0)
+        } else {
+            0.0
+        };
+        let capbe = bjt.model.tf * comp.gbe_raw + capbe_dep_corr;
+        let capbc = bjt.model.tr * comp.gbc_raw + capbc_dep_corr;
+
+        // B-E charge LTE.
+        if capbe > 0.0 {
+            let q_new = hist.qbe + capbe * (vbe - hist.vbe);
+            let i_old = hist.cqbe;
+
+            let i_trap = 2.0 * capbe / h * (vbe - hist.vbe) - i_old;
+            let i_be = capbe / h * (vbe - hist.vbe);
+
+            let q_trap = h / 2.0 * (i_old + i_trap);
+            let q_be = h * i_be;
+            let lte = (q_trap - q_be).abs() * m;
+
+            let chg_tol = reltol * q_new.abs().max(hist.qbe.abs()).max(CHGTOL) * m;
+            let vol_tol = (abstol + reltol * vbe.abs().max(hist.vbe.abs())) * m;
+            let tol = TRTOL * vol_tol.max(chg_tol);
+
+            if lte > 1e-30 {
+                let ratio = tol / lte;
+                let h_new = h * ratio.sqrt();
+                new_h = new_h.min(h_new);
+            }
+        }
+
+        // B-C charge LTE.
+        if capbc > 0.0 {
+            let q_new = hist.qbc + capbc * (vbc - hist.vbc);
+            let i_old = hist.cqbc;
+
+            let i_trap = 2.0 * capbc / h * (vbc - hist.vbc) - i_old;
+            let i_be = capbc / h * (vbc - hist.vbc);
+
+            let q_trap = h / 2.0 * (i_old + i_trap);
+            let q_be = h * i_be;
+            let lte = (q_trap - q_be).abs() * m;
+
+            let chg_tol = reltol * q_new.abs().max(hist.qbc.abs()).max(CHGTOL) * m;
+            let vol_tol = (abstol + reltol * vbc.abs().max(hist.vbc.abs())) * m;
+            let tol = TRTOL * vol_tol.max(chg_tol);
+
+            if lte > 1e-30 {
+                let ratio = tol / lte;
+                let h_new = h * ratio.sqrt();
+                new_h = new_h.min(h_new);
+            }
         }
     }
 
@@ -427,27 +529,36 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
-    // Initialize BJT diffusion charge histories from DC operating point.
+    // Initialize BJT charge histories from DC operating point.
     // At DC steady state, dQ/dt = 0, so charge currents are all zero.
-    // Tracks the TF/TR diffusion charge on top of the constant CJE/CJC
-    // depletion caps in MNA assembly.
+    // Tracks diffusion charge + positive depletion correction (cap_be(v) - CJE
+    // when positive) on top of the constant CJE/CJC caps in MNA.
     let mut bjt_charge_histories: Vec<BjtChargeHistory> = mna
         .bjts
         .iter()
         .map(|bjt| {
             let (vbe, vbc) = bjt.junction_voltages(&solution);
             let comp = bjt.model.companion(vbe, vbc);
-            let (qbe, _, qbc, _) = bjt.model.compute_diffusion_charges(
+            // Diffusion charge + positive depletion correction charge.
+            // Use compute_charge_correction for exact integral.
+            let (qbe, _, qbc, _) = bjt.model.compute_charge_correction(
+                vbe,
+                vbc,
                 comp.cbe_raw,
                 comp.gbe_raw,
                 comp.cbc_raw,
                 comp.gbc_raw,
             );
+            // Clamp depletion correction to positive only (diffusion is always positive)
+            let qbe = (bjt.model.tf * comp.cbe_raw).max(qbe);
+            let qbc = (bjt.model.tr * comp.cbc_raw).max(qbc);
             BjtChargeHistory {
                 qbe,
                 cqbe: 0.0, // DC steady state: no charge current
+                vbe,
                 qbc,
                 cqbc: 0.0,
+                vbc,
             }
         })
         .collect();
@@ -477,6 +588,51 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 vgd
             };
             MesaChargeHistory {
+                qgs: comp.capgs * vgspp,
+                cqgs: 0.0,
+                qgd: comp.capgd * vgdpp,
+                cqgd: 0.0,
+                vgspp,
+                vgdpp,
+            }
+        })
+        .collect();
+
+    // Initialize HFET junction charge histories from DC operating point.
+    // At DC, Q = capgs * vgspp and Q = capgd * vgdpp. dQ/dt = 0.
+    let mut hfet_charge_histories: Vec<HfetChargeHistory> = mna
+        .hfets
+        .iter()
+        .map(|hfet| {
+            let (vgs, vgd) = hfet.junction_voltages(&solution);
+            let comp = crate::hfet::hfet_companion_full(hfet, vgs, vgd, 1e-12);
+            // vgspp = V(gp) - V(spp). At DC OP, spp voltage ≈ sp voltage.
+            let v_gp = hfet
+                .gate_prime_idx
+                .or(hfet.gate_idx)
+                .map(|i| solution[i])
+                .unwrap_or(0.0);
+            let vgspp = if let Some(spp_i) = hfet.source_prm_prm_idx {
+                v_gp - solution[spp_i]
+            } else {
+                let v_sp = hfet
+                    .source_prime_idx
+                    .or(hfet.source_idx)
+                    .map(|i| solution[i])
+                    .unwrap_or(0.0);
+                v_gp - v_sp
+            };
+            let vgdpp = if let Some(dpp_i) = hfet.drain_prm_prm_idx {
+                v_gp - solution[dpp_i]
+            } else {
+                let v_dp = hfet
+                    .drain_prime_idx
+                    .or(hfet.drain_idx)
+                    .map(|i| solution[i])
+                    .unwrap_or(0.0);
+                v_gp - v_dp
+            };
+            HfetChargeHistory {
                 qgs: comp.capgs * vgspp,
                 cqgs: 0.0,
                 qgd: comp.capgd * vgdpp,
@@ -871,6 +1027,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             if has_txl { Some(&txl_stamps) } else { None },
             if has_cpl { Some(&cpl_stamps) } else { None },
             &mesa_charge_histories,
+            &hfet_charge_histories,
             &mosfet_charge_histories,
             &mos6_charge_histories,
         ) {
@@ -896,14 +1053,16 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             }
         };
 
-        // LTE-based timestep control (only for Trap with reactive elements).
-        if method == IntegrationMethod::Trapezoidal && has_reactive {
+        // LTE-based timestep control (only for Trap with reactive elements or BJTs).
+        let has_bjt_charges = !mna.bjts.is_empty();
+        if method == IntegrationMethod::Trapezoidal && (has_reactive || has_bjt_charges) {
             let new_h = estimate_new_timestep(
                 step_h,
                 &new_solution,
                 &mna,
                 &cap_histories,
                 &ind_histories,
+                &bjt_charge_histories,
                 nr_options.reltol,
                 nr_options.abstol,
             );
@@ -970,16 +1129,28 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
         }
 
-        // Update BJT diffusion charge histories.
+        // Update BJT charge correction histories (diffusion + positive depletion correction).
         for (bi, bjt) in mna.bjts.iter().enumerate() {
             let (vbe, vbc) = bjt.junction_voltages(&solution);
             let comp = bjt.model.companion(vbe, vbc);
-            let (qbe, _, qbc, _) = bjt.model.compute_diffusion_charges(
-                comp.cbe_raw,
-                comp.gbe_raw,
-                comp.cbc_raw,
-                comp.gbc_raw,
-            );
+            // Compute incremental charge at accepted point
+            // Use incremental charge for the accepted point
+            let capbe_corr = if bjt.model.cje > 0.0 {
+                (bjt.model.cap_be(vbe) - bjt.model.cje).max(0.0)
+            } else {
+                0.0
+            };
+            let capbc_corr = if bjt.model.cjc > 0.0 {
+                (bjt.model.cap_bc(vbc) - bjt.model.cjc).max(0.0)
+            } else {
+                0.0
+            };
+            let capbe = bjt.model.tf * comp.gbe_raw + capbe_corr;
+            let capbc = bjt.model.tr * comp.gbc_raw + capbc_corr;
+            let qbe = bjt_charge_histories[bi].qbe
+                + capbe * (vbe - bjt_charge_histories[bi].vbe);
+            let qbc = bjt_charge_histories[bi].qbc
+                + capbc * (vbc - bjt_charge_histories[bi].vbc);
 
             let cqbe = match method {
                 IntegrationMethod::BackwardEuler => (qbe - bjt_charge_histories[bi].qbe) / step_h,
@@ -999,8 +1170,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             bjt_charge_histories[bi] = BjtChargeHistory {
                 qbe,
                 cqbe,
+                vbe,
                 qbc,
                 cqbc,
+                vbc,
             };
         }
 
@@ -1037,6 +1210,60 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
 
             mesa_charge_histories[mi] = MesaChargeHistory {
+                qgs,
+                cqgs,
+                qgd,
+                cqgd,
+                vgspp,
+                vgdpp,
+            };
+        }
+
+        // Update HFET junction charge histories.
+        for (hi, hfet) in mna.hfets.iter().enumerate() {
+            let v_gp = hfet
+                .gate_prime_idx
+                .or(hfet.gate_idx)
+                .map(|i| solution[i])
+                .unwrap_or(0.0);
+            let vgspp = if let Some(spp_i) = hfet.source_prm_prm_idx {
+                v_gp - solution[spp_i]
+            } else {
+                let v_sp = hfet
+                    .source_prime_idx
+                    .or(hfet.source_idx)
+                    .map(|i| solution[i])
+                    .unwrap_or(0.0);
+                v_gp - v_sp
+            };
+            let vgdpp = if let Some(dpp_i) = hfet.drain_prm_prm_idx {
+                v_gp - solution[dpp_i]
+            } else {
+                let v_dp = hfet
+                    .drain_prime_idx
+                    .or(hfet.drain_idx)
+                    .map(|i| solution[i])
+                    .unwrap_or(0.0);
+                v_gp - v_dp
+            };
+
+            let (vgs, vgd) = hfet.junction_voltages(&solution);
+            let comp = crate::hfet::hfet_companion_full(hfet, vgs, vgd, nr_options.gmin);
+
+            let hist = &hfet_charge_histories[hi];
+            let qgs = hist.qgs + comp.capgs * (vgspp - hist.vgspp);
+            let qgd = hist.qgd + comp.capgd * (vgdpp - hist.vgdpp);
+
+            let cqgs = match method {
+                IntegrationMethod::BackwardEuler => (qgs - hist.qgs) / step_h,
+                IntegrationMethod::Trapezoidal => 2.0 * (qgs - hist.qgs) / step_h - hist.cqgs,
+            };
+            let cqgd = match method {
+                IntegrationMethod::BackwardEuler => (qgd - hist.qgd) / step_h,
+                IntegrationMethod::Trapezoidal => 2.0 * (qgd - hist.qgd) / step_h - hist.cqgd,
+            };
+
+            hfet_charge_histories[hi] = HfetChargeHistory {
                 qgs,
                 cqgs,
                 qgd,
@@ -1308,6 +1535,7 @@ fn solve_timestep(
     txl_stamps: Option<&[TxlTransientStamp]>,
     cpl_stamps: Option<&[crate::cpl::CplTransientStamp]>,
     mesa_charge_histories: &[MesaChargeHistory],
+    hfet_charge_histories: &[HfetChargeHistory],
     mosfet_charge_histories: &[MosfetChargeHistory],
     mos6_charge_histories: &[MosfetChargeHistory],
 ) -> Result<Vec<f64>, MnaError> {
@@ -1403,10 +1631,14 @@ fn solve_timestep(
             dev_state.stamp_devices(solution, system, mna, nr_options.gmin);
         }
 
-        // 5. Stamp BJT diffusion capacitance companion models (TF*gbe, TR*gbc).
-        //    This must happen after stamp_devices() to read limited junction voltages.
-        //    Depletion caps (CJE, CJC) are handled as constant caps in MNA;
-        //    diffusion caps are dynamic within NR iterations.
+        // 5. Stamp BJT junction capacitance companion models.
+        //    Uses the incremental charge formulation with voltage-dependent
+        //    depletion capacitances + TF/TR diffusion capacitances, matching
+        //    ngspice's bjtload.c.  The charge at the current operating point is:
+        //      Q_new = Q_prev + C(v) * (v - v_prev)
+        //    where C(v) = junction_cap(v) + TF*gbe (or TR*gbc).
+        //    This avoids computing absolute charges during NR iterations and
+        //    always produces positive geq (since C(v) >= 0).
         if !mna.bjts.is_empty() {
             let prev_bjt = dev_state.prev_bjt_voltages();
             for (bi, bjt) in mna.bjts.iter().enumerate() {
@@ -1416,17 +1648,31 @@ fn solve_timestep(
 
                 // Compute companion at current operating point to get cbe, gbe, cbc, gbc.
                 let comp = bjt.model.companion(vbe, vbc);
-                // Compute diffusion charges (TF*cbe, TR*cbc) and their derivatives.
-                // The constant CJE/CJC depletion caps are in MNA assembly;
-                // this adds only the TF/TR diffusion terms dynamically.
-                let (qbe, capbe, qbc, capbc) = bjt.model.compute_diffusion_charges(
-                    comp.cbe_raw,
-                    comp.gbe_raw,
-                    comp.cbc_raw,
-                    comp.gbc_raw,
-                );
+
+                // Diffusion capacitance (TF*gbe, TR*gbc) plus depletion cap
+                // correction (voltage-dependent minus constant CJE/CJC).
+                // The constant CJE/CJC caps are already in MNA; here we add
+                // the diffusion terms and the positive depletion correction
+                // (forward bias only, where junction_cap > CJE).  In reverse
+                // bias, the constant CJE/CJC from MNA is used as-is.
+                let capbe_dep_corr = if bjt.model.cje > 0.0 {
+                    (bjt.model.cap_be(vbe) - bjt.model.cje).max(0.0)
+                } else {
+                    0.0
+                };
+                let capbc_dep_corr = if bjt.model.cjc > 0.0 {
+                    (bjt.model.cap_bc(vbc) - bjt.model.cjc).max(0.0)
+                } else {
+                    0.0
+                };
+                let capbe = bjt.model.tf * comp.gbe_raw + capbe_dep_corr;
+                let capbc = bjt.model.tr * comp.gbc_raw + capbc_dep_corr;
 
                 let hist = &bjt_charge_histories[bi];
+
+                // Incremental charge: Q = Q_prev + C_corr(v) * (v - v_prev)
+                let qbe = hist.qbe + capbe * (vbe - hist.vbe);
+                let qbc = hist.qbc + capbc * (vbc - hist.vbc);
 
                 // Integrate B-E charge.
                 let (geq_be, cqbe) = match method {
@@ -1562,6 +1808,83 @@ fn solve_timestep(
             }
         }
 
+        // 6b. Stamp HFET junction capacitance companion models.
+        //     Same pattern as MESA: integrate capgs/capgd charges and stamp
+        //     conductance + Norton current between gate' and cap nodes.
+        if !mna.hfets.is_empty() {
+            let prev_hfet = dev_state.prev_hfet_voltages();
+            for (hi, hfet) in mna.hfets.iter().enumerate() {
+                let gp = hfet.gate_prime_idx.or(hfet.gate_idx);
+                // Use PPM nodes if they exist, otherwise fall back to prime nodes.
+                let spp = hfet.source_prm_prm_idx.or(hfet.source_prime_idx).or(hfet.source_idx);
+                let dpp = hfet.drain_prm_prm_idx.or(hfet.drain_prime_idx).or(hfet.drain_idx);
+
+                // Compute vgspp and vgdpp from the current NR solution.
+                let v_gp = gp.map(|i| solution[i]).unwrap_or(0.0);
+                let vgspp = spp.map(|i| v_gp - solution[i]).unwrap_or(0.0);
+                let vgdpp = dpp.map(|i| v_gp - solution[i]).unwrap_or(0.0);
+
+                // Get capgs/capgd from companion using limited voltages.
+                let (vgs_lim, vgd_lim) = prev_hfet[hi];
+                let comp = crate::hfet::hfet_companion_full(hfet, vgs_lim, vgd_lim, nr_options.gmin);
+                let capgs = comp.capgs;
+                let capgd = comp.capgd;
+
+                // Compute charges incrementally: Q = Q_prev + C * (V - V_prev).
+                let hist = &hfet_charge_histories[hi];
+                let qgs = hist.qgs + capgs * (vgspp - hist.vgspp);
+                let qgd = hist.qgd + capgd * (vgdpp - hist.vgdpp);
+
+                // Integrate G-S charge.
+                let (ggspp, cqgs) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = capgs / h;
+                        let cq = (qgs - hist.qgs) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * capgs / h;
+                        let cq = 2.0 * (qgs - hist.qgs) / h - hist.cqgs;
+                        (geq, cq)
+                    }
+                };
+
+                // Integrate G-D charge.
+                let (ggdpp, cqgd) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = capgd / h;
+                        let cq = (qgd - hist.qgd) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * capgd / h;
+                        let cq = 2.0 * (qgd - hist.qgd) / h - hist.cqgd;
+                        (geq, cq)
+                    }
+                };
+
+                // Stamp ggspp conductance between gp and cap_s_node.
+                stamp_conductance(&mut system.matrix, gp, spp, ggspp);
+                // Stamp ggdpp conductance between gp and cap_d_node.
+                stamp_conductance(&mut system.matrix, gp, dpp, ggdpp);
+
+                // RHS: charge current Norton equivalents at cap nodes.
+                let ieq_gs = cqgs - ggspp * vgspp;
+                let ieq_gd = cqgd - ggdpp * vgdpp;
+                if let Some(spp_i) = spp {
+                    system.rhs[spp_i] += ieq_gs;
+                }
+                if let Some(dpp_i) = dpp {
+                    system.rhs[dpp_i] += ieq_gd;
+                }
+                // gp sees the negative sum of both charge currents.
+                if let Some(gp_i) = gp {
+                    system.rhs[gp_i] -= ieq_gs;
+                    system.rhs[gp_i] -= ieq_gd;
+                }
+            }
+        }
+
         // 7. Stamp MOSFET Meyer gate capacitance companion models.
         //    The Meyer model computes voltage-dependent capgs/capgd/capgb which
         //    are integrated using the same method as MESA junction charges.
@@ -1575,8 +1898,7 @@ fn solve_timestep(
                 let vgb_signed = vgs_signed - vbs_signed;
 
                 // Use limited voltages for companion (same as stamp_devices used).
-                let (vgs_lim, vds_lim) = prev_mos[mi];
-                let vbs_lim = vbs_signed; // vbs is not limited
+                let (vgs_lim, vds_lim, vbs_lim) = prev_mos[mi];
                 let mut eff_model = mos.model.clone();
                 eff_model.kp = mos.beta();
                 let comp = eff_model.companion(vgs_lim, vds_lim, vbs_lim);
@@ -1692,8 +2014,7 @@ fn solve_timestep(
                 let vgd_signed = vgs_signed - vds_signed;
                 let vgb_signed = vgs_signed - vbs_signed;
 
-                let (vgs_lim, vds_lim) = prev_mos6[mi];
-                let vbs_lim = vbs_signed;
+                let (vgs_lim, vds_lim, vbs_lim) = prev_mos6[mi];
                 let comp = mos.model.companion(vgs_lim, vds_lim, vbs_lim, mos.betac());
 
                 let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);

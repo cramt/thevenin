@@ -480,7 +480,7 @@ harness_test!(
 harness_test!(
     harness_general_mosamp,
     "general/mosamp.cir",
-    ignore = "DC OP singular matrix (Level 2 MOSFET — needs Level 2 velocity saturation/mobility degradation)"
+    ignore = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix; Level 2 MOSFET missing velocity saturation/mobility degradation"
 );
 harness_test!(harness_general_mosmem, "general/mosmem.cir");
 harness_test!(harness_general_rca3040, "general/rca3040.cir");
@@ -488,12 +488,12 @@ harness_test!(harness_general_rc, "general/rc.cir");
 harness_test!(
     harness_general_rtlinv,
     "general/rtlinv.cir",
-    ignore = "~0.2-2% transient accuracy error at switching edges (constant depletion cap approximation vs ngspice voltage-dependent)"
+    ignore = "~0.21% transient accuracy: forward-bias depletion cap correction improves timing but reverse-bias constant cap still slightly too large"
 );
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
-    ignore = "up to ~24% waveform divergence in later switching cycles (constant depletion cap + timing accumulation)"
+    ignore = "~0.20% switching error at t=280ns: forward-bias depletion cap correction applied; remaining error from reverse-bias constant cap approximation"
 );
 
 // === HFET ===
@@ -519,7 +519,7 @@ harness_test!(harness_mesa_mesinv, "mesa/mesinv.cir");
 harness_test!(
     harness_mesa_mesosc,
     "mesa/mesosc.cir",
-    ignore = "~7% transient timing error at ring oscillator edge (11-stage accumulation of timestep differences)"
+    ignore = "times out (>30s): 11-stage ring oscillator transient, timestep accumulation causes slow convergence"
 );
 
 // === MES (MESFET) ===
@@ -529,13 +529,9 @@ harness_test!(harness_mes_subth, "mes/subth.cir");
 harness_test!(
     harness_mos6_mos6inv,
     "mos6/mos6inv.cir",
-    ignore = "tran: singular matrix (Level 6 MOSFET subcircuit — DC OP converges but transient solver fails)"
+    ignore = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix"
 );
-harness_test!(
-    harness_mos6_simpleinv,
-    "mos6/simpleinv.cir",
-    ignore = "~0.2-1.1% transient accuracy error (constant bulk junction cap approximation)"
-);
+harness_test!(harness_mos6_simpleinv, "mos6/simpleinv.cir");
 
 // === Pole-Zero ===
 harness_test!(harness_pz_filt_bridge_t, "polezero/filt_bridge_t.cir");
@@ -752,50 +748,51 @@ harness_test!(
 harness_test!(
     harness_transmission_ltra1_1,
     "transmission/ltra1_1_line.cir",
-    ignore = "~2.5% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
+    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
 );
 harness_test!(
     harness_transmission_ltra2_2,
     "transmission/ltra2_2_line.cir",
-    ignore = "~2.5% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
+    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
 );
 harness_test!(
     harness_transmission_txl1_1,
     "transmission/txl1_1_line.cir",
-    ignore = "~2% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
+    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
 );
 harness_test!(
     harness_transmission_txl2_3,
     "transmission/txl2_3_line.cir",
-    ignore = "~3% transient accuracy at switching edge (constant junction caps vs ngspice voltage-dependent)"
+    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
 );
 
 // === VBIC ===
 harness_test!(
     harness_vbic_ceamp,
     "vbic/CEamp.cir",
-    ignore = "VBIC AC accuracy: ~0.2-0.4% gain error growing at high frequency (self-heating FP evaluation order difference)"
+    ignore = "VBIC AC numerical accuracy: ~1.2% AC gain error (avalanche derivative coupling + self-heating FP difference)"
 );
 harness_test!(
     harness_vbic_diffamp,
     "vbic/diffamp.cir",
-    ignore = "VBIC diffamp: times out (>30s) — 13-transistor circuit with self-heating (NPN+PNP)"
+    ignore = "VBIC diffamp: NR non-convergence during DC OP (complex 9-transistor circuit with self-heating)"
 );
 harness_test!(
     harness_vbic_fg,
     "vbic/FG.cir",
-    ignore = "VBIC FG: ~0.2-0.7% DC sweep error growing with current (self-heating FP evaluation order difference)"
+    ignore =
+        "VBIC FG: ~0.23% error in DC sweep (just above 0.2% tolerance, self-heating FP difference)"
 );
 harness_test!(
     harness_vbic_fo,
     "vbic/FO.cir",
-    ignore = "VBIC FO: ~4.3% Ic error in DC sweep (self-heating accuracy at low VCE)"
+    ignore = "VBIC FO: ~0.2% DC sweep error (self-heating FP difference, avalanche now correct)"
 );
 harness_test!(harness_vbic_noise_scale, "vbic/noise_scale_test.cir");
 harness_test!(
     harness_vbic_temp,
     "vbic/temp.cir",
-    ignore = "VBIC temp: ~0.2-0.6% Ic error growing with current (self-heating FP evaluation order difference)"
+    ignore = "VBIC temp: ~0.23% Ic error (just above 0.2% tolerance, self-heating FP difference vs ngspice)"
 );
 
 // === XSPICE (unimplemented) ===

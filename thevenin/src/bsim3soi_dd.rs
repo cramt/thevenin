@@ -876,29 +876,39 @@ impl Bsim3SoiDdModel {
         };
 
         let xdep0 = (2.0 * EPSSI / (CHARGE_Q * npeak * 1e6)).sqrt() * sqrt_phi;
-        let xj = self.xj;
-        let litl = (EPSSI * xj / self.cox).sqrt();
 
-        let t0 = -0.5 * self.dvt1 * leff / litl;
-        let theta0 = if t0 > -EXP_THRESHOLD {
+        // litl: ngspice b3soiddtemp.c: sqrt(3.0 * xj * tox), used for VACLM and dvbd.
+        // Note: sqrt(EPSSI/EPSOX * xj * tox) ≈ sqrt(3 * xj * tox) since EPSSI/EPSOX ≈ 3.
+        let litl = (EPSSI * self.xj / self.cox).sqrt();
+
+        // Characteristic length for DIBL (theta0vb0) and PDIBL (theta_rout).
+        // ngspice b3soiddtemp.c line 734: T1 = sqrt(EPSSI / EPSOX * tox * Xdep0)
+        let t1_soi = (EPSSI * xdep0 / self.cox).sqrt();
+
+        // theta0vb0: ngspice uses dsub (NOT dvt1) and does NOT multiply by dvt0.
+        // b3soiddtemp.c lines 736-737.
+        let t0 = -0.5 * self.dsub * leff / t1_soi;
+        let theta0vb0 = if t0 > -EXP_THRESHOLD {
             let t1 = t0.exp();
-            t1 * (1.0 + 2.0 * t1)
+            t1 + 2.0 * t1 * t1
         } else {
-            MIN_EXP * (1.0 + 2.0 * MIN_EXP)
+            MIN_EXP + 2.0 * MIN_EXP * MIN_EXP
         };
-        let theta0vb0 = self.dvt0 * theta0;
 
-        let t0 = -0.5 * self.drout * leff / litl;
+        // theta_rout: ngspice uses drout with same characteristic length.
+        // b3soiddtemp.c lines 739-742.
+        let t0 = -0.5 * self.drout * leff / t1_soi;
         let theta_rout = if t0 > -EXP_THRESHOLD {
             let t1 = t0.exp();
-            self.pdiblc1 * (t1 * (1.0 + 2.0 * t1)) + self.pdiblc2
+            self.pdiblc1 * (t1 + 2.0 * t1 * t1) + self.pdiblc2
         } else {
             self.pdiblc2
         };
 
         let k1eff = self.k1;
         let vfb = -1.0;
-        let cdep0 = (CHARGE_Q * EPSSI * npeak * 1e6).sqrt() / (2.0 * phi);
+        // ngspice b3soiddtemp.c line 655: sqrt(q * EPSSI * npeak * 1e6 / 2.0 / phi)
+        let cdep0 = (CHARGE_Q * EPSSI * npeak * 1e6 / 2.0 / phi).sqrt();
 
         let eg = 1.16 - 7.02e-4 * temp * temp / (temp + 1108.0);
         let ni_temp = 1.45e10

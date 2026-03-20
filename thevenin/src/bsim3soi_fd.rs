@@ -809,26 +809,32 @@ impl Bsim3SoiFdModel {
         // Depletion width
         let xdep0 = (2.0 * EPSSI / (CHARGE_Q * self.npeak * 1e6)).sqrt() * sqrt_phi;
 
-        // litl (characteristic length)
+        // litl: used for VACLM and dvbd. FD model doesn't parse xj separately;
+        // use tox-based approximation (pre-existing).
         let litl = (EPSSI * self.tox / self.cox).sqrt();
 
-        // Theta0vb0 for DIBL
-        let t0 = -0.5 * self.dsub * leff / litl;
+        // Characteristic length for DIBL (theta0vb0) and PDIBL (theta_rout).
+        // ngspice b3soifdtemp.c: T1 = sqrt(EPSSI / EPSOX * tox * Xdep0)
+        let t1_soi = (EPSSI * xdep0 / self.cox).sqrt();
+
+        // theta0vb0: ngspice uses dsub and does NOT multiply by dvt0.
+        // b3soifdtemp.c lines 735-736.
+        let t0 = -0.5 * self.dsub * leff / t1_soi;
         let theta0vb0 = if t0 > -EXP_THRESHOLD {
             let t1 = t0.exp();
-            self.dvt0 * t1 * (1.0 + 2.0 * t1)
+            t1 + 2.0 * t1 * t1
         } else {
-            self.dvt0 * MIN_EXP * (1.0 + 2.0 * MIN_EXP)
+            MIN_EXP + 2.0 * MIN_EXP * MIN_EXP
         };
 
-        // Theta for output resistance (theta_rout)
-        let t0 = -0.5 * self.drout * leff / litl;
+        // Theta for output resistance (theta_rout).
+        // b3soifdtemp.c lines 738-741.
+        let t0 = -0.5 * self.drout * leff / t1_soi;
         let theta_rout = if self.pdiblc1 == 0.0 && self.pdiblc2 == 0.0 {
             0.0
         } else if t0 > -EXP_THRESHOLD {
             let t1 = t0.exp();
-            let t2 = t1 * (1.0 + 2.0 * t1);
-            self.pdiblc1 * t2 + self.pdiblc2
+            self.pdiblc1 * (t1 + 2.0 * t1 * t1) + self.pdiblc2
         } else {
             self.pdiblc2
         };
@@ -839,8 +845,8 @@ impl Bsim3SoiFdModel {
         // Flat-band voltage
         let vfb = self.vbi_default - phi;
 
-        // cdep0
-        let cdep0 = (2.0 * EPSSI * CHARGE_Q * self.npeak * 1e6).sqrt() / (2.0 * vtm);
+        // cdep0: ngspice b3soifdtemp.c line 654: sqrt(q * EPSSI * npeak * 1e6 / 2.0 / phi)
+        let cdep0 = (CHARGE_Q * EPSSI * self.npeak * 1e6 / 2.0 / phi).sqrt();
 
         // Junction precomputed (temperature-dependent)
         let t3_temp = temp_ratio - 1.0;

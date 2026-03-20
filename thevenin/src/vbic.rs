@@ -666,11 +666,16 @@ impl VbicModel {
         self.iben_t = temp_current(self.iben, self.xin, self.eane, self.nen);
         self.ibcn_t = temp_current(self.ibcn, self.xin, self.eanc, self.ncn);
 
-        // Parasitic base currents
+        // Parasitic base currents — the parasitic transistor in VBIC shares
+        // junction characteristics with the main transistor's B-C junction:
+        //   IBEIP: parasitic ideal B-E → uses EAIC, NCI (matches main B-C ideal)
+        //   IBCIP: parasitic ideal B-C → uses EAIS, NCIP (substrate activation energy)
+        //   IBENP: parasitic non-ideal B-E → uses EANC, NCN (matches main B-C non-ideal)
+        //   IBCNP: parasitic non-ideal B-C → uses EANS, NCNP (substrate activation energy)
         self.ibeip_t = temp_current(self.ibeip, self.xii, self.eaic, self.nci);
-        self.ibcip_t = temp_current(self.ibcip, self.xii, self.eaic, self.ncip);
-        self.ibenp_t = temp_current(self.ibenp, self.xin, self.eanc, self.nen);
-        self.ibcnp_t = temp_current(self.ibcnp, self.xin, self.eanc, self.ncnp);
+        self.ibcip_t = temp_current(self.ibcip, self.xii, self.eais, self.ncip);
+        self.ibenp_t = temp_current(self.ibenp, self.xin, self.eanc, self.ncn);
+        self.ibcnp_t = temp_current(self.ibcnp, self.xin, self.eans, self.ncnp);
 
         // Resistances
         self.rci_t = temp_resistance(self.rci, self.xrci);
@@ -698,10 +703,12 @@ impl VbicModel {
         self.pc_t = temp_potential(self.pc, self.eaic);
         self.ps_t = temp_potential(self.ps, self.eais);
 
-        // Junction capacitances
+        // Junction capacitances — CJEP uses B-C junction parameters (PC/MC),
+        // not B-E (PE/ME), because the parasitic B-E junction in VBIC shares
+        // characteristics with the main B-C junction (ngspice vbictemp.c:326-328).
         self.cje_t = temp_cap(self.cje, self.pe, self.pe_t, self.me);
         self.cjc_t = temp_cap(self.cjc, self.pc, self.pc_t, self.mc);
-        self.cjep_t = temp_cap(self.cjep, self.pe, self.pe_t, self.me);
+        self.cjep_t = temp_cap(self.cjep, self.pc, self.pc_t, self.mc);
         self.cjcp_t = temp_cap(self.cjcp, self.ps, self.ps_t, self.ms);
 
         // NF, NR temperature — ngspice scales both using the same coefficient (TNF)
@@ -978,36 +985,69 @@ impl VbicModel {
         };
 
         // --- Avalanche current Igc ---
+        // ngspice vbicload.c lines 3596-3637:
+        //   vl = 0.5*(sqrt((PC_T - Vbci)^2 + 0.01) + PC_T - Vbci)
+        //   xvar3 = vl^(MC - 1)
+        //   xvar4 = exp(-AVC2 * xvar3)
+        //   avalf = AVC1 * vl * xvar4
+        //   Igc = (Itzf - Itzr - Ibcj) * avalf
         let (igc, digc_dvbci, digc_dvbei) = if self.avc1 > 0.0 && self.avc2_t > 0.0 {
-            // Smooth clamping: vl = 0.5*(sqrt((PC-Vbci)^2 + 0.01) + PC - Vbci)
+            // Smooth clamping: vl = max(0, PC_T - Vbci), smoothed
             let pc_minus_vbci = self.pc_t - vbci;
             let vl = 0.5 * ((pc_minus_vbci * pc_minus_vbci + 0.01).sqrt() + pc_minus_vbci);
             let dvl_dvbci =
                 0.5 * (-pc_minus_vbci / (pc_minus_vbci * pc_minus_vbci + 0.01).sqrt() - 1.0);
 
-            let avalf = self.avc1 * vl * safe_exp(-self.avc2_t * vl);
-            let davalf_dvl = self.avc1 * safe_exp(-self.avc2_t * vl) * (1.0 - self.avc2_t * vl);
+            if vl > 0.0 {
+                // ngspice uses vl^(MC-1) in the exponential, NOT vl directly.
+                // MC is the B-C junction grading coefficient (default 0.33).
+                let mc_m1 = self.mc - 1.0; // MC - 1 (typically -0.67)
+                let xvar3 = vl.powf(mc_m1); // vl^(MC-1)
+                let xvar3_vl = xvar3 * mc_m1 / vl; // d(vl^(MC-1))/dvl = (MC-1)*vl^(MC-2)
+                let xvar1 = -self.avc2_t * xvar3; // -AVC2 * vl^(MC-1)
+                let xvar4 = safe_exp(xvar1); // exp(-AVC2 * vl^(MC-1))
 
-            // Igc = (Itzf - Itzr - Ibcj) * avalf
-            let i_drive = itzf - itzr - ibcj;
-            let igc_val = i_drive * avalf;
+                let avalf = self.avc1 * vl * xvar4;
 
-            // dIgc/dVbci = d(i_drive)/dVbci * avalf + i_drive * davalf/dVbci
-            let di_drive_dvbci = ditzf_dvbci - ditzr_dvbci - dibcj_dvbci;
-            let digc_dvbci_val = di_drive_dvbci * avalf + i_drive * davalf_dvl * dvl_dvbci;
+                // davalf/dvl via chain rule:
+                //   avalf = AVC1 * vl * xvar4
+                //   davalf/dvl = AVC1 * xvar4 + AVC1 * vl * xvar4 * dxvar1/dvl
+                //   dxvar1/dvl = -AVC2 * xvar3_vl
+                let avalf_vl = self.avc1 * xvar4; // partial: d(AVC1*vl)/dvl * xvar4
+                let avalf_xvar4 = self.avc1 * vl; // partial: AVC1*vl * d(xvar4)
+                let xvar4_xvar1 = xvar4;
+                let xvar1_xvar3 = -self.avc2_t;
+                // Total davalf/dvl = avalf_vl + avalf_xvar4 * xvar4_xvar1 * xvar1_xvar3 * xvar3_vl
+                let davalf_dvl =
+                    avalf_vl + avalf_xvar4 * xvar4_xvar1 * xvar1_xvar3 * xvar3_vl;
 
-            // dIgc/dVbei = d(i_drive)/dVbei * avalf
-            let di_drive_dvbei = ditzf_dvbei - ditzr_dvbei;
-            let digc_dvbei_val = di_drive_dvbei * avalf;
+                // Igc = (Itzf - Itzr - Ibcj) * avalf
+                let i_drive = itzf - itzr - ibcj;
+                let igc_val = i_drive * avalf;
 
-            (igc_val, digc_dvbci_val, digc_dvbei_val)
+                // dIgc/dVbci = d(i_drive)/dVbci * avalf + i_drive * davalf/dVbci
+                let di_drive_dvbci = ditzf_dvbci - ditzr_dvbci - dibcj_dvbci;
+                let davalf_dvbci = davalf_dvl * dvl_dvbci;
+                let digc_dvbci_val = di_drive_dvbci * avalf + i_drive * davalf_dvbci;
+
+                // dIgc/dVbei = d(i_drive)/dVbei * avalf
+                let di_drive_dvbei = ditzf_dvbei - ditzr_dvbei;
+                let digc_dvbei_val = di_drive_dvbei * avalf;
+
+                (igc_val, digc_dvbci_val, digc_dvbei_val)
+            } else {
+                (0.0, 0.0, 0.0)
+            }
         } else {
             (0.0, 0.0, 0.0)
         };
 
-        let ibc = ibcj + igc;
-        let dibc_dvbci = dibcj_dvbci + digc_dvbci;
-        let dibc_dvbei = digc_dvbei;
+        // ngspice vbicload.c line 3644: Ibc = Ibcj - Igc
+        // Avalanche current Igc flows from collector to base (opposite to Ibc
+        // direction), so it REDUCES the net base-collector current.
+        let ibc = ibcj - igc;
+        let dibc_dvbci = dibcj_dvbci - digc_dvbci;
+        let dibc_dvbei = -digc_dvbei;
 
         // --- Ibep: parasitic B-E ---
         let (ibep, dibep_dvbep) = {
@@ -1147,8 +1187,11 @@ impl VbicModel {
         // =====================================================================
         let (qbe, cqbe) = depletion_charge(vbei, self.cje_t, self.pe_t, self.me, self.aje, self.fc);
         let (qbc, cqbc) = depletion_charge(vbci, self.cjc_t, self.pc_t, self.mc, self.ajc, self.fc);
+        // qdbep uses B-C junction parameters (PC_t, MC, AJC) — the parasitic
+        // B-E junction shares characteristics with the main B-C junction
+        // (ngspice vbicload.c:2723-2739).
         let (qbep, cqbep) =
-            depletion_charge(vbep, self.cjep_t, self.pe_t, self.me, self.aje, self.fc);
+            depletion_charge(vbep, self.cjep_t, self.pc_t, self.mc, self.ajc, self.fc);
         let (qbcp, cqbcp) =
             depletion_charge(vbcp, self.cjcp_t, self.ps_t, self.ms, self.ajs, self.fc);
 
