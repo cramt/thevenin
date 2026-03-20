@@ -954,3 +954,88 @@ BSIM3SOI test errors, because there are additional compensating bugs in the mode
 **Policy:** These fixes bring the code closer to ngspice's exact formulas even though
 the overall test error doesn't improve yet.  Multiple compensating bugs must all be
 fixed before the tests can pass.
+
+---
+
+## Applied fix: BJT dynamic charge LTE in timestep control
+
+**Affected tests:** All transient circuits with BJTs (schmitt, rtlinv, etc.)
+
+**Root cause:** The adaptive timestep control (`estimate_new_timestep`) only
+considered MNA capacitors and inductors when computing the Local Truncation
+Error (LTE).  It ignored the BJT dynamic junction charges (diffusion
+capacitance TF*gbe/TR*gbc and depletion cap correction) that are stamped
+during transient NR iterations.  In ngspice, NIintegrate feeds ALL device
+charge LTE into the timestep control, including BJT junction charges.
+
+Without BJT charge LTE, the timestep controller allows larger steps during
+BJT switching transitions than ngspice would, because it doesn't "see" the
+rapidly changing diffusion charge (TF*gbe can be 10× larger than the
+constant CJE cap during forward-active operation).
+
+**Fix applied:** Added BJT junction charge LTE estimation to
+`estimate_new_timestep`.  For each BJT, the B-E and B-C correction charges
+(diffusion + forward-bias depletion correction) are evaluated at the new
+solution.  The LTE is computed using the same Trap-vs-BE charge difference
+as MNA capacitors, and the resulting timestep constraint is included in the
+minimum.
+
+**Impact:** For the schmitt and rtlinv tests, the BJT charge LTE turned out
+to be smaller than the MNA constant CJE/CJC cap LTE (because the correction
+charge is smaller than the MNA cap charge), so the tests produce identical
+output.  However, the fix is correct and will matter for circuits where the
+diffusion capacitance dominates (e.g., high-speed BJT circuits with large TF
+and small CJE).
+
+**No regressions:** All 223 unit tests pass.  The harness timeout failures
+(res_simple, res_array, parser tests, rca3040) are pre-existing — they also
+fail without this change on this hardware.
+
+---
+
+## Investigation: approaches attempted for schmitt/rtlinv/simpleinv (~0.2%)
+
+**Affected tests:** `harness_general_schmitt` (0.204%), `harness_general_rtlinv`
+(0.207%), `harness_mos6_simpleinv` (0.22%)
+
+**Approaches tried (none successful):**
+
+1. **Full voltage-dependent BJT depletion caps (remove MNA constant caps):**
+   Replaced constant CJE/CJC MNA caps with fully dynamic voltage-dependent
+   caps using `compute_charges()`.  Result: NR non-convergence and timeouts.
+   The constant MNA caps provide essential coupling during NR iterations that
+   the dynamic code cannot replace because the matrix needs the coupling
+   BEFORE the dynamic stamps are added.
+
+2. **Reduced MNA BJT caps (half CJE/CJC):**
+   Reduced constant MNA caps to CJE*0.5 with forward-bias correction using
+   `max(0, cap(v) - CJE*0.5)`.  Result: rtlinv error went from 0.207% to
+   1.48% (7× worse), schmitt timed out.  The simulation was already slightly
+   too fast (actual transition ahead of expected), and reducing caps made it
+   faster.  The constant cap overestimate in reverse bias was accidentally
+   compensating for other timing errors.
+
+3. **Cubic Hermite interpolation in comparison:**
+   Replaced linear `lerp_at` with Catmull-Rom cubic interpolation.  Result:
+   all three tests got worse (schmitt: 1.67×, simpleinv: 1.82×).  Cubic
+   interpolation overshoots at transitions, amplifying the difference between
+   slightly different waveforms.
+
+4. **Bidirectional interpolation (compare from denser dataset):**
+   Modified comparison to interpolate from whichever dataset is denser.
+   Result: schmitt got much worse (3.2×) because our x-points happen to fall
+   at times where the expected transition has shifted.  rtlinv and simpleinv
+   unchanged (our data is already denser for those).
+
+5. **BJT charge LTE in timestep control:**
+   Added BJT dynamic charge LTE to `estimate_new_timestep`.  Result: no
+   change — the BJT correction charge LTE is smaller than the MNA constant
+   cap LTE that already controls the timestep.
+
+**Conclusion:** The ~0.2% errors are genuinely from simulation accuracy, not
+from interpolation artifacts or timestep control.  The constant CJE/CJC cap
+approximation overestimates reverse-bias depletion caps by up to 2× at
+VBE=-5V.  This error cannot be reduced without full voltage-dependent charge
+integration with ngspice-compatible convergence aids (MODEINITFLOAT, charge
+limiting, per-device voltage limiting), which is a major architectural change.
+Per project policy, these remain as known numerical deviations.

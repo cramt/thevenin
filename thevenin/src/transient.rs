@@ -239,19 +239,25 @@ const MIN_SHRINK: f64 = 0.125; // 1/8
 /// Maximum factor to grow timestep.
 const MAX_GROW: f64 = 2.0;
 
-/// Estimate the new timestep based on LTE for capacitors and inductors.
+/// Estimate the new timestep based on LTE for capacitors, inductors, and
+/// BJT dynamic junction charges.
 ///
 /// Uses the difference between Trap and BE predictions as the LTE estimate.
 /// For each capacitor: LTE ≈ |q_trap - q_be| where q is the integrated charge.
 /// For each inductor: LTE ≈ |flux_trap - flux_be| where flux is the integrated flux.
+/// For BJT charges: LTE ≈ |q_trap - q_be| for the dynamic correction charges
+/// (diffusion + depletion cap correction), matching ngspice's approach of
+/// including device-internal charges in the timestep control.
 ///
 /// Returns the recommended new timestep.
+#[expect(clippy::too_many_arguments)]
 fn estimate_new_timestep(
     h: f64,
     solution: &[f64],
     mna: &MnaSystem,
     cap_histories: &[CapHistory],
     ind_histories: &[IndHistory],
+    bjt_charge_histories: &[BjtChargeHistory],
     reltol: f64,
     abstol: f64,
 ) -> f64 {
@@ -320,6 +326,79 @@ fn estimate_new_timestep(
             let ratio = tol / lte;
             let h_new = h * ratio.sqrt();
             new_h = new_h.min(h_new);
+        }
+    }
+
+    // LTE for BJT dynamic junction charges (diffusion + depletion correction).
+    // In ngspice, bjtload.c integrates junction charges via NIintegrate, and
+    // the LTE from these charges feeds into the adaptive timestep control.
+    // Without this, the timestep controller ignores the dominant charge storage
+    // in BJT circuits (e.g., TF*gbe diffusion cap can be 10× larger than CJE),
+    // allowing too-large steps during BJT switching transitions.
+    for (bi, bjt) in mna.bjts.iter().enumerate() {
+        let hist = &bjt_charge_histories[bi];
+        let (vbe, vbc) = bjt.junction_voltages(solution);
+        let comp = bjt.model.companion(vbe, vbc);
+        let m = bjt.m * bjt.area;
+
+        // Compute correction cap at new voltage (same formula as NR stamping).
+        let capbe_dep_corr = if bjt.model.cje > 0.0 {
+            (bjt.model.cap_be(vbe) - bjt.model.cje).max(0.0)
+        } else {
+            0.0
+        };
+        let capbc_dep_corr = if bjt.model.cjc > 0.0 {
+            (bjt.model.cap_bc(vbc) - bjt.model.cjc).max(0.0)
+        } else {
+            0.0
+        };
+        let capbe = bjt.model.tf * comp.gbe_raw + capbe_dep_corr;
+        let capbc = bjt.model.tr * comp.gbc_raw + capbc_dep_corr;
+
+        // B-E charge LTE.
+        if capbe > 0.0 {
+            let q_new = hist.qbe + capbe * (vbe - hist.vbe);
+            let i_old = hist.cqbe;
+
+            let i_trap = 2.0 * capbe / h * (vbe - hist.vbe) - i_old;
+            let i_be = capbe / h * (vbe - hist.vbe);
+
+            let q_trap = h / 2.0 * (i_old + i_trap);
+            let q_be = h * i_be;
+            let lte = (q_trap - q_be).abs() * m;
+
+            let chg_tol = reltol * q_new.abs().max(hist.qbe.abs()).max(CHGTOL) * m;
+            let vol_tol = (abstol + reltol * vbe.abs().max(hist.vbe.abs())) * m;
+            let tol = TRTOL * vol_tol.max(chg_tol);
+
+            if lte > 1e-30 {
+                let ratio = tol / lte;
+                let h_new = h * ratio.sqrt();
+                new_h = new_h.min(h_new);
+            }
+        }
+
+        // B-C charge LTE.
+        if capbc > 0.0 {
+            let q_new = hist.qbc + capbc * (vbc - hist.vbc);
+            let i_old = hist.cqbc;
+
+            let i_trap = 2.0 * capbc / h * (vbc - hist.vbc) - i_old;
+            let i_be = capbc / h * (vbc - hist.vbc);
+
+            let q_trap = h / 2.0 * (i_old + i_trap);
+            let q_be = h * i_be;
+            let lte = (q_trap - q_be).abs() * m;
+
+            let chg_tol = reltol * q_new.abs().max(hist.qbc.abs()).max(CHGTOL) * m;
+            let vol_tol = (abstol + reltol * vbc.abs().max(hist.vbc.abs())) * m;
+            let tol = TRTOL * vol_tol.max(chg_tol);
+
+            if lte > 1e-30 {
+                let ratio = tol / lte;
+                let h_new = h * ratio.sqrt();
+                new_h = new_h.min(h_new);
+            }
         }
     }
 
@@ -911,14 +990,16 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             }
         };
 
-        // LTE-based timestep control (only for Trap with reactive elements).
-        if method == IntegrationMethod::Trapezoidal && has_reactive {
+        // LTE-based timestep control (only for Trap with reactive elements or BJTs).
+        let has_bjt_charges = !mna.bjts.is_empty();
+        if method == IntegrationMethod::Trapezoidal && (has_reactive || has_bjt_charges) {
             let new_h = estimate_new_timestep(
                 step_h,
                 &new_solution,
                 &mna,
                 &cap_histories,
                 &ind_histories,
+                &bjt_charge_histories,
                 nr_options.reltol,
                 nr_options.abstol,
             );
