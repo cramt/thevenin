@@ -386,81 +386,81 @@ harness_test!(
 harness_test!(
     harness_bsim3soidd_inv2,
     "bsim3soidd/inv2.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
 );
 harness_test!(
     harness_bsim3soidd_rampvg2,
     "bsim3soidd/RampVg2.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "times out (>30s): BSIM3SOI-DD DC sweep NR convergence too slow"
 );
 harness_test!(
     harness_bsim3soidd_t3,
     "bsim3soidd/t3.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "~12% Ids error near threshold (BSIM3SOI-DD model value bug in vth/vgsteff/vdseff)"
 );
 harness_test!(
     harness_bsim3soidd_t4,
     "bsim3soidd/t4.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "~13% Ids error (BSIM3SOI-DD model value bug)"
 );
 harness_test!(
     harness_bsim3soidd_t5,
     "bsim3soidd/t5.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "~6% Ids error (BSIM3SOI-DD model value bug)"
 );
 
 // === BSIM3SOI-FD ===
 harness_test!(
     harness_bsim3soifd_inv2,
     "bsim3soifd/inv2.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "times out (>30s): BSIM3SOI-FD inverter NR convergence too slow"
 );
 harness_test!(
     harness_bsim3soifd_rampvg2,
     "bsim3soifd/RampVg2.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "times out (>30s): BSIM3SOI-FD DC sweep NR convergence too slow"
 );
 harness_test!(
     harness_bsim3soifd_t3,
     "bsim3soifd/t3.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "~7% Ids error near threshold (BSIM3SOI-FD model value bug)"
 );
 harness_test!(
     harness_bsim3soifd_t4,
     "bsim3soifd/t4.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "wrong sign: expected +7.2e-8, got -5.1e-8 (BSIM3SOI-FD model value bug)"
 );
 harness_test!(
     harness_bsim3soifd_t5,
     "bsim3soifd/t5.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "~99% error: expected 1.1e-7, got 6.1e-10 (BSIM3SOI-FD model value bug)"
 );
 
 // === BSIM3SOI-PD ===
 harness_test!(
     harness_bsim3soipd_inv2,
     "bsim3soipd/inv2.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
 );
 harness_test!(
     harness_bsim3soipd_rampvg2,
     "bsim3soipd/RampVg2.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "times out (>30s): BSIM3SOI-PD DC sweep NR convergence too slow"
 );
 harness_test!(
     harness_bsim3soipd_t3,
     "bsim3soipd/t3.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "times out (>30s): BSIM3SOI-PD NR non-convergence"
 );
 harness_test!(
     harness_bsim3soipd_t4,
     "bsim3soipd/t4.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "times out (>30s): BSIM3SOI-PD NR non-convergence"
 );
 harness_test!(
     harness_bsim3soipd_t5,
     "bsim3soipd/t5.cir",
-    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+    ignore = "times out (>30s): BSIM3SOI-PD NR non-convergence"
 );
 
 // === Filters ===
@@ -488,12 +488,12 @@ harness_test!(harness_general_rc, "general/rc.cir");
 harness_test!(
     harness_general_rtlinv,
     "general/rtlinv.cir",
-    ignore = "~0.21% transient accuracy: forward-bias depletion cap correction improves timing but reverse-bias constant cap still slightly too large"
+    ignore = "~5.5% transient timing error at first switching transition: our transition starts ~2ns later than ngspice due to constant reverse-bias cap approximation"
 );
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
-    ignore = "~0.20% switching error at t=280ns: forward-bias depletion cap correction applied; remaining error from reverse-bias constant cap approximation"
+    ignore = "~1.2% error at switching transition: output oscillates during state transition instead of settling cleanly; constant reverse-bias cap approximation"
 );
 
 // === HFET ===
@@ -590,7 +590,7 @@ harness_test!(
 harness_test!(
     harness_regression_misc_asrc_tc_2,
     "regression/misc/asrc-tc-2.cir",
-    ignore = "Requires .control scripting language"
+    ignore = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
 );
 harness_test!(harness_regression_misc_bugs_1, "regression/misc/bugs-1.cir");
 harness_test!(harness_regression_misc_bugs_2, "regression/misc/bugs-2.cir");
