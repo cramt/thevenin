@@ -1283,3 +1283,71 @@ times out (>30s) instead of the previously reported 7% transient timing error.
 | `harness_vbic_ceamp` | 0.21% AC error | 1.2% AC error (correct model exposes thermal FP gap) |
 | `harness_vbic_fg` | 0.231% DC error | 0.234% DC error |
 | `harness_vbic_temp` | 0.229% DC error | 0.226% DC error |
+
+---
+
+## Triage update: comprehensive status of all 40 ignored tests
+
+Updated ignore reasons to match actual failure modes (many were generic placeholders).
+
+### BSIM3SOI (15 tests)
+
+| Test | Actual failure |
+|---|---|
+| DD inv2 | DC OP singular matrix |
+| DD rampvg2 | timeout (>30s) |
+| DD t3 | ~12% Ids error at threshold |
+| DD t4 | ~13% Ids error |
+| DD t5 | ~6% Ids error |
+| FD inv2 | timeout (>30s) |
+| FD rampvg2 | timeout (>30s) |
+| FD t3 | ~7% Ids error |
+| FD t4 | wrong sign (170% error) |
+| FD t5 | ~99% error |
+| PD inv2 | DC OP singular matrix |
+| PD rampvg2 | timeout (>30s) |
+| PD t3 | timeout (>30s) |
+| PD t4 | timeout (>30s) |
+| PD t5 | timeout (>30s) |
+
+All BSIM3SOI tests have model accuracy or convergence issues.  The DD variant
+has 6-13% Ids errors from upstream intermediate value bugs (vth, vgsteff,
+vdseff).  The FD variant has even larger errors including wrong sign.  The PD
+variant mostly times out from NR non-convergence.
+
+### VBIC (5 tests)
+
+| Test | Error | Cause |
+|---|---|---|
+| FO | 0.205% | self-heating FP evaluation order (linear growth with Vc) |
+| FG | 0.234% | self-heating FP evaluation order |
+| temp | 0.226% | self-heating FP evaluation order |
+| ceamp | 1.2% AC | avalanche derivative coupling + self-heating FP |
+| diffamp | timeout | NR non-convergence (9-transistor circuit) |
+
+The FO error was analyzed in detail: 0% at Vc=0 (no self-heating), growing
+linearly to 0.57% at Vc=5V.  Error is proportional to Vrth (thermal rise).
+This is a genuine FP evaluation order difference between our two-step
+temperature evaluation (clone → temperature_adjust → companion) and ngspice's
+single-pass auto-generated kernel.  All physical constants and formulas match
+ngspice exactly.
+
+### Transient tests (2 tests)
+
+| Test | Error | Cause |
+|---|---|---|
+| schmitt | ~1.2% at transition | output oscillates during switching instead of settling cleanly |
+| rtlinv | ~5.5% at first edge | transition starts ~2ns later than ngspice |
+
+Both errors are from the constant reverse-bias junction cap approximation.
+The schmitt trigger shows output oscillation at the switching transition
+that ngspice's voltage-dependent cap implementation avoids.
+
+### Other tests (18 tests)
+
+| Category | Count | Status |
+|---|---|---|
+| Timeout (fourbitadder, mosamp, hfet, mesa, mos6inv, transmission×6, transient fourbitadder) | 12 | NR convergence or transient timestep too slow |
+| Missing features (BSIM1/2, .control, TEMPER, param expressions) | 5 | Need new code |
+| No reference (diffpair) | 1 | ngspice reference file says "To be done" |
+| LU precision (sensitivity diffpair) | 1 | 47× error, needs LU factor reuse from OP |
