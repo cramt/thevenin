@@ -450,17 +450,17 @@ harness_test!(
 harness_test!(
     harness_bsim3soipd_t3,
     "bsim3soipd/t3.cir",
-    ignore = "times out (>30s): BSIM3SOI-PD NR non-convergence"
+    ignore = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
 );
 harness_test!(
     harness_bsim3soipd_t4,
     "bsim3soipd/t4.cir",
-    ignore = "times out (>30s): BSIM3SOI-PD NR non-convergence"
+    ignore = "~5.6% Ids error (BSIM3SOI-PD model value bug, previously timed out)"
 );
 harness_test!(
     harness_bsim3soipd_t5,
     "bsim3soipd/t5.cir",
-    ignore = "times out (>30s): BSIM3SOI-PD NR non-convergence"
+    ignore = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
 );
 
 // === Filters ===
@@ -516,11 +516,7 @@ harness_test!(harness_mesa_mesa21, "mesa/mesa21.cir");
 harness_test!(harness_mesa_mesa, "mesa/mesa.cir");
 harness_test!(harness_mesa_mesgout, "mesa/mesgout.cir");
 harness_test!(harness_mesa_mesinv, "mesa/mesinv.cir");
-harness_test!(
-    harness_mesa_mesosc,
-    "mesa/mesosc.cir",
-    ignore = "times out (>30s): 11-stage ring oscillator transient, timestep accumulation causes slow convergence"
-);
+harness_test!(harness_mesa_mesosc, "mesa/mesosc.cir");
 
 // === MES (MESFET) ===
 harness_test!(harness_mes_subth, "mes/subth.cir");
@@ -590,7 +586,8 @@ harness_test!(
 harness_test!(
     harness_regression_misc_asrc_tc_2,
     "regression/misc/asrc-tc-2.cir",
-    ignore = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
+    ignore =
+        "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
 );
 harness_test!(harness_regression_misc_bugs_1, "regression/misc/bugs-1.cir");
 harness_test!(harness_regression_misc_bugs_2, "regression/misc/bugs-2.cir");

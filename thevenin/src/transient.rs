@@ -703,7 +703,9 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let vgd_signed = vgs_signed - vds_signed;
             let vgb_signed = vgs_signed - vbs_signed;
 
-            let comp = mos.model.companion(vgs_signed, vds_signed, vbs_signed, mos.betac());
+            let comp = mos
+                .model
+                .companion(vgs_signed, vds_signed, vbs_signed, mos.betac());
 
             let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);
             let cox = (3.9 * 8.854214871e-12) / mos.model.tox * l_eff * mos.w;
@@ -1147,10 +1149,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
             let capbe = bjt.model.tf * comp.gbe_raw + capbe_corr;
             let capbc = bjt.model.tr * comp.gbc_raw + capbc_corr;
-            let qbe = bjt_charge_histories[bi].qbe
-                + capbe * (vbe - bjt_charge_histories[bi].vbe);
-            let qbc = bjt_charge_histories[bi].qbc
-                + capbc * (vbc - bjt_charge_histories[bi].vbc);
+            let qbe = bjt_charge_histories[bi].qbe + capbe * (vbe - bjt_charge_histories[bi].vbe);
+            let qbc = bjt_charge_histories[bi].qbc + capbc * (vbc - bjt_charge_histories[bi].vbc);
 
             let cqbe = match method {
                 IntegrationMethod::BackwardEuler => (qbe - bjt_charge_histories[bi].qbe) / step_h,
@@ -1344,7 +1344,9 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let vgd_signed = vgs_signed - vds_signed;
             let vgb_signed = vgs_signed - vbs_signed;
 
-            let comp = mos.model.companion(vgs_signed, vds_signed, vbs_signed, mos.betac());
+            let comp = mos
+                .model
+                .companion(vgs_signed, vds_signed, vbs_signed, mos.betac());
             let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);
             let cox = (3.9 * 8.854214871e-12) / mos.model.tox * l_eff * mos.w;
 
@@ -1816,8 +1818,14 @@ fn solve_timestep(
             for (hi, hfet) in mna.hfets.iter().enumerate() {
                 let gp = hfet.gate_prime_idx.or(hfet.gate_idx);
                 // Use PPM nodes if they exist, otherwise fall back to prime nodes.
-                let spp = hfet.source_prm_prm_idx.or(hfet.source_prime_idx).or(hfet.source_idx);
-                let dpp = hfet.drain_prm_prm_idx.or(hfet.drain_prime_idx).or(hfet.drain_idx);
+                let spp = hfet
+                    .source_prm_prm_idx
+                    .or(hfet.source_prime_idx)
+                    .or(hfet.source_idx);
+                let dpp = hfet
+                    .drain_prm_prm_idx
+                    .or(hfet.drain_prime_idx)
+                    .or(hfet.drain_idx);
 
                 // Compute vgspp and vgdpp from the current NR solution.
                 let v_gp = gp.map(|i| solution[i]).unwrap_or(0.0);
@@ -1826,7 +1834,8 @@ fn solve_timestep(
 
                 // Get capgs/capgd from companion using limited voltages.
                 let (vgs_lim, vgd_lim) = prev_hfet[hi];
-                let comp = crate::hfet::hfet_companion_full(hfet, vgs_lim, vgd_lim, nr_options.gmin);
+                let comp =
+                    crate::hfet::hfet_companion_full(hfet, vgs_lim, vgd_lim, nr_options.gmin);
                 let capgs = comp.capgs;
                 let capgd = comp.capgd;
 
@@ -2087,7 +2096,6 @@ fn solve_timestep(
                 stamp_current_source(&mut system.rhs, gp, b, ieq_gb);
             }
         }
-
     };
 
     if has_nonlinear {

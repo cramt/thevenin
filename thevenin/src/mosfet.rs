@@ -295,13 +295,15 @@ impl MosfetModel {
 
         // Body effect: compute threshold voltage shift.
         //
-        // The incoming vgs/vds/vbs are already sign-adjusted (multiplied by
-        // mos_type.sign() in terminal_voltages).  The threshold must be
-        // expressed in that same signed space, so we apply the sign to vto:
-        //   von = sign * (vto + gamma * sarg)
-        // This ensures PMOS (sign=-1, vto=-0.8) has a positive threshold
-        // ~0.45 V in signed space, matching ngspice Level 1 behaviour where
-        // the cutoff condition is vgst = vgs_eff - von <= 0.
+        // ngspice (mos1temp.c:170-174) computes:
+        //   tVbi = vt0 - type * gamma * sqrt(phi)
+        // Then (mos1load.c:485):
+        //   von = tVbi * type + gamma * sarg
+        //       = type*vt0 + gamma*(sarg - sqrt(phi))
+        //
+        // At vbs=0, sarg = sqrt(phi), so von = type*vt0 = sign*vto.
+        // The body effect adds gamma*(sarg - sqrt(phi)), which is zero at
+        // vbs=0 and positive for reverse body bias (vbs < 0).
         let sign = self.mos_type.sign();
         let sarg = if vbs_eff <= 0.0 {
             (self.phi - vbs_eff).sqrt()
@@ -310,7 +312,7 @@ impl MosfetModel {
             (s - vbs_eff / (2.0 * s)).max(0.0)
         };
 
-        let von = sign * (self.vto + self.gamma * sarg);
+        let von = sign * self.vto + self.gamma * (sarg - self.phi.sqrt());
         let vgst = vgs_eff - von;
         let vdsat = vgst.max(0.0);
 

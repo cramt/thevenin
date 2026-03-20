@@ -1407,3 +1407,91 @@ coupling chain, exposing additional compensating bugs in the Vbs0→Vbseff chain
 FD variant already has the correct vfbb sign.
 
 **No regressions:** All 68 passing harness tests, 223 unit tests still pass.
+
+---
+
+## Applied fix: Level 1 MOSFET von (threshold voltage) computation
+
+**Affected devices:** All Level 1 MOSFETs with non-zero gamma (NSUB or GAMMA specified)
+
+**Root cause:** The threshold voltage `von` in `MosfetModel::companion()` included a
+spurious `gamma * sqrt(phi)` term.  In ngspice (`mos1temp.c:170-174`, `mos1load.c:485`):
+```
+tVbi = vt0 - type * gamma * sqrt(phi)
+von  = tVbi * type + gamma * sarg
+     = type*vt0 + gamma*(sarg - sqrt(phi))
+```
+At vbs=0: `sarg = sqrt(phi)`, so `von = type*vt0 = VTO`.  The body effect only adds
+`gamma*(sarg - sqrt(phi))`, which is zero at vbs=0.
+
+Our code had:
+```
+von = sign * (vto + gamma * sarg)
+```
+At vbs=0: `von = sign*vto + sign*gamma*sqrt(phi)`.  The extra `sign*gamma*sqrt(phi)` term
+shifts the threshold by gamma*sqrt(phi) — for the LTRA test circuit this was 0.4V.
+
+For NMOS (sign=+1): threshold was too HIGH (e.g., 1.2V vs correct 0.8V).  NMOS turns on
+later, less drain current.
+
+For PMOS (sign=-1): threshold was too LOW in signed space (e.g., 0.4V vs correct 0.8V).
+PMOS turns on too easily, more source current.
+
+**Fix applied:**
+- `mosfet.rs`: Changed `von = sign * (self.vto + self.gamma * sarg)` to
+  `von = sign * self.vto + self.gamma * (sarg - self.phi.sqrt())`
+- `simulate.rs`: Changed initial guess `von = sign * (vto + gamma*sqrt(phi))` to
+  `von = sign * vto` (matching ngspice's MODEINITJCT where vgs = type * tVto = type * vt0)
+
+**Impact:** The bug was dormant for all circuits where gamma=0 (default when NSUB and
+GAMMA are not specified).  It affected circuits with NSUB-derived or explicit GAMMA:
+- Transmission line tests (NSUB=3e16): MOSFET operating point changed significantly
+- `harness_general_mosmem` (GAMMA=1.83): still passes (DC point robust to threshold shift)
+- No regressions in any of 69 passing harness tests or 223 unit tests
+
+Note: the MOS6 (`mos6.rs`) companion already had the correct formula using
+`vbi = vto - sign * gamma * sqrt(phi)`.
+
+---
+
+## Un-ignored test: harness_mesa_mesosc
+
+**Previous status:** times out (>30s) — 11-stage ring oscillator transient
+
+**Current status:** PASSES (completes in ~10s)
+
+The test now passes without any targeted fix.  This is likely due to accumulated
+improvements in timestep control (BJT charge LTE, MESA junction capacitance handling)
+reducing the timestep count enough for the circuit to complete within the 30s timeout.
+
+---
+
+## Triage update (post von fix + mesosc un-ignore)
+
+**Transmission line tests status change (not fixed, but running instead of timing out):**
+
+| Test | Before von fix | After von fix |
+|---|---|---|
+| `ltra1_1` | 16% error at x=16.25ns | 24% error at x=16.13ns |
+| `ltra2_2` | 16% error | similar |
+| `txl1_1` | 17% error | similar |
+| `txl2_3` | timeout | timeout |
+| `cpl3_4` | timeout | timeout |
+| `cpl_ibm2` | timeout | timeout |
+
+The von fix is correct but worsened the transmission line accuracy because the wrong
+threshold was partially compensating for another error in the CMOS inverter driver.
+The remaining errors in ltra1/ltra2/txl1 are from an unidentified issue in the PMOS
+pull-up transient behavior (possibly related to voltage limiting using raw VTO instead
+of the previous iteration's von, as ngspice does).
+
+**BSIM3SOI PD tests status change (no longer timing out):**
+
+| Test | Before | After |
+|---|---|---|
+| `PD t3` | timeout | DC OP singular matrix (fast fail) |
+| `PD t4` | timeout | 5.6% error (DC sweep completes!) |
+| `PD t5` | timeout | DC OP singular matrix (fast fail) |
+
+PD t4 now runs to completion with a 5.6% Ids error — this is progress from previous
+timeouts, likely due to accumulated convergence improvements.

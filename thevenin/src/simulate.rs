@@ -252,15 +252,16 @@ fn jct_initial_guess(
     mna.stamp_cpl_dc_all(&mut system);
 
     // Stamp each Level-1 MOSFET at its threshold voltage.
-    // von (in our signed convention) = sign * (vto + gamma * sqrt(phi)).
-    // We want vgs slightly above threshold for the companion.
-    // vds is set to von as well (matching ngspice's MODEINITJCT where
-    // vds = vgs = type * tVbi), which puts the MOSFET in the correct
-    // mode (NMOS: mode=+1, PMOS: mode=-1).
+    // Initial guess: ngspice's MODEINITJCT (mos1load.c:397-411) sets:
+    //   vgs = type * tVto = type * vt0 (at TNOM, tVto = vt0)
+    //   vds = 0
+    //   vbs = -1
+    // We use vgs = vds = sign*vto to put the MOSFET slightly above
+    // threshold with the correct mode (NMOS: mode=+1, PMOS: mode=-1).
     let zeros = vec![0.0_f64; dim];
     for mos in &mna.mosfets {
         let sign = mos.model.mos_type.sign();
-        let von = sign * (mos.model.vto + mos.model.gamma * mos.model.phi.sqrt());
+        let von = sign * mos.model.vto;
         let vgs = von;
         let vds = von;
         let mut eff_model = mos.model.clone();

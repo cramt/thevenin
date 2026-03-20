@@ -1018,8 +1018,7 @@ impl VbicModel {
                 let xvar4_xvar1 = xvar4;
                 let xvar1_xvar3 = -self.avc2_t;
                 // Total davalf/dvl = avalf_vl + avalf_xvar4 * xvar4_xvar1 * xvar1_xvar3 * xvar3_vl
-                let davalf_dvl =
-                    avalf_vl + avalf_xvar4 * xvar4_xvar1 * xvar1_xvar3 * xvar3_vl;
+                let davalf_dvl = avalf_vl + avalf_xvar4 * xvar4_xvar1 * xvar1_xvar3 * xvar3_vl;
 
                 // Igc = (Itzf - Itzr - Ibcj) * avalf
                 let i_drive = itzf - itzr - ibcj;
