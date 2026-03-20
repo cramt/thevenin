@@ -666,11 +666,16 @@ impl VbicModel {
         self.iben_t = temp_current(self.iben, self.xin, self.eane, self.nen);
         self.ibcn_t = temp_current(self.ibcn, self.xin, self.eanc, self.ncn);
 
-        // Parasitic base currents
+        // Parasitic base currents — the parasitic transistor in VBIC shares
+        // junction characteristics with the main transistor's B-C junction:
+        //   IBEIP: parasitic ideal B-E → uses EAIC, NCI (matches main B-C ideal)
+        //   IBCIP: parasitic ideal B-C → uses EAIS, NCIP (substrate activation energy)
+        //   IBENP: parasitic non-ideal B-E → uses EANC, NCN (matches main B-C non-ideal)
+        //   IBCNP: parasitic non-ideal B-C → uses EANS, NCNP (substrate activation energy)
         self.ibeip_t = temp_current(self.ibeip, self.xii, self.eaic, self.nci);
-        self.ibcip_t = temp_current(self.ibcip, self.xii, self.eaic, self.ncip);
-        self.ibenp_t = temp_current(self.ibenp, self.xin, self.eanc, self.nen);
-        self.ibcnp_t = temp_current(self.ibcnp, self.xin, self.eanc, self.ncnp);
+        self.ibcip_t = temp_current(self.ibcip, self.xii, self.eais, self.ncip);
+        self.ibenp_t = temp_current(self.ibenp, self.xin, self.eanc, self.ncn);
+        self.ibcnp_t = temp_current(self.ibcnp, self.xin, self.eans, self.ncnp);
 
         // Resistances
         self.rci_t = temp_resistance(self.rci, self.xrci);
@@ -698,10 +703,12 @@ impl VbicModel {
         self.pc_t = temp_potential(self.pc, self.eaic);
         self.ps_t = temp_potential(self.ps, self.eais);
 
-        // Junction capacitances
+        // Junction capacitances — CJEP uses B-C junction parameters (PC/MC),
+        // not B-E (PE/ME), because the parasitic B-E junction in VBIC shares
+        // characteristics with the main B-C junction (ngspice vbictemp.c:326-328).
         self.cje_t = temp_cap(self.cje, self.pe, self.pe_t, self.me);
         self.cjc_t = temp_cap(self.cjc, self.pc, self.pc_t, self.mc);
-        self.cjep_t = temp_cap(self.cjep, self.pe, self.pe_t, self.me);
+        self.cjep_t = temp_cap(self.cjep, self.pc, self.pc_t, self.mc);
         self.cjcp_t = temp_cap(self.cjcp, self.ps, self.ps_t, self.ms);
 
         // NF, NR temperature — ngspice scales both using the same coefficient (TNF)
@@ -1147,8 +1154,11 @@ impl VbicModel {
         // =====================================================================
         let (qbe, cqbe) = depletion_charge(vbei, self.cje_t, self.pe_t, self.me, self.aje, self.fc);
         let (qbc, cqbc) = depletion_charge(vbci, self.cjc_t, self.pc_t, self.mc, self.ajc, self.fc);
+        // qdbep uses B-C junction parameters (PC_t, MC, AJC) — the parasitic
+        // B-E junction shares characteristics with the main B-C junction
+        // (ngspice vbicload.c:2723-2739).
         let (qbep, cqbep) =
-            depletion_charge(vbep, self.cjep_t, self.pe_t, self.me, self.aje, self.fc);
+            depletion_charge(vbep, self.cjep_t, self.pc_t, self.mc, self.ajc, self.fc);
         let (qbcp, cqbcp) =
             depletion_charge(vbcp, self.cjcp_t, self.ps_t, self.ms, self.ajs, self.fc);
 

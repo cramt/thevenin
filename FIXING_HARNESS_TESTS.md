@@ -1183,3 +1183,53 @@ partially cancel the vfbb/vfb errors. All three bugs must be fixed together.
 **Policy:** Fixes reverted to avoid regressing results. The bugs are documented
 here for future systematic BSIM3SOI debugging when the compensating bugs are
 also identified.
+
+---
+
+## Applied fix: VBIC parasitic junction parameter corrections
+
+**Affected parameters:** CJEP_t, qdbep, IBCIP, IBCNP, IBENP temperature scaling
+
+**Bugs found by comparing `temperature_adjust()` and `companion()` with ngspice
+`vbictemp.c` and `vbicload.c`:**
+
+In the VBIC model, the parasitic transistor shares junction characteristics with
+the main transistor's B-C junction.  This means parasitic B-E parameters should
+use B-C junction constants, and parasitic B-C parameters should use substrate
+junction constants.
+
+1. **CJEP temperature scaling (vbic.rs:704):** Used B-E junction parameters
+   (PE/PE_t/ME) for CJEP capacitance scaling.  ngspice `vbictemp.c:326-328`
+   uses B-C junction parameters (PC/PC_t/MC): `CJEP_t = CJEP * (PC_nom/PC_t)^MC`.
+   Fixed to use `pc/pc_t/mc`.
+
+2. **qdbep depletion charge (vbic.rs:1151):** Used B-E junction parameters
+   (PE_t/ME/AJE) for the parasitic B-E depletion charge.  ngspice `vbicload.c:
+   2723-2739` uses `PCatT`, `MC` (p[25]), and `AJC` (p[26]).  Fixed to use
+   `pc_t/mc/ajc`.
+
+3. **IBCIP activation energy (vbic.rs:671):** Used `eaic` (B-C activation
+   energy).  ngspice `vbictemp.c:259-265` uses `pnom[74]` = `EAIS` (substrate
+   activation energy).  Fixed to use `eais`.
+
+4. **IBCNP activation energy (vbic.rs:673):** Used `eanc` (B-C non-ideal
+   activation energy).  ngspice `vbictemp.c:266-272` uses `pnom[77]` = `EANS`
+   (substrate non-ideal activation energy).  Fixed to use `eans`.
+
+5. **IBENP emission coefficient (vbic.rs:672):** Used `nen` (B-E non-ideal
+   emission coefficient) for the exponent.  ngspice `vbictemp.c:252-258` uses
+   `1/pnom[39]` = `1/NCN` (B-C non-ideal emission coefficient).  Fixed to use
+   `ncn`.
+
+**Impact on tests:** All five bugs are dormant for the current VBIC test circuits
+because the default B-E, B-C, and substrate junction parameters are identical
+(PE=PC=0.75, ME=MC=0.33, EAIE=EAIC=EAIS=1.12, EANE=EANC=EANS=1.12,
+NEN=NCN=2.0).  The fixes do not change any test results.
+
+**Impact for user circuits:** Any circuit that sets different values for B-E vs
+B-C junction parameters (e.g., PE≠PC, ME≠MC, or different activation energies)
+would have gotten incorrect results for CJEP temperature scaling, qdbep
+depletion charge, and parasitic base current temperature adjustment.
+
+Also updated `harness_mesa_mesosc` ignore reason to reflect that it now
+times out (>30s) instead of the previously reported 7% transient timing error.

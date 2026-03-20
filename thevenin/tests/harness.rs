@@ -519,7 +519,7 @@ harness_test!(harness_mesa_mesinv, "mesa/mesinv.cir");
 harness_test!(
     harness_mesa_mesosc,
     "mesa/mesosc.cir",
-    ignore = "~7% transient timing error at ring oscillator edge (11-stage accumulation of timestep differences)"
+    ignore = "times out (>30s): 11-stage ring oscillator transient, timestep accumulation causes slow convergence"
 );
 
 // === MES (MESFET) ===
