@@ -356,6 +356,12 @@ impl DeviceVoltageState {
         self.prev_mos6.borrow().clone()
     }
 
+    /// Get the current limited HFET junction voltages (vgs, vgd) for each HFET.
+    /// Call after `stamp_devices()` to read the voltages used for the last stamp.
+    pub fn prev_hfet_voltages(&self) -> Vec<(f64, f64)> {
+        self.prev_hfet.borrow().clone()
+    }
+
     /// All device types apply their own voltage limiting unconditionally,
     /// matching ngspice's MODEINITFLOAT behaviour where DEVfetlim/pnjlim are
     /// active even during DC OP iterations.

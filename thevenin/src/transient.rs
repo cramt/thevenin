@@ -106,6 +106,23 @@ struct MosfetChargeHistory {
     vgb: f64,
 }
 
+/// History state for an HFET junction charge at the previous timestep.
+#[derive(Debug, Clone)]
+struct HfetChargeHistory {
+    /// G-S junction charge at previous timestep.
+    qgs: f64,
+    /// G-S charge current at previous timestep (for trapezoidal).
+    cqgs: f64,
+    /// G-D junction charge at previous timestep.
+    qgd: f64,
+    /// G-D charge current at previous timestep (for trapezoidal).
+    cqgd: f64,
+    /// Previous G-S capacitor voltage (V(gp) - V(spp)).
+    vgspp: f64,
+    /// Previous G-D capacitor voltage (V(gp) - V(dpp)).
+    vgdpp: f64,
+}
+
 /// Compute capacitor companion model coefficients.
 ///
 /// Returns `(geq, ieq)` where:
@@ -581,6 +598,51 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
+    // Initialize HFET junction charge histories from DC operating point.
+    // At DC, Q = capgs * vgspp and Q = capgd * vgdpp. dQ/dt = 0.
+    let mut hfet_charge_histories: Vec<HfetChargeHistory> = mna
+        .hfets
+        .iter()
+        .map(|hfet| {
+            let (vgs, vgd) = hfet.junction_voltages(&solution);
+            let comp = crate::hfet::hfet_companion_full(hfet, vgs, vgd, 1e-12);
+            // vgspp = V(gp) - V(spp). At DC OP, spp voltage ≈ sp voltage.
+            let v_gp = hfet
+                .gate_prime_idx
+                .or(hfet.gate_idx)
+                .map(|i| solution[i])
+                .unwrap_or(0.0);
+            let vgspp = if let Some(spp_i) = hfet.source_prm_prm_idx {
+                v_gp - solution[spp_i]
+            } else {
+                let v_sp = hfet
+                    .source_prime_idx
+                    .or(hfet.source_idx)
+                    .map(|i| solution[i])
+                    .unwrap_or(0.0);
+                v_gp - v_sp
+            };
+            let vgdpp = if let Some(dpp_i) = hfet.drain_prm_prm_idx {
+                v_gp - solution[dpp_i]
+            } else {
+                let v_dp = hfet
+                    .drain_prime_idx
+                    .or(hfet.drain_idx)
+                    .map(|i| solution[i])
+                    .unwrap_or(0.0);
+                v_gp - v_dp
+            };
+            HfetChargeHistory {
+                qgs: comp.capgs * vgspp,
+                cqgs: 0.0,
+                qgd: comp.capgd * vgdpp,
+                cqgd: 0.0,
+                vgspp,
+                vgdpp,
+            }
+        })
+        .collect();
+
     // Initialize MOSFET Meyer gate charge histories from DC operating point.
     let mut mosfet_charge_histories: Vec<MosfetChargeHistory> = mna
         .mosfets
@@ -965,6 +1027,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             if has_txl { Some(&txl_stamps) } else { None },
             if has_cpl { Some(&cpl_stamps) } else { None },
             &mesa_charge_histories,
+            &hfet_charge_histories,
             &mosfet_charge_histories,
             &mos6_charge_histories,
         ) {
@@ -1147,6 +1210,60 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
 
             mesa_charge_histories[mi] = MesaChargeHistory {
+                qgs,
+                cqgs,
+                qgd,
+                cqgd,
+                vgspp,
+                vgdpp,
+            };
+        }
+
+        // Update HFET junction charge histories.
+        for (hi, hfet) in mna.hfets.iter().enumerate() {
+            let v_gp = hfet
+                .gate_prime_idx
+                .or(hfet.gate_idx)
+                .map(|i| solution[i])
+                .unwrap_or(0.0);
+            let vgspp = if let Some(spp_i) = hfet.source_prm_prm_idx {
+                v_gp - solution[spp_i]
+            } else {
+                let v_sp = hfet
+                    .source_prime_idx
+                    .or(hfet.source_idx)
+                    .map(|i| solution[i])
+                    .unwrap_or(0.0);
+                v_gp - v_sp
+            };
+            let vgdpp = if let Some(dpp_i) = hfet.drain_prm_prm_idx {
+                v_gp - solution[dpp_i]
+            } else {
+                let v_dp = hfet
+                    .drain_prime_idx
+                    .or(hfet.drain_idx)
+                    .map(|i| solution[i])
+                    .unwrap_or(0.0);
+                v_gp - v_dp
+            };
+
+            let (vgs, vgd) = hfet.junction_voltages(&solution);
+            let comp = crate::hfet::hfet_companion_full(hfet, vgs, vgd, nr_options.gmin);
+
+            let hist = &hfet_charge_histories[hi];
+            let qgs = hist.qgs + comp.capgs * (vgspp - hist.vgspp);
+            let qgd = hist.qgd + comp.capgd * (vgdpp - hist.vgdpp);
+
+            let cqgs = match method {
+                IntegrationMethod::BackwardEuler => (qgs - hist.qgs) / step_h,
+                IntegrationMethod::Trapezoidal => 2.0 * (qgs - hist.qgs) / step_h - hist.cqgs,
+            };
+            let cqgd = match method {
+                IntegrationMethod::BackwardEuler => (qgd - hist.qgd) / step_h,
+                IntegrationMethod::Trapezoidal => 2.0 * (qgd - hist.qgd) / step_h - hist.cqgd,
+            };
+
+            hfet_charge_histories[hi] = HfetChargeHistory {
                 qgs,
                 cqgs,
                 qgd,
@@ -1418,6 +1535,7 @@ fn solve_timestep(
     txl_stamps: Option<&[TxlTransientStamp]>,
     cpl_stamps: Option<&[crate::cpl::CplTransientStamp]>,
     mesa_charge_histories: &[MesaChargeHistory],
+    hfet_charge_histories: &[HfetChargeHistory],
     mosfet_charge_histories: &[MosfetChargeHistory],
     mos6_charge_histories: &[MosfetChargeHistory],
 ) -> Result<Vec<f64>, MnaError> {
@@ -1637,6 +1755,83 @@ fn solve_timestep(
 
                 // Compute charges: Q = C * V (constant cap model, matching ngspice).
                 let hist = &mesa_charge_histories[mi];
+                let qgs = hist.qgs + capgs * (vgspp - hist.vgspp);
+                let qgd = hist.qgd + capgd * (vgdpp - hist.vgdpp);
+
+                // Integrate G-S charge.
+                let (ggspp, cqgs) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = capgs / h;
+                        let cq = (qgs - hist.qgs) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * capgs / h;
+                        let cq = 2.0 * (qgs - hist.qgs) / h - hist.cqgs;
+                        (geq, cq)
+                    }
+                };
+
+                // Integrate G-D charge.
+                let (ggdpp, cqgd) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = capgd / h;
+                        let cq = (qgd - hist.qgd) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * capgd / h;
+                        let cq = 2.0 * (qgd - hist.qgd) / h - hist.cqgd;
+                        (geq, cq)
+                    }
+                };
+
+                // Stamp ggspp conductance between gp and cap_s_node.
+                stamp_conductance(&mut system.matrix, gp, spp, ggspp);
+                // Stamp ggdpp conductance between gp and cap_d_node.
+                stamp_conductance(&mut system.matrix, gp, dpp, ggdpp);
+
+                // RHS: charge current Norton equivalents at cap nodes.
+                let ieq_gs = cqgs - ggspp * vgspp;
+                let ieq_gd = cqgd - ggdpp * vgdpp;
+                if let Some(spp_i) = spp {
+                    system.rhs[spp_i] += ieq_gs;
+                }
+                if let Some(dpp_i) = dpp {
+                    system.rhs[dpp_i] += ieq_gd;
+                }
+                // gp sees the negative sum of both charge currents.
+                if let Some(gp_i) = gp {
+                    system.rhs[gp_i] -= ieq_gs;
+                    system.rhs[gp_i] -= ieq_gd;
+                }
+            }
+        }
+
+        // 6b. Stamp HFET junction capacitance companion models.
+        //     Same pattern as MESA: integrate capgs/capgd charges and stamp
+        //     conductance + Norton current between gate' and cap nodes.
+        if !mna.hfets.is_empty() {
+            let prev_hfet = dev_state.prev_hfet_voltages();
+            for (hi, hfet) in mna.hfets.iter().enumerate() {
+                let gp = hfet.gate_prime_idx.or(hfet.gate_idx);
+                // Use PPM nodes if they exist, otherwise fall back to prime nodes.
+                let spp = hfet.source_prm_prm_idx.or(hfet.source_prime_idx).or(hfet.source_idx);
+                let dpp = hfet.drain_prm_prm_idx.or(hfet.drain_prime_idx).or(hfet.drain_idx);
+
+                // Compute vgspp and vgdpp from the current NR solution.
+                let v_gp = gp.map(|i| solution[i]).unwrap_or(0.0);
+                let vgspp = spp.map(|i| v_gp - solution[i]).unwrap_or(0.0);
+                let vgdpp = dpp.map(|i| v_gp - solution[i]).unwrap_or(0.0);
+
+                // Get capgs/capgd from companion using limited voltages.
+                let (vgs_lim, vgd_lim) = prev_hfet[hi];
+                let comp = crate::hfet::hfet_companion_full(hfet, vgs_lim, vgd_lim, nr_options.gmin);
+                let capgs = comp.capgs;
+                let capgd = comp.capgd;
+
+                // Compute charges incrementally: Q = Q_prev + C * (V - V_prev).
+                let hist = &hfet_charge_histories[hi];
                 let qgs = hist.qgs + capgs * (vgspp - hist.vgspp);
                 let qgd = hist.qgd + capgd * (vgdpp - hist.vgdpp);
 

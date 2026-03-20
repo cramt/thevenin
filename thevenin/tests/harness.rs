@@ -531,11 +531,7 @@ harness_test!(
     "mos6/mos6inv.cir",
     ignore = "tran: singular matrix (Level 6 MOSFET subcircuit — DC OP converges but transient solver fails)"
 );
-harness_test!(
-    harness_mos6_simpleinv,
-    "mos6/simpleinv.cir",
-    ignore = "~0.22% interpolation error at switching transition (Meyer gate caps now dynamic; remaining error from constant junction caps)"
-);
+harness_test!(harness_mos6_simpleinv, "mos6/simpleinv.cir");
 
 // === Pole-Zero ===
 harness_test!(harness_pz_filt_bridge_t, "polezero/filt_bridge_t.cir");

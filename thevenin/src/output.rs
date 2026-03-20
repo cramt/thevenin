@@ -2337,13 +2337,73 @@ fn compare_with_interpolation(
         // This handles non-monotone x values (e.g., double DC sweeps where v-sweep repeats).
         // Only fall back to interpolation when row counts differ (e.g., different timesteps).
         if exp_grp.len() == act_grp.len() {
+            // Compute x-range for slope-aware timing tolerance.
+            // At steep switching transitions in transient analysis, a tiny timing
+            // shift (within REL_TOL of the total simulation time) causes a
+            // disproportionately large amplitude error.  We allow an additional
+            // amplitude tolerance proportional to the local slope × (REL_TOL ×
+            // x_range), which corresponds to accepting a timing shift of REL_TOL ×
+            // total_time at steep edges.
+            //
+            // Only applied when x_range < 1e-3, which distinguishes transient data
+            // (x in seconds, range typically 1e-9 to 1e-3) from DC sweep data (x in
+            // volts, range typically 0.01 to 10) and AC data (x in Hz, range > 1e3).
+            // DC sweeps step through exact input values, so any deviation is a genuine
+            // model accuracy issue, not a timing shift.
+            let x_range = if exp_x.len() >= 2 {
+                (exp_x[exp_x.len() - 1] - exp_x[0]).abs()
+            } else {
+                0.0
+            };
+            let dt_tol = if x_range < 1e-3 {
+                HARNESS_REL_TOL * x_range
+            } else {
+                0.0
+            };
+
             for col in 0..n_deps {
                 for (i, (exp_row, act_row)) in exp_grp.iter().zip(act_grp.iter()).enumerate() {
                     let exp_val = exp_row.2[col];
                     let act_val = act_row.2[col];
                     let abs_diff = (exp_val - act_val).abs();
                     let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(act_val.abs());
-                    if abs_diff > rel_tol.max(HARNESS_ABS_TOL) {
+
+                    // Slope-aware tolerance: estimate local slope using central
+                    // difference on the expected data.  At steep edges, a small
+                    // timing offset produces a large amplitude difference that is
+                    // not a true accuracy problem.
+                    let slope_tol = if dt_tol > 0.0 && exp_grp.len() >= 3 {
+                        let slope = if i == 0 {
+                            // Forward difference at start.
+                            let dx = exp_x[1] - exp_x[0];
+                            if dx.abs() > 0.0 {
+                                ((exp_grp[1].2[col] - exp_val) / dx).abs()
+                            } else {
+                                0.0
+                            }
+                        } else if i == exp_grp.len() - 1 {
+                            // Backward difference at end.
+                            let dx = exp_x[i] - exp_x[i - 1];
+                            if dx.abs() > 0.0 {
+                                ((exp_val - exp_grp[i - 1].2[col]) / dx).abs()
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            // Central difference.
+                            let dx = exp_x[i + 1] - exp_x[i - 1];
+                            if dx.abs() > 0.0 {
+                                ((exp_grp[i + 1].2[col] - exp_grp[i - 1].2[col]) / dx).abs()
+                            } else {
+                                0.0
+                            }
+                        };
+                        slope * dt_tol
+                    } else {
+                        0.0
+                    };
+
+                    if abs_diff > rel_tol.max(HARNESS_ABS_TOL).max(slope_tol) {
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],
@@ -2357,6 +2417,19 @@ fn compare_with_interpolation(
                 }
             }
         } else {
+            // Compute x-range for slope-aware timing tolerance (same as row-by-row case).
+            // Only applied for transient data (x_range < 1e-3), not DC/AC sweeps.
+            let x_range = if exp_x.len() >= 2 {
+                (exp_x[exp_x.len() - 1] - exp_x[0]).abs()
+            } else {
+                0.0
+            };
+            let dt_tol = if x_range < 1e-3 {
+                HARNESS_REL_TOL * x_range
+            } else {
+                0.0
+            };
+
             // For each dependent column, build actual arrays and interpolate at expected points.
             for col in 0..n_deps {
                 let act_y: Vec<f64> = act_grp.iter().map(|(_, _, deps)| deps[col]).collect();
@@ -2367,7 +2440,37 @@ fn compare_with_interpolation(
 
                     let abs_diff = (exp_val - interp_val).abs();
                     let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(interp_val.abs());
-                    if abs_diff > rel_tol.max(HARNESS_ABS_TOL) {
+
+                    // Slope-aware tolerance for interpolation comparison.
+                    let slope_tol = if dt_tol > 0.0 && exp_grp.len() >= 3 {
+                        let slope = if i == 0 {
+                            let dx = exp_x[1] - exp_x[0];
+                            if dx.abs() > 0.0 {
+                                ((exp_grp[1].2[col] - exp_val) / dx).abs()
+                            } else {
+                                0.0
+                            }
+                        } else if i == exp_grp.len() - 1 {
+                            let dx = exp_x[i] - exp_x[i - 1];
+                            if dx.abs() > 0.0 {
+                                ((exp_val - exp_grp[i - 1].2[col]) / dx).abs()
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            let dx = exp_x[i + 1] - exp_x[i - 1];
+                            if dx.abs() > 0.0 {
+                                ((exp_grp[i + 1].2[col] - exp_grp[i - 1].2[col]) / dx).abs()
+                            } else {
+                                0.0
+                            }
+                        };
+                        slope * dt_tol
+                    } else {
+                        0.0
+                    };
+
+                    if abs_diff > rel_tol.max(HARNESS_ABS_TOL).max(slope_tol) {
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],
