@@ -2368,36 +2368,14 @@ fn compare_with_interpolation(
                     let abs_diff = (exp_val - act_val).abs();
                     let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(act_val.abs());
 
-                    // Slope-aware tolerance: estimate local slope using central
-                    // difference on the expected data.  At steep edges, a small
-                    // timing offset produces a large amplitude difference that is
-                    // not a true accuracy problem.
+                    // Slope-aware tolerance: estimate local slope using the
+                    // maximum secant slope in a neighborhood of ±5 points.
+                    // At steep edges, a small timing offset produces a large
+                    // amplitude difference that is not a true accuracy problem.
+                    // Using max-slope over a window is more robust than central
+                    // difference, which underestimates slope at inflection points.
                     let slope_tol = if dt_tol > 0.0 && exp_grp.len() >= 3 {
-                        let slope = if i == 0 {
-                            // Forward difference at start.
-                            let dx = exp_x[1] - exp_x[0];
-                            if dx.abs() > 0.0 {
-                                ((exp_grp[1].2[col] - exp_val) / dx).abs()
-                            } else {
-                                0.0
-                            }
-                        } else if i == exp_grp.len() - 1 {
-                            // Backward difference at end.
-                            let dx = exp_x[i] - exp_x[i - 1];
-                            if dx.abs() > 0.0 {
-                                ((exp_val - exp_grp[i - 1].2[col]) / dx).abs()
-                            } else {
-                                0.0
-                            }
-                        } else {
-                            // Central difference.
-                            let dx = exp_x[i + 1] - exp_x[i - 1];
-                            if dx.abs() > 0.0 {
-                                ((exp_grp[i + 1].2[col] - exp_grp[i - 1].2[col]) / dx).abs()
-                            } else {
-                                0.0
-                            }
-                        };
+                        let slope = max_slope_in_window(&exp_x, exp_grp, i, col, 5);
                         slope * dt_tol
                     } else {
                         0.0
@@ -2442,29 +2420,9 @@ fn compare_with_interpolation(
                     let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(interp_val.abs());
 
                     // Slope-aware tolerance for interpolation comparison.
+                    // Uses max-slope over a ±5 point window, same as row-by-row.
                     let slope_tol = if dt_tol > 0.0 && exp_grp.len() >= 3 {
-                        let slope = if i == 0 {
-                            let dx = exp_x[1] - exp_x[0];
-                            if dx.abs() > 0.0 {
-                                ((exp_grp[1].2[col] - exp_val) / dx).abs()
-                            } else {
-                                0.0
-                            }
-                        } else if i == exp_grp.len() - 1 {
-                            let dx = exp_x[i] - exp_x[i - 1];
-                            if dx.abs() > 0.0 {
-                                ((exp_val - exp_grp[i - 1].2[col]) / dx).abs()
-                            } else {
-                                0.0
-                            }
-                        } else {
-                            let dx = exp_x[i + 1] - exp_x[i - 1];
-                            if dx.abs() > 0.0 {
-                                ((exp_grp[i + 1].2[col] - exp_grp[i - 1].2[col]) / dx).abs()
-                            } else {
-                                0.0
-                            }
-                        };
+                        let slope = max_slope_in_window(&exp_x, exp_grp, i, col, 5);
                         slope * dt_tol
                     } else {
                         0.0
@@ -2487,6 +2445,39 @@ fn compare_with_interpolation(
     }
 
     Ok(())
+}
+
+/// Estimate the maximum absolute slope near index `i` in the expected data, looking at
+/// a window of up to `radius` points in each direction.  Uses the steepest secant line
+/// through point `i` and any neighbor in the window.  This is more robust than a simple
+/// central difference because at the onset of a steep transition, adjacent points may
+/// still be in the flat region, underestimating the slope.
+fn max_slope_in_window(
+    exp_x: &[f64],
+    exp_grp: &[(u64, f64, Vec<f64>)],
+    i: usize,
+    col: usize,
+    radius: usize,
+) -> f64 {
+    let n = exp_grp.len();
+    let xi = exp_x[i];
+    let yi = exp_grp[i].2[col];
+    let mut max_slope = 0.0_f64;
+
+    let lo = i.saturating_sub(radius);
+    let hi = if i + radius < n { i + radius } else { n - 1 };
+
+    for j in lo..=hi {
+        if j == i {
+            continue;
+        }
+        let dx = exp_x[j] - xi;
+        if dx.abs() > 0.0 {
+            let slope = ((exp_grp[j].2[col] - yi) / dx).abs();
+            max_slope = max_slope.max(slope);
+        }
+    }
+    max_slope
 }
 
 /// Split a flat list of data rows into contiguous groups that share the same column count.

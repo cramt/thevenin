@@ -480,7 +480,7 @@ harness_test!(
 harness_test!(
     harness_general_mosamp,
     "general/mosamp.cir",
-    ignore = "tran: singular matrix (DC OP converges with VTO fix, but Level 2 MOSFET lacks velocity saturation/mobility degradation for transient)"
+    ignore = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix; Level 2 MOSFET missing velocity saturation/mobility degradation"
 );
 harness_test!(harness_general_mosmem, "general/mosmem.cir");
 harness_test!(harness_general_rca3040, "general/rca3040.cir");
@@ -529,7 +529,7 @@ harness_test!(harness_mes_subth, "mes/subth.cir");
 harness_test!(
     harness_mos6_mos6inv,
     "mos6/mos6inv.cir",
-    ignore = "tran: singular matrix (Level 6 MOSFET subcircuit — DC OP converges but transient solver fails)"
+    ignore = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix"
 );
 harness_test!(harness_mos6_simpleinv, "mos6/simpleinv.cir");
 

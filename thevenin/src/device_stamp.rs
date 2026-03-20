@@ -115,8 +115,8 @@ pub(crate) struct DeviceVoltageState {
     prev_jct: RefCell<Vec<f64>>,
     vcrits: Vec<f64>,
     prev_bjt: RefCell<Vec<(f64, f64)>>,
-    prev_mos: RefCell<Vec<(f64, f64)>>,
-    prev_mos6: RefCell<Vec<(f64, f64)>>,
+    prev_mos: RefCell<Vec<(f64, f64, f64)>>,
+    prev_mos6: RefCell<Vec<(f64, f64, f64)>>,
     prev_jfet: RefCell<Vec<(f64, f64)>>,
     jfet_vcrits: Vec<f64>,
     prev_bsim3: RefCell<Vec<(f64, f64, f64)>>,
@@ -151,8 +151,8 @@ impl DeviceVoltageState {
             prev_jct: RefCell::new(vec![0.0; mna.diodes.len()]),
             vcrits,
             prev_bjt: RefCell::new(vec![(0.0, 0.0); mna.bjts.len()]),
-            prev_mos: RefCell::new(vec![(0.0, 0.0); mna.mosfets.len()]),
-            prev_mos6: RefCell::new(vec![(0.0, 0.0); mna.mos6s.len()]),
+            prev_mos: RefCell::new(vec![(0.0, 0.0, 0.0); mna.mosfets.len()]),
+            prev_mos6: RefCell::new(vec![(0.0, 0.0, 0.0); mna.mos6s.len()]),
             prev_jfet: RefCell::new(vec![(0.0, 0.0); mna.jfets.len()]),
             jfet_vcrits,
             prev_bsim3: RefCell::new(vec![(0.0, 0.0, 0.0); mna.bsim3s.len()]),
@@ -211,8 +211,8 @@ impl DeviceVoltageState {
                 mna.mosfets
                     .iter()
                     .map(|m| {
-                        let (vgs, vds, _vbs) = m.terminal_voltages(prev_solution);
-                        (vgs, vds)
+                        let (vgs, vds, vbs) = m.terminal_voltages(prev_solution);
+                        (vgs, vds, vbs)
                     })
                     .collect(),
             ),
@@ -220,8 +220,8 @@ impl DeviceVoltageState {
                 mna.mos6s
                     .iter()
                     .map(|m| {
-                        let (vgs, vds, _vbs) = m.terminal_voltages(prev_solution);
-                        (vgs, vds)
+                        let (vgs, vds, vbs) = m.terminal_voltages(prev_solution);
+                        (vgs, vds, vbs)
                     })
                     .collect(),
             ),
@@ -319,8 +319,8 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_mos.borrow_mut();
             for (i, mos) in mna.mosfets.iter().enumerate() {
-                let (vgs, vds, _) = mos.terminal_voltages(solution);
-                prev[i] = (vgs, vds);
+                let (vgs, vds, vbs) = mos.terminal_voltages(solution);
+                prev[i] = (vgs, vds, vbs);
             }
         }
     }
@@ -344,15 +344,15 @@ impl DeviceVoltageState {
         self.prev_mesa.borrow().clone()
     }
 
-    /// Get the current limited MOSFET voltages (vgs, vds) for each Level 1 MOSFET.
+    /// Get the current limited MOSFET voltages (vgs, vds, vbs) for each Level 1 MOSFET.
     /// Call after `stamp_devices()` to read the voltages used for the last stamp.
-    pub fn prev_mos_voltages(&self) -> Vec<(f64, f64)> {
+    pub fn prev_mos_voltages(&self) -> Vec<(f64, f64, f64)> {
         self.prev_mos.borrow().clone()
     }
 
-    /// Get the current limited MOS6 voltages (vgs, vds) for each Level 6 MOSFET.
+    /// Get the current limited MOS6 voltages (vgs, vds, vbs) for each Level 6 MOSFET.
     /// Call after `stamp_devices()` to read the voltages used for the last stamp.
-    pub fn prev_mos6_voltages(&self) -> Vec<(f64, f64)> {
+    pub fn prev_mos6_voltages(&self) -> Vec<(f64, f64, f64)> {
         self.prev_mos6.borrow().clone()
     }
 
@@ -419,7 +419,7 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_mos.borrow_mut();
             for (mi, mos) in mna.mosfets.iter().enumerate() {
-                let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
+                let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
 
                 // Always apply voltage limiting for Level 1 MOSFETs, matching
                 // ngspice's MODEINITFLOAT which enables DEVfetlim/DEVlimvds even
@@ -427,7 +427,15 @@ impl DeviceVoltageState {
                 // transistors with LAMBDA=0 (gds=0 in saturation).  BSIM3/4 have
                 // their own unconditional limiting and are not affected.
                 let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
-                prev[mi] = (vgs, vds);
+                // Apply pnjlim to bulk junction voltages (Vbs/Vbd), matching
+                // ngspice mos1load.c lines 375-384.  Without this, large Vbs
+                // jumps can cause exponential overflow in junction currents.
+                let vbs = if vds >= 0.0 {
+                    bsim_pnjlim(raw_vbs, prev[mi].2)
+                } else {
+                    bsim_pnjlim(raw_vbs - vds, prev[mi].2 - prev[mi].1) + vds
+                };
+                prev[mi] = (vgs, vds, vbs);
 
                 let mut eff_model = mos.model.clone();
                 eff_model.kp = mos.beta();
@@ -441,12 +449,20 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_mos6.borrow_mut();
             for (mi, mos) in mna.mos6s.iter().enumerate() {
-                let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
+                let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
 
                 // Always apply voltage limiting for Level 6 MOSFETs (same
                 // rationale as Level 1 above).
                 let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
-                prev[mi] = (vgs, vds);
+                // Apply pnjlim to bulk junction voltages (same as Level 1).
+                let vbs = if vds >= 0.0 {
+                    bsim_pnjlim(raw_vbs, prev[mi].2)
+                } else {
+                    let vbd = raw_vbs - vds;
+                    let vbd_lim = bsim_pnjlim(vbd, prev[mi].2 - prev[mi].1);
+                    vbd_lim + vds
+                };
+                prev[mi] = (vgs, vds, vbs);
 
                 let betac = mos.betac();
                 let comp = mos.model.companion(vgs, vds, vbs, betac);

@@ -1898,8 +1898,7 @@ fn solve_timestep(
                 let vgb_signed = vgs_signed - vbs_signed;
 
                 // Use limited voltages for companion (same as stamp_devices used).
-                let (vgs_lim, vds_lim) = prev_mos[mi];
-                let vbs_lim = vbs_signed; // vbs is not limited
+                let (vgs_lim, vds_lim, vbs_lim) = prev_mos[mi];
                 let mut eff_model = mos.model.clone();
                 eff_model.kp = mos.beta();
                 let comp = eff_model.companion(vgs_lim, vds_lim, vbs_lim);
@@ -2015,8 +2014,7 @@ fn solve_timestep(
                 let vgd_signed = vgs_signed - vds_signed;
                 let vgb_signed = vgs_signed - vbs_signed;
 
-                let (vgs_lim, vds_lim) = prev_mos6[mi];
-                let vbs_lim = vbs_signed;
+                let (vgs_lim, vds_lim, vbs_lim) = prev_mos6[mi];
                 let comp = mos.model.companion(vgs_lim, vds_lim, vbs_lim, mos.betac());
 
                 let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);
