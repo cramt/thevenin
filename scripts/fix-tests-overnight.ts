@@ -1,50 +1,85 @@
 #!/usr/bin/env npx tsx
 /**
  * Overnight test fixer — uses Claude Agent SDK to repeatedly pick ignored
- * harness tests, fix them, commit & push. Handles rate limits gracefully
- * by waiting and retrying.
+ * harness tests, fix them, commit & push.
+ *
+ * Improvements over naive loop (informed by Agent SDK docs + best practices):
+ *   - Doesn't inject 1,286-line FIXING_HARNESS_TESTS.md into prompt context;
+ *     tells the agent to read it, keeping initial context lean for better quality
+ *   - Uses settingSources: ["project"] so CLAUDE.md/skills/hooks load automatically
+ *   - Tracks progress: counts #[ignore] before/after, detects no-commit iterations
+ *   - Deduplication: logs attempted tests so agent can skip previously-failed ones
+ *   - Git pull before each iteration to avoid push conflicts
+ *   - Handles ResultMessage.subtype properly (success, error_max_turns, etc.)
+ *   - Stops early after N consecutive no-progress iterations
+ *   - Logs iteration summaries for post-mortem review
+ *
+ * Designed for Claude Max subscription (flat-rate, rate-limited only).
  *
  * Usage:
- *   npx tsx scripts/fix-tests-overnight.ts [--max-iterations 50] [--cooldown 30]
+ *   npx tsx scripts/fix-tests-overnight.ts [options]
  *
  * Options:
- *   --max-iterations N   Max agent sessions to run (default: 50)
- *   --cooldown N         Seconds to wait between iterations (default: 30)
+ *   --max-iterations N       Max successful agent sessions (default: 50)
+ *   --cooldown N             Seconds between iterations (default: 30)
+ *   --max-no-progress N      Stop after N consecutive no-commit iterations (default: 3)
+ *
+ * Graceful shutdown (finishes current iteration, then exits):
+ *   touch scripts/.stop-fix-tests     # stop file — checked between iterations
+ *   kill -USR1 $(pgrep -f fix-tests)  # signal — works mid-iteration too
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { readFileSync } from "fs";
+import { readFileSync, appendFileSync, existsSync } from "fs";
 import { resolve } from "path";
+import { execSync } from "child_process";
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-const args = process.argv.slice(2);
+const cliArgs = process.argv.slice(2);
 function flag(name: string, fallback: number): number {
-  const idx = args.indexOf(`--${name}`);
-  if (idx !== -1 && args[idx + 1]) return parseInt(args[idx + 1], 10);
+  const idx = cliArgs.indexOf(`--${name}`);
+  if (idx !== -1 && cliArgs[idx + 1]) return parseInt(cliArgs[idx + 1], 10);
   return fallback;
 }
 
 const MAX_ITERATIONS = flag("max-iterations", 50);
 const COOLDOWN_SEC = flag("cooldown", 30);
+const MAX_NO_PROGRESS = flag("max-no-progress", 3);
 const PROJECT_DIR = resolve(import.meta.dirname ?? __dirname, "..");
+const LOG_FILE = resolve(PROJECT_DIR, "scripts", "fix-tests.log");
+const ATTEMPTS_FILE = resolve(PROJECT_DIR, "scripts", "attempted-tests.log");
+
+const STOP_FILE = resolve(PROJECT_DIR, "scripts", ".stop-fix-tests");
+
+// Test categories that are intractable — agent should not waste time on these
+const SKIP_CATEGORIES = [
+  ".control scripting",
+  "XSPICE (US-056)",
+  "BSIM1/BSIM2 (US-052/053)",
+  "TEMPER keyword",
+];
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function timestamp(): string {
-  return new Date().toLocaleTimeString("en-GB", { hour12: false });
+  return new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
 }
 
 function log(msg: string) {
-  console.log(`[${timestamp()}] ${msg}`);
+  const line = `[${timestamp()}] ${msg}`;
+  console.log(line);
+  try { appendFileSync(LOG_FILE, line + "\n"); } catch {}
 }
 
 function logError(msg: string) {
-  console.error(`[${timestamp()}] ERROR: ${msg}`);
+  const line = `[${timestamp()}] ERROR: ${msg}`;
+  console.error(line);
+  try { appendFileSync(LOG_FILE, line + "\n"); } catch {}
 }
 
 async function sleep(seconds: number): Promise<void> {
@@ -55,69 +90,187 @@ async function sleep(seconds: number): Promise<void> {
   process.stdout.write("\r" + " ".repeat(60) + "\r");
 }
 
+function shell(cmd: string): string {
+  try {
+    return execSync(cmd, { cwd: PROJECT_DIR, encoding: "utf-8", timeout: 30_000 }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/** Count lines matching `ignore =` in harness.rs */
+function countIgnoredTests(): number {
+  const content = shell(`grep -c 'ignore\\s*=' thevenin/tests/harness.rs`);
+  return parseInt(content, 10) || 0;
+}
+
+/** Get the latest commit hash */
+function latestCommit(): string {
+  return shell("git rev-parse HEAD");
+}
+
+/** Pull latest changes (rebase to keep linear history) */
+function gitPull(): boolean {
+  const result = shell("git pull --rebase 2>&1");
+  if (result.includes("CONFLICT") || result.includes("error:")) {
+    logError(`git pull failed: ${result}`);
+    shell("git rebase --abort");
+    return false;
+  }
+  return true;
+}
+
+/** Load previously attempted tests (for deduplication) */
+function loadAttemptedTests(): string[] {
+  if (!existsSync(ATTEMPTS_FILE)) return [];
+  return readFileSync(ATTEMPTS_FILE, "utf-8")
+    .split("\n")
+    .filter((l) => l.trim().length > 0);
+}
+
+function logAttemptedTest(testInfo: string) {
+  try { appendFileSync(ATTEMPTS_FILE, `${timestamp()} | ${testInfo}\n`); } catch {}
+}
+
 // ---------------------------------------------------------------------------
-// Load the prompt
+// Graceful shutdown
+//
+// Two ways to request a graceful stop:
+//   1. Touch the stop file:  touch scripts/.stop-fix-tests
+//   2. Send SIGUSR1:         kill -USR1 <pid>
+//
+// The current iteration finishes, then the loop exits cleanly.
 // ---------------------------------------------------------------------------
 
-const fixingHarnessTests = readFileSync(
-  resolve(PROJECT_DIR, "FIXING_HARNESS_TESTS.md"),
-  "utf-8",
-);
+let stopRequested = false;
 
-const PROMPT = `@FIXING_HARNESS_TESTS.md pick another set of ignored tests and work on them, when done just go ahead and commit and push it.
+function checkStopRequested(): boolean {
+  if (stopRequested) return true;
+  if (existsSync(STOP_FILE)) {
+    stopRequested = true;
+    try { execSync(`rm -f "${STOP_FILE}"`); } catch {}
+    log("Stop requested via stop file.");
+    return true;
+  }
+  return false;
+}
 
-Here is the content of FIXING_HARNESS_TESTS.md for reference:
+process.on("SIGUSR1", () => {
+  stopRequested = true;
+  log("Stop requested via SIGUSR1 — will finish current iteration then exit.");
+});
 
-<fixing-harness-tests>
-${fixingHarnessTests}
-</fixing-harness-tests>
+// Also handle SIGINT/SIGTERM gracefully: if we get one while sleeping between
+// iterations, exit cleanly instead of printing an ugly stack trace.
+let inIteration = false;
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    if (inIteration) {
+      // During an iteration, set flag and let it finish
+      stopRequested = true;
+      log(`${sig} received — will finish current iteration then exit.`);
+    } else {
+      // Between iterations (cooldown/backoff), exit immediately
+      log(`${sig} received — exiting.`);
+      process.exit(0);
+    }
+  });
+}
 
-Instructions:
-1. Look at thevenin/tests/harness.rs and find ignored tests
+// ---------------------------------------------------------------------------
+// Build the prompt (lean — no inline doc injection)
+// ---------------------------------------------------------------------------
+
+function buildPrompt(): string {
+  const attempted = loadAttemptedTests();
+  const attemptedSection = attempted.length > 0
+    ? `\n\nTests previously attempted (may have failed — avoid re-attempting unless you have a new approach):\n${attempted.map((l) => `- ${l}`).join("\n")}`
+    : "";
+
+  return `Read FIXING_HARNESS_TESTS.md for the full methodology, then fix ignored harness tests.
+
+Steps:
+1. Read thevenin/tests/harness.rs and identify ignored tests
 2. Pick a group of related ignored tests (prefer numerical accuracy bugs)
 3. Diagnose the root cause using the methodology in FIXING_HARNESS_TESTS.md
 4. Fix the issue in the Rust source code
-5. Run the tests to verify they pass
-6. Commit all changes with a descriptive message
-7. Push to the current branch
+5. Run the fixed tests to verify they pass
+6. Run the FULL test suite to check for regressions: nix develop --command cargo test --package thevenin 2>&1 | grep -E "FAILED|test result"
+7. Run clippy: nix develop --command cargo clippy --workspace -- -D warnings
+8. Commit all changes with a descriptive message and push to the current branch
 
-Always run commands through \`nix develop --command ...\`.
-`;
+Important rules:
+- Always run commands through \`nix develop --command ...\`
+- Do NOT attempt tests in these intractable categories: ${SKIP_CATEGORIES.join(", ")}
+- Do NOT attempt tests that would require implementing entire missing subsystems
+- If a test group requires an architectural change (e.g., full voltage-dependent charge integration), document why and move on
+- If after investigation you determine the test cannot be fixed without major changes, say so clearly and do NOT commit
+- Update FIXING_HARNESS_TESTS.md with any new findings (triage updates, applied fixes, investigations)
+${attemptedSection}`;
+}
 
 // ---------------------------------------------------------------------------
-// Main loop
+// Run one iteration
 // ---------------------------------------------------------------------------
 
-async function runIteration(iteration: number): Promise<"continue" | "rate_limited"> {
+type IterationResult =
+  | { status: "success"; summary: string }
+  | { status: "no_progress"; summary: string }
+  | { status: "rate_limited" }
+  | { status: "error"; message: string };
+
+async function runIteration(iteration: number): Promise<IterationResult> {
+  inIteration = true;
+  log(`\n${"=".repeat(60)}`);
   log(`--- Iteration ${iteration}/${MAX_ITERATIONS} ---`);
+
+  const ignoredBefore = countIgnoredTests();
+  const commitBefore = latestCommit();
+  log(`Ignored tests before: ${ignoredBefore}`);
+
+  // Pull latest before starting
+  if (!gitPull()) {
+    return { status: "error", message: "git pull failed" };
+  }
 
   try {
     let resultText = "";
     let hitRateLimit = false;
+    let sessionId = "";
+    let resultSubtype = "";
 
     for await (const message of query({
-      prompt: PROMPT,
+      prompt: buildPrompt(),
       options: {
         cwd: PROJECT_DIR,
         allowedTools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent"],
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         maxTurns: 200,
+        settingSources: ["project"],
+        effort: "high",
         includePartialMessages: true,
       },
     })) {
       const msg = message as any;
 
-      if ("result" in msg) {
-        // Final result
+      if (msg.type === "result") {
         resultText = msg.result ?? "";
-        const cost = msg.total_cost_usd;
+        resultSubtype = msg.subtype ?? "";
+        sessionId = msg.session_id ?? sessionId;
         const duration = msg.duration_ms;
-        log(`Agent finished.${cost ? ` Cost: $${cost.toFixed(4)}` : ""}${duration ? ` Duration: ${(duration / 1000).toFixed(0)}s` : ""}`);
+        const turns = msg.num_turns;
+        log(`Agent finished (${resultSubtype}).${turns ? ` Turns: ${turns}` : ""}${duration ? ` Duration: ${(duration / 1000).toFixed(0)}s` : ""}`);
+
+        // Log a summary of what the agent said
+        if (resultText) {
+          const summaryLines = resultText.split("\n").slice(0, 10).join("\n");
+          log(`Summary:\n${summaryLines}`);
+        }
       } else if (msg.type === "system" && msg.subtype === "init") {
-        log(`Session: ${msg.session_id}`);
+        sessionId = msg.session_id ?? "";
+        log(`Session: ${sessionId}`);
       } else if (msg.type === "stream_event") {
-        // Real-time streaming of assistant output
         const event = msg.event;
         if (event?.type === "content_block_start") {
           if (event.content_block?.type === "tool_use") {
@@ -129,7 +282,6 @@ async function runIteration(iteration: number): Promise<"continue" | "rate_limit
           }
         }
       } else if (msg.type === "tool_progress") {
-        // Periodic tool progress (shows it's alive)
         if (msg.elapsed_time_seconds && msg.elapsed_time_seconds % 10 === 0) {
           log(`  .. ${msg.tool_name} running (${msg.elapsed_time_seconds}s)`);
         }
@@ -137,7 +289,9 @@ async function runIteration(iteration: number): Promise<"continue" | "rate_limit
         const info = msg.rate_limit_info;
         if (info?.status === "rejected") {
           hitRateLimit = true;
-          const resetsAt = info.resetsAt ? new Date(info.resetsAt).toLocaleTimeString("en-GB", { hour12: false }) : "unknown";
+          const resetsAt = info.resetsAt
+            ? new Date(info.resetsAt).toLocaleTimeString("en-GB", { hour12: false })
+            : "unknown";
           log(`Rate limited! Resets at: ${resetsAt}`);
         } else if (info?.status === "allowed_warning") {
           log(`Rate limit warning: ${((info.utilization ?? 0) * 100).toFixed(0)}% utilized`);
@@ -145,51 +299,124 @@ async function runIteration(iteration: number): Promise<"continue" | "rate_limit
       }
     }
 
-    if (hitRateLimit) return "rate_limited";
-    return "continue";
+    if (hitRateLimit) return { status: "rate_limited" };
+
+    // Handle non-success results
+    if (resultSubtype === "error_max_turns") {
+      log("Hit max turns — agent ran out of steps.");
+    } else if (resultSubtype === "error_during_execution") {
+      log("Error during agent execution.");
+    }
+
+    // Check if progress was made
+    const commitAfter = latestCommit();
+    const ignoredAfter = countIgnoredTests();
+    const madeCommit = commitAfter !== commitBefore;
+    const fixedTests = ignoredBefore - ignoredAfter;
+
+    log(`Ignored tests after: ${ignoredAfter} (${fixedTests >= 0 ? "-" : "+"}${Math.abs(fixedTests)})`);
+    log(`New commit: ${madeCommit ? "yes" : "no"}`);
+
+    // Log what was attempted for deduplication
+    const shortSummary = resultText.split("\n")[0]?.slice(0, 200) ?? "no summary";
+    logAttemptedTest(shortSummary);
+
+    if (madeCommit) {
+      return { status: "success", summary: shortSummary };
+    } else {
+      return { status: "no_progress", summary: shortSummary };
+    }
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
 
     if (/rate.?limit|429|too many requests|overloaded|529/i.test(errMsg)) {
       log(`Rate limited: ${errMsg}`);
-      return "rate_limited";
+      return { status: "rate_limited" };
     }
 
     logError(errMsg);
 
     if (/5\d\d|ECONNRESET|ETIMEDOUT|fetch failed/i.test(errMsg)) {
       log("Transient error, will retry after cooldown.");
-      return "rate_limited";
+      return { status: "rate_limited" };
     }
 
-    logError("Unexpected error, continuing after cooldown.");
-    return "rate_limited";
+    return { status: "error", message: errMsg };
   }
 }
 
+// ---------------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------------
+
 async function main() {
-  log(`Starting overnight test fixer`);
+  // Clean up stale stop file from a previous run
+  try { execSync(`rm -f "${STOP_FILE}"`); } catch {}
+
+  log(`Starting overnight test fixer (PID: ${process.pid})`);
   log(`Project: ${PROJECT_DIR}`);
   log(`Max iterations: ${MAX_ITERATIONS}`);
   log(`Cooldown: ${COOLDOWN_SEC}s`);
+  log(`Stop after ${MAX_NO_PROGRESS} consecutive no-progress iterations`);
+  log(`Log file: ${LOG_FILE}`);
+  log(`Initial ignored tests: ${countIgnoredTests()}`);
   console.log("=".repeat(60));
 
   let consecutiveRateLimits = 0;
+  let consecutiveNoProgress = 0;
+  let successCount = 0;
 
   for (let i = 1; i <= MAX_ITERATIONS; i++) {
-    const result = await runIteration(i);
-
-    if (result === "rate_limited") {
-      consecutiveRateLimits++;
-      // Exponential backoff: 60s, 120s, 240s, 480s, max 600s
-      const backoff = Math.min(60 * Math.pow(2, consecutiveRateLimits - 1), 600);
-      log(`Rate limited (${consecutiveRateLimits}x consecutive). Backing off ${backoff}s...`);
-      await sleep(backoff);
-      i--; // Don't count rate-limited iterations
-      continue;
+    if (checkStopRequested()) {
+      log("Graceful stop — not starting new iteration.");
+      break;
     }
 
-    consecutiveRateLimits = 0;
+    const result = await runIteration(i);
+    inIteration = false;
+
+    // Check again after iteration completes
+    if (checkStopRequested()) {
+      log("Graceful stop — iteration completed, exiting loop.");
+      break;
+    }
+
+    switch (result.status) {
+      case "rate_limited":
+        consecutiveRateLimits++;
+        const backoff = Math.min(60 * Math.pow(2, consecutiveRateLimits - 1), 600);
+        log(`Rate limited (${consecutiveRateLimits}x consecutive). Backing off ${backoff}s...`);
+        await sleep(backoff);
+        i--; // Don't count rate-limited iterations
+        continue;
+
+      case "success":
+        consecutiveRateLimits = 0;
+        consecutiveNoProgress = 0;
+        successCount++;
+        log(`✓ Iteration ${i} succeeded (${successCount} total).`);
+        break;
+
+      case "no_progress":
+        consecutiveRateLimits = 0;
+        consecutiveNoProgress++;
+        log(`✗ Iteration ${i} made no progress (${consecutiveNoProgress}/${MAX_NO_PROGRESS} before stopping).`);
+
+        if (consecutiveNoProgress >= MAX_NO_PROGRESS) {
+          log(`\nStopping: ${MAX_NO_PROGRESS} consecutive iterations with no commits.`);
+          log(`Remaining tests are likely intractable or require architectural changes.`);
+          break;
+        }
+        break;
+
+      case "error":
+        consecutiveRateLimits = 0;
+        consecutiveNoProgress++;
+        logError(`Iteration ${i} failed: ${result.message}`);
+        break;
+    }
+
+    if (consecutiveNoProgress >= MAX_NO_PROGRESS) break;
 
     if (i < MAX_ITERATIONS) {
       log(`Cooling down before next iteration...`);
@@ -197,7 +424,12 @@ async function main() {
     }
   }
 
-  log(`Completed ${MAX_ITERATIONS} iterations. Done.`);
+  // Final summary
+  log(`\n${"=".repeat(60)}`);
+  log(`FINAL SUMMARY`);
+  log(`  Successful iterations: ${successCount}`);
+  log(`  Remaining ignored tests: ${countIgnoredTests()}`);
+  log(`${"=".repeat(60)}`);
 }
 
 main().catch((err) => {
