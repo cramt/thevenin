@@ -12,6 +12,16 @@ faer = {version = "0.24", default-features = false, features = ["npy", "rand", "
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
 
+[profile.dev]
+opt-level = 3           # release-grade optimizations for cargo test / cargo build
+debug = true            # full debug info — backtraces show file/line on panic
+overflow-checks = true  # catch integer overflow bugs
+
+[profile.test-release]
+inherits = "release"
+debug = true
+overflow-checks = true
+
 [package]
 name = "thevenin-cli"
 version = "0.1.0"
