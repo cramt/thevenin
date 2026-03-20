@@ -1495,3 +1495,69 @@ of the previous iteration's von, as ngspice does).
 
 PD t4 now runs to completion with a 5.6% Ids error — this is progress from previous
 timeouts, likely due to accumulated convergence improvements.
+
+---
+
+## Applied fix: breakpoint step growth limiting for reactive circuits
+
+**Affected tests:** All transient circuits with PULSE/PWL sources and reactive elements
+or transmission lines.
+
+**Root cause:** After a breakpoint step (e.g., at a PULSE edge), the transient solver
+uses Backward Euler, which skips the Trapezoidal LTE-based timestep control.  The
+internal variable `h` (suggested next step) was NOT updated during BE steps, so it
+retained its pre-breakpoint value (typically h_max).  When the solver exited the
+breakpoint zone and switched back to Trapezoidal, the step immediately jumped to h_max,
+skipping the fast transition.
+
+For example, in the LTRA transmission line tests with a PULSE input (rise time 0.2ns,
+h_max=100ps), the stepping was:
+- Before fix: 15.90ns, 15.91ns, **16.01ns** (100ps jump over transition!)
+- After fix: 15.90ns, 15.91ns, 15.93ns, 15.97ns, 16.05ns, 16.10ns (gradual growth)
+
+The after-fix pattern matches ngspice's adaptive stepping exactly (10ps, 20ps, 40ps,
+80ps doubling after each breakpoint).
+
+**Fix applied:** After accepting a Backward Euler step at a breakpoint in circuits with
+reactive elements or transmission lines, `h` is now capped to `step_h * MAX_GROW`
+(= 2× the actual step used).  This ensures gradual step recovery after breakpoints.
+The fix does NOT apply to purely resistive circuits (which don't use LTE and rely on
+free step growth).
+
+**Impact on transmission line tests:** The stepping is now correct, but the LTRA output
+still shows ~24% error.  The LTRA error is from a separate physics/stamping issue
+(V(2) drops too fast during the CMOS inverter transition, as if the effective impedance
+presented by the LTRA at port 1 is wrong).  This requires further investigation of the
+LTRA companion model.
+
+**No regressions:** All 223 unit tests pass.  All 69 non-ignored harness tests pass.
+
+---
+
+## Investigation: transmission line LTRA/TXL ~24% error
+
+**Affected tests:** `harness_transmission_ltra1_1`, `harness_transmission_ltra2_2`,
+`harness_transmission_txl1_1` (all three show identical error)
+
+**Symptom:** At the CMOS inverter output during the PULSE falling transition (t≈16.1ns),
+expected V(2)=3.77V but got V(2)=2.81V.  The output drops too fast through the line's
+characteristic impedance Z₀=138.5Ω.
+
+**Investigation findings:**
+1. Matrix stamps match ngspice exactly (admit, h1dash first coeff, KCL signs) ✓
+2. RHS excitation computation matches ngspice (h1dash, h2, h3dash convolutions) ✓
+3. Integral values match (intH1dash=-1, intH2=1-atten, intH3dash=-atten) ✓
+4. DC operating point is correct (V(2)=V(3)=5V, I=0) ✓
+5. MOSFET parameters are correct (beta=960µA/V², Id_sat=8.47mA) ✓
+6. Breakpoint stepping now matches ngspice (10ps→20ps→40ps→80ps) ✓
+
+**Remaining hypothesis:** The error is identical across LTRA and TXL (different line
+models, same CMOS driver), which suggests a common MOSFET or MNA interaction issue.
+At the expected steady state V(2)=3.83V, the NMOS current (8.47mA) should balance the
+LTRA current ((5-V)/Z₀=8.38mA).  Our simulation settles lower (3.10V), implying either
+the effective NMOS current is too high or the LTRA effective impedance is too low.
+Further investigation requires detailed NR iteration tracing at the transition point.
+
+**Status:** Not fixed.  The 24% error requires deeper analysis of the MNA system at
+the transition point (possibly a MOSFET Norton equivalent sign issue in reversed mode
+or an LTRA excitation accumulation bug).

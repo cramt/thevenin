@@ -1088,6 +1088,14 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
             // Accept: schedule next h from LTE estimate.
             h = new_h.min(step_h * MAX_GROW).min(h_max).max(h_min);
+        } else if at_breakpoint && (has_reactive || has_bjt_charges || has_ltra || has_txl || has_cpl) {
+            // For Backward Euler steps at breakpoints in reactive circuits,
+            // we can't compute Trapezoidal LTE but must still limit step
+            // growth.  Without this, h retains its pre-breakpoint value and
+            // the step jumps back to h_max immediately after leaving the
+            // breakpoint zone, missing fast transitions (e.g., PULSE edges
+            // driving CMOS inverters through transmission lines).
+            h = (step_h * MAX_GROW).min(h_max).max(h_min);
         }
 
         // Accept this timestep: advance time and update state.
