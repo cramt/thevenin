@@ -29,12 +29,12 @@
 # === General circuits ===
 "general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
 "general/fourbitadder.cir" = "times out (>30s)"
-"general/mosamp.cir" = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix; Level 2 MOSFET missing velocity saturation/mobility degradation"
-"general/rtlinv.cir" = "~5.5% transient timing error at first switching transition: our transition starts ~2ns later than ngspice due to constant reverse-bias cap approximation"
-"general/schmitt.cir" = "~1.2% error at switching transition: output oscillates during state transition instead of settling cleanly; constant reverse-bias cap approximation"
+"general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET missing velocity saturation/mobility degradation"
+"general/rtlinv.cir" = "~5.96% transient error at t=7ns: transition timing shift from constant reverse-bias BJT junction cap approximation"
+"general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching from constant reverse-bias BJT junction cap approximation"
 
 # === HFET ===
-"hfet/inverter.cir" = "times out (>30s)"
+"hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (NR converges to wrong equilibrium; HFET channel current ~600µA vs ngspice ~36pA — possible model current scaling discrepancy)"
 
 # === MOS6 ===
 "mos6/mos6inv.cir" = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix"
@@ -52,16 +52,16 @@
 "transient/fourbitadder.cir" = "times out (>30s)"
 
 # === Transmission lines ===
-"transmission/cpl3_4_line.cir" = "times out (>30s): CPL transient with CMOS driver"
-"transmission/cpl_ibm2.cir" = "times out (>30s): CPL transient with CMOS driver"
-"transmission/ltra1_1_line.cir" = "~25% V(2) error at t=16.1ns: CMOS inverter output drops too fast during transition (common to LTRA/TXL, MOSFET driver issue)"
-"transmission/ltra2_2_line.cir" = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 -> gds=0)"
-"transmission/txl1_1_line.cir" = "~25% V(2) error at t=16.1ns: CMOS inverter output drops too fast during transition (common to LTRA/TXL, MOSFET driver issue)"
-"transmission/txl2_3_line.cir" = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 -> gds=0)"
+"transmission/cpl3_4_line.cir" = "~61% error: CPL transient with CMOS driver (timing shift from constant junction cap approximation)"
+"transmission/cpl_ibm2.cir" = "~13% error: CPL transient with CMOS driver (timing shift from constant junction cap approximation)"
+"transmission/ltra1_1_line.cir" = "~2.2% V(2) error at t=16.95ns: CMOS inverter transition timing (constant junction cap + missing Meyer gate cap voltage dependence)"
+"transmission/ltra2_2_line.cir" = "~2.2% V(2) error at t=16.95ns: same CMOS driver issue as ltra1_1 (different line model, same error)"
+"transmission/txl1_1_line.cir" = "~4.6% V(2) error at t=21.05ns: TXL CMOS inverter transition timing (same root cause as LTRA tests)"
+"transmission/txl2_3_line.cir" = "~4.7% V(2) error: TXL three-line cascade, CMOS driver timing (same root cause as LTRA tests)"
 
 # === VBIC ===
-"vbic/CEamp.cir" = "VBIC AC numerical accuracy: ~1.2% AC gain error (avalanche derivative coupling + self-heating FP difference)"
+"vbic/CEamp.cir" = "VBIC AC: ~1.2% AC gain error (avalanche derivative coupling + self-heating FP difference)"
 "vbic/diffamp.cir" = "VBIC diffamp: times out (>30s) -- 13-transistor circuit with self-heating (NPN+PNP)"
-"vbic/FG.cir" = "VBIC FG: ~0.2-0.7% DC sweep error growing with current (self-heating FP evaluation order difference)"
-"vbic/FO.cir" = "VBIC FO: ~0.2% DC sweep error (self-heating FP difference, avalanche now correct)"
-"vbic/temp.cir" = "VBIC temp: ~0.2-0.6% Ic error growing with current (self-heating FP evaluation order difference)"
+"vbic/FG.cir" = "VBIC FG: 0.234% DC error at Vb=0.74V (self-heating FP evaluation order, grows linearly with Vrth)"
+"vbic/FO.cir" = "VBIC FO: 0.205% DC error at Vc=2.2V (self-heating FP evaluation order, 0.005% above 0.2% tolerance)"
+"vbic/temp.cir" = "VBIC temp: 0.226% DC error at Vb=0.57V (self-heating FP evaluation order, grows linearly with Vrth)"
