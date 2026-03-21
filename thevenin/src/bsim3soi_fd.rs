@@ -2001,6 +2001,7 @@ pub fn bsim3soi_fd_limit(
     vbs_old: f64,
     ves_old: f64,
     vth: f64,
+    floating_body: bool,
 ) -> (f64, f64, f64, f64) {
     let vgs = crate::bsim3::fetlim(vgs_new, vgs_old, vth);
     let vds = crate::bsim3::fetlim(vds_new, vds_old, vth);
@@ -2015,8 +2016,10 @@ pub fn bsim3soi_fd_limit(
     } else {
         vbs_new
     };
-    // FD SmartVbs: in DC floating body, Vbs >= 0
-    let vbs = vbs.max(0.0);
+    // FD SmartVbs: in DC floating body, Vbs >= 0.
+    // Only applies to floating body — 5-terminal devices with explicit body
+    // contact can have Vbs < 0 (matching DD variant behavior).
+    let vbs = if floating_body { vbs.max(0.0) } else { vbs };
 
     let limit_e = 3.0;
     let ves = if (ves_new - ves_old).abs() > limit_e {

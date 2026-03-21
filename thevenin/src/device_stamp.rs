@@ -545,6 +545,7 @@ impl DeviceVoltageState {
             for (bi, bsim) in mna.bsim3soi_fds.iter().enumerate() {
                 let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
 
+                let floating_body = bsim.body_idx.is_none();
                 let (vgs, vds, vbs, ves) = bsim3soi_fd_limit(
                     raw_vgs,
                     raw_vds,
@@ -555,10 +556,10 @@ impl DeviceVoltageState {
                     prev[bi].2,
                     prev[bi].3,
                     bsim.vth0_inst,
+                    floating_body,
                 );
                 prev[bi] = (vgs, vds, vbs, ves);
 
-                let floating_body = bsim.body_idx.is_none();
                 let comp = bsim3soi_fd_companion(
                     vgs,
                     vds,

@@ -7,21 +7,21 @@
 
 # === BSIM3SOI-DD ===
 "bsim3soidd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
-"bsim3soidd/RampVg2.cir" = "times out (>30s): BSIM3SOI-DD DC sweep NR convergence too slow"
+"bsim3soidd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
 "bsim3soidd/t3.cir" = "~18% Ids error near threshold (BSIM3SOI-DD excess current bug exposed by vfb fix)"
 "bsim3soidd/t4.cir" = "~22% Ids error (BSIM3SOI-DD excess current bug exposed by vfb fix)"
 "bsim3soidd/t5.cir" = "~1.1% Ids error at Ve=-4 (vfbb sign error in back-gate coupling, see FIXING_HARNESS_TESTS.md)"
 
 # === BSIM3SOI-FD ===
-"bsim3soifd/inv2.cir" = "times out (>30s): BSIM3SOI-FD inverter NR convergence too slow"
-"bsim3soifd/RampVg2.cir" = "times out (>30s): BSIM3SOI-FD DC sweep NR convergence too slow"
+"bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
+"bsim3soifd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
 "bsim3soifd/t3.cir" = "~9% Ids error near threshold (BSIM3SOI-FD model value bug)"
-"bsim3soifd/t4.cir" = "wrong sign: expected +7.2e-8, got -5.1e-8 (BSIM3SOI-FD model value bug)"
+"bsim3soifd/t4.cir" = "~36% Ids error near threshold (sign now correct after vbs clamp fix, remaining model value bug)"
 "bsim3soifd/t5.cir" = "~99% error: expected 1.1e-7, got 6.1e-10 (BSIM3SOI-FD model value bug)"
 
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
-"bsim3soipd/RampVg2.cir" = "times out (>30s): BSIM3SOI-PD DC sweep NR convergence too slow"
+"bsim3soipd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
 "bsim3soipd/t3.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
 "bsim3soipd/t4.cir" = "~5.6% Ids error (BSIM3SOI-PD model value bug, previously timed out)"
 "bsim3soipd/t5.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"

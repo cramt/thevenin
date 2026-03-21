@@ -1720,3 +1720,65 @@ The remaining errors are from CMOS inverter transition timing differences
 voltage limiting differences).
 
 **No regressions:** All 420 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Applied fix: BSIM3SOI-FD Vbs clamp for 5-terminal devices
+
+**Affected tests:** `harness_bsim3soifd_t4` (primary)
+
+**Root cause:** The `bsim3soi_fd_limit()` function unconditionally clamped
+`vbs >= 0` for all devices, including 5-terminal devices with explicit body
+contacts.  This "SmartVbs" clamp is correct for floating-body devices (where
+the body potential is determined by charge balance and should never go below
+the source), but wrong for 5-terminal devices where the body is tied to a
+specific voltage.
+
+The DD variant already had the correct behavior: it accepts a `floating_body`
+parameter and only applies the clamp when `floating_body == true`.  The FD
+variant was missing this parameter and always clamped.
+
+**How it caused wrong-sign current:** When the DC sweep sets Vb=-0.3V:
+1. The body internal node settles to Vb_int ≈ -0.3V (through body resistance)
+2. The limiting function clamps vbs to 0 (from -0.3)
+3. The companion function computes ceq_d with `gmbs * vbs_i = gmbs * 0`
+4. The matrix stamps include `gmbs * Vb_int = gmbs * (-0.3)` at drain/source
+5. The mismatch creates: `i_branch = ids + gmbs * Vb_int = ids - 0.3*gmbs`
+6. Since gmbs is large enough, `0.3*gmbs > ids`, making `i_branch < 0`
+
+**Fix applied:** Added `floating_body: bool` parameter to `bsim3soi_fd_limit()`,
+matching the DD variant.  Only apply `vbs.max(0.0)` when `floating_body == true`.
+
+**Impact on tests:**
+
+| Test | Before | After |
+|---|---|---|
+| `harness_bsim3soifd_t4` | wrong sign (170% error) | ~36% Ids error (sign correct) |
+| `harness_bsim3soifd_t3` | ~9% error | ~9% error (unchanged) |
+| `harness_bsim3soifd_t5` | ~99% error | ~99% error (unchanged) |
+
+The t3 and t5 tests are unaffected because their sweep variables (Vgs for t3,
+Ves for t5) do not exercise the Vbs clamping path.  The remaining 36% error
+in t4 is from the same model accuracy issues affecting all BSIM3SOI variants
+(intermediate value bugs in vth, vgsteff, vdseff).
+
+**No regressions:** All 420 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Triage update (post FD Vbs clamp fix)
+
+Updated ignore reasons to reflect actual current failure modes:
+
+| Test | Before | After |
+|---|---|---|
+| `harness_bsim3soifd_t4` | wrong sign (170%) | ~36% Ids error (sign correct) |
+| `harness_bsim3soidd_RampVg2` | times out (>30s) | empty output (device param query unsupported) |
+| `harness_bsim3soifd_RampVg2` | times out (>30s) | empty output (device param query unsupported) |
+| `harness_bsim3soipd_RampVg2` | times out (>30s) | empty output (device param query unsupported) |
+| `harness_bsim3soifd_inv2` | times out (>30s) | DC OP singular matrix (fast fail) |
+
+The three RampVg2 tests now complete quickly but produce empty output because
+the `.print` variables include `@m1[Vbs]` (device operating point parameter
+query) and `V(g)/10` (arithmetic expression), neither of which is supported
+by the output formatter.
