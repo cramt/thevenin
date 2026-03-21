@@ -195,7 +195,7 @@ Steps:
 3. Diagnose the root cause using the methodology in FIXING_HARNESS_TESTS.md
 4. Fix the issue in the Rust source code
 5. Run the fixed tests to verify they pass
-6. Run the FULL test suite to check for regressions: nix develop --command cargo test --package thevenin 2>&1 | grep -E "FAILED|test result"
+6. Run the FULL test suite to check for regressions: nix develop --command cargo nextest run --package thevenin 2>&1 | grep -E "FAIL|test result"
 7. Run clippy: nix develop --command cargo clippy --workspace -- -D warnings
 8. Commit all changes with a descriptive message and push to the current branch
 
@@ -267,6 +267,9 @@ async function runIteration(iteration: number): Promise<IterationResult> {
           const summaryLines = resultText.split("\n").slice(0, 10).join("\n");
           log(`Summary:\n${summaryLines}`);
         }
+
+        // Break out of the async iterator — it may not signal done on its own
+        break;
       } else if (msg.type === "system" && msg.subtype === "init") {
         sessionId = msg.session_id ?? "";
         log(`Session: ${sessionId}`);

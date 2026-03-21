@@ -120,7 +120,7 @@
             echo "  rustc: $(rustc --version)"
             echo ""
             echo "  Build:   cargo build"
-            echo "  Test:    cargo test"
+            echo "  Test:    cargo nextest run"
             echo "  Wasm:    cargo test --target wasm32-unknown-unknown"
             echo "  Check:   cargo clippy --workspace -- -D warnings"
           '';

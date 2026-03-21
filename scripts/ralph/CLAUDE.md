@@ -15,7 +15,7 @@ You are an autonomous coding agent working on **thevenin**, a Rust rewrite of ng
 
 ```bash
 nix develop --command cargo clippy --workspace -- -D warnings
-nix develop --command cargo test --workspace
+nix develop --command cargo nextest run --workspace
 nix develop --command cargo fmt --check
 ```
 

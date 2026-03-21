@@ -15,7 +15,7 @@ and no dependency works by accident from the host environment.
 
 ```bash
 nix develop --command cargo build
-nix develop --command cargo test
+nix develop --command cargo nextest run
 nix develop --command cargo clippy --workspace -- -D warnings
 nix develop --command cargo fmt --check
 ```

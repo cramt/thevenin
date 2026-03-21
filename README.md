@@ -65,7 +65,7 @@ for plot in &result.plots {
 ```bash
 # native
 cargo build
-cargo test --workspace
+cargo nextest run --workspace
 
 # wasm32
 cargo test --workspace --target wasm32-unknown-unknown

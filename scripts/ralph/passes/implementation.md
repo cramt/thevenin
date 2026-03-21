@@ -10,7 +10,7 @@ You have chosen to do an **implementation pass**. Your goal is to pick the next 
 4. Check you're on the correct branch from PRD `branchName`. If not, check it out or create from main.
 5. Pick the **highest priority** user story where `passes: false`
 6. Implement that single user story
-7. Run quality checks: `nix develop --command cargo clippy --workspace -- -D warnings && nix develop --command cargo test --workspace`
+7. Run quality checks: `nix develop --command cargo clippy --workspace -- -D warnings && nix develop --command cargo nextest run --workspace`
 8. Update CLAUDE.md files if you discover reusable patterns (see below)
 9. If checks pass, commit ALL changes with message: `feat: [Story ID] - [Story Title]`
 10. Update the PRD to set `passes: true` for the completed story

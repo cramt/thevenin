@@ -7,14 +7,9 @@
 //! Tests that require unimplemented features are #[ignore]d with clear notes.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
 
 use thevenin::output::{compare_filtered, format_batch_output};
 use thevenin_types::Netlist;
-
-/// Per-test timeout in seconds.
-const TEST_TIMEOUT_SECS: u64 = 30;
 
 /// Root directory of ngspice test suite.
 fn ngspice_tests_dir() -> PathBuf {
@@ -74,20 +69,9 @@ fn run_cir_test(cir_path: &Path) -> Result<(), String> {
     compare_filtered(&expected_output, &actual_output)
 }
 
-/// Run a .cir test with a timeout. Returns Err if the test times out.
-fn run_cir_test_timed(cir_path: &Path) -> Result<(), String> {
-    let path = cir_path.to_path_buf();
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let result = run_cir_test(&path);
-        let _ = tx.send(result);
-    });
-    match rx.recv_timeout(Duration::from_secs(TEST_TIMEOUT_SECS)) {
-        Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("TIMEOUT (>{TEST_TIMEOUT_SECS}s)")),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err("thread panicked".to_string()),
-    }
-}
+// Per-test timeouts are handled by cargo-nextest (see .config/nextest.toml).
+// Each test runs in its own process, so nextest can SIGKILL hung simulations
+// instead of leaving threads spinning forever.
 
 /// Resolve .include directives by inlining file contents.
 fn resolve_includes(content: &str, base_dir: &Path) -> Result<String, String> {
@@ -251,68 +235,6 @@ fn run_all_analyses(netlist: &Netlist) -> Result<thevenin_types::SimResult, Stri
     Ok(SimResult { plots: all_plots })
 }
 
-/// Summary test that reports overall pass rate.
-/// This test always runs and prints a summary.
-#[test]
-fn harness_summary() {
-    if !has_ngspice_tests() {
-        eprintln!("ngspice-upstream/tests/ not found, skipping harness summary");
-        return;
-    }
-
-    let tests_dir = ngspice_tests_dir();
-    let mut cir_files: Vec<PathBuf> = Vec::new();
-    collect_cir_files(&tests_dir, &mut cir_files);
-    cir_files.sort();
-
-    let mut pass = 0;
-    let mut fail = 0;
-    let mut skip = 0;
-    let mut errors: Vec<(String, String)> = Vec::new();
-
-    for cir_path in &cir_files {
-        let rel = cir_path.strip_prefix(&tests_dir).unwrap();
-        let rel_str = rel.to_string_lossy().to_string();
-
-        let out_path = cir_path.with_extension("out");
-        if !out_path.exists() {
-            skip += 1;
-            continue;
-        }
-
-        let start = Instant::now();
-        match run_cir_test_timed(cir_path) {
-            Ok(()) => {
-                pass += 1;
-                eprintln!("  PASS: {rel_str} ({:.1}s)", start.elapsed().as_secs_f64());
-            }
-            Err(e) => {
-                fail += 1;
-                let short_err = if e.len() > 200 {
-                    format!("{}...", &e[..200])
-                } else {
-                    e.clone()
-                };
-                eprintln!("  FAIL: {rel_str}: {short_err}");
-                errors.push((rel_str, e));
-            }
-        }
-    }
-
-    let total = pass + fail;
-    eprintln!("\n=== Harness Summary ===");
-    eprintln!("Passed: {pass}/{total} ({skip} skipped, no .out file)");
-
-    if !errors.is_empty() {
-        eprintln!("\nFailed tests:");
-        for (name, _err) in &errors {
-            eprintln!("  - {name}");
-        }
-    }
-
-    // Don't assert — this is a progress reporter, not a pass/fail gate.
-    // Individual test functions below handle specific pass/fail assertions.
-}
 
 /// Recursively collect all .cir files.
 fn collect_cir_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -347,7 +269,7 @@ macro_rules! harness_test {
                 return;
             }
             let cir_path = ngspice_tests_dir().join($path);
-            if let Err(e) = run_cir_test_timed(&cir_path) {
+            if let Err(e) = run_cir_test(&cir_path) {
                 panic!("Test {} failed: {}", $path, e);
             }
         }
@@ -361,7 +283,7 @@ macro_rules! harness_test {
                 return;
             }
             let cir_path = ngspice_tests_dir().join($path);
-            if let Err(e) = run_cir_test_timed(&cir_path) {
+            if let Err(e) = run_cir_test(&cir_path) {
                 panic!("Test {} failed: {}", $path, e);
             }
         }

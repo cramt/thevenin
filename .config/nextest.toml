@@ -1,8 +1,8 @@
 [profile.default]
-# 30-second timeout per test to prevent hanging on long simulations
-slow-timeout = { period = "30s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-# The summary test runs all 113 tests sequentially — give it more time
-filter = "test(harness_summary)"
-slow-timeout = { period = "300s", terminate-after = 1 }
+# Circuit simulations can legitimately take minutes for complex transient
+# analyses. nextest runs each test in its own process and sends SIGTERM then
+# SIGKILL when the timeout fires, so hung tests are actually killed (unlike the
+# old thread-based timeout which left threads spinning forever).
+#
+# Warn after 60s, kill after 4 periods (240s total).
+slow-timeout = { period = "60s", terminate-after = 4 }

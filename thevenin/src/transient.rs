@@ -1096,6 +1096,13 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // breakpoint zone, missing fast transitions (e.g., PULSE edges
             // driving CMOS inverters through transmission lines).
             h = (step_h * MAX_GROW).min(h_max).max(h_min);
+        } else {
+            // No LTE control and not at a breakpoint — grow toward h_max,
+            // but cap at h_print so output points stay dense enough for
+            // waveform fidelity.  Without growth here, circuits with only
+            // transmission lines (no caps/inductors/BJTs) stay stuck at
+            // the initial tiny h and never make progress.
+            h = (step_h * MAX_GROW).min(h_max).min(h_print).max(h_min);
         }
 
         // Accept this timestep: advance time and update state.
@@ -2386,14 +2393,16 @@ R1 1 0 1k
         let v1 = tran_vector(&result, "v(1)");
 
         // At t=0.5ms: should be about 2.5V (midway through ramp)
+        // Tolerance of 0.15V accounts for the discrete output resolution
+        // (tstep=50μs, ramp slope=5V/ms, worst-case offset ≈ 0.125V).
         let idx = find_nearest_time(time, 0.5e-3);
         assert!(
-            (v1[idx] - 2.5).abs() < 0.1,
+            (v1[idx] - 2.5).abs() < 0.15,
             "at 0.5ms: expected ~2.5V, got {:.4}",
             v1[idx]
         );
 
-        // At t=1.5ms: should be 5V (holding)
+        // At t=1.5ms: should be 5V (holding — flat, no slope error)
         let idx = find_nearest_time(time, 1.5e-3);
         assert!(
             (v1[idx] - 5.0).abs() < 0.1,
@@ -2404,7 +2413,7 @@ R1 1 0 1k
         // At t=2.5ms: should be about 2.5V (ramping down)
         let idx = find_nearest_time(time, 2.5e-3);
         assert!(
-            (v1[idx] - 2.5).abs() < 0.1,
+            (v1[idx] - 2.5).abs() < 0.15,
             "at 2.5ms: expected ~2.5V, got {:.4}",
             v1[idx]
         );
