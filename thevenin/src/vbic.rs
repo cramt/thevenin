@@ -609,8 +609,20 @@ impl VbicModel {
             if i_nom == 0.0 {
                 return 0.0;
             }
+            // Match ngspice vbictemp.c evaluation order exactly:
+            //   xvar2 = pow(rT, XP)
+            //   xvar3 = -EA*(1-rT)/Vtv
+            //   xvar4 = exp(xvar3)
+            //   xvar1 = xvar2 * xvar4
+            //   xvar6 = pow(xvar1, 1/NF)
+            //   I_T   = I_nom * xvar6
             let base = tratio.powf(xp) * safe_exp(-ea_val * (1.0 - tratio) / vt);
-            i_nom * base.powf(1.0 / nf_val)
+            if nf_val == 1.0 {
+                // Skip powf(1.0) to avoid FP error from exp(ln(x)) round-trip
+                i_nom * base
+            } else {
+                i_nom * base.powf(1.0 / nf_val)
+            }
         };
 
         // Resistance temperature scaling: R_t = R_nom * (tratio^xr)

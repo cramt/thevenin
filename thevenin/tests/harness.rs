@@ -745,7 +745,7 @@ harness_test!(
 harness_test!(
     harness_transmission_ltra1_1,
     "transmission/ltra1_1_line.cir",
-    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
+    ignore = "~25% V(2) error at t=16.1ns: CMOS inverter output drops too fast during transition (common to LTRA/TXL, MOSFET driver issue)"
 );
 harness_test!(
     harness_transmission_ltra2_2,
@@ -755,7 +755,7 @@ harness_test!(
 harness_test!(
     harness_transmission_txl1_1,
     "transmission/txl1_1_line.cir",
-    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
+    ignore = "~25% V(2) error at t=16.1ns: CMOS inverter output drops too fast during transition (common to LTRA/TXL, MOSFET driver issue)"
 );
 harness_test!(
     harness_transmission_txl2_3,

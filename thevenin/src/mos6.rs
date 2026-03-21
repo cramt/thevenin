@@ -567,14 +567,18 @@ pub fn stamp_mos6(
     let ceq_bs = sign * m * comp.ceq_bs;
     let ceq_bd = sign * m * comp.ceq_bd;
 
+    // ngspice mos6load.c RHS stamping (ignoring gate cap terms):
+    //   rhs[dp] += ceqbd - cdreq       (junction current INTO dp, drain current OUT)
+    //   rhs[sp] += cdreq + ceqbs       (drain current IN, junction current IN)
+    //   rhs[b]  -= ceqbs + ceqbd       (junction currents OUT of bulk)
     if let Some(d) = dp {
-        rhs[d] -= ceq_d + ceq_bd;
+        rhs[d] -= ceq_d - ceq_bd;
     }
     if let Some(s) = sp {
         rhs[s] += ceq_d + ceq_bs;
     }
     if let Some(bulk) = b {
-        rhs[bulk] += ceq_bd + ceq_bs;
+        rhs[bulk] -= ceq_bd + ceq_bs;
     }
 }
 

@@ -1561,3 +1561,92 @@ Further investigation requires detailed NR iteration tracing at the transition p
 **Status:** Not fixed.  The 24% error requires deeper analysis of the MNA system at
 the transition point (possibly a MOSFET Norton equivalent sign issue in reversed mode
 or an LTRA excitation accumulation bug).
+
+---
+
+## Applied fix: MOSFET junction diode RHS sign correction
+
+**Affected devices:** All Level 1 MOSFETs (MosfetModel) and Level 6 MOSFETs (Mos6Model)
+
+**Root cause:** The MOSFET stamp function had incorrect signs for the bulk junction
+diode Norton current sources on the drain-prime and bulk RHS entries.
+
+In ngspice mos1load.c (ignoring gate cap terms):
+```
+rhs[dp] += ceqbd - cdreq    (junction current INTO dp, drain current OUT)
+rhs[sp] += cdreq + ceqbs    (drain current IN, junction current IN)
+rhs[b]  -= ceqbs + ceqbd    (junction currents OUT of bulk)
+```
+
+Our code had:
+```
+rhs[dp] -= ceq_d + ceq_bd    → dp += -cdreq - ceqbd  (ceqbd WRONG SIGN)
+rhs[sp] += ceq_d + ceq_bs    → sp += cdreq + ceqbs    (correct)
+rhs[bulk] += ceq_bd + ceq_bs → b  += ceqbd + ceqbs    (WRONG SIGN)
+```
+
+The ceq_bd sign at dp was inverted (subtracted instead of added), and both junction
+current signs at the bulk node were inverted (added instead of subtracted).
+
+**Fix applied:** Changed the RHS stamping to match ngspice exactly:
+- `rhs[d] -= ceq_d - ceq_bd` (flips ceq_bd to correct sign)
+- `rhs[bulk] -= ceq_bd + ceq_bs` (flips entire bulk expression)
+
+Same fix applied to both `stamp_mosfet()` in `mosfet.rs` and `stamp_mos6()` in `mos6.rs`.
+
+**Impact on tests:** The bug is latent for all current test circuits because:
+1. Most MOSFETs have drain and bulk on the same node, so dp and b RHS errors cancel
+2. Junction diodes are typically reverse-biased (ceqbd ≈ 0)
+
+The fix becomes significant for circuits where the MOSFET drain and bulk are at
+different nodes AND the junction is forward-biased (ceqbd can be milliamps).
+
+**No regressions:** All 223 unit tests pass. All 69 non-ignored harness tests pass.
+
+---
+
+## Applied fix: VBIC temperature scaling powf(1.0) optimization
+
+**Affected devices:** All VBIC transistors
+
+**Root cause:** The `temp_current` function in VBIC temperature_adjust() used
+`base.powf(1.0 / nf_val)` even when `nf_val == 1.0`.  The `powf(1.0)` call
+computes `exp(1.0 * ln(x))` which introduces unnecessary FP rounding error
+compared to just returning `x` directly.  For IS (NF=1.0 default) and most
+other current parameters with emission coefficient 1.0, this adds a spurious
+~1 ULP error to every temperature scaling computation.
+
+**Fix applied:** Added a fast path that skips powf(1.0) when nf_val == 1.0,
+directly returning `i_nom * base`.
+
+**Impact:** No measurable change in VBIC test errors (the FP error from powf(1.0)
+is smaller than the dominant self-heating evaluation order difference).  The
+optimization is correct and avoids unnecessary computation.
+
+---
+
+## Triage update (post junction diode fix)
+
+### Transmission line tests status change
+
+| Test | Before | After |
+|---|---|---|
+| `harness_transmission_ltra1_1` | timeout (>30s) | ~25% V(2) error at t=16.1ns (completes in ~5s) |
+| `harness_transmission_txl1_1` | timeout (>30s) | ~25% V(2) error at t=16.1ns (completes in ~6s) |
+| `harness_transmission_ltra2_2` | timeout | timeout (unchanged) |
+| `harness_transmission_txl2_3` | timeout | timeout (unchanged) |
+| `harness_transmission_cpl3_4` | timeout | timeout (unchanged) |
+| `harness_transmission_cpl_ibm2` | timeout | timeout (unchanged) |
+
+The LTRA1_1 and TXL1_1 tests now complete (NR convergence improved by accumulated
+gds floor and von fixes) but show a ~25% error in the CMOS inverter output voltage
+during the PULSE transition.  Both transistors (NMOS and PMOS) operate in reversed
+mode (netlist drain at power supply, source at output node).  The error is identical
+across LTRA and TXL models, confirming it's a MOSFET driver issue.
+
+Investigation confirmed: Y-matrix stamps match ngspice exactly, cdreq formula
+matches, junction diode RHS now correct.  The remaining ~25% error is likely from
+a different NR convergence path during the fast PULSE transition (our simulation
+drops V(2) to 2.8V while ngspice settles at 3.8V), possibly due to differences
+in how the reversed-mode MOSFET interacts with the transmission line impedance
+during rapid voltage changes.
