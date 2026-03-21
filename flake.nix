@@ -117,6 +117,13 @@
           shellHook = ''
             export RUST_BACKTRACE=1
             export RUST_LOG=info
+
+            # Auto-init submodules if missing
+            if [ -f .gitmodules ] && [ ! -f ngspice-upstream/.git ]; then
+              echo "Initializing git submodules..."
+              git submodule update --init --recursive
+            fi
+
             echo "=== Thevenin dev environment ==="
             echo "  rustc: $(rustc --version)"
             echo ""
