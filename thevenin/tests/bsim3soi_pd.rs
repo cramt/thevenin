@@ -2,8 +2,6 @@
 //!
 //! Tests ported from ngspice-upstream/tests/bsim3soipd/ test suite.
 
-#[cfg(target_arch = "wasm32")]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 use thevenin::{simulate_dc, simulate_op};
 use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]

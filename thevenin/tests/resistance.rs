@@ -3,8 +3,6 @@
 //! Loads actual .cir files, parses with thevenin_types, simulates with
 //! thevenin, and compares output against expected .out reference values.
 
-#[cfg(target_arch = "wasm32")]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 use approx::assert_abs_diff_eq;
 use thevenin::simulate_op;
 use thevenin_types::{Netlist, SimResult};

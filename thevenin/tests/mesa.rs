@@ -1,5 +1,3 @@
-#[cfg(target_arch = "wasm32")]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 use approx::assert_abs_diff_eq;
 use thevenin::simulate_dc;
 use thevenin_types::Netlist;

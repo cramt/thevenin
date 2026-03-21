@@ -1,7 +1,3 @@
-#[cfg(test)]
-#[cfg(target_arch = "wasm32")]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
-
 use thevenin_types::Expr;
 
 /// Parse a numeric expression value, returning an error if it's not a literal number.

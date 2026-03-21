@@ -2,8 +2,6 @@
 //!
 //! Ported from ngspice-upstream/tests/mos6/simpleinv.cir.
 
-#[cfg(target_arch = "wasm32")]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;

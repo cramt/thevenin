@@ -3,8 +3,6 @@
 //! Tests ported from ngspice-upstream/tests/vbic/ test suite.
 //! All 6 test circuits use the same VBIC model parameters.
 
-#[cfg(target_arch = "wasm32")]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;

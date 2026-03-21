@@ -111,6 +111,7 @@
             chromium
             chromedriver
             cargo-nextest
+            lld
           ];
 
           shellHook = ''
