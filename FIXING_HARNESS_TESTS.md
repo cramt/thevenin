@@ -1644,9 +1644,67 @@ during the PULSE transition.  Both transistors (NMOS and PMOS) operate in revers
 mode (netlist drain at power supply, source at output node).  The error is identical
 across LTRA and TXL models, confirming it's a MOSFET driver issue.
 
-Investigation confirmed: Y-matrix stamps match ngspice exactly, cdreq formula
-matches, junction diode RHS now correct.  The remaining ~25% error is likely from
-a different NR convergence path during the fast PULSE transition (our simulation
-drops V(2) to 2.8V while ngspice settles at 3.8V), possibly due to differences
-in how the reversed-mode MOSFET interacts with the transmission line impedance
-during rapid voltage changes.
+Investigation confirmed: Y-matrix stamps match ngspice exactly, junction diode
+RHS now correct.  The ~25% error was found to be caused by a gds sign bug in
+the cdreq formula — see "Applied fix: Level 1 MOSFET ceq_d gds sign in reversed
+mode" below.
+
+---
+
+## Applied fix: Level 1 MOSFET ceq_d gds sign in reversed mode
+
+**Affected tests:** All 6 transmission line tests (all use CMOS inverter driver
+with Level 1 MOSFETs)
+
+**Root cause:** The Norton equivalent current source `ceq_d` in `mosfet.rs`
+had a sign error for the `gds * vds_eff` term in reversed mode (mode=-1).
+
+In ngspice `mos1load.c` lines 890-896, the cdreq inner formula is the SAME
+for both modes — `gds * effective_vds` is always SUBTRACTED:
+- Normal mode: `cdreq = type * (cdrain - gds*vds - gm*vgs - gmbs*vbs)`
+- Reversed mode: `cdreq = -type * (cdrain - gds*(-vds) - gm*vgd - gmbs*vbd)`
+
+Note: in reversed mode, `(-vds)` is the positive effective drain-source voltage
+(since raw `vds < 0`).  The expression `-gds*(-vds)` = `-gds*vds_eff` — same
+subtraction as normal mode.
+
+Our code had:
+```rust
+let gds_vds_sign = if mode > 0 { -1.0 } else { 1.0 };
+let ceq_d = cdrain - gm*vgs_eff + gds_vds_sign*gds*vds_eff - gmbs*vbs_eff;
+```
+
+For reversed mode, `gds_vds_sign = +1.0`, giving `+gds*vds_eff` instead of
+`-gds*vds_eff`.  This introduced an error of `2 * gds * vds_eff` in the Norton
+current source.
+
+**Why this matters:** In saturation with LAMBDA=0, gds is floored to 1e-12 and
+the error is negligible (~10pA).  But during the CMOS inverter switching
+transition, the PMOS operates in the LINEAR region where gds is substantial:
+- PMOS: beta=756µA/V², overdrive=1.2V, vds_eff=0.5V → gds=529µS
+- Error: 2 × 529µS × 0.5V = 529µA (larger than the actual drain current!)
+
+Every other device model (mos6.rs, bsim3.rs, bsim4.rs, jfet.rs, all BSIM3SOI
+variants) correctly uses `-gds*vds_eff` in all modes.  Only mosfet.rs had this
+bug.
+
+**Fix applied:** Removed the `gds_vds_sign` conditional; always subtract
+`gds * vds_eff` from ceq_d, matching all other device models and ngspice.
+
+**Impact on tests:**
+
+| Test | Before | After |
+|---|---|---|
+| `ltra1_1` | ~25% error | ~2.2% error (11× improvement) |
+| `ltra2_2` | timeout (>30s) | ~2.2% error (now completes) |
+| `txl1_1` | ~25% error | ~4.6% error (5× improvement) |
+| `txl2_3` | timeout (>30s) | ~4.7% error (now completes) |
+| `cpl3_4` | timeout (>30s) | ~61% error (now completes, large timing error) |
+| `cpl_ibm2` | timeout (>30s) | ~13% error (now completes) |
+
+Four tests that were previously timing out (>30s) now complete in 1-2 seconds.
+The remaining errors are from CMOS inverter transition timing differences
+(constant junction cap approximation, missing Meyer gate cap voltage dependence,
+voltage limiting differences).
+
+**No regressions:** All 420 non-ignored tests pass.  Clippy clean.

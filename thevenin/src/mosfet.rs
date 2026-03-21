@@ -364,17 +364,15 @@ impl MosfetModel {
         let (gbd, cbd_current) = bulk_diode_current(vbd, self.is, vt);
 
         // Equivalent current source for NR (Norton companion).
-        // In ngspice mos1load.c, the cdreq formula differs by mode:
-        //   mode >= 0: cdreq = type * (cdrain - gds*vds - gm*vgs - gmbs*vbs)
-        //   mode <  0: cdreq = -type * (cdrain - gds*(-vds_stored) - gm*vgs - gmbs*vbs)
-        // where vds_stored = vds_eff (positive), so (-vds_stored) flips the gds term.
+        // In ngspice mos1load.c, the cdreq inner formula is the same for both modes:
+        //   ceq_d_inner = cdrain - gds*vds_eff - gm*vgs_eff - gmbs*vbs_eff
+        // The outer sign changes with mode:
+        //   mode >= 0: cdreq = +type * ceq_d_inner
+        //   mode <  0: cdreq = -type * ceq_d_inner
+        // In ngspice reversed mode (line 895): -gds*(-vds) where vds<0, so
+        // (-vds)=vds_eff (positive), giving -gds*vds_eff — same subtraction as normal mode.
         // The stamp applies: rhs[dp] -= mode * sign * m * ceq_d
-        //
-        // We compute ceq_d such that mode*sign*ceq_d matches ngspice's cdreq/m:
-        //   mode >= 0: ceq_d = cdrain - gm*vgs_eff - gds*vds_eff - gmbs*vbs_eff
-        //   mode <  0: ceq_d = cdrain - gm*vgs_eff + gds*vds_eff - gmbs*vbs_eff
-        let gds_vds_sign = if mode > 0 { -1.0 } else { 1.0 };
-        let ceq_d = cdrain - gm * vgs_eff + gds_vds_sign * gds * vds_eff - gmbs * vbs_eff;
+        let ceq_d = cdrain - gm * vgs_eff - gds * vds_eff - gmbs * vbs_eff;
         let ceq_bs = cbs_current - gbs * vbs;
         let ceq_bd = cbd_current - gbd * vbd;
 

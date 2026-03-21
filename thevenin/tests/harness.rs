@@ -657,32 +657,32 @@ harness_test!(
 harness_test!(
     harness_transmission_cpl3_4,
     "transmission/cpl3_4_line.cir",
-    ignore = "times out (>30s): CPL transient with CMOS driver"
+    ignore = "~61% CPL transient error (CMOS inverter timing, residual after ceq_d gds sign fix)"
 );
 harness_test!(
     harness_transmission_cpl_ibm2,
     "transmission/cpl_ibm2.cir",
-    ignore = "times out (>30s): CPL transient with CMOS driver"
+    ignore = "~13% CPL transient error (CMOS inverter timing, residual after ceq_d gds sign fix)"
 );
 harness_test!(
     harness_transmission_ltra1_1,
     "transmission/ltra1_1_line.cir",
-    ignore = "~25% V(2) error at t=16.1ns: CMOS inverter output drops too fast during transition (common to LTRA/TXL, MOSFET driver issue)"
+    ignore = "~2.2% V(2) error at t=16.95ns: CMOS inverter transition timing (improved from 25% by ceq_d gds sign fix)"
 );
 harness_test!(
     harness_transmission_ltra2_2,
     "transmission/ltra2_2_line.cir",
-    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
+    ignore = "~2.2% V(2) error at t=16.95ns: same as LTRA1_1 (improved from timeout by ceq_d gds sign fix)"
 );
 harness_test!(
     harness_transmission_txl1_1,
     "transmission/txl1_1_line.cir",
-    ignore = "~25% V(2) error at t=16.1ns: CMOS inverter output drops too fast during transition (common to LTRA/TXL, MOSFET driver issue)"
+    ignore = "~4.6% V(2) error at t=21ns: CMOS inverter transition timing (improved from 25% by ceq_d gds sign fix)"
 );
 harness_test!(
     harness_transmission_txl2_3,
     "transmission/txl2_3_line.cir",
-    ignore = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 → gds=0)"
+    ignore = "~4.7% V(2) error at t=21.7ns: same topology as TXL1_1 (improved from timeout by ceq_d gds sign fix)"
 );
 
 // === VBIC ===
