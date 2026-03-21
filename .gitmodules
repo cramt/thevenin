@@ -1,0 +1,3 @@
+[submodule "ngspice-upstream"]
+	path = ngspice-upstream
+	url = https://git.code.sf.net/p/ngspice/ngspice

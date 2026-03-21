@@ -98,9 +98,9 @@ function shell(cmd: string): string {
   }
 }
 
-/** Count lines matching `ignore =` in harness.rs */
+/** Count ignored tests in ignore.toml (each non-comment, non-empty line with `=` is one test) */
 function countIgnoredTests(): number {
-  const content = shell(`grep -c 'ignore\\s*=' thevenin/tests/harness.rs`);
+  const content = shell(`grep -c '=' thevenin/tests/ignore.toml`);
   return parseInt(content, 10) || 0;
 }
 
@@ -189,15 +189,20 @@ function buildPrompt(): string {
 
   return `Read FIXING_HARNESS_TESTS.md for the full methodology, then fix ignored harness tests.
 
+Test architecture: Tests are auto-generated at compile time by the \`ngspice_tests!()\` proc macro
+(in thevenin-test-macro/). It discovers all .cir/.out pairs from ngspice-upstream/tests/ and embeds
+them as string literals. Ignore reasons live in thevenin/tests/ignore.toml (TOML: "path/to/file.cir" = "reason").
+
 Steps:
-1. Read thevenin/tests/harness.rs and identify ignored tests
+1. Read thevenin/tests/ignore.toml to see all ignored tests and their reasons
 2. Pick a group of related ignored tests (prefer numerical accuracy bugs)
 3. Diagnose the root cause using the methodology in FIXING_HARNESS_TESTS.md
 4. Fix the issue in the Rust source code
 5. Run the fixed tests to verify they pass
 6. Run the FULL test suite to check for regressions: nix develop --command cargo nextest run --package thevenin 2>&1 | grep -E "FAIL|test result"
 7. Run clippy: nix develop --command cargo clippy --workspace -- -D warnings
-8. Commit all changes with a descriptive message and push to the current branch
+8. To un-ignore a fixed test, remove its line from thevenin/tests/ignore.toml
+9. Commit all changes with a descriptive message and push to the current branch
 
 Important rules:
 - Always run commands through \`nix develop --command ...\`

@@ -1,0 +1,67 @@
+# Tests that are ignored because they don't work yet.
+# Format: "relative/path/to/file.cir" = "reason"
+
+# === Unimplemented models ===
+"bsim1/test.cir" = "BSIM1 model not implemented (US-052)"
+"bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
+
+# === BSIM3SOI-DD ===
+"bsim3soidd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
+"bsim3soidd/RampVg2.cir" = "times out (>30s): BSIM3SOI-DD DC sweep NR convergence too slow"
+"bsim3soidd/t3.cir" = "~18% Ids error near threshold (BSIM3SOI-DD excess current bug exposed by vfb fix)"
+"bsim3soidd/t4.cir" = "~22% Ids error (BSIM3SOI-DD excess current bug exposed by vfb fix)"
+"bsim3soidd/t5.cir" = "~1.1% Ids error at Ve=-4 (vfbb sign error in back-gate coupling, see FIXING_HARNESS_TESTS.md)"
+
+# === BSIM3SOI-FD ===
+"bsim3soifd/inv2.cir" = "times out (>30s): BSIM3SOI-FD inverter NR convergence too slow"
+"bsim3soifd/RampVg2.cir" = "times out (>30s): BSIM3SOI-FD DC sweep NR convergence too slow"
+"bsim3soifd/t3.cir" = "~9% Ids error near threshold (BSIM3SOI-FD model value bug)"
+"bsim3soifd/t4.cir" = "wrong sign: expected +7.2e-8, got -5.1e-8 (BSIM3SOI-FD model value bug)"
+"bsim3soifd/t5.cir" = "~99% error: expected 1.1e-7, got 6.1e-10 (BSIM3SOI-FD model value bug)"
+
+# === BSIM3SOI-PD ===
+"bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
+"bsim3soipd/RampVg2.cir" = "times out (>30s): BSIM3SOI-PD DC sweep NR convergence too slow"
+"bsim3soipd/t3.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
+"bsim3soipd/t4.cir" = "~5.6% Ids error (BSIM3SOI-PD model value bug, previously timed out)"
+"bsim3soipd/t5.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
+
+# === General circuits ===
+"general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
+"general/fourbitadder.cir" = "times out (>30s)"
+"general/mosamp.cir" = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix; Level 2 MOSFET missing velocity saturation/mobility degradation"
+"general/rtlinv.cir" = "~5.5% transient timing error at first switching transition: our transition starts ~2ns later than ngspice due to constant reverse-bias cap approximation"
+"general/schmitt.cir" = "~1.2% error at switching transition: output oscillates during state transition instead of settling cleanly; constant reverse-bias cap approximation"
+
+# === HFET ===
+"hfet/inverter.cir" = "times out (>30s)"
+
+# === MOS6 ===
+"mos6/mos6inv.cir" = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix"
+
+# === Regression: misc ===
+"regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
+
+# === Regression: temper ===
+"regression/temper/temper-3.cir" = "Requires TEMPER keyword + .control"
+
+# === Sensitivity ===
+"sensitivity/diffpair.cir" = "q3/q4:is sensitivity requires bit-exact LU reuse from NR solver (dense LU refactoring loses CMRR precision)"
+
+# === Transient ===
+"transient/fourbitadder.cir" = "times out (>30s)"
+
+# === Transmission lines ===
+"transmission/cpl3_4_line.cir" = "times out (>30s): CPL transient with CMOS driver"
+"transmission/cpl_ibm2.cir" = "times out (>30s): CPL transient with CMOS driver"
+"transmission/ltra1_1_line.cir" = "~25% V(2) error at t=16.1ns: CMOS inverter output drops too fast during transition (common to LTRA/TXL, MOSFET driver issue)"
+"transmission/ltra2_2_line.cir" = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 -> gds=0)"
+"transmission/txl1_1_line.cir" = "~25% V(2) error at t=16.1ns: CMOS inverter output drops too fast during transition (common to LTRA/TXL, MOSFET driver issue)"
+"transmission/txl2_3_line.cir" = "times out (>30s): PMOS NR convergence in CMOS inverter driver (LAMBDA=0 -> gds=0)"
+
+# === VBIC ===
+"vbic/CEamp.cir" = "VBIC AC numerical accuracy: ~1.2% AC gain error (avalanche derivative coupling + self-heating FP difference)"
+"vbic/diffamp.cir" = "VBIC diffamp: times out (>30s) -- 13-transistor circuit with self-heating (NPN+PNP)"
+"vbic/FG.cir" = "VBIC FG: ~0.2-0.7% DC sweep error growing with current (self-heating FP evaluation order difference)"
+"vbic/FO.cir" = "VBIC FO: ~0.2% DC sweep error (self-heating FP difference, avalanche now correct)"
+"vbic/temp.cir" = "VBIC temp: ~0.2-0.6% Ic error growing with current (self-heating FP evaluation order difference)"

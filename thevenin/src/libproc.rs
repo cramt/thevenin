@@ -34,6 +34,24 @@ pub fn process_libs(netlist: &mut Netlist, base_dir: &Path) -> Result<(), LibErr
     process_items(&mut netlist.items, base_dir, &mut cache, 0)
 }
 
+/// Process `.lib` directives using an in-memory file map instead of the filesystem.
+///
+/// `files` is a slice of `(filename, content)` pairs. This allows running
+/// the test harness without filesystem access (e.g., on WASM).
+pub fn process_libs_embedded(
+    netlist: &mut Netlist,
+    files: &[(&str, &str)],
+) -> Result<(), LibError> {
+    // Use a synthetic base directory and pre-populate the cache so that
+    // process_items never hits the real filesystem.
+    let base = PathBuf::from("__embedded__");
+    let mut cache: BTreeMap<PathBuf, String> = files
+        .iter()
+        .map(|(name, content)| (base.join(name), content.to_string()))
+        .collect();
+    process_items(&mut netlist.items, &base, &mut cache, 0)
+}
+
 fn process_items(
     items: &mut Vec<Item>,
     base_dir: &Path,

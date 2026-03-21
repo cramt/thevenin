@@ -1,8 +1,23 @@
 # Fixing Ignored Harness Tests
 
-Systematic methodology for diagnosing and fixing `#[ignore]`d tests in
-`thevenin/tests/harness.rs`.  Each test compares thevenin's batch output
+Systematic methodology for diagnosing and fixing ignored tests in the
+ngspice integration harness.  Each test compares thevenin's batch output
 against the reference `.out` file from `ngspice-upstream/tests/`.
+
+### Test architecture
+
+Tests are auto-generated at compile time by the `ngspice_tests!()` proc macro
+(crate: `thevenin-test-macro`).  It walks `ngspice-upstream/tests/`, finds all
+`.cir`/`.out` pairs, resolves `.include` directives, and embeds everything as
+string literals — no filesystem access at runtime (works on WASM too).
+
+Ignore reasons live in **`thevenin/tests/ignore.toml`** (flat TOML table):
+```toml
+"bsim3soidd/t5.cir" = "~1.1% Ids error at Ve=-4 (vfbb sign error)"
+```
+
+To un-ignore a test: remove its line from `ignore.toml`.
+To add a new ignore: add a `"path/to/file.cir" = "reason"` entry.
 
 ---
 
@@ -242,13 +257,10 @@ nix develop --command cargo clippy --workspace -- -D warnings
 
 ## 8. Un-ignore the test
 
-In `harness.rs`, change:
-```rust
-harness_test!(name, "path/file.cir", ignore = "reason");
-```
-to:
-```rust
-harness_test!(name, "path/file.cir");
+Remove the test's line from `thevenin/tests/ignore.toml`:
+```toml
+# Delete this line:
+"path/file.cir" = "reason"
 ```
 
 ## 9. Check if sibling tests also pass
