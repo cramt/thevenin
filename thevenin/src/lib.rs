@@ -120,7 +120,7 @@ pub use mna::{
 };
 pub use mos6::{Mos6Instance, Mos6Model, stamp_mos6};
 pub use mosfet::{MosfetInstance, MosfetModel, MosfetType, stamp_mosfet};
-pub use newton::{NrError, NrOptions, NrResult, newton_raphson_solve};
+pub use newton::{NrError, NrMode, NrOptions, NrResult, newton_raphson_solve};
 pub use noise::simulate_noise;
 pub use pz::simulate_pz;
 pub use sens::simulate_sens;

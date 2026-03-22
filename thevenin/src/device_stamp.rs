@@ -21,6 +21,7 @@ use crate::mesa::{mesa_companion, stamp_mesa};
 use crate::mesfet::{mesfet_companion, stamp_mesfet_with_voltages};
 use crate::mna::{MnaSystem, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
+use crate::newton::NrMode;
 use crate::vbic::{compute_self_heating_power, stamp_vbic_with_voltages};
 
 /// Stamp a current source into the RHS vector.
@@ -364,16 +365,25 @@ impl DeviceVoltageState {
         self.prev_hfet.borrow().clone()
     }
 
-    /// All device types apply their own voltage limiting unconditionally,
-    /// matching ngspice's MODEINITFLOAT behaviour where DEVfetlim/pnjlim are
-    /// active even during DC OP iterations.
+    /// Stamp all nonlinear device companion models into the MNA system.
+    ///
+    /// In `NrMode::InitJct` (first iteration of each NR attempt), junction
+    /// voltages are initialized to built-in potentials (vcrit for PN junctions,
+    /// Vto for FETs) matching ngspice's MODEINITJCT.  This gives a physically
+    /// reasonable starting point and prevents singular matrices from all-zeros.
+    ///
+    /// In `NrMode::Float` (subsequent iterations), voltage limiting (pnjlim,
+    /// fetlim) is applied against previous iteration values, matching ngspice's
+    /// MODEINITFLOAT.
     pub fn stamp_devices(
         &self,
         solution: &[f64],
         system: &mut LinearSystem,
         mna: &MnaSystem,
         gmin: f64,
+        mode: NrMode,
     ) {
+        let init_jct = mode == NrMode::InitJct;
         // Diodes
         {
             let mut prev = self.prev_jct.borrow_mut();
@@ -384,11 +394,16 @@ impl DeviceVoltageState {
                     (diode.anode_idx, diode.cathode_idx)
                 };
 
-                let v_anode = jct_anode.map(|i| solution[i]).unwrap_or(0.0);
-                let v_cathode = jct_cathode.map(|i| solution[i]).unwrap_or(0.0);
-                let mut v_jct = v_anode - v_cathode;
-
-                v_jct = pnjlim(v_jct, prev[di], diode.model.n * VT_NOM, self.vcrits[di]);
+                let v_jct = if init_jct {
+                    // MODEINITJCT: initialize to critical voltage (built-in potential).
+                    // Matches ngspice dioload.c: vd = here->DIOtVcrit
+                    self.vcrits[di]
+                } else {
+                    let v_anode = jct_anode.map(|i| solution[i]).unwrap_or(0.0);
+                    let v_cathode = jct_cathode.map(|i| solution[i]).unwrap_or(0.0);
+                    let raw = v_anode - v_cathode;
+                    pnjlim(raw, prev[di], diode.model.n * VT_NOM, self.vcrits[di])
+                };
                 prev[di] = v_jct;
 
                 let (g_d, i_eq) = diode.model.companion(v_jct);
@@ -406,10 +421,19 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_bjt.borrow_mut();
             for (bi, bjt) in mna.bjts.iter().enumerate() {
-                let (raw_vbe, raw_vbc) = bjt.junction_voltages(solution);
-
-                let vbe = bjt.model.limit_vbe(raw_vbe, prev[bi].0);
-                let vbc = bjt.model.limit_vbc(raw_vbc, prev[bi].1);
+                let (vbe, vbc) = if init_jct {
+                    // MODEINITJCT: vbe = type * vcrit, vbc = 0.
+                    // Matches ngspice bjtload.c:
+                    //   vbe = model->BJTtype * here->BJTtVcrit;
+                    //   vbc = 0;
+                    let sign = bjt.model.bjt_type.sign();
+                    (sign * bjt.model.vcrit_be(), 0.0)
+                } else {
+                    let (raw_vbe, raw_vbc) = bjt.junction_voltages(solution);
+                    let vbe = bjt.model.limit_vbe(raw_vbe, prev[bi].0);
+                    let vbc = bjt.model.limit_vbc(raw_vbc, prev[bi].1);
+                    (vbe, vbc)
+                };
                 prev[bi] = (vbe, vbc);
 
                 let comp = bjt.model.companion(vbe, vbc);
@@ -421,26 +445,29 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_mos.borrow_mut();
             for (mi, mos) in mna.mosfets.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
-
-                // Always apply voltage limiting for Level 1 MOSFETs, matching
-                // ngspice's MODEINITFLOAT which enables DEVfetlim/DEVlimvds even
-                // during DC OP iterations.  This prevents NR divergence for PMOS
-                // transistors with LAMBDA=0 (gds=0 in saturation).  BSIM3/4 have
-                // their own unconditional limiting and are not affected.
-                // Use the previous iteration's dynamically computed von (including
-                // body effect) for fetlim, matching ngspice mos1load.c line 351:
-                //   von = model->MOS1type * here->MOS1von;
-                // On the first iteration, von=0.0 (matching ngspice default).
-                let von_prev = prev[mi].3;
-                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
-                // Apply pnjlim to bulk junction voltages (Vbs/Vbd), matching
-                // ngspice mos1load.c lines 375-384.  Without this, large Vbs
-                // jumps can cause exponential overflow in junction currents.
-                let vbs = if vds >= 0.0 {
-                    bsim_pnjlim(raw_vbs, prev[mi].2)
+                let (vgs, vds, vbs) = if init_jct {
+                    // MODEINITJCT: vgs = vds = type * Vto, vbs = 0.
+                    // Matches ngspice mos1load.c:
+                    //   vds = model->MOS1type * here->MOS1tVto;
+                    //   vgs = vds;
+                    //   vbs = 0;
+                    let sign = mos.model.mos_type.sign();
+                    let vto = sign * mos.model.vto;
+                    (vto, vto, 0.0)
                 } else {
-                    bsim_pnjlim(raw_vbs - vds, prev[mi].2 - prev[mi].1) + vds
+                    let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
+
+                    // Apply voltage limiting for Level 1 MOSFETs, matching
+                    // ngspice's MODEINITFLOAT which enables DEVfetlim/DEVlimvds.
+                    let von_prev = prev[mi].3;
+                    let (vgs, vds) =
+                        mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let vbs = if vds >= 0.0 {
+                        bsim_pnjlim(raw_vbs, prev[mi].2)
+                    } else {
+                        bsim_pnjlim(raw_vbs - vds, prev[mi].2 - prev[mi].1) + vds
+                    };
+                    (vgs, vds, vbs)
                 };
 
                 let mut eff_model = mos.model.clone();
@@ -458,20 +485,24 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_mos6.borrow_mut();
             for (mi, mos) in mna.mos6s.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
-
-                // Always apply voltage limiting for Level 6 MOSFETs (same
-                // rationale as Level 1 above).
-                // Use previous iteration's dynamic von for fetlim (same as Level 1).
-                let von_prev = prev[mi].3;
-                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
-                // Apply pnjlim to bulk junction voltages (same as Level 1).
-                let vbs = if vds >= 0.0 {
-                    bsim_pnjlim(raw_vbs, prev[mi].2)
+                let (vgs, vds, vbs) = if init_jct {
+                    // MODEINITJCT: same as Level 1.
+                    let sign = mos.model.mos_type.sign();
+                    let vto = sign * mos.model.vto;
+                    (vto, vto, 0.0)
                 } else {
-                    let vbd = raw_vbs - vds;
-                    let vbd_lim = bsim_pnjlim(vbd, prev[mi].2 - prev[mi].1);
-                    vbd_lim + vds
+                    let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
+                    let von_prev = prev[mi].3;
+                    let (vgs, vds) =
+                        mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let vbs = if vds >= 0.0 {
+                        bsim_pnjlim(raw_vbs, prev[mi].2)
+                    } else {
+                        let vbd = raw_vbs - vds;
+                        let vbd_lim = bsim_pnjlim(vbd, prev[mi].2 - prev[mi].1);
+                        vbd_lim + vds
+                    };
+                    (vgs, vds, vbs)
                 };
 
                 let betac = mos.betac();
@@ -485,17 +516,25 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_jfet.borrow_mut();
             for (ji, jfet) in mna.jfets.iter().enumerate() {
-                let (raw_vgs, raw_vgd) = jfet.junction_voltages(solution);
-
-                let vt = jfet.model.n * VT_NOM;
-                let (vgs, vgd) = jfet_limit(
-                    raw_vgs,
-                    raw_vgd,
-                    prev[ji].0,
-                    prev[ji].1,
-                    vt,
-                    self.jfet_vcrits[ji],
-                );
+                let (vgs, vgd) = if init_jct {
+                    // MODEINITJCT: vgs = vgd = type * Vto.
+                    // Matches ngspice jfetload.c: vds = vgs = type * tThreshold.
+                    // vgd = vgs - vds = 0 (but we set both to Vto for symmetry).
+                    let sign = jfet.model.jfet_type.sign();
+                    let vto = sign * jfet.model.vto;
+                    (vto, vto)
+                } else {
+                    let (raw_vgs, raw_vgd) = jfet.junction_voltages(solution);
+                    let vt = jfet.model.n * VT_NOM;
+                    jfet_limit(
+                        raw_vgs,
+                        raw_vgd,
+                        prev[ji].0,
+                        prev[ji].1,
+                        vt,
+                        self.jfet_vcrits[ji],
+                    )
+                };
                 prev[ji] = (vgs, vgd);
 
                 let comp = jfet.model.companion(vgs, vgd);
@@ -507,17 +546,23 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_bsim3.borrow_mut();
             for (bi, bsim) in mna.bsim3s.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
-
-                let (vgs, vds, vbs) = bsim3_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    prev[bi].0,
-                    prev[bi].1,
-                    prev[bi].2,
-                    bsim.vth0_inst,
-                );
+                let (vgs, vds, vbs) = if init_jct {
+                    // MODEINITJCT: vgs = type * (vth0 + 0.1), vds = type * 0.1, vbs = 0.
+                    // Matches ngspice b3ld.c MODEINITJCT behavior.
+                    let sign = bsim.model.mos_type.sign();
+                    (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0)
+                } else {
+                    let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
+                    bsim3_limit(
+                        raw_vgs,
+                        raw_vds,
+                        raw_vbs,
+                        prev[bi].0,
+                        prev[bi].1,
+                        prev[bi].2,
+                        bsim.vth0_inst,
+                    )
+                };
                 prev[bi] = (vgs, vds, vbs);
 
                 let comp = bsim3_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
@@ -529,19 +574,25 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_bsim3soi_pd.borrow_mut();
             for (bi, bsim) in mna.bsim3soi_pds.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
-
-                let (vgs, vds, vbs, ves) = bsim3soi_pd_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    raw_ves,
-                    prev[bi].0,
-                    prev[bi].1,
-                    prev[bi].2,
-                    prev[bi].3,
-                    bsim.vth0_inst,
-                );
+                let (vgs, vds, vbs, ves) = if init_jct {
+                    // MODEINITJCT: same pattern as BSIM3 with ves = 0.
+                    let sign = bsim.model.mos_type.sign();
+                    (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0, 0.0)
+                } else {
+                    let (raw_vgs, raw_vds, raw_vbs, raw_ves) =
+                        bsim.terminal_voltages(solution);
+                    bsim3soi_pd_limit(
+                        raw_vgs,
+                        raw_vds,
+                        raw_vbs,
+                        raw_ves,
+                        prev[bi].0,
+                        prev[bi].1,
+                        prev[bi].2,
+                        prev[bi].3,
+                        bsim.vth0_inst,
+                    )
+                };
                 prev[bi] = (vgs, vds, vbs, ves);
 
                 let comp =
@@ -554,21 +605,27 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_bsim3soi_fd.borrow_mut();
             for (bi, bsim) in mna.bsim3soi_fds.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
-
                 let floating_body = bsim.body_idx.is_none();
-                let (vgs, vds, vbs, ves) = bsim3soi_fd_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    raw_ves,
-                    prev[bi].0,
-                    prev[bi].1,
-                    prev[bi].2,
-                    prev[bi].3,
-                    bsim.vth0_inst,
-                    floating_body,
-                );
+                let (vgs, vds, vbs, ves) = if init_jct {
+                    // MODEINITJCT: same pattern as BSIM3 with ves = 0.
+                    let sign = bsim.model.mos_type.sign();
+                    (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0, 0.0)
+                } else {
+                    let (raw_vgs, raw_vds, raw_vbs, raw_ves) =
+                        bsim.terminal_voltages(solution);
+                    bsim3soi_fd_limit(
+                        raw_vgs,
+                        raw_vds,
+                        raw_vbs,
+                        raw_ves,
+                        prev[bi].0,
+                        prev[bi].1,
+                        prev[bi].2,
+                        prev[bi].3,
+                        bsim.vth0_inst,
+                        floating_body,
+                    )
+                };
                 prev[bi] = (vgs, vds, vbs, ves);
 
                 let comp = bsim3soi_fd_companion(
@@ -588,20 +645,26 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_bsim3soi_dd.borrow_mut();
             for (bi, bsim) in mna.bsim3soi_dds.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
-
-                let (vgs, vds, vbs, ves) = bsim3soi_dd_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    raw_ves,
-                    prev[bi].0,
-                    prev[bi].1,
-                    prev[bi].2,
-                    prev[bi].3,
-                    bsim.vth0_inst,
-                    bsim.body_idx.is_none(),
-                );
+                let (vgs, vds, vbs, ves) = if init_jct {
+                    // MODEINITJCT: same pattern as BSIM3 with ves = 0.
+                    let sign = bsim.model.mos_type.sign();
+                    (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0, 0.0)
+                } else {
+                    let (raw_vgs, raw_vds, raw_vbs, raw_ves) =
+                        bsim.terminal_voltages(solution);
+                    bsim3soi_dd_limit(
+                        raw_vgs,
+                        raw_vds,
+                        raw_vbs,
+                        raw_ves,
+                        prev[bi].0,
+                        prev[bi].1,
+                        prev[bi].2,
+                        prev[bi].3,
+                        bsim.vth0_inst,
+                        bsim.body_idx.is_none(),
+                    )
+                };
                 prev[bi] = (vgs, vds, vbs, ves);
 
                 let comp =
@@ -614,17 +677,22 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_bsim4.borrow_mut();
             for (bi, bsim) in mna.bsim4s.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
-
-                let (vgs, vds, vbs) = bsim4_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    prev[bi].0,
-                    prev[bi].1,
-                    prev[bi].2,
-                    bsim.size_params.vth0,
-                );
+                let (vgs, vds, vbs) = if init_jct {
+                    // MODEINITJCT: same pattern as BSIM3.
+                    let sign = bsim.model.mos_type.sign();
+                    (sign * (bsim.size_params.vth0 + 0.1), sign * 0.1, 0.0)
+                } else {
+                    let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
+                    bsim4_limit(
+                        raw_vgs,
+                        raw_vds,
+                        raw_vbs,
+                        prev[bi].0,
+                        prev[bi].1,
+                        prev[bi].2,
+                        bsim.size_params.vth0,
+                    )
+                };
                 prev[bi] = (vgs, vds, vbs);
 
                 let comp = bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
@@ -636,24 +704,7 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_vbic.borrow_mut();
             for (vi, vbic) in mna.vbics.iter().enumerate() {
-                let (
-                    raw_vbei,
-                    raw_vbex,
-                    raw_vbci,
-                    raw_vbcx,
-                    raw_vbep,
-                    raw_vrci,
-                    raw_vrbi,
-                    raw_vrbp,
-                    raw_vbcp,
-                ) = vbic.junction_voltages(solution);
-
-                // Clamp all junction voltages to a safe range to prevent NaN/Inf
-                // from corrupted solution vectors (e.g., after a failed NR attempt
-                // where prev voltages became invalid). ngspice handles this via
-                // the MODEINITJCT → MODEINITFLOAT transition; we clamp instead.
-                // Junction voltages: clamp to ±5V (safe for exp(v/vt) < exp(200))
-                // Resistance voltages: allow wider range (±50V)
+                // Shared helper closures for voltage clamping.
                 let clamp_jct = |v: f64| {
                     if v.is_nan() || v.is_infinite() {
                         0.0
@@ -668,26 +719,9 @@ impl DeviceVoltageState {
                         v.clamp(-50.0, 50.0)
                     }
                 };
-                let vbex = clamp_jct(raw_vbex);
-                let vbcx = clamp_jct(raw_vbcx);
-                let vbep = clamp_jct(raw_vbep);
-                let vrci = clamp_res(raw_vrci);
-                let vrbi = clamp_res(raw_vrbi);
-                let vrbp = clamp_res(raw_vrbp);
-                let vbcp = clamp_jct(raw_vbcp);
-
-                // If prev voltages are corrupted (NaN/Inf from a prior failed NR
-                // attempt), reset them to zero so that pnjlim works correctly.
-                if prev[vi].0.is_nan()
-                    || prev[vi].0.is_infinite()
-                    || prev[vi].1.is_nan()
-                    || prev[vi].1.is_infinite()
-                {
-                    prev[vi] = (0.0, 0.0);
-                }
 
                 // Self-heating: clone model and adjust temperature based on Vrth
-                let vrth = if vbic.model.rth > 0.0 && vbic.rth_idx.is_some() {
+                let vrth = if !init_jct && vbic.model.rth > 0.0 && vbic.rth_idx.is_some() {
                     let v = vbic.vrth(solution);
                     if v.is_nan() || v.is_infinite() {
                         0.0
@@ -705,9 +739,52 @@ impl DeviceVoltageState {
                     vbic.model.clone()
                 };
 
-                let vbei = model.limit_vbei(clamp_jct(raw_vbei), prev[vi].0);
-                let vbci = model.limit_vbci(clamp_jct(raw_vbci), prev[vi].1);
-                prev[vi] = (vbei, vbci);
+                let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) = if init_jct {
+                    // MODEINITJCT: initialize main junctions to vcrit, others to 0.
+                    // Matches ngspice vbicload.c MODEINITJCT behavior:
+                    //   vbei = model->VBICtype * here->VBICvcrit;
+                    //   vbci = 0;
+                    // All resistance and parasitic junction voltages start at 0.
+                    let sign = vbic.model.vbic_type.sign();
+                    let vcrit_bei = sign * model.vcrit_bei();
+                    prev[vi] = (vcrit_bei, 0.0);
+                    (vcrit_bei, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                } else {
+                    let (
+                        raw_vbei,
+                        raw_vbex,
+                        raw_vbci,
+                        raw_vbcx,
+                        raw_vbep,
+                        raw_vrci,
+                        raw_vrbi,
+                        raw_vrbp,
+                        raw_vbcp,
+                    ) = vbic.junction_voltages(solution);
+
+                    let vbex = clamp_jct(raw_vbex);
+                    let vbcx = clamp_jct(raw_vbcx);
+                    let vbep = clamp_jct(raw_vbep);
+                    let vrci = clamp_res(raw_vrci);
+                    let vrbi = clamp_res(raw_vrbi);
+                    let vrbp = clamp_res(raw_vrbp);
+                    let vbcp = clamp_jct(raw_vbcp);
+
+                    // If prev voltages are corrupted (NaN/Inf from a prior failed NR
+                    // attempt), reset them to zero so that pnjlim works correctly.
+                    if prev[vi].0.is_nan()
+                        || prev[vi].0.is_infinite()
+                        || prev[vi].1.is_nan()
+                        || prev[vi].1.is_infinite()
+                    {
+                        prev[vi] = (0.0, 0.0);
+                    }
+
+                    let vbei = model.limit_vbei(clamp_jct(raw_vbei), prev[vi].0);
+                    let vbci = model.limit_vbci(clamp_jct(raw_vbci), prev[vi].1);
+                    prev[vi] = (vbei, vbci);
+                    (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp)
+                };
 
                 let comp =
                     model.companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
@@ -766,14 +843,22 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_mesa.borrow_mut();
             for (mi, mesa) in mna.mesas.iter().enumerate() {
-                let (raw_vgs, raw_vgd) = mesa.junction_voltages(solution);
-
-                let vtes = mesa.model.n * crate::mesa::K_OVER_Q * mesa.precomp.ts;
-                let vted = mesa.model.n * crate::mesa::K_OVER_Q * mesa.precomp.td;
-                let vgs = pnjlim(raw_vgs, prev[mi].0, vtes, self.mesa_vcrits[mi]);
-                let vgd = pnjlim(raw_vgd, prev[mi].1, vted, self.mesa_vcritd[mi]);
-                let vgs = fetlim(vgs, prev[mi].0, mesa.precomp.t_vto);
-                let vgd = fetlim(vgd, prev[mi].1, mesa.precomp.t_vto);
+                let (vgs, vgd) = if init_jct {
+                    // MODEINITJCT: vgs = Vto, vgd = Vto.
+                    // Matches ngspice mesaload.c: vgs = type * tVto, vds = type * 0.1.
+                    // MESA is always NMF (sign=+1).  Use vgd ≈ vgs for init.
+                    let vto = mesa.precomp.t_vto;
+                    (vto, vto)
+                } else {
+                    let (raw_vgs, raw_vgd) = mesa.junction_voltages(solution);
+                    let vtes = mesa.model.n * crate::mesa::K_OVER_Q * mesa.precomp.ts;
+                    let vted = mesa.model.n * crate::mesa::K_OVER_Q * mesa.precomp.td;
+                    let vgs = pnjlim(raw_vgs, prev[mi].0, vtes, self.mesa_vcrits[mi]);
+                    let vgd = pnjlim(raw_vgd, prev[mi].1, vted, self.mesa_vcritd[mi]);
+                    let vgs = fetlim(vgs, prev[mi].0, mesa.precomp.t_vto);
+                    let vgd = fetlim(vgd, prev[mi].1, mesa.precomp.t_vto);
+                    (vgs, vgd)
+                };
                 prev[mi] = (vgs, vgd);
 
                 let comp = mesa_companion(mesa, vgs, vgd, 1e-12);
@@ -785,12 +870,19 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_mesfet.borrow_mut();
             for (mi, mes) in mna.mesfets.iter().enumerate() {
-                let (raw_vgs, raw_vgd) = mes.junction_voltages(solution);
-
-                let vgs = pnjlim(raw_vgs, prev[mi].0, VT_NOM, self.mesfet_vcrits[mi]);
-                let vgd = pnjlim(raw_vgd, prev[mi].1, VT_NOM, self.mesfet_vcrits[mi]);
-                let vgs = fetlim(vgs, prev[mi].0, mes.model.vt0);
-                let vgd = fetlim(vgd, prev[mi].1, mes.model.vt0);
+                let (vgs, vgd) = if init_jct {
+                    // MODEINITJCT: vgs = vgd = Vt0.
+                    // Matches ngspice mesfetload.c MODEINITJCT behavior.
+                    let vto = mes.model.vt0;
+                    (vto, vto)
+                } else {
+                    let (raw_vgs, raw_vgd) = mes.junction_voltages(solution);
+                    let vgs = pnjlim(raw_vgs, prev[mi].0, VT_NOM, self.mesfet_vcrits[mi]);
+                    let vgd = pnjlim(raw_vgd, prev[mi].1, VT_NOM, self.mesfet_vcrits[mi]);
+                    let vgs = fetlim(vgs, prev[mi].0, mes.model.vt0);
+                    let vgd = fetlim(vgd, prev[mi].1, mes.model.vt0);
+                    (vgs, vgd)
+                };
                 prev[mi] = (vgs, vgd);
 
                 let comp = mesfet_companion(mes, vgs, vgd, 1e-12);
@@ -809,10 +901,20 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_hfet.borrow_mut();
             for (hi, hfet) in mna.hfets.iter().enumerate() {
-                let (raw_vgs, raw_vgd) = hfet.junction_voltages(solution);
-
-                let vgs = fetlim(raw_vgs, prev[hi].0, hfet.precomp.t_vto);
-                let vgd = fetlim(raw_vgd, prev[hi].1, hfet.precomp.t_vto);
+                let (vgs, vgd) = if init_jct {
+                    // MODEINITJCT: initialize to Vto.
+                    // Matches ngspice hfetload.c MODEINITJCT:
+                    //   vgs = model->HFETAtype * here->HFETAvt0;
+                    //   vgd = vgs;
+                    let sign = hfet.model.device_type as i32 as f64;
+                    let vto = sign * hfet.precomp.t_vto;
+                    (vto, vto)
+                } else {
+                    let (raw_vgs, raw_vgd) = hfet.junction_voltages(solution);
+                    let vgs = fetlim(raw_vgs, prev[hi].0, hfet.precomp.t_vto);
+                    let vgd = fetlim(raw_vgd, prev[hi].1, hfet.precomp.t_vto);
+                    (vgs, vgd)
+                };
                 prev[hi] = (vgs, vgd);
 
                 let comp = hfet_companion_full(hfet, vgs, vgd, 1e-12);

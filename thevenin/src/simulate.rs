@@ -7,7 +7,7 @@ use crate::LinearSystem;
 use crate::device_stamp::DeviceVoltageState;
 use crate::expr_val;
 use crate::mna::{MnaError, MnaSystem, assemble_mna, assemble_mna_with_xspice};
-use crate::newton::{NrOptions, newton_raphson_solve, source_stepping_solve};
+use crate::newton::{NrMode, NrOptions, newton_raphson_solve, source_stepping_solve};
 
 /// Extract Newton-Raphson options from netlist `.OPTIONS` directives.
 pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
@@ -388,7 +388,7 @@ fn solve_nonlinear_op_with_guess(
     // failed attempt poisoning the next one.
     let last_gmin = std::cell::Cell::new(f64::NAN);
 
-    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64| {
+    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64, mode: NrMode| {
         // Detect NR attempt boundary: gmin changes when switching between
         // direct NR (gmin=diag_gmin), gmin stepping (gmin=1e-2..1e-12), and
         // source stepping. Reset device prev voltages to match current solution.
@@ -415,16 +415,27 @@ fn solve_nonlinear_op_with_guess(
         //    ngspice where CKTgmin stays at its nominal value during stepping and
         //    only CKTdiagGmin (solver diagonal) is elevated.
         let _ = gmin; // elevated gmin used only by solver diagonal, not device stamps
-        dev_state.stamp_devices(solution, system, mna, options.gmin);
+        dev_state.stamp_devices(solution, system, mna, options.gmin, mode);
     };
 
-    // For circuits with transmission lines (LTRA/TXL/CPL) combined with MOSFETs,
-    // use source stepping for the DC OP.  Source stepping ramps all independent
-    // sources from zero, keeping the circuit on the physical solution path and
-    // avoiding spurious negative-voltage fixed points in cascaded-inverter
-    // circuits.
+    // Choose DC OP convergence strategy based on circuit topology.
+    //
+    // Source stepping ramps all independent sources from 0→full, keeping the
+    // circuit on the physical solution path and avoiding convergence to wrong
+    // equilibria in bistable circuits.  This is forced (instead of being a
+    // fallback inside newton_raphson_solve) for topologies where direct NR is
+    // known to converge to the wrong solution:
+    //
+    //  • Transmission lines + MOSFETs: cascaded CMOS inverters have multiple
+    //    DC operating points; source stepping follows the unique physical path.
+    //  • Circuits with many nonlinear devices (≥10 BJTs/VBICs): complex
+    //    multi-transistor circuits (e.g. VBIC diffamp) benefit from the
+    //    gradual source ramp to avoid NR divergence.
     let has_tlines = !mna.ltras.is_empty() || !mna.txls.is_empty() || !mna.cpls.is_empty();
-    let result = if has_tlines && !mna.mosfets.is_empty() {
+    let many_nonlinear = mna.bjts.len() + mna.vbics.len() >= 10;
+    let force_source_stepping =
+        (has_tlines && !mna.mosfets.is_empty()) || many_nonlinear;
+    let result = if force_source_stepping {
         source_stepping_solve(options, dim, num_nodes, load, &initial)
     } else {
         newton_raphson_solve(options, dim, num_nodes, load, &initial)

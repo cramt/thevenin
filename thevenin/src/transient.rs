@@ -15,7 +15,7 @@ use crate::device_stamp::{DeviceVoltageState, stamp_current_source};
 use crate::expr_val;
 use crate::ltra::{LtraCoeffs, LtraState};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
-use crate::newton::{NrOptions, transient_nr_solve};
+use crate::newton::{NrMode, NrOptions, transient_nr_solve};
 use crate::simulate::solve_op_raw;
 use crate::txl::TxlTransientStamp;
 use crate::waveform::{self, TranParams};
@@ -346,31 +346,18 @@ fn estimate_new_timestep(
         }
     }
 
-    // LTE for BJT dynamic junction charges (diffusion + depletion correction).
+    // LTE for BJT dynamic junction charges (full voltage-dependent caps).
     // In ngspice, bjtload.c integrates junction charges via NIintegrate, and
     // the LTE from these charges feeds into the adaptive timestep control.
-    // Without this, the timestep controller ignores the dominant charge storage
-    // in BJT circuits (e.g., TF*gbe diffusion cap can be 10× larger than CJE),
-    // allowing too-large steps during BJT switching transitions.
     for (bi, bjt) in mna.bjts.iter().enumerate() {
         let hist = &bjt_charge_histories[bi];
         let (vbe, vbc) = bjt.junction_voltages(solution);
         let comp = bjt.model.companion(vbe, vbc);
         let m = bjt.m * bjt.area;
 
-        // Compute correction cap at new voltage (same formula as NR stamping).
-        let capbe_dep_corr = if bjt.model.cje > 0.0 {
-            (bjt.model.cap_be(vbe) - bjt.model.cje).max(0.0)
-        } else {
-            0.0
-        };
-        let capbc_dep_corr = if bjt.model.cjc > 0.0 {
-            (bjt.model.cap_bc(vbc) - bjt.model.cjc).max(0.0)
-        } else {
-            0.0
-        };
-        let capbe = bjt.model.tf * comp.gbe_raw + capbe_dep_corr;
-        let capbc = bjt.model.tr * comp.gbc_raw + capbc_dep_corr;
+        // Full voltage-dependent depletion cap + diffusion cap.
+        let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * comp.gbe_raw;
+        let capbc = bjt.model.cap_bc(vbc) + bjt.model.tr * comp.gbc_raw;
 
         // B-E charge LTE.
         if capbe > 0.0 {
@@ -531,17 +518,16 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
     // Initialize BJT charge histories from DC operating point.
     // At DC steady state, dQ/dt = 0, so charge currents are all zero.
-    // Tracks diffusion charge + positive depletion correction (cap_be(v) - CJE
-    // when positive) on top of the constant CJE/CJC caps in MNA.
+    // Uses FULL absolute charges (depletion + diffusion), matching ngspice's
+    // bjtload.c which computes Q = junction_charge(v) + TF*cbe at each point.
     let mut bjt_charge_histories: Vec<BjtChargeHistory> = mna
         .bjts
         .iter()
         .map(|bjt| {
             let (vbe, vbc) = bjt.junction_voltages(&solution);
             let comp = bjt.model.companion(vbe, vbc);
-            // Diffusion charge + positive depletion correction charge.
-            // Use compute_charge_correction for exact integral.
-            let (qbe, _, qbc, _) = bjt.model.compute_charge_correction(
+            // Full charge: depletion integral + diffusion charge.
+            let (qbe, _, qbc, _) = bjt.model.compute_charges(
                 vbe,
                 vbc,
                 comp.cbe_raw,
@@ -549,9 +535,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 comp.cbc_raw,
                 comp.gbc_raw,
             );
-            // Clamp depletion correction to positive only (diffusion is always positive)
-            let qbe = (bjt.model.tf * comp.cbe_raw).max(qbe);
-            let qbc = (bjt.model.tr * comp.cbc_raw).max(qbc);
             BjtChargeHistory {
                 qbe,
                 cqbe: 0.0, // DC steady state: no charge current
@@ -1148,24 +1131,13 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
         }
 
-        // Update BJT charge correction histories (diffusion + positive depletion correction).
+        // Update BJT charge histories (full voltage-dependent caps).
         for (bi, bjt) in mna.bjts.iter().enumerate() {
             let (vbe, vbc) = bjt.junction_voltages(&solution);
             let comp = bjt.model.companion(vbe, vbc);
-            // Compute incremental charge at accepted point
-            // Use incremental charge for the accepted point
-            let capbe_corr = if bjt.model.cje > 0.0 {
-                (bjt.model.cap_be(vbe) - bjt.model.cje).max(0.0)
-            } else {
-                0.0
-            };
-            let capbc_corr = if bjt.model.cjc > 0.0 {
-                (bjt.model.cap_bc(vbc) - bjt.model.cjc).max(0.0)
-            } else {
-                0.0
-            };
-            let capbe = bjt.model.tf * comp.gbe_raw + capbe_corr;
-            let capbc = bjt.model.tr * comp.gbc_raw + capbc_corr;
+            // Full voltage-dependent depletion cap + diffusion cap.
+            let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * comp.gbe_raw;
+            let capbc = bjt.model.cap_bc(vbc) + bjt.model.tr * comp.gbc_raw;
             let qbe = bjt_charge_histories[bi].qbe + capbe * (vbe - bjt_charge_histories[bi].vbe);
             let qbc = bjt_charge_histories[bi].qbc + capbc * (vbc - bjt_charge_histories[bi].vbc);
 
@@ -1565,7 +1537,21 @@ fn solve_timestep(
 
     let dev_state = DeviceVoltageState::from_solution(mna, prev_solution);
 
-    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64| {
+    // Build a skip-set for BJT CJE/CJC cap indices.  These depletion caps
+    // are stamped dynamically (voltage-dependent) in step 5 of the load
+    // closure rather than as constant zero-bias values.  CJS (substrate)
+    // caps are NOT skipped — they remain constant.
+    let mut skip_bjt_cap = vec![false; capacitors.len()];
+    for idx in &mna.bjt_cap_indices {
+        if let Some(i) = idx.cje_idx {
+            skip_bjt_cap[i] = true;
+        }
+        if let Some(i) = idx.cjc_idx {
+            skip_bjt_cap[i] = true;
+        }
+    }
+
+    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64, _mode: NrMode| {
         // 1. Copy base linear stamps (R, V, I topology + inductor topology).
         for triplet in base_matrix.triplets() {
             system.matrix.add(triplet.row, triplet.col, triplet.value);
@@ -1628,7 +1614,12 @@ fn solve_timestep(
         }
 
         // 2. Stamp capacitor companion models.
+        //    Skip BJT CJE/CJC caps — these are stamped dynamically (voltage-
+        //    dependent) in step 5 below instead of as constant zero-bias values.
         for (ci, cap) in capacitors.iter().enumerate() {
+            if skip_bjt_cap[ci] {
+                continue;
+            }
             let (geq, ieq) = capacitor_companion(cap.capacitance, h, &cap_histories[ci], method);
             stamp_conductance(&mut system.matrix, cap.pos_idx, cap.neg_idx, geq);
             stamp_current_source(&mut system.rhs, cap.pos_idx, cap.neg_idx, ieq);
@@ -1643,21 +1634,26 @@ fn solve_timestep(
 
         // 4. Stamp all nonlinear device companions. Device stamps always use
         //    nominal gmin (not the elevated gmin from gmin stepping).
-        //    Voltage limiting is always applied, matching ngspice MODETRANOP
-        //    which uses DEVfetlim/pnjlim to prevent NR divergence.
+        //    Transient always uses Float mode (voltage limiting against previous
+        //    timestep's solution), matching ngspice MODETRANOP.
         if has_nonlinear {
             let _ = gmin;
-            dev_state.stamp_devices(solution, system, mna, nr_options.gmin);
+            // Always use Float for transient — we have a meaningful previous solution.
+            dev_state.stamp_devices(solution, system, mna, nr_options.gmin, NrMode::Float);
         }
 
         // 5. Stamp BJT junction capacitance companion models.
-        //    Uses the incremental charge formulation with voltage-dependent
-        //    depletion capacitances + TF/TR diffusion capacitances, matching
-        //    ngspice's bjtload.c.  The charge at the current operating point is:
+        //    Uses the FULL voltage-dependent depletion capacitance (not a
+        //    correction on top of a constant MNA cap) plus TF/TR diffusion
+        //    capacitance.  The constant CJE/CJC caps are skipped in step 2
+        //    above.  This gives the correct cap in both forward and reverse
+        //    bias, matching ngspice's bjtload.c which computes
+        //    cap(v) = junction_cap(v) + TF*gbe at every NR iteration.
+        //
+        //    The incremental charge formulation is:
         //      Q_new = Q_prev + C(v) * (v - v_prev)
         //    where C(v) = junction_cap(v) + TF*gbe (or TR*gbc).
-        //    This avoids computing absolute charges during NR iterations and
-        //    always produces positive geq (since C(v) >= 0).
+        //    geq = C(v)/h is always positive since junction_cap >= 0.
         if !mna.bjts.is_empty() {
             let prev_bjt = dev_state.prev_bjt_voltages();
             for (bi, bjt) in mna.bjts.iter().enumerate() {
@@ -1665,27 +1661,12 @@ fn solve_timestep(
                 let sign = bjt.model.bjt_type.sign();
                 let m = bjt.m * bjt.area;
 
-                // Compute companion at current operating point to get cbe, gbe, cbc, gbc.
+                // Compute companion at current operating point to get gbe, gbc.
                 let comp = bjt.model.companion(vbe, vbc);
 
-                // Diffusion capacitance (TF*gbe, TR*gbc) plus depletion cap
-                // correction (voltage-dependent minus constant CJE/CJC).
-                // The constant CJE/CJC caps are already in MNA; here we add
-                // the diffusion terms and the positive depletion correction
-                // (forward bias only, where junction_cap > CJE).  In reverse
-                // bias, the constant CJE/CJC from MNA is used as-is.
-                let capbe_dep_corr = if bjt.model.cje > 0.0 {
-                    (bjt.model.cap_be(vbe) - bjt.model.cje).max(0.0)
-                } else {
-                    0.0
-                };
-                let capbc_dep_corr = if bjt.model.cjc > 0.0 {
-                    (bjt.model.cap_bc(vbc) - bjt.model.cjc).max(0.0)
-                } else {
-                    0.0
-                };
-                let capbe = bjt.model.tf * comp.gbe_raw + capbe_dep_corr;
-                let capbc = bjt.model.tr * comp.gbc_raw + capbc_dep_corr;
+                // Full voltage-dependent depletion cap + diffusion cap.
+                let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * comp.gbe_raw;
+                let capbc = bjt.model.cap_bc(vbc) + bjt.model.tr * comp.gbc_raw;
 
                 let hist = &bjt_charge_histories[bi];
 
@@ -2125,7 +2106,7 @@ fn solve_timestep(
     } else {
         // Linear: single solve.
         let mut system = LinearSystem::new(dim);
-        load(prev_solution, &mut system, 1.0, nr_options.gmin);
+        load(prev_solution, &mut system, 1.0, nr_options.gmin, NrMode::Float);
         let sol = system.solve()?;
         Ok(sol)
     }

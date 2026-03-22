@@ -30,11 +30,11 @@
 "general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
 "general/fourbitadder.cir" = "times out (>30s)"
 "general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET missing velocity saturation/mobility degradation"
-"general/rtlinv.cir" = "~5.96% transient error at t=7ns: transition timing shift from constant reverse-bias BJT junction cap approximation"
-"general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching from constant reverse-bias BJT junction cap approximation"
+"general/rtlinv.cir" = "~4.1% transient error at t=9ns: transition timing shift (dynamic BJT caps improved from 5.96% at 7ns)"
+"general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (BJT caps now fully dynamic but other timing errors dominate)"
 
 # === HFET ===
-"hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter: NR converges to Vdd equilibrium instead of negative-V equilibrium; needs source stepping to find correct operating point)"
+"hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter: source stepping also converges to Vdd; depletion-mode load pulls output high at every source ramp step)"
 
 # === Regression: misc ===
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
@@ -57,7 +57,8 @@
 
 # === VBIC ===
 "vbic/CEamp.cir" = "VBIC AC: ~0.2% gain error at 6.8MHz (self-heating FP, 0.066dB vs 0.065dB tolerance; fixed AC temp adjustment reduced from 1.2%)"
-"vbic/diffamp.cir" = "VBIC diffamp: times out (>30s) -- 13-transistor circuit with self-heating (NPN+PNP)"
+"vbic/diffamp.cir" = "VBIC diffamp: NR non-convergence (13-transistor circuit with self-heating, source stepping also fails)"
 "vbic/FG.cir" = "VBIC FG: 0.234% DC error at Vb=0.74V (self-heating FP evaluation order, grows linearly with Vrth)"
 "vbic/FO.cir" = "VBIC FO: 0.205% DC error at Vc=2.2V (self-heating FP evaluation order, 0.005% above 0.2% tolerance)"
 "vbic/temp.cir" = "VBIC temp: 0.226% DC error at Vb=0.57V (self-heating FP evaluation order, grows linearly with Vrth)"
+

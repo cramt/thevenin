@@ -1,6 +1,24 @@
 use crate::{LinearSystem, SparseMatrixError};
 use thiserror::Error;
 
+/// NR iteration mode, matching ngspice's MODEINITJCT/MODEINITFLOAT.
+///
+/// On the very first NR iteration of each attempt, devices should initialize
+/// junction voltages to built-in potentials (e.g. vcrit for PN junctions,
+/// Vto for FETs) rather than limiting against previous iteration values.
+/// This gives a physically reasonable starting point for multi-transistor
+/// circuits that would otherwise converge to singular matrices from an
+/// all-zeros start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NrMode {
+    /// First iteration: initialize junction voltages to built-in potentials.
+    /// No voltage limiting is applied (no meaningful "previous" to limit against).
+    InitJct,
+    /// Subsequent iterations: apply voltage limiting (pnjlim, fetlim) against
+    /// the previous iteration's solution.
+    Float,
+}
+
 #[derive(Error, Debug)]
 pub enum NrError {
     #[error("Newton-Raphson failed to converge after {iterations} iterations")]
@@ -99,6 +117,12 @@ struct NrAttempt {
 
 /// Run NR iteration with given attempt parameters.
 ///
+/// `first_mode` controls what mode is used for iter 0:
+///   - `NrMode::InitJct`: devices initialize to built-in potentials (used for
+///     the very first NR attempt of a fresh DC OP from scratch).
+///   - `NrMode::Float`: devices use voltage limiting from the start (used for
+///     gmin/source stepping, transient, DC sweep continuation, etc.).
+///
 /// Returns `Ok(NrResult)` if converged, `Err` otherwise.
 fn try_nr<F>(
     options: &NrOptions,
@@ -107,9 +131,10 @@ fn try_nr<F>(
     load_system: &F,
     initial_guess: &[f64],
     attempt: &NrAttempt,
+    first_mode: NrMode,
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
     let mut solution = initial_guess.to_vec();
     let mut system = LinearSystem::new(dim);
@@ -117,7 +142,8 @@ where
     for iter in 0..attempt.max_iters {
         system.matrix.clear();
         system.rhs.fill(0.0);
-        load_system(&solution, &mut system, attempt.source_factor, attempt.gmin);
+        let mode = if iter == 0 { first_mode } else { NrMode::Float };
+        load_system(&solution, &mut system, attempt.source_factor, attempt.gmin, mode);
 
         // Add Gmin from each node to ground for numerical stability.
         for i in 0..num_nodes {
@@ -163,7 +189,7 @@ fn gmin_stepping<F>(
     initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
     let mut gmin = 1e-2;
     let gmin_factor = 10.0; // matches ngspice SPICE3-style gmin stepping
@@ -176,7 +202,7 @@ where
             source_factor: 1.0,
             max_iters: options.itl2,
         };
-        let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt)?;
+        let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float)?;
         total_iters += result.iterations;
         solution = result.solution;
         gmin /= gmin_factor;
@@ -188,7 +214,7 @@ where
         source_factor: 1.0,
         max_iters: options.itl2,
     };
-    let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt)?;
+    let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float)?;
     total_iters += result.iterations;
 
     Ok(NrResult {
@@ -217,7 +243,7 @@ fn source_stepping<F>(
     initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
     // Use elevated Gmin throughout source ramping to prevent near-singular
     // matrices caused by floating nodes (e.g. LTRA-coupled node pairs where
@@ -235,7 +261,7 @@ where
             source_factor: factor,
             max_iters: options.itl2,
         };
-        let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt)?;
+        let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float)?;
         total_iters += result.iterations;
         solution = result.solution;
     }
@@ -255,7 +281,7 @@ where
             source_factor: 1.0,
             max_iters: options.itl2,
         };
-        match try_nr(options, dim, num_nodes, load_system, &solution, &attempt) {
+        match try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float) {
             Ok(result) => {
                 total_iters += result.iterations;
                 backup.copy_from_slice(&result.solution);
@@ -282,7 +308,7 @@ where
         source_factor: 1.0,
         max_iters: options.itl2,
     };
-    let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt)?;
+    let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float)?;
     total_iters += result.iterations;
 
     Ok(NrResult {
@@ -306,7 +332,7 @@ pub fn transient_nr_solve<F>(
     initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
     // First try: direct NR with the nominal diag_gmin.
     let attempt = NrAttempt {
@@ -314,6 +340,7 @@ where
         source_factor: 1.0,
         max_iters: options.itl4,
     };
+    // Transient always uses Float — we have a meaningful previous solution.
     match try_nr(
         options,
         dim,
@@ -321,6 +348,7 @@ where
         &load_system,
         initial_guess,
         &attempt,
+        NrMode::Float,
     ) {
         Ok(result) => Ok(result),
         Err(_) => {
@@ -348,7 +376,7 @@ pub fn source_stepping_solve<F>(
     initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
     source_stepping(options, dim, num_nodes, &load_system, initial_guess)
 }
@@ -381,7 +409,7 @@ pub fn newton_raphson_solve<F>(
     initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
     // Try direct NR first.
     // Use options.diag_gmin for the diagonal Gmin.  For DC OP this is 0
@@ -392,6 +420,8 @@ where
         source_factor: 1.0,
         max_iters: options.itl1,
     };
+    // Use InitJct for the very first NR iteration, matching ngspice's
+    // MODEINITJCT → MODEINITFLOAT transition in CKTdcOp.
     if let Ok(result) = try_nr(
         options,
         dim,
@@ -399,6 +429,7 @@ where
         &load_system,
         initial_guess,
         &attempt,
+        NrMode::InitJct,
     ) {
         return Ok(result);
     }
@@ -467,7 +498,7 @@ mod tests {
         let num_nodes = 2;
         let options = NrOptions::default();
 
-        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64| {
+        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64, _mode: NrMode| {
             let v2 = solution[1]; // diode voltage
 
             // Resistor R1 between nodes 0 and 1 (matrix indices)
@@ -533,7 +564,7 @@ mod tests {
         // V1=5V, R1=1k to ground
         // V(1) = 5V, I(V1) = -5mA
         let load =
-            |_solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64| {
+            |_solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64, _mode: NrMode| {
                 let g = 1.0 / 1000.0;
                 // Resistor from node 0 to ground
                 system.matrix.add(0, 0, g);
@@ -588,7 +619,7 @@ mod tests {
         let num_nodes = 2;
         let options = NrOptions::default();
 
-        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64| {
+        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64, _mode: NrMode| {
             let v2 = solution[1];
 
             // Resistor
