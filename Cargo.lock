@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "approx",
  "faer",
@@ -1439,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-test-macro"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "approx",
  "facet",
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-xspice"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "thiserror"

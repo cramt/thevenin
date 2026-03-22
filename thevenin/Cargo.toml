@@ -1,6 +1,6 @@
 [package]
 name = "thevenin"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Core simulation engine for thevenin: sparse matrices, MNA assembly, solvers"
 license = "BSD-3-Clause"
@@ -9,8 +9,8 @@ repository = "https://github.com/cramt/thevenin"
 [dependencies]
 thiserror.workspace = true
 faer.workspace = true
-thevenin-types = { path = "../thevenin-types", version = "0.1.0" }
-thevenin-xspice = { path = "../thevenin-xspice", version = "0.1.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.2.0" }
+thevenin-xspice = { path = "../thevenin-xspice", version = "0.1.1" }
 libm = "0.2"
 
 [dev-dependencies]
@@ -18,7 +18,7 @@ approx = "0.5"
 wasm-bindgen-test.workspace = true
 getrandom = { version = "0.3", features = ["wasm_js"] }
 web-time = "1"
-thevenin-test-macro = { path = "../thevenin-test-macro", version = "0.1.0" }
+thevenin-test-macro = { path = "../thevenin-test-macro", version = "0.1.1" }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 web-sys = { version = "0.3", features = ["console"] }
