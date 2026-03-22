@@ -16,7 +16,7 @@ libm = "0.2"
 [dev-dependencies]
 approx = "0.5"
 wasm-bindgen-test.workspace = true
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
 web-time = "1"
 thevenin-test-macro = { path = "../thevenin-test-macro" }
 
