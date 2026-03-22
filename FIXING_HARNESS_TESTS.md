@@ -3040,4 +3040,73 @@ All other test categories remain as previously documented:
 - Sensitivity (1 test): LU precision, needs analytical sensitivity
 - Missing subsystems (5 tests): BSIM1/2, .control, TEMPER
 - No reference (1 test): ngspice says "To be done"
+
+---
+
+## Investigation: VBIC CEamp improvement and BJT analytical charge (2026-03-22)
+
+### VBIC CEamp AC test improvement
+
+The VBIC CEamp test has improved significantly since the AC temperature
+adjustment fix was documented.  The first mismatch moved from 6.76 MHz
+(0.066 dB error) to 1.479 GHz (0.028 dB error), likely due to the VBIC
+q1 clamp fix.  The error is now only 0.62% above tolerance:
+
+| Metric | Previous | Current |
+|---|---|---|
+| First mismatch freq | 6.76 MHz | 1.479 GHz |
+| Error (dB) | 0.066 | 0.028 |
+| Tolerance (dB) | 0.065 | 0.027 |
+| Over tolerance | 1.5% | 0.62% |
+
+Still not passing — the remaining 0.028 dB error at 1.479 GHz is from
+the same self-heating FP evaluation order difference.  Updated ignore.toml
+to reflect current state.
+
+### BJT analytical charge investigation
+
+Investigated switching from incremental charge (`Q += C*ΔV`) to analytical
+charge (`Q = ∫C(v)dv + TF*I`) for BJT transient analysis, matching
+ngspice's bjtload.c which computes Q(V) analytically at each NR iteration.
+
+Three approaches attempted:
+
+1. **Full analytical Q in NR loop**: Replaces `Q = Q_prev + C*ΔV` with
+   `Q = compute_charges(V)`.  Result: NR divergence (singular matrix after
+   200 iterations).  Root cause: the exponential diffusion charge term
+   `TF * IS * exp(V/VT)` causes enormous Norton current changes when V
+   shifts between NR iterations, even with pnjlim voltage limiting.
+
+2. **Analytical Q in history, incremental in NR**: Stores analytical Q(V)
+   at each converged timestep to prevent drift, but uses incremental
+   formula within NR iterations.  Result: No change in error (4.1%
+   identical to baseline).  Root cause: the trapezoidal integration uses
+   only charge DIFFERENCES (Q - Q_prev), and the incremental formula
+   computes `Q - Q_prev = C*ΔV` regardless of the absolute Q base value.
+
+3. **Analytical Q in history with NR-consistent cqbe**: Stores analytical
+   Q but keeps the charge current cqbe from the NR-converged solution.
+   Result: Also no change — same reason as approach 2.
+
+**Conclusion:** The 4.1% rtlinv error cannot be fixed by changing where
+analytical charges are used.  The error is fundamental to the incremental
+charge formula's first-order approximation within each timestep.  Fixing
+it requires either: (a) using analytical Q directly in the NR loop with
+charge limiting (ngspice-style, but requires convergence infrastructure
+we lack), or (b) implementing per-device state vectors with NR-aware
+charge integration matching ngspice's NIintegrate framework.
+
+### BSIM3SOI-DD vfbb sign fix (regression)
+
+Re-attempted the BSIM3SOI-DD vfbb sign fix (`vfbb = -type * Vtm * ln(npeak/nsub)`
+matching ngspice b3soiddtemp.c).  Results:
+
+| Test | Before fix | After fix | Change |
+|---|---|---|---|
+| DD t3 | ~18% error | ~29% error | Worse |
+| DD t5 | ~1.1% error | ~1.5% error | Worse |
+
+The fix worsens ALL DD tests, confirming the documented compensating bug
+interaction.  Reverted.  The BSIM3SOI-FD model already has the correct
+vfbb sign (fixed in a prior session).
 - Timeout (2 tests): fourbitadder complexity

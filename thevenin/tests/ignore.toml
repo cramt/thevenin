@@ -56,7 +56,7 @@
 "transmission/txl2_3_line.cir" = "~4.7% V(2) error: TXL three-line cascade, CMOS driver timing (TXL model, not affected by LTRA convolution fixes)"
 
 # === VBIC ===
-"vbic/CEamp.cir" = "VBIC AC: ~0.2% gain error at 6.8MHz (self-heating FP, 0.066dB vs 0.065dB tolerance; fixed AC temp adjustment reduced from 1.2%)"
+"vbic/CEamp.cir" = "VBIC AC: ~0.2% gain error at 1.48GHz (self-heating FP, 0.028dB vs 0.027dB tolerance; improved from 6.8MHz/0.066dB by q1 clamp fix)"
 "vbic/diffamp.cir" = "VBIC diffamp: NR non-convergence (13-transistor circuit with self-heating, source stepping also fails)"
 "vbic/FG.cir" = "VBIC FG: 0.234% DC error at Vb=0.74V (self-heating FP evaluation order, grows linearly with Vrth)"
 "vbic/FO.cir" = "VBIC FO: 0.205% DC error at Vc=2.2V (self-heating FP evaluation order, 0.005% above 0.2% tolerance)"
