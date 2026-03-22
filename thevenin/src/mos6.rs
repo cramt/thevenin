@@ -562,8 +562,12 @@ pub fn stamp_mos6(
         crate::stamp_conductance(matrix, inst.source_idx, sp, m * grs);
     }
 
-    // Equivalent current sources on the RHS
-    let ceq_d = sign * m * comp.ceq_d;
+    // Equivalent current sources on the RHS.
+    // ceq_d uses mode*sign to match ngspice's sign convention for reversed mode:
+    //   mode >= 0: cdreq = +type * ceq_d_inner
+    //   mode <  0: cdreq = -type * ceq_d_inner
+    let mode_f = comp.mode as f64;
+    let ceq_d = mode_f * sign * m * comp.ceq_d;
     let ceq_bs = sign * m * comp.ceq_bs;
     let ceq_bd = sign * m * comp.ceq_bd;
 

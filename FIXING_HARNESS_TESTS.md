@@ -2345,3 +2345,48 @@ issue). The updated ignore reason reflects the actual failure mode.
 **No regressions:** All 420 non-ignored tests pass. The tolerance only loosens
 for near-zero values on columns with large dynamic range, not for columns that
 are consistently near zero (sensitivity outputs, leakage currents).
+
+---
+
+## Applied fix: MOS6 ceq_d mode sign in reversed mode (2026-03-22)
+
+**Affected test:** `harness_mos6_mos6inv` (now passes)
+
+**Root cause:** The MOS6 stamp function (`stamp_mos6` in `mos6.rs`) was missing the
+`mode` factor in the ceq_d RHS stamping. In ngspice `mos6load.c` lines 902-912:
+
+```c
+if (here->MOS6mode >= 0) {
+    cdreq = type * (cdrain - gds*vds - gm*vgs - gmbs*vbs);
+} else {
+    cdreq = -(type) * (cdrain - gds*(-vds) - gm*vgd - gmbs*vbd);
+}
+```
+
+The sign flips from `+type` to `-type` between normal and reversed mode. The Level 1
+MOSFET (`mosfet.rs`) already had this fix applied (using `mode * sign * m * ceq_d`),
+but the Level 6 MOSFET (`mos6.rs`) was still using `sign * m * ceq_d` without the
+mode factor.
+
+During transient switching in the MOS6 inverter, MOSFETs briefly operate in reversed
+mode (vds < 0) as node voltages cross. Without the mode factor, the drain current
+equivalent source was stamped with the wrong sign, injecting current in the wrong
+direction and producing incorrect switching waveforms.
+
+**Fix applied:** Added `mode_f = comp.mode as f64` and changed the ceq_d computation
+from `sign * m * comp.ceq_d` to `mode_f * sign * m * comp.ceq_d`, matching the
+Level 1 MOSFET stamp function.
+
+**Also investigated (not fixed):** A `vbsvbd` bug was found where the inverse-mode
+body effect voltage is `vbs` instead of `vbd` (`= vbs - vds`). The current code
+computes `vbs_eff - vds_eff` which cancels back to `vbs` for mode=-1. The correct
+value should be just `vbs_eff` (which gives `vbs` for mode=1 and `vbd` for mode=-1).
+However, fixing this causes a timeout (NR non-convergence) because the corrected
+threshold voltage in inverse mode creates convergence difficulties that require
+ngspice's MODEINITFLOAT convergence aids. The bug is documented for future fixing
+when the convergence infrastructure is available.
+
+**Result:**
+- `harness_mos6_mos6inv`: PASSES (was 27% error at t=11.2ns, now completes in 1.5s)
+- `harness_mos6_simpleinv`: still passes (no regression)
+- All 421 non-ignored tests pass. Clippy clean.

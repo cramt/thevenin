@@ -36,9 +36,6 @@
 # === HFET ===
 "hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter: NR converges to Vdd equilibrium instead of negative-V equilibrium; needs source stepping to find correct operating point)"
 
-# === MOS6 ===
-"mos6/mos6inv.cir" = "~27% transient error at t=11.2ns (col 1): MOS6 inverter settled-state voltage differs (Level 6 model accuracy)"
-
 # === Regression: misc ===
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
 
