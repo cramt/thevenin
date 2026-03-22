@@ -422,12 +422,15 @@ impl DeviceVoltageState {
             let mut prev = self.prev_bjt.borrow_mut();
             for (bi, bjt) in mna.bjts.iter().enumerate() {
                 let (vbe, vbc) = if init_jct {
-                    // MODEINITJCT: vbe = type * vcrit, vbc = 0.
-                    // Matches ngspice bjtload.c:
-                    //   vbe = model->BJTtype * here->BJTtVcrit;
-                    //   vbc = 0;
-                    let sign = bjt.model.bjt_type.sign();
-                    (sign * bjt.model.vcrit_be(), 0.0)
+                    // MODEINITJCT: matches ngspice bjtload.c:
+                    //   if (!here->BJToff) { vbe = type * vcrit; vbc = 0; }
+                    //   else               { vbe = 0; vbc = 0; }
+                    if bjt.off {
+                        (0.0, 0.0)
+                    } else {
+                        let sign = bjt.model.bjt_type.sign();
+                        (sign * bjt.model.vcrit_be(), 0.0)
+                    }
                 } else {
                     let (raw_vbe, raw_vbc) = bjt.junction_voltages(solution);
                     let vbe = bjt.model.limit_vbe(raw_vbe, prev[bi].0);

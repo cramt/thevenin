@@ -2830,3 +2830,43 @@ transconductance, missing chain-rule terms in Gm/Gds/Gmbs).
 
 **No regressions:** All 422 tests pass (70 non-ignored harness + 352 unit tests).
 Clippy clean.
+
+---
+
+## Applied fix: BJT OFF flag in MODEINITJCT initialization (2026-03-22)
+
+**Affected test:** `harness_general_schmitt`
+
+**Root cause:** The MODEINITJCT convergence mode (commit 9ad0757) initialized ALL
+BJTs to `vbe = type * vcrit, vbc = 0` on the first NR iteration, regardless of the
+device's OFF flag.  In ngspice `bjtload.c`, MODEINITJCT checks `!here->BJToff`:
+
+```c
+if ((ckt->CKTmode & MODEINITJCT) && !here->BJToff) {
+    vbe = model->BJTtype * here->BJTtVcrit;
+    vbc = 0;
+} else if ((ckt->CKTmode & MODEINITJCT) && here->BJToff) {
+    vbe = 0;
+    vbc = 0;
+}
+```
+
+The schmitt trigger circuit (`general/schmitt.cir`) has `q1 3 2 4 qstd off` — Q1 is
+explicitly marked OFF.  Without the OFF check, Q1 was initialized to forward-active
+(vbe=vcrit≈0.7V) instead of cutoff (vbe=0).  For this bistable Schmitt trigger, the
+initial state determines which stable operating point NR converges to.  With Q1
+forward-biased, the NR converged to a wrong DC OP (V(3)=-0.708V vs expected -0.260V).
+
+**Fix applied:** Added `bjt.off` check in the `init_jct` path of `device_stamp.rs`.
+BJTs with the OFF flag now use `(0.0, 0.0)` instead of `(vcrit, 0.0)` on the first
+NR iteration, matching ngspice.
+
+**Impact:**
+- `harness_general_schmitt`: DC OP restored to correct values.  First mismatch moved
+  from t=0 (wrong DC OP, 172% error) back to t=293ns (31% transient settling error).
+  The transient error is pre-existing from the full voltage-dependent cap refactoring
+  in commit 9ad0757.
+- No regressions: all 422 tests pass.  Clippy clean.
+
+**Note:** Only `general/schmitt.cir` uses the BJT OFF flag in the test suite.  No
+MOSFET tests use OFF (and the MOSFET `MnaInstance` doesn't have an `off` field).

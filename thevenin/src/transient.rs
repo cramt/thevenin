@@ -1670,7 +1670,7 @@ fn solve_timestep(
 
                 let hist = &bjt_charge_histories[bi];
 
-                // Incremental charge: Q = Q_prev + C_corr(v) * (v - v_prev)
+                // Incremental charge: Q = Q_prev + C(v) * (v - v_prev)
                 let qbe = hist.qbe + capbe * (vbe - hist.vbe);
                 let qbc = hist.qbc + capbc * (vbc - hist.vbc);
 

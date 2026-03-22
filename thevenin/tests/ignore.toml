@@ -31,7 +31,7 @@
 "general/fourbitadder.cir" = "times out (>30s)"
 "general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET missing velocity saturation/mobility degradation"
 "general/rtlinv.cir" = "~4.1% transient error at t=9ns: transition timing shift (dynamic BJT caps improved from 5.96% at 7ns)"
-"general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (BJT caps now fully dynamic but other timing errors dominate)"
+"general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag, full voltage-dependent cap approach causes transient timing shift)"
 
 # === HFET ===
 "hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter: source stepping also converges to Vdd; depletion-mode load pulls output high at every source ramp step)"
