@@ -1707,16 +1707,21 @@ pub fn update_cnv_cpl(cp: &mut CpLine, h: f64) {
                     tm.cnv_o =
                         (tm.cnv_o - boc * h) * e + (e - 1.0) * (ao * t + 1.0e12 * boc / tm.x);
                 } else {
+                    // ngspice (cplload.c lines 618-629): bi *= t and
+                    // bo *= t accumulate across the 3 term iterations.
+                    // Iteration i uses bi * product(c_j/x_j, j=0..i).
+                    let mut bi_acc = bi;
+                    let mut bo_acc = bo;
                     for idx in 0..3 {
                         let e = cp.h1e[j][k][idx];
                         let tm = &mut tms.tm[idx];
                         let t = tm.c / tm.x;
-                        let bic = bi * t;
-                        let boc = bo * t;
-                        tm.cnv_i =
-                            (tm.cnv_i - bic * h) * e + (e - 1.0) * (ai * t + 1.0e12 * bic / tm.x);
-                        tm.cnv_o =
-                            (tm.cnv_o - boc * h) * e + (e - 1.0) * (ao * t + 1.0e12 * boc / tm.x);
+                        bi_acc *= t;
+                        bo_acc *= t;
+                        tm.cnv_i = (tm.cnv_i - bi_acc * h) * e
+                            + (e - 1.0) * (ai * t + 1.0e12 * bi_acc / tm.x);
+                        tm.cnv_o = (tm.cnv_o - bo_acc * h) * e
+                            + (e - 1.0) * (ao * t + 1.0e12 * bo_acc / tm.x);
                     }
                 }
             }
@@ -1804,22 +1809,23 @@ pub fn prepare_cpl_transient(
             vi.i_o[m] = solution[num_nodes + inst.ibr2[m]];
         }
 
-        // Update h1 cnv before adding new point
+        // Push new entry FIRST, then update convolutions.
+        // ngspice (cplload.c lines 99-119): add_new_vi() records the new
+        // solution, then update_cnv() reads nd->V / nd->dv which are set
+        // from the *newest* vi_tail entry.  Our update_cnv_cpl reads from
+        // vi_history.last(), so the push must come before the update.
+        cp.vi_history.push(vi);
+
         if cp.vi_history.len() >= 2 {
-            let prev_tail = cp.vi_history[cp.vi_history.len() - 1].clone();
-            let prev_prev = cp.vi_history[cp.vi_history.len() - 2].clone();
-            let delta = (prev_tail.time - prev_prev.time) as f64;
+            let len = cp.vi_history.len();
+            let delta = (cp.vi_history[len - 1].time - cp.vi_history[len - 2].time) as f64;
             if delta > 0.0 {
-                // Compute dv for each node
-                // update_cnv is called with delta (not h)
                 update_cnv_cpl(cp, delta);
                 if cp.ext {
                     update_delayed_cnv_cpl(cp, delta);
                 }
             }
         }
-
-        cp.vi_history.push(vi);
     }
 
     // Compute admittance matrix: h1 terms
