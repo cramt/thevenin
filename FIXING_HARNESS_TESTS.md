@@ -2225,3 +2225,53 @@ This is a genuine V(2) discrepancy (not a timing shift):
 
 **Settled-state noise (1 test):**
 - mos6/mos6inv: 2.4µV ground noise (1) — per-variable tolerance needed
+
+---
+
+## Applied fix: VBIC AC self-heating temperature adjustment (2026-03-22)
+
+**Affected test:** `harness_vbic_CEamp`
+
+**Root cause:** The AC analysis was computing the VBIC small-signal model
+at the wrong temperature.  During DC analysis, the VBIC model is cloned
+and temperature-adjusted to `T_ambient + Vrth` at each NR iteration
+(device_stamp.rs line 691).  However, the AC analysis (ac.rs line 571)
+was using `vbic.model` directly — the base model at `T_ambient` — to
+compute the companion at the DC operating point.
+
+This meant the AC derivatives (gm, go, etc.) were evaluated at the wrong
+temperature.  For the CEamp circuit with RTH=300 and Vrth ≈ 2°C at the
+DC operating point, IS_T at T_ambient+2 is ~37% higher than at T_ambient.
+The AC gm computed with the cold model was wrong, producing a 1.2% error
+in the AC gain (0.4 dB at 100 kHz).
+
+**Fix applied:** Modified the VBIC AC stamping in `ac.rs` to check for
+self-heating (rth > 0 and rth_idx present), read Vrth from the DC
+solution, clone the model, and call `temperature_adjust(t_ambient + vrth)`
+before computing the companion.  This matches what the noise analysis
+(`noise.rs`) already does (which was fixed in a prior session).
+
+**Result:** CEamp AC error reduced from 1.2% (0.4 dB) to ~0.2% (0.066 dB).
+The first mismatch moved from x=100kHz to x=6.76MHz.  The remaining 0.2%
+error is the same self-heating FP evaluation order difference affecting
+FO/FG/temp tests.
+
+**Remaining gap analysis:**
+- Expected at 6.76MHz: 32.676 dB, Actual: 32.610 dB, Diff: 0.066 dB
+- Tolerance: 2e-3 × 32.676 = 0.065 dB
+- Over by: 0.001 dB (1.5% above tolerance)
+- Root cause: self-heating FP evaluation order (same as DC tests)
+
+The test remains ignored because the remaining error cannot be fixed
+without resolving the fundamental self-heating FP evaluation order
+difference (which affects all VBIC self-heating tests).
+
+### Updated CEamp triage
+
+| Metric | Before | After |
+|---|---|---|
+| First mismatch frequency | 100 kHz | 6.76 MHz |
+| Error (dB) | 0.400 | 0.066 |
+| Error (%) | 1.22% | 0.20% |
+| Over tolerance | 5.1× | 1.01× |
+| Root cause | Wrong AC temperature | Self-heating FP |

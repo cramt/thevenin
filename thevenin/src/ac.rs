@@ -568,8 +568,23 @@ pub fn stamp_ac_devices(
     for vbic in &mna.vbics {
         let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
             vbic.junction_voltages(op_solution);
-        let comp = vbic
-            .model
+
+        // For self-heating devices, the DC operating point was computed with
+        // the model temperature-adjusted to T_ambient + Vrth.  We must use
+        // the same adjusted model here so that the small-signal parameters
+        // (gm, go, etc.) match the DC solution.  Without this, the AC
+        // derivatives are computed at the wrong temperature, giving ~1%
+        // error in circuits like CEamp where self-heating shifts gm.
+        let vrth = vbic.vrth(op_solution);
+        let model = if vrth != 0.0 && vbic.model.rth > 0.0 {
+            let mut m = vbic.model.clone();
+            m.temperature_adjust(vbic.t_ambient + vrth);
+            m
+        } else {
+            vbic.model.clone()
+        };
+
+        let comp = model
             .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
         let s = vbic.m * vbic.area;
 
