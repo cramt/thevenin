@@ -2870,3 +2870,69 @@ NR iteration, matching ngspice.
 
 **Note:** Only `general/schmitt.cir` uses the BJT OFF flag in the test suite.  No
 MOSFET tests use OFF (and the MOSFET `MnaInstance` doesn't have an `off` field).
+
+---
+
+## Applied fix: divided-difference LTE for capacitors and BJT charges (2026-03-22)
+
+**Affected:** Timestep control for all transient circuits with capacitors or BJT
+junction charges.
+
+**Root cause:** The LTE (local truncation error) computation for capacitors and
+BJT junction charges always returned exactly zero.  The formula computed:
+
+```
+i_trap = 2*C/h*(v_new - v_old) - i_old
+i_be = C/h*(v_new - v_old)
+q_trap = h/2*(i_old + i_trap) = C*(v_new - v_old)
+q_be = h*i_be = C*(v_new - v_old)
+LTE = |q_trap - q_be| = 0   ← always zero!
+```
+
+The algebraic cancellation is exact: the i_old term in q_trap cancels out.
+This meant the timestep controller never reduced the timestep for capacitive
+dynamics — only inductor LTE or NR convergence failures could shrink the step.
+
+**Fix applied:** Replaced with ngspice's divided-difference approach (CKTterr).
+For each charge Q, computes the 2nd divided difference over 3 timepoints:
+
+```
+diff1_0 = (Q₀ - Q₁) / h
+diff1_1 = (Q₁ - Q₂) / h_prev
+diff2 = (diff1_0 - diff1_1) / (h + h_prev)
+```
+
+This estimates Q'', and the timestep scales as `sqrt(tol / |diff2|)` for
+trapezoidal order 2 (error coefficient 1/12, matching `trapCoeff[1]` in
+ngspice's `cktterr.c`).
+
+**Data structure changes:**
+- `CapHistory`: added `charge` and `charge_prev` for 3-point Q history
+- `BjtChargeHistory`: added `qbe_prev` and `qbc_prev` for 3-point Q history
+- Transient loop: tracks `h_prev` (previous timestep) for divided differences
+- BJT charge LTE uses exact analytical Q via `compute_charges()`
+
+**Impact:** No test results changed — all 422 tests still pass.  For current
+test circuits, the timestep was already adequate (h_max ≤ transition timescales).
+The fix prevents incorrect timestep growth in circuits where capacitive or BJT
+charge dynamics should dominate the timestep control.
+
+**Investigation: rtlinv timing shift (no improvement)**
+
+Investigated `harness_general_rtlinv` (4.1% error at t=9ns) as a potential
+beneficiary of the LTE fix.  The circuit is a cascaded RTL inverter with:
+- CJE=0.9pF, CJC=1.5pF, CCS=2pF, TF=0.1ns, TR=10ns, RB=70Ω
+
+Findings:
+- BJT junction capacitances ARE correctly voltage-dependent (not constant):
+  `cap_be(v)` and `cap_bc(v)` recomputed at each NR iteration in step 5
+- CJS (substrate cap, MJS=0 default) correctly treated as constant cap
+- CJS correctly connected to col_prime (internal collector), matching ngspice
+- XCJC=1.0 (default), so no split B-C capacitance issue
+- The LTE fix produces correct non-zero LTE during switching, but the
+  computed optimal timestep (~4ns) exceeds h_max (2ns from `.tran` command),
+  so the timestep is unchanged
+- The 4.1% error persists — it's from accumulated integration error in the
+  incremental charge formula (Q += C*Δv), not from timestep control.
+  Attempted exact analytical charge in NR loop but it causes convergence
+  difficulties from the exponential diffusion charge term TF*cbe.
