@@ -37,7 +37,7 @@
 "hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (NR converges to wrong equilibrium; HFET channel current ~600µA vs ngspice ~36pA — possible model current scaling discrepancy)"
 
 # === MOS6 ===
-"mos6/mos6inv.cir" = "times out (>30s): transient too slow after Vbs pnjlim fix resolved singular matrix"
+"mos6/mos6inv.cir" = "~37% transient error at t=4.7ns (col 1): MOS6 inverter runs but produces wrong switching waveform"
 
 # === Regression: misc ===
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
@@ -54,9 +54,9 @@
 # === Transmission lines ===
 "transmission/cpl3_4_line.cir" = "~61% error: CPL transient with CMOS driver (timing shift from constant junction cap approximation)"
 "transmission/cpl_ibm2.cir" = "~13% error: CPL transient with CMOS driver (timing shift from constant junction cap approximation)"
-"transmission/ltra1_1_line.cir" = "~2.2% V(2) error at t=16.95ns: CMOS inverter transition timing (constant junction cap + missing Meyer gate cap voltage dependence)"
+"transmission/ltra1_1_line.cir" = "~2.2% V(2) error at t=16.95ns: CMOS inverter switching accuracy (MOSFET caps explicitly zero; error likely from LTRA companion model or reversed-mode MOSFET accuracy)"
 "transmission/ltra2_2_line.cir" = "~2.2% V(2) error at t=16.95ns: same CMOS driver issue as ltra1_1 (different line model, same error)"
-"transmission/txl1_1_line.cir" = "~4.6% V(2) error at t=21.05ns: TXL CMOS inverter transition timing (same root cause as LTRA tests)"
+"transmission/txl1_1_line.cir" = "~4.6% V(2) error at t=21.05ns: TXL CMOS inverter transition (same root cause as LTRA tests)"
 "transmission/txl2_3_line.cir" = "~4.7% V(2) error: TXL three-line cascade, CMOS driver timing (same root cause as LTRA tests)"
 
 # === VBIC ===

@@ -1886,3 +1886,106 @@ junction cap approximation + missing Meyer gate cap voltage dependence.
 | general/rtlinv | ~5.96% at t=7ns |
 | general/schmitt | ~31% at t=293ns |
 | hfet/inverter | wrong DC OP (V(3)=1.96 vs -0.275) |
+| mos6/mos6inv | ~37% at t=4.7ns (was timeout, now completes in ~4s) |
+
+---
+
+## Investigation: VBIC self-heating ~0.2% error (no fix found)
+
+**Affected tests:** `harness_vbic_fo` (0.205%), `harness_vbic_fg` (0.234%),
+`harness_vbic_temp` (0.226%)
+
+**Investigation:** Exhaustive comparison of VBIC temperature scaling against
+ngspice's `vbictemp.c` and `vbic_4T_et_cf_fj` auto-generated kernel. All 96
+model parameter defaults match ngspice exactly. Temperature scaling formulas,
+physical constants (KB, QE), junction potential formulas, and capacitance
+scaling all match line-by-line. Power dissipation (Ith) computation matches
+all 14 branch terms. Thermal node RHS/matrix stamps are correct (sign
+convention verified).
+
+When TAMB=TNOM (as in FO/FG/temp test circuits), the temperature scaling from
+TNOM to TAMB+Vrth is mathematically identical to ngspice's two-step approach
+(vbictemp scales to TAMB, kernel scales from TAMB to TAMB+Vrth). The two
+approaches compute the same rT, Vtv, and dT. No FP evaluation order
+difference should exist in this case.
+
+The 0.205% error for FO corresponds to a diff of 1.0167e-7 vs tolerance of
+9.95e-8 — only 2.2% over tolerance. Despite extensive investigation, the
+root cause remains unidentified. The error is consistent with a ~0.1% offset
+in IS_T that gets amplified by the thermal feedback loop (amplification factor
+~1.76x at Vrth=3°C for EA=1.12).
+
+**Conclusion:** Per project policy, these remain as known deviations. The error
+is too small to diagnose without bit-level tracing of intermediate values.
+
+---
+
+## Investigation: sensitivity LU reuse (unsuccessful)
+
+**Affected test:** `harness_sensitivity_diffpair`
+
+**Attempted fix:** Captured the dense Jacobian from the NR solver's final
+converged iteration and passed it to `simulate_sens` for reuse, instead of
+rebuilding via `build_jacobian`. The goal was to preserve the exact FP
+rounding from the NR solve.
+
+**Result:** The captured Jacobian is evaluated at the PREVIOUS iteration's
+solution (one iteration before convergence), while `build_jacobian` evaluates
+at the CONVERGED solution. Using the pre-convergence Jacobian worsened the
+RS1 sensitivity from within 1e-6 of the reference to 4.8e-6 off — a
+regression. The change was reverted.
+
+**Root cause:** In SPICE NR, the Jacobian used to compute iteration k+1 is
+evaluated at the solution from iteration k. At convergence, solution k and
+k+1 are close but not identical (differ by up to RELTOL). The Jacobian at
+solution k is slightly different from the Jacobian at the converged solution
+k+1. For the sensitivity diffpair, the converged-solution Jacobian (from
+`build_jacobian`) gives better results because it's evaluated at the more
+accurate operating point.
+
+**What would actually fix this:** The Q3/Q4:is sensitivities (~1.9e-8 V/A)
+are 8 orders of magnitude below NR convergence noise (~1e-13 V) and cannot
+be resolved by ANY numerical perturbation method. Fixing this requires either:
+1. Analytical sensitivity computation (exact dY/dp derivatives)
+2. Complex-step differentiation (uses imaginary perturbation to avoid
+   cancellation)
+Neither is a small change.
+
+---
+
+## Investigation: transmission line LTRA ~2.2% error (updated root cause)
+
+**Affected tests:** `harness_transmission_ltra1_1`, `harness_transmission_ltra2_2`
+
+**Updated finding:** The LTRA test circuit's CMOS driver has ALL MOSFET
+capacitances explicitly set to zero (CGSO=0, CGDO=0, CJ=0, CJSW=0). The
+intrinsic Meyer gate capacitance is negligible (~0.03aF due to TOX=18µm).
+This means the ~2.2% error is NOT from junction/gate capacitance issues.
+
+The error occurs at the CMOS inverter switching transition (t≈16.95ns) where
+V(2) is 0.072V too high (3.339V vs 3.267V expected). Both MOSFET models are
+correct: all matrix stamps, RHS stamps, and ceq_d computation match ngspice's
+mos1load.c exactly (verified in normal and reversed mode).
+
+**Remaining hypothesis:** The error is in the LTRA transmission line companion
+model itself, or in a subtle interaction between the reversed-mode MOSFET
+saturation current and the LTRA characteristic impedance during the
+transition. The NMOS operates in reversed mode (drain=GND, source=output)
+throughout this circuit, and any small error in the reversed-mode drain
+current at intermediate V(2) values would accumulate through the LTRA's
+convolution-based companion model.
+
+---
+
+## Triage update: mos6inv now completes
+
+**Test:** `harness_mos6_mos6inv`
+
+**Previous status:** times out (>30s)
+**Current status:** completes in ~4s, ~37% error at t=4.7ns (col 1)
+
+The test now runs to completion (no longer timing out) due to accumulated
+improvements in NR convergence (gds floor, Vbs pnjlim). The ~37% error
+indicates a genuine model accuracy issue in the MOS6 switching waveform,
+likely from missing Level 6 specific features (e.g., velocity saturation
+or mobility degradation effects not yet implemented).
