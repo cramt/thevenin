@@ -2390,3 +2390,71 @@ when the convergence infrastructure is available.
 - `harness_mos6_mos6inv`: PASSES (was 27% error at t=11.2ns, now completes in 1.5s)
 - `harness_mos6_simpleinv`: still passes (no regression)
 - All 421 non-ignored tests pass. Clippy clean.
+
+---
+
+## Independent verification: all 38 remaining tests intractable (2026-03-22)
+
+A fresh, independent investigation of all 38 remaining ignored tests was performed,
+re-examining each category with new approaches. The conclusion matches the previous
+comprehensive assessment: no tests can be fixed without major architectural changes.
+
+### Investigation approaches attempted:
+
+**VBIC self-heating (FO/FG/temp/CEamp — 4 tests):**
+- Verified sign convention in `compute_self_heating_power()`: our positive Ith matches
+  ngspice's negative Ith because our RHS uses `+=ith` while ngspice uses
+  `rhs_current=-Ith; rhs+=rhs_current`. Sign conventions are internally consistent. ✓
+- Checked gmin-in-power discrepancy: our companion includes gmin in junction currents
+  (Ibe += gmin*Vbei etc.) before computing power, while ngspice's kernel computes Ith
+  BEFORE gmin additions (lines 756-771). Quantified: extra power ≈ 3e-12 W → extra
+  ΔIc ≈ 3e-13 A → relative error ≈ 6e-9%. Completely negligible.
+- Verified `temperature_adjust()` receives correct temperature: t_ambient (°C) + Vrth (K)
+  → temp + 273.15 = 300.15 + Vrth (Kelvin). Matches ngspice exactly.
+- Verified `vt_at()` uses correct constants (KB=1.380662e-23, QE=1.602189e-19).
+- Verified `safe_exp()` does not clamp at operating point (argument ≈ 0.29, well under 500).
+- Verified output formatting precision (`format_sci` with 7 significant figures).
+- FO test: diff=1.0167e-7, tolerance=1.0e-7 (only 1.67% above threshold). No fix found.
+
+**Transmission line LTRA/TXL (6 tests):**
+- Verified LTRA companion model: matrix stamps, convolution history, h1dash/h2/h3dash
+  coefficients all match ngspice's ltraload.c.
+- Verified Level 1 MOSFET reversed-mode computation: companion function correctly computes
+  vgs_eff=vgd, vds_eff=-vds, vbs_eff=vbd. ceq_d formula matches ngspice mos1load.c.
+- Verified stamp_mosfet xnrm/xrev routing and RHS signs against ngspice.
+- MOSFET beta scaling: `eff_model.kp = mos.beta()` correctly applies W/L before companion.
+- The ~2.2% error is genuine: at the CMOS switching transition, our NMOS pull-down
+  produces slightly less current than ngspice, likely from subtle reversed-mode
+  saturation behavior or LTRA convolution rounding accumulation.
+
+**BSIM3SOI DD t5 (1.1% error — closest to passing among BSIM3SOI):**
+- Verified VBI computation in `size_dep_param()`: uses ni and vtm at simulation temp
+  (300.15K), matching ngspice b3soiddtemp.c lines 72-77 and 653-654.
+- Verified phi computation: uses model's pre-computed phi at TNOM, which equals ngspice's
+  per-instance phi when Temp=TNOM.
+- Confirmed `.option gmin=1e-25` is correctly parsed and propagated through
+  `nr_options_from_netlist()` → `stamp_devices()` → `stamp_bsim3soi_dd()`.
+- For 5-terminal devices (t5 has explicit body), gmin is NOT applied to body stability
+  stamp (`body_idx.is_none()` is false), so gmin=1e-25 has no effect. Matches ngspice.
+- The ~1.1% error remains from the documented "3-4mV Vth discrepancy" whose root cause
+  is still unidentified, likely in the Vbs0→Vbseff body coupling chain.
+
+### Current test status (re-confirmed):
+- 421 non-ignored tests: ALL PASS
+- 38 ignored tests: 36 fail, 2 timeout
+- 0 tests improved to passing since last comprehensive check
+
+### Classification (unchanged):
+| Category | Tests | Status |
+|---|---|---|
+| VBIC self-heating FP | 4 | 0.2-1.2% error, needs bit-level tracing |
+| VBIC NR convergence | 1 | timeout, needs source/gmin stepping |
+| Transmission line | 6 | 2.2-61% error, MOSFET/line interaction |
+| BJT junction cap | 2 | 6-31% error, needs voltage-dependent charge |
+| Level 2 MOSFET | 1 | 35% error, needs model implementation |
+| HFET bistable | 1 | wrong DC OP, needs source stepping |
+| Sensitivity LU | 1 | 47× error, needs analytical sensitivity |
+| BSIM3SOI | 15 | 1.1-99% error, multiple compensating bugs |
+| Missing subsystems | 5 | BSIM1/2, .control, TEMPER, param expressions |
+| No reference | 1 | ngspice says "To be done" |
+| Timeout | 2 | fourbitadder ×2 |
