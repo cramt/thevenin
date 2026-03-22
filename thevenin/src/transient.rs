@@ -36,6 +36,10 @@ struct CapHistory {
     voltage: f64,
     /// Current through capacitor at previous timestep (needed for Trap).
     current: f64,
+    /// Charge at previous timestep (Q = C*v for constant cap; needed for LTE).
+    charge: f64,
+    /// Charge at two timesteps ago (needed for divided-difference LTE).
+    charge_prev: f64,
 }
 
 /// History state for an inductor at the previous timestep.
@@ -64,6 +68,10 @@ struct BjtChargeHistory {
     cqbc: f64,
     /// B-C junction voltage at previous timestep.
     vbc: f64,
+    /// B-E charge at two timesteps ago (for divided-difference LTE).
+    qbe_prev: f64,
+    /// B-C charge at two timesteps ago (for divided-difference LTE).
+    qbc_prev: f64,
 }
 
 /// History state for a MESA junction charge at the previous timestep.
@@ -260,16 +268,16 @@ const MAX_GROW: f64 = 2.0;
 /// BJT dynamic junction charges.
 ///
 /// Uses the difference between Trap and BE predictions as the LTE estimate.
-/// For each capacitor: LTE ≈ |q_trap - q_be| where q is the integrated charge.
-/// For each inductor: LTE ≈ |flux_trap - flux_be| where flux is the integrated flux.
-/// For BJT charges: LTE ≈ |q_trap - q_be| for the dynamic correction charges
-/// (diffusion + depletion cap correction), matching ngspice's approach of
-/// including device-internal charges in the timestep control.
+/// Uses divided differences of charge/flux over 3 timepoints to estimate the
+/// second derivative, matching ngspice's CKTterr function.  For trapezoidal
+/// order 2, the truncation error coefficient is 1/12 and the timestep scales
+/// as sqrt(tol / |divided_diff|).
 ///
 /// Returns the recommended new timestep.
 #[expect(clippy::too_many_arguments)]
 fn estimate_new_timestep(
     h: f64,
+    h_prev: f64,
     solution: &[f64],
     mna: &MnaSystem,
     cap_histories: &[CapHistory],
@@ -280,43 +288,50 @@ fn estimate_new_timestep(
 ) -> f64 {
     let mut new_h = f64::MAX;
 
-    // LTE for capacitors.
+    /// Trapezoidal order-2 truncation error coefficient (1/12).
+    const TRAP_COEFF: f64 = 1.0 / 12.0;
+
+    // LTE for capacitors using divided differences of charge.
+    // Matches ngspice CKTterr: computes 2nd divided difference of Q over
+    // 3 timepoints (current, previous, two-ago) to estimate Q''.
     for (ci, cap) in mna.capacitors.iter().enumerate() {
         let v_pos = cap.pos_idx.map(|i| solution[i]).unwrap_or(0.0);
         let v_neg = cap.neg_idx.map(|i| solution[i]).unwrap_or(0.0);
         let v_new = v_pos - v_neg;
-        let v_old = cap_histories[ci].voltage;
-        let i_old = cap_histories[ci].current;
 
-        // Trap current: i_trap = 2C/h * (v_new - v_old) - i_old
-        let i_trap = 2.0 * cap.capacitance / h * (v_new - v_old) - i_old;
-        // BE current: i_be = C/h * (v_new - v_old)
-        let i_be = cap.capacitance / h * (v_new - v_old);
+        let q0 = cap.capacitance * v_new; // Q at current step
+        let q1 = cap_histories[ci].charge; // Q at previous step
+        let q2 = cap_histories[ci].charge_prev; // Q at two steps ago
 
-        // Charge LTE: difference in integrated charge over this step.
-        // Trap integrates: q_trap = h/2 * (i_old + i_trap)
-        // BE integrates:   q_be = h * i_be
-        // LTE ≈ |q_trap - q_be|
-        let q_trap = h / 2.0 * (i_old + i_trap);
-        let q_be = h * i_be;
-        let lte = (q_trap - q_be).abs();
+        // Capacitor current for tolerance computation.
+        let i_cur = 2.0 * cap.capacitance / h * (v_new - cap_histories[ci].voltage)
+            - cap_histories[ci].current;
 
-        // Tolerance on charge.
-        let q_new = cap.capacitance * v_new;
-        let q_old = cap.capacitance * v_old;
-        let vol_tol = abstol + reltol * v_new.abs().max(v_old.abs());
-        let chg_tol = reltol * q_new.abs().max(q_old.abs()).max(CHGTOL);
+        // Tolerance: max of voltage-based and charge-based.
+        let vol_tol = abstol + reltol * i_cur.abs().max(cap_histories[ci].current.abs());
+        let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
         let tol = TRTOL * vol_tol.max(chg_tol);
 
-        if lte > 1e-30 {
-            // For Trap (order 2): new_h = h * (tol / lte)^(1/2)
-            let ratio = tol / lte;
-            let h_new = h * ratio.sqrt();
+        // Divided differences: 2nd divided difference of Q.
+        // diff1_0 = (Q0 - Q1) / h
+        // diff1_1 = (Q1 - Q2) / h_prev
+        // diff2 = (diff1_0 - diff1_1) / (h + h_prev)
+        let diff1_0 = (q0 - q1) / h;
+        let diff1_1 = (q1 - q2) / h_prev;
+        let diff2 = (diff1_0 - diff1_1) / (h + h_prev);
+        let lte_est = TRAP_COEFF * diff2.abs();
+
+        if lte_est > 1e-30 {
+            // Match ngspice CKTterr: del = trtol * tol / max(abstol, lte_est)
+            // Then h_new = sqrt(del) for order 2.  The sqrt of the ratio
+            // directly gives the new timestep (not scaled by current h).
+            let del = tol / lte_est.max(abstol);
+            let h_new = del.sqrt();
             new_h = new_h.min(h_new);
         }
     }
 
-    // LTE for inductors.
+    // LTE for inductors (flux = L*i, same divided-difference approach).
     for (li, ind) in mna.inductors.iter().enumerate() {
         let i_new = solution[ind.branch_idx];
         let i_old = ind_histories[li].current;
@@ -325,11 +340,13 @@ fn estimate_new_timestep(
         // Trap voltage: v_trap = 2L/h * (i_new - i_old) - v_old
         let v_trap = 2.0 * ind.inductance / h * (i_new - i_old) - v_old;
         // BE voltage: v_be = L/h * (i_new - i_old)
-        let v_be = ind.inductance / h * (i_new - i_old);
+        let _v_be = ind.inductance / h * (i_new - i_old);
 
-        // Flux LTE: difference in integrated flux.
+        // Flux LTE: use current change as proxy for flux divided difference.
+        // (Inductors keep the old formula for now since it works correctly
+        // for the common L*di/dt case.)
         let flux_trap = h / 2.0 * (v_old + v_trap);
-        let flux_be = h * v_be;
+        let flux_be = h * _v_be;
         let lte = (flux_trap - flux_be).abs();
 
         // Tolerance on flux.
@@ -346,61 +363,61 @@ fn estimate_new_timestep(
         }
     }
 
-    // LTE for BJT dynamic junction charges (full voltage-dependent caps).
-    // In ngspice, bjtload.c integrates junction charges via NIintegrate, and
-    // the LTE from these charges feeds into the adaptive timestep control.
+    // LTE for BJT dynamic junction charges using divided differences.
+    // Matches ngspice's BJTtrunc → CKTterr: computes 2nd divided difference
+    // of Q over 3 timepoints to estimate Q'' and control the timestep.
     for (bi, bjt) in mna.bjts.iter().enumerate() {
         let hist = &bjt_charge_histories[bi];
         let (vbe, vbc) = bjt.junction_voltages(solution);
         let comp = bjt.model.companion(vbe, vbc);
         let m = bjt.m * bjt.area;
 
-        // Full voltage-dependent depletion cap + diffusion cap.
-        let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * comp.gbe_raw;
-        let capbc = bjt.model.cap_bc(vbc) + bjt.model.tr * comp.gbc_raw;
+        // Compute exact analytical charge at current operating point.
+        let (q0_be, _capbe, q0_bc, _capbc) = bjt.model.compute_charges(
+            vbe, vbc, comp.cbe_raw, comp.gbe_raw, comp.cbc_raw, comp.gbc_raw,
+        );
 
-        // B-E charge LTE.
-        if capbe > 0.0 {
-            let q_new = hist.qbe + capbe * (vbe - hist.vbe);
-            let i_old = hist.cqbe;
+        // B-E charge LTE via divided differences.
+        {
+            let q0 = q0_be;
+            let q1 = hist.qbe;
+            let q2 = hist.qbe_prev;
 
-            let i_trap = 2.0 * capbe / h * (vbe - hist.vbe) - i_old;
-            let i_be = capbe / h * (vbe - hist.vbe);
-
-            let q_trap = h / 2.0 * (i_old + i_trap);
-            let q_be = h * i_be;
-            let lte = (q_trap - q_be).abs() * m;
-
-            let chg_tol = reltol * q_new.abs().max(hist.qbe.abs()).max(CHGTOL) * m;
-            let vol_tol = (abstol + reltol * vbe.abs().max(hist.vbe.abs())) * m;
+            // Tolerance matching ngspice CKTterr.
+            let vol_tol = abstol + reltol * hist.cqbe.abs().max((q0 - q1).abs() / h);
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
             let tol = TRTOL * vol_tol.max(chg_tol);
 
-            if lte > 1e-30 {
-                let ratio = tol / lte;
-                let h_new = h * ratio.sqrt();
+            let diff1_0 = (q0 - q1) / h;
+            let diff1_1 = (q1 - q2) / h_prev;
+            let diff2 = (diff1_0 - diff1_1) / (h + h_prev);
+            let lte_est = TRAP_COEFF * diff2.abs() * m;
+
+            if lte_est > 1e-30 {
+                let del = tol / lte_est.max(abstol);
+                let h_new = del.sqrt();
                 new_h = new_h.min(h_new);
             }
         }
 
-        // B-C charge LTE.
-        if capbc > 0.0 {
-            let q_new = hist.qbc + capbc * (vbc - hist.vbc);
-            let i_old = hist.cqbc;
+        // B-C charge LTE via divided differences.
+        {
+            let q0 = q0_bc;
+            let q1 = hist.qbc;
+            let q2 = hist.qbc_prev;
 
-            let i_trap = 2.0 * capbc / h * (vbc - hist.vbc) - i_old;
-            let i_be = capbc / h * (vbc - hist.vbc);
-
-            let q_trap = h / 2.0 * (i_old + i_trap);
-            let q_be = h * i_be;
-            let lte = (q_trap - q_be).abs() * m;
-
-            let chg_tol = reltol * q_new.abs().max(hist.qbc.abs()).max(CHGTOL) * m;
-            let vol_tol = (abstol + reltol * vbc.abs().max(hist.vbc.abs())) * m;
+            let vol_tol = abstol + reltol * hist.cqbc.abs().max((q0 - q1).abs() / h);
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
             let tol = TRTOL * vol_tol.max(chg_tol);
 
-            if lte > 1e-30 {
-                let ratio = tol / lte;
-                let h_new = h * ratio.sqrt();
+            let diff1_0 = (q0 - q1) / h;
+            let diff1_1 = (q1 - q2) / h_prev;
+            let diff2 = (diff1_0 - diff1_1) / (h + h_prev);
+            let lte_est = TRAP_COEFF * diff2.abs() * m;
+
+            if lte_est > 1e-30 {
+                let del = tol / lte_est.max(abstol);
+                let h_new = del.sqrt();
                 new_h = new_h.min(h_new);
             }
         }
@@ -497,9 +514,13 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .map(|cap| {
             let v_pos = cap.pos_idx.map(|i| solution[i]).unwrap_or(0.0);
             let v_neg = cap.neg_idx.map(|i| solution[i]).unwrap_or(0.0);
+            let v = v_pos - v_neg;
+            let charge = cap.capacitance * v;
             CapHistory {
-                voltage: v_pos - v_neg,
+                voltage: v,
                 current: 0.0, // At DC steady state, capacitor current is 0.
+                charge,
+                charge_prev: charge, // No previous history at DC init.
             }
         })
         .collect();
@@ -542,6 +563,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 qbc,
                 cqbc: 0.0,
                 vbc,
+                qbe_prev: qbe, // No previous history at DC init.
+                qbc_prev: qbc, // No previous history at DC init.
             }
         })
         .collect();
@@ -878,6 +901,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // for purely resistive circuits the step doubles freely until reaching h_max.
     let h_min = h_print * 1e-9; // Absolute minimum timestep.
     let mut h = (h_max / 400.0).max(h_min);
+    let mut h_prev = h; // No previous step yet; use h as initial estimate.
     let mut is_first_step = true;
 
     // Adaptive time-stepping loop.
@@ -1043,6 +1067,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         if method == IntegrationMethod::Trapezoidal && (has_reactive || has_bjt_charges) {
             let new_h = estimate_new_timestep(
                 step_h,
+                h_prev,
                 &new_solution,
                 &mna,
                 &cap_histories,
@@ -1091,6 +1116,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         }
 
         // Accept this timestep: advance time and update state.
+        h_prev = step_h;
         t += step_h;
         solution = new_solution;
         is_first_step = false;
@@ -1112,9 +1138,13 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 }
             };
 
+            let charge_prev = cap_histories[ci].charge;
+            let charge = cap.capacitance * v_new;
             cap_histories[ci] = CapHistory {
                 voltage: v_new,
                 current,
+                charge,
+                charge_prev,
             };
         }
 
@@ -1156,6 +1186,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 }
             };
 
+            let qbe_prev = bjt_charge_histories[bi].qbe;
+            let qbc_prev = bjt_charge_histories[bi].qbc;
             bjt_charge_histories[bi] = BjtChargeHistory {
                 qbe,
                 cqbe,
@@ -1163,6 +1195,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 qbc,
                 cqbc,
                 vbc,
+                qbe_prev,
+                qbc_prev,
             };
         }
 
