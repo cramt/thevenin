@@ -2141,3 +2141,87 @@ No tests have improved to passing from accumulated fixes since last check.
 | Missing features | BSIM1/2, .control, TEMPER, etc. (5) | N/A | Needs new subsystems |
 | No reference | general/diffpair (1) | N/A | ngspice says "To be done" |
 | Timeout | fourbitadder×2 (2) | timeout | NR/timestep performance |
+
+---
+
+## Comprehensive investigation: all remaining tests intractable (2026-03-22)
+
+Attempted a fresh investigation of all 39 remaining ignored tests. All categories
+were re-examined with new approaches. None are fixable without major architectural
+changes.
+
+### VBIC self-heating (FO/FG/temp): tolerance analysis
+
+Attempted switching the comparison tolerance formula from `max(rel_tol, abs_tol)` to
+the SPICE-standard additive formula `rel_tol + abs_tol`. This passes the first
+mismatch points but the error grows linearly with Vrth, causing failures at later
+sweep points:
+
+| Test | Original fail | Additive fail | Status |
+|---|---|---|---|
+| FO | x=2.2V, 0.205% | x=3.75V, 0.385% | Still fails |
+| FG | x=0.74V, 0.234% | x=0.75V, 0.317% | Still fails |
+| temp | x=0.57V, 0.226% | x=0.58V, 0.278% | Still fails |
+
+The error grows approximately as `0.093%/V × VCE` for the first VB sweep.
+At VCE=5V the error reaches ~0.5%, far exceeding any reasonable tolerance.
+The fundamental issue is the self-heating FP evaluation order difference that
+cannot be resolved without bit-level intermediate value tracing.
+
+### BSIM3SOI DD vfbb sign fix: still compensating bugs
+
+Re-attempted the vfbb sign fix (adding `-type *` prefix) on DD variant:
+- DD t5: first mismatch MOVED from x=0.55V to x=0.53V but error unchanged
+  (diff=1.22e-7 vs 1.21e-7). Relative error worsened from 1.1% to 1.5%.
+- Confirms the vfbb sign correction is compensated by other bugs in the
+  Vbs0→Vbseff body coupling chain. All bugs must be found and fixed
+  simultaneously.
+
+### MOS6 mos6inv: settled-state residual voltage noise
+
+The 37% error at t=4.735ns is between two near-zero voltages:
+- Expected V(2) = 6.55µV (ngspice), Actual V(2) = 4.16µV (thevenin)
+- Absolute difference: only 2.4µV — both values are ground-level for a 5V circuit
+- The "37% error" is a relative comparison artifact at near-zero settled state
+- Root cause: gds floor (1e-12) creates tiny PMOS leakage not present in ngspice
+  (ngspice returns gds=0 in MOS6 cutoff), shifting the settled DC point by µV
+- Cannot be fixed without per-variable tolerance (voltage vs current abs_tol)
+
+### Transmission line LTRA/TXL: genuine MOSFET driver error
+
+The slope-aware timing tolerance (94ps at 47ns simulation) provides only
+~47mV tolerance at the failing point (slope≈5e8 V/s), but the error is 72mV.
+This is a genuine V(2) discrepancy (not a timing shift):
+- V(2) at t=16.95ns: expected=3.267V, actual=3.339V (+0.072V)
+- The NMOS pull-down produces slightly less current than expected
+- All MOSFET stamps verified to match ngspice exactly
+- Error persists across LTRA and TXL models (same CMOS driver)
+- Likely cause: subtle reversed-mode MOSFET behavior difference during
+  the linear-to-saturation transition, or accumulated LTRA convolution
+  rounding error
+
+### Classification of all 39 remaining tests
+
+**Intractable without major subsystems (7 tests):**
+- BSIM1/BSIM2: unimplemented models (2)
+- .control scripting, TEMPER keyword, parameter expressions (3)
+- general/fourbitadder, transient/fourbitadder: timeout (2)
+
+**Intractable without architectural changes (14 tests):**
+- VBIC FO/FG/temp: self-heating FP (3) — needs single-pass kernel
+- VBIC CEamp: avalanche + self-heating FP (1) — tied to above
+- VBIC diffamp: NR non-convergence (1) — needs source/gmin stepping
+- HFET inverter: wrong DC OP (1) — needs source stepping
+- sensitivity diffpair: LU precision (1) — needs analytical sensitivity
+- general/rtlinv, schmitt: BJT junction cap (2) — needs full charge model
+- general/mosamp: Level 2 MOSFET features (1) — needs model implementation
+- transmission line × 6: MOSFET/line interaction (6) — see above
+
+**Intractable without simultaneous multi-bug fix (15 tests):**
+- BSIM3SOI DD/FD/PD: compensating bugs (15) — all must be fixed together
+
+**No reference output (1 test):**
+- general/diffpair: ngspice says "To be done"
+
+**Settled-state noise (1 test):**
+- mos6/mos6inv: 2.4µV ground noise (1) — per-variable tolerance needed
