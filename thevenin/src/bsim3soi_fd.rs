@@ -794,7 +794,8 @@ impl Bsim3SoiFdModel {
         let u0temp = self.u0 * temp_ratio.powf(self.ute);
 
         // Velocity saturation temperature dependence
-        let vsattemp = self.vsat - self.at * (temp - tnom_k);
+        // ngspice b3soifdtemp.c: vsattemp = vsat - at * T0 where T0 = (TRatio - 1.0)
+        let vsattemp = self.vsat - self.at * temp_ratio_minus1;
 
         // Series resistance
         let wr2 = 1.0 / self.wr;
@@ -1275,7 +1276,10 @@ pub fn bsim3soi_fd_companion(
     let delt_vthw = sp.dvt0w * t2_w * v0;
     let ddelt_vthw_dvb = sp.dvt0w * dt2w_dvb * v0;
 
-    let delt_vth_temp = sp.k1 * (t0_nlx - 1.0) * sqrt_phi + t1_kt * temp_ratio_minus1;
+    // ngspice b3soifdld.c line 1240-1242: recomputes DeltVthtemp with Vbseff
+    // (not Vbs0mos as used in the Vthfd computation above)
+    let t1_kt_final = sp.kt1 + sp.kt1l / leff + sp.kt2 * vbseff;
+    let delt_vth_temp = sp.k1 * (t0_nlx - 1.0) * sqrt_phi + t1_kt_final * temp_ratio_minus1;
 
     let t3_eta_main = sp.eta0 + sp.etab * vbseff;
     let (t3_eta_main_eff, dt3_dvb_main) = if t3_eta_main < 1e-4 {

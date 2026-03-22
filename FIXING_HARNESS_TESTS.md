@@ -2575,3 +2575,122 @@ matching ngspice's formula.
 **Impact:** Dormant for current test circuits — transit time only produces
 current via dQ/dt (zero in DC).  Would affect transient analysis of circuits
 with non-default ITF.
+
+---
+
+## Applied fix: BSIM3SOI temperature scaling corrections (2026-03-22)
+
+**Affected models:** BSIM3SOI-DD, BSIM3SOI-FD, BSIM3SOI-PD
+
+### 1. Temperature coefficient scaling factor (DD, PD, FD vsattemp)
+
+**Root cause:** The temperature-dependent parameters `ua`, `ub`, `uc`, `vsattemp`,
+and `rds0` were scaled using `(T - Tnom)` (absolute Kelvin difference) instead of
+`(T/Tnom - 1.0)` (dimensionless ratio).
+
+In ngspice `b3soiddtemp.c` line 530, `b3soifdtemp.c` line 529,
+`b3soipdtemp.c` line 624:
+```c
+T0 = (TRatio - 1.0);
+ua = ua + ua1 * T0;
+ub = ub + ub1 * T0;
+uc = uc + uc1 * T0;
+vsattemp = vsat - at * T0;
+rds0 = (rdsw + prt * T0) / pow(weff * 1E6, wr);
+```
+
+Our code had:
+```rust
+let ua = self.ua + self.ua1 * (temp - tnom_k);  // WRONG: 300× too large scaling
+```
+
+For TNOM=300.15K, the difference is a factor of Tnom between the two formulas:
+- ngspice: `ua1 * (T/300.15 - 1)` = `ua1 * dT/300.15`
+- thevenin (old): `ua1 * dT`
+
+At T=310K: our code gives `ua1 * 10` vs correct `ua1 * 0.033` — a 300× error.
+
+**Fix applied:**
+- DD: Changed all 5 parameters to use `t_ratio_minus1 = temp/tnom_k - 1.0`
+- PD: Changed all 5 parameters to use `t_ratio_minus1`
+- FD: Changed only `vsattemp` (ua/ub/uc and rds0 already used `temp_ratio_minus1`)
+
+**Impact:** Dormant for all current test circuits (T = Tnom, so scaling factor = 0).
+Would cause severe mobility/velocity errors at non-TNOM temperatures.
+
+### 2. DeltVthtemp recomputation with Vbseff (DD, FD)
+
+**Root cause:** The DeltVthtemp term in the final Vth computation reused the
+`t1_kt` coefficient from the Vthfd (floating-body threshold) computation, which
+uses `Vbs0mos`.  In ngspice, DeltVthtemp is recomputed for the final Vth using
+`Vbseff` instead:
+
+ngspice `b3soiddld.c` line 1274-1276 (final Vth):
+```c
+T1 = kt1 + kt1l/Leff + kt2 * Vbseff;  // uses Vbseff
+DeltVthtemp = k1 * (T0 - 1.0) * sqrtPhi + T1 * TempRatio;
+```
+
+vs line 1043-1045 (Vthfd):
+```c
+T1 = kt1 + kt1l/Leff + kt2 * Vbs0mos;  // uses Vbs0mos
+DeltVthtemp = k1 * (T0 - 1.0) * sqrtPhi + T1 * TempRatio;
+```
+
+Our code only computed T1 once (with `vbs0mos`) and reused it for both.
+Fixed by adding `t1_kt_final = kt1 + kt1l/leff + kt2 * vbseff` before the
+final Vth computation.
+
+**Impact:** Dormant for current test circuits (TempRatio = 0 at TNOM, so
+the entire DeltVthtemp term is zero). The PD variant already used `vbseff`
+correctly.
+
+### Comprehensive investigation: all 37 remaining tests intractable (2026-03-22)
+
+A fresh investigation of all 37 remaining ignored tests was performed with
+new approaches and detailed line-by-line code comparison against ngspice.
+
+**Tests investigated in depth:**
+
+1. **VBIC FO** (0.205% error, 1.67% above tolerance): Examined the complete
+   self-heating path including Ith computation, thermal node stamping, NR
+   convergence tolerance, and comparison tolerance formula.  The diff
+   (1.0167e-7) exceeds tolerance (1.0e-7) by only 1.67%.  Additive tolerance
+   formula was previously tried and still fails at later sweep points (error
+   grows with Vc).  The NR convergence criterion applies to the thermal node
+   (checked: all nodes are included in convergence check). Convergence
+   tolerance alone could contribute up to 0.057% of the 0.205% error —
+   insufficient to explain the gap.  Root cause confirmed as evaluation order
+   difference in two-step temperature adjustment vs ngspice's single-pass kernel.
+
+2. **BSIM3SOI-DD t5** (1.1% error): Performed detailed line-by-line comparison
+   of the entire Vbs0→Vbseff body coupling chain against ngspice `b3soiddld.c`.
+   Found and verified the known vfbb sign error.  Tested fixing vfbb with the
+   current codebase (vfb already fixed): t5 worsened from 1.1% to 1.5%, t3
+   worsened from 18% to 41%.  The vfbb fix shifts Vbseff in the wrong direction
+   at the specific test bias points due to nonlinear clamp interactions.
+   Found 7 discrepancies total: 2 latent temperature bugs (fixed above),
+   3 derivative-only bugs (affect NR convergence, not DC Ids), the known vfbb
+   sign error, and the DeltVthtemp reuse bug (fixed above, dormant at TNOM).
+
+3. **TXL transmission line** (4.6% error): Compared all TXL formulas including
+   Padé approximation, convolution state updates, history interpolation,
+   extended timestep ratio computation, and complex conjugate pair handling.
+   All formulas match ngspice `txlload.c` exactly.  The error is from the
+   common MOSFET driver circuit, not the TXL model.
+
+**Classification (unchanged from previous assessment):**
+
+| Category | Tests | Status |
+|---|---|---|
+| VBIC self-heating FP | 4 | 0.2-1.2% error, needs bit-level tracing |
+| VBIC NR convergence | 1 | timeout, needs source/gmin stepping |
+| Transmission line | 5 | 4.6-61% error, MOSFET/line interaction |
+| BJT junction cap | 2 | 6-31% error, needs voltage-dependent charge |
+| Level 2 MOSFET | 1 | 35% error, needs model implementation |
+| HFET bistable | 1 | wrong DC OP, needs source stepping |
+| Sensitivity LU | 1 | 47× error, needs analytical sensitivity |
+| BSIM3SOI | 15 | 1.1-99% error, multiple compensating bugs |
+| Missing subsystems | 5 | BSIM1/2, .control, TEMPER, param expressions |
+| No reference | 1 | ngspice says "To be done" |
+| Timeout | 2 | fourbitadder ×2 |

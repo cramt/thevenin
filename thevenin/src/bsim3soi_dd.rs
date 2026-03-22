@@ -854,19 +854,22 @@ impl Bsim3SoiDdModel {
         let phi = self.phi;
         let sqrt_phi = self.sqrt_phi;
         let temp_ratio = temp / tnom_k;
+        // ngspice b3soiddtemp.c line 530: T0 = (TRatio - 1.0)
+        // All temperature coefficient terms use (TRatio - 1.0), not (T - Tnom)
+        let t_ratio_minus1 = temp_ratio - 1.0;
 
         let u0temp = self.u0 * temp_ratio.powf(self.ute);
-        let vsattemp = self.vsat - self.at * (temp - tnom_k);
+        let vsattemp = self.vsat - self.at * t_ratio_minus1;
 
         let rds0 = if self.rdsw > 0.0 {
-            (self.rdsw + self.prt * (temp - tnom_k)) / weff.powf(self.wr) * 1e-6
+            (self.rdsw + self.prt * t_ratio_minus1) / weff.powf(self.wr) * 1e-6
         } else {
             0.0
         };
 
-        let ua = self.ua + self.ua1 * (temp - tnom_k);
-        let ub = self.ub + self.ub1 * (temp - tnom_k);
-        let uc = self.uc + self.uc1 * (temp - tnom_k);
+        let ua = self.ua + self.ua1 * t_ratio_minus1;
+        let ub = self.ub + self.ub1 * t_ratio_minus1;
+        let uc = self.uc + self.uc1 * t_ratio_minus1;
 
         let npeak = if self.npeak > 1e20 {
             self.npeak * 1e-6
@@ -1355,7 +1358,10 @@ pub fn bsim3soi_dd_companion(
     let delt_vthw = sp.dvt0w * t2_w * v0;
     let ddelt_vthw_dvb = sp.dvt0w * dt2w_dvb * v0;
 
-    let delt_vth_temp = sp.k1 * (t0_nlx - 1.0) * sqrt_phi + t1_kt * temp_ratio_minus1;
+    // ngspice b3soiddld.c line 1274-1276: recomputes DeltVthtemp with Vbseff
+    // (not Vbs0mos as used in the Vthfd computation above)
+    let t1_kt_final = sp.kt1 + sp.kt1l / leff + sp.kt2 * vbseff;
+    let delt_vth_temp = sp.k1 * (t0_nlx - 1.0) * sqrt_phi + t1_kt_final * temp_ratio_minus1;
 
     let tmp2 = model.tox * phi / (weff + sp.w0);
     let t3_eta = sp.eta0 + sp.etab * vbseff;

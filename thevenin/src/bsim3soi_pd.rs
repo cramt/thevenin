@@ -778,24 +778,27 @@ impl Bsim3SoiPdModel {
 
         // Temperature ratio
         let temp_ratio = temp / tnom_k;
+        // ngspice b3soipdtemp.c line 624: T0 = (TempRatio - 1.0)
+        // All temperature coefficient terms use (TRatio - 1.0), not (T - Tnom)
+        let t_ratio_minus1 = temp_ratio - 1.0;
 
         // Mobility temperature dependence
         let u0temp = self.u0 * temp_ratio.powf(self.ute);
 
         // Velocity saturation temperature dependence
-        let vsattemp = self.vsat - self.at * (temp - tnom_k);
+        let vsattemp = self.vsat - self.at * t_ratio_minus1;
 
         // Series resistance
         let rds0 = if self.rdsw > 0.0 {
-            (self.rdsw + self.prt * (temp - tnom_k)) / weff.powf(self.wr) * 1e-6 // Convert from Ohm·µm to Ohm
+            (self.rdsw + self.prt * t_ratio_minus1) / weff.powf(self.wr) * 1e-6 // Convert from Ohm·µm to Ohm
         } else {
             0.0
         };
 
         // ua, ub, uc temperature dependence
-        let ua = self.ua + self.ua1 * (temp - tnom_k);
-        let ub = self.ub + self.ub1 * (temp - tnom_k);
-        let uc = self.uc + self.uc1 * (temp - tnom_k);
+        let ua = self.ua + self.ua1 * t_ratio_minus1;
+        let ub = self.ub + self.ub1 * t_ratio_minus1;
+        let uc = self.uc + self.uc1 * t_ratio_minus1;
 
         // Xdep0
         let xdep0 = (2.0 * EPSSI / (CHARGE_Q * self.npeak * 1e6)).sqrt() * sqrt_phi;
