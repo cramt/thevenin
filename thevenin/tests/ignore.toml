@@ -49,8 +49,8 @@
 "transient/fourbitadder.cir" = "times out (>30s)"
 
 # === Transmission lines ===
-"transmission/cpl3_4_line.cir" = "~0.48% V(2) error at t=21.2ns: CPL CMOS inverter transition (improved from 61% after convolution accumulation + timing order fixes)"
-"transmission/cpl_ibm2.cir" = "~5.3% error at t=7.75ns: CPL 2-line coupling error (improved from 13% after convolution accumulation + timing order fixes)"
+"transmission/cpl3_4_line.cir" = "~0.57% V(2) error at t=21.1ns: CPL 4-line impulse response (improved from 61% after convolution accumulation + timing order + taul truncation fixes; no MOSFETs)"
+"transmission/cpl_ibm2.cir" = "~5.3% error at t=7.75ns: CPL 2-line coupling error (improved from 13% after convolution accumulation + timing order fixes; no MOSFETs)"
 "transmission/ltra2_2_line.cir" = "~5.8% V(3) error at t=29.3ns: cascaded 2-line circuit accumulates CMOS inverter switching errors through second stage"
 "transmission/txl1_1_line.cir" = "~4.6% V(2) error at t=21.05ns: TXL CMOS inverter transition (TXL model, not affected by LTRA convolution fixes)"
 "transmission/txl2_3_line.cir" = "~4.7% V(2) error: TXL three-line cascade, CMOS driver timing (TXL model, not affected by LTRA convolution fixes)"

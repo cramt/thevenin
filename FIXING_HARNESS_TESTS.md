@@ -2936,3 +2936,108 @@ Findings:
   incremental charge formula (Q += C*Δv), not from timestep control.
   Attempted exact analytical charge in NR loop but it causes convergence
   difficulties from the exponential diffusion charge term TF*cbe.
+
+---
+
+## Applied fix: CPL delay interpolation integer truncation (2026-03-22)
+
+**Affected tests:** `harness_transmission_cpl3_4_line`, `harness_transmission_cpl_ibm2`
+
+**Root cause:** In the CPL coupled transmission line model, the `get_pvs_vi` function
+computes delayed time indices `ta[i]` and `tb[i]` by subtracting the modal delay
+`taul[i]` (in picoseconds) from the current time `t1`/`t2` (integer picoseconds).
+The delay values `taul[i]` are stored as `f64` with fractional picoseconds (e.g.,
+353.7 ps), but the subtraction truncated them to integer via `cp.taul[i] as i64`:
+
+```rust
+ta[i] = t1 - cp.taul[i] as i64;  // WRONG: truncates fractional ps
+```
+
+In ngspice `cplload.c` lines 705-718, `ta` and `tb` are declared as `double`:
+```c
+double ta[MAX_CP_TX_LINES], tb[MAX_CP_TX_LINES];
+ta[i] = t1 - cp->taul[i];  // preserves fractional ps
+```
+
+The integer truncation systematically shifted every delayed signal lookup by up
+to 1 picosecond, biasing the interpolation fraction.  For a 4-line CPL with modal
+delays of ~350 ps, the truncation introduces a ~0.14% systematic delay error.
+
+**Fix applied:** Changed `ta` and `tb` from `Vec<i64>` to `Vec<f64>`, computing
+`ta[i] = t1 as f64 - cp.taul[i]`.  Updated `find_interp` to accept `f64` targets.
+Updated all comparisons (`tb <= 0`, `ta <= 0`, `tb > t1`) and the ratio computation
+to use `f64` arithmetic, matching ngspice's `double` types.
+
+**Impact on tests:**
+
+| Test | Before | After |
+|---|---|---|
+| `cpl3_4_line` | ~0.48% V(2) error | ~0.57% V(2) error (slightly worse) |
+| `cpl_ibm2` | ~5.3% error | ~5.3% error (unchanged) |
+
+The fix is correct (matches ngspice's data types) but slightly worsened `cpl3_4`
+from 0.48% to 0.57%.  This indicates a second compensating bug elsewhere in the
+CPL model (likely in the setup code: eigendecomposition, polynomial fitting, or
+Padé approximation) that was partially hidden by the truncation error.  The
+truncation was accidentally shifting delayed signal lookups in the direction that
+partially compensated for the second bug.
+
+**Remaining CPL investigation findings:**
+- All 14 terms in the convolution update formula (update_cnv_cpl) match ngspice
+  line-by-line, including the bi/bo accumulation fix
+- All RHS excitation computation (right_consts equivalent) matches exactly
+- All admittance and coupling matrix stamps match exactly
+- The approx_mode delay extraction function matches exactly
+- The Scaling_F/Scaling_F2 eigenvalue rescaling is correctly implemented
+- The 1e12 unit conversion factors are consistent throughout
+
+**Key discovery:** The cpl3_4 and cpl_ibm2 test circuits contain NO MOSFETs — they
+are pure R+CPL circuits with PWL voltage sources and resistor loads.  The error
+is entirely in the CPL model (not "CMOS inverter transition" as previously noted
+in the ignore reasons).  This means the remaining ~0.57% error is from the CPL
+model's numerical treatment of coupled line impulse responses, not from MOSFET
+timing approximations.
+
+**No regressions:** All 422 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Comprehensive investigation: all 37 remaining tests intractable (2026-03-22)
+
+Fresh investigation of all 37 remaining ignored tests with focus on identifying
+any newly fixable issues.  All categories were re-examined:
+
+### VBIC self-heating (FO/FG/temp/CEamp — 4 tests)
+
+Re-investigated the VBIC FO test (0.205% error, only 0.005% above tolerance).
+Verified all 14 self-heating power terms match ngspice's `vbic_4T_et_cf_fj`
+kernel exactly.  The external resistance power terms (RCX, RBX, RE, RS) use
+V²/R_t formulation which is mathematically identical to ngspice's I*V since
+I = V/R_t for linear resistors.  All temperature scaling coefficients (XRCX,
+XRBX, XRE, XRS) default to 0, so R_t = R_nom at all temperatures — no
+temperature dependence in external resistances for the test circuits.
+
+The 0.205% error corresponds to a diff of 1.0172e-7 vs tolerance of 1.0e-7,
+requiring a 0.00346% reduction in base current to pass.  This is consistent
+with a ~1 ULP FP evaluation order difference amplified ~2× through the thermal
+feedback loop.  No fixable code-level bug was found.
+
+### CPL transmission lines (2 tests, no MOSFETs)
+
+Found and fixed the taul integer truncation bug (see above).  Exhaustive
+line-by-line comparison of all stamp, convolution, and excitation formulas
+confirmed they match ngspice exactly.  The remaining error is in the CPL
+setup code (eigendecomposition/polynomial fitting/Padé approximation).
+
+### All other categories
+
+All other test categories remain as previously documented:
+- BSIM3SOI (15 tests): multiple compensating bugs, 1.1-22% errors
+- Transmission lines with MOSFETs (3 tests): MOSFET driver timing
+- BJT transient (2 tests): constant junction cap approximation
+- Level 2 MOSFET (1 test): missing model features
+- HFET (1 test): bistable circuit, needs source stepping
+- Sensitivity (1 test): LU precision, needs analytical sensitivity
+- Missing subsystems (5 tests): BSIM1/2, .control, TEMPER
+- No reference (1 test): ngspice says "To be done"
+- Timeout (2 tests): fourbitadder complexity

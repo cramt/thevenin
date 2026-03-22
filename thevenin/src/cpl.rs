@@ -1557,14 +1557,14 @@ fn get_pvs_vi(t1: i64, t2: i64, cp: &mut CpLine) -> DelayedValues {
     let mut ratio = vec![0.0; no_l];
     let mut ext = false;
 
-    let mut ta = vec![0i64; no_l];
-    let mut tb = vec![0i64; no_l];
+    let mut ta = vec![0.0f64; no_l];
+    let mut tb = vec![0.0f64; no_l];
     let mut _mini = 0usize;
-    let mut minta = i64::MAX;
+    let mut minta = f64::MAX;
 
     for i in 0..no_l {
-        ta[i] = t1 - cp.taul[i] as i64;
-        tb[i] = t2 - cp.taul[i] as i64;
+        ta[i] = t1 as f64 - cp.taul[i];
+        tb[i] = t2 as f64 - cp.taul[i];
         if ta[i] < minta {
             minta = ta[i];
             _mini = i;
@@ -1576,7 +1576,7 @@ fn get_pvs_vi(t1: i64, t2: i64, cp: &mut CpLine) -> DelayedValues {
     for i in 0..no_l {
         ratio[i] = 0.0;
 
-        if tb[i] <= 0 {
+        if tb[i] <= 0.0 {
             for j in 0..no_l {
                 i1_i[i][j] = 0.0;
                 i2_i[i][j] = 0.0;
@@ -1588,7 +1588,7 @@ fn get_pvs_vi(t1: i64, t2: i64, cp: &mut CpLine) -> DelayedValues {
                 v2_o[i][j] = cp.dc2[j];
             }
         } else {
-            if ta[i] <= 0 {
+            if ta[i] <= 0.0 {
                 for j in 0..no_l {
                     i1_i[i][j] = 0.0;
                     i1_o[i][j] = 0.0;
@@ -1610,9 +1610,9 @@ fn get_pvs_vi(t1: i64, t2: i64, cp: &mut CpLine) -> DelayedValues {
                 }
             }
 
-            if tb[i] > t1 {
+            if tb[i] > t1 as f64 {
                 ext = true;
-                let f = (tb[i] - t1) as f64 / (t2 - t1) as f64;
+                let f = (tb[i] - t1 as f64) / (t2 - t1) as f64;
                 ratio[i] = f;
                 let last = hist.last().unwrap();
                 let f1 = 1.0 - f;
@@ -1641,17 +1641,17 @@ fn get_pvs_vi(t1: i64, t2: i64, cp: &mut CpLine) -> DelayedValues {
     (ext, v1_i, v2_i, i1_i, i2_i, v1_o, v2_o, i1_o, i2_o, ratio)
 }
 
-fn find_interp(hist: &[CplViEntry], target: i64) -> (usize, f64) {
+fn find_interp(hist: &[CplViEntry], target: f64) -> (usize, f64) {
     if hist.len() < 2 {
         return (0, 0.0);
     }
     for idx in 0..(hist.len() - 1) {
-        if hist[idx + 1].time >= target {
+        if hist[idx + 1].time as f64 >= target {
             let dt = (hist[idx + 1].time - hist[idx].time) as f64;
             if dt.abs() < 1e-300 {
                 return (idx, 0.0);
             }
-            let f = (target - hist[idx].time) as f64 / dt;
+            let f = (target - hist[idx].time as f64) / dt;
             return (idx, f);
         }
     }
