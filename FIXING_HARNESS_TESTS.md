@@ -2757,3 +2757,76 @@ dropped from 13% to 5.3%, with the larger remaining error likely from multi-line
 modal coupling amplifying the MOSFET timing shift.
 
 **No regressions:** All 70 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Applied fix: BSIM3SOI-FD csieff/litl/Abeff corrections (2026-03-22)
+
+**Affected tests:** `harness_bsim3soifd_t3`, `harness_bsim3soifd_t4`, `harness_bsim3soifd_t5`
+
+**Three bugs found by comparing `bsim3soi_fd.rs` with ngspice `b3soifdset.c`,
+`b3soifdtemp.c`, and `b3soifdld.c`:**
+
+### 1. Wrong csieff/qsieff computation (CRITICAL)
+
+**File:** `thevenin/src/bsim3soi_fd.rs`, model setup
+
+Our code unconditionally halved the silicon film capacitance:
+```rust
+self.csieff = self.csi * 0.5;
+self.qsieff = self.qsi * 0.5;
+```
+
+ngspice `b3soifdset.c` lines 978-995 computes these based on the VBSA parameter:
+when VBSA=0, `csieff = csi` and `qsieff = qsi` (no halving).  The halving was
+wrong, giving a 2× error in the body coupling coefficient `kb1/(1+csieff/cbox)`.
+With the test model card (KB1=0.95, CBOX from TBOX=8e-8), this changed the
+coupling ratio from 0.164 (correct) to 0.279 (70% too large), propagating through
+the entire Vbs0→Vbseff→Vth chain.
+
+**Fix:** Replaced with the VBSA-dependent formula from ngspice.
+
+### 2. Wrong litl formula
+
+**File:** `thevenin/src/bsim3soi_fd.rs`, size_dep_param
+
+Our code used `litl = sqrt(EPSSI * tox / cox)` ≈ 7.8nm.  ngspice `b3soifdtemp.c`
+line 650 uses `litl = sqrt(3 * xj * tox)` where XJ defaults to TSI ≈ 26nm.
+The wrong litl suppressed the DVBD body-effect correction in Vbs0t.
+
+**Fix:** Changed to `sqrt(3.0 * tsi * tox)`.
+
+### 3. Missing Abeff computation (CRITICAL)
+
+**File:** `thevenin/src/bsim3soi_fd.rs`, companion function
+
+The FD model was using raw `Abulk` in the entire Ids computation (Vdsat, Ids,
+VACLM, VADIBL, etc.).  ngspice `b3soifdld.c` lines 1492-1513 computes
+`Abeff = Xcsat * Abulk + (1-Xcsat) * adice` — a weighted blend between Abulk
+and the processed ADICE0 parameter based on the cross-section saturation state.
+The DD variant already had this correctly implemented.
+
+In FD floating-body mode (Vcs≈0), Xcsat is small (~0.05), making `Abeff ≈ 0.89`
+vs `Abulk ≈ 1.1` — an 18% difference in the effective body charge factor.
+
+**Fix:** Added full Xcsat/Abeff computation matching DD variant, plus `adice`
+preprocessing (`adice0 / (1 + Cboxt/Cox)`).
+
+### Combined impact
+
+| Test | Before | After |
+|---|---|---|
+| `bsim3soifd/t3` | ~9% Ids error | ~5.5% Ids error (mismatch moved, partial overcorrection) |
+| `bsim3soifd/t4` | ~36% Ids error | ~5.7% Ids error (6× improvement) |
+| `bsim3soifd/t5` | ~99% Ids error (factor 184) | ~2.7% Ids error (37× improvement) |
+
+The t5 test improved from a factor-of-184 discrepancy to 2.7% — the csieff fix
+corrected the gross body coupling error, the litl fix improved the DVBD term, and
+the Abeff fix corrected the drain current's dependence on body charge.
+
+The remaining errors likely come from additional model value bugs in the FD
+variant (derivative-only bugs: missing dueff_dvb/dvd, missing Gme substrate
+transconductance, missing chain-rule terms in Gm/Gds/Gmbs).
+
+**No regressions:** All 422 tests pass (70 non-ignored harness + 352 unit tests).
+Clippy clean.

@@ -205,6 +205,7 @@ pub struct Bsim3SoiFdModel {
     pub qsi: f64,
     pub csieff: f64,
     pub qsieff: f64,
+    pub adice: f64,
     pub vfbb: f64,
 }
 
@@ -525,6 +526,7 @@ impl Bsim3SoiFdModel {
             qsi: 0.0,
             csieff: 0.0,
             qsieff: 0.0,
+            adice: 0.0,
             vfbb: 0.0,
         };
         m.precompute();
@@ -733,10 +735,26 @@ impl Bsim3SoiFdModel {
         self.csi = EPSSI / self.tsi;
         self.qsi = CHARGE_Q * npeak * 1e6 * self.tsi;
 
-        // Effective silicon capacitance (for body potential calculation)
-        // csieff = csi / 2 (half of silicon film for FD)
-        self.csieff = self.csi * 0.5;
-        self.qsieff = self.qsi * 0.5;
+        // Effective silicon capacitance (for body potential calculation).
+        // ngspice b3soifdset.c lines 978-995: csieff/qsieff depend on VBSA.
+        // When VBSA is too large for the given tsi, fall back to csi/qsi.
+        // Otherwise compute the effective depletion-corrected thickness.
+        let tmp1_vbsa = 2.0 * EPSSI * self.vbsa / CHARGE_Q / (1e6 * npeak);
+        let tmp2_tsi2 = self.tsi * self.tsi;
+        if tmp2_tsi2 < tmp1_vbsa {
+            // VBSA too large: ngspice prints warning and uses full tsi
+            self.csieff = self.csi;
+            self.qsieff = self.qsi;
+        } else {
+            let tsieff = (tmp2_tsi2 - tmp1_vbsa).sqrt();
+            self.csieff = EPSSI / tsieff;
+            self.qsieff = CHARGE_Q * npeak * 1e6 * tsieff;
+        }
+
+        // Processed adice: adice0 / (1 + Cboxt/Cox)
+        // ngspice b3soifdset.c lines 996-1000
+        let cboxt = self.cbox * self.csi / (self.cbox + self.csi);
+        self.adice = self.adice0 / (1.0 + cboxt / self.cox);
 
         // Flat-band voltage
         let nsub = if self.nsub > 1e20 {
@@ -810,9 +828,11 @@ impl Bsim3SoiFdModel {
         // Depletion width
         let xdep0 = (2.0 * EPSSI / (CHARGE_Q * self.npeak * 1e6)).sqrt() * sqrt_phi;
 
-        // litl: used for VACLM and dvbd. FD model doesn't parse xj separately;
-        // use tox-based approximation (pre-existing).
-        let litl = (EPSSI * self.tox / self.cox).sqrt();
+        // litl: used for VACLM and dvbd.
+        // ngspice b3soifdtemp.c line 650: litl = sqrt(3 * xj * tox).
+        // When XJ is not given, it defaults to TSI (b3soifdset.c line 216).
+        let xj = self.tsi; // XJ defaults to TSI in FD-SOI
+        let litl = (3.0 * xj * self.tox).sqrt();
 
         // Characteristic length for DIBL (theta0vb0) and PDIBL (theta_rout).
         // ngspice b3soifdtemp.c: T1 = sqrt(EPSSI / EPSOX * tox * Xdep0)
@@ -1449,6 +1469,41 @@ pub fn bsim3soi_fd_companion(
 
         (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb)
     };
+
+    // Xcsat / Abeff (FD cross-section saturation blending, matching DD implementation)
+    // ngspice b3soifdld.c lines 1492-1513
+    const DELT_XCSAT: f64 = 0.2;
+    let vcs = vbsdio - vbs0eff_fd;
+    let (abeff, dabeff_dvg, dabeff_dvb) = {
+        let t0 = model.abp * vgst2vtm;
+        if t0.abs() < 1e-20 {
+            // Avoid division by zero; Xcsat=0, Abeff=adice
+            (model.adice, 0.0, 0.0)
+        } else {
+            let t1 = 1.0 - vcs / t0 - DELT_XCSAT;
+            let t2 = (t1 * t1 + DELT_XCSAT * DELT_XCSAT).sqrt();
+            let t3 = 1.0 - 0.5 * (t1 + t2);
+            let t5 = -0.5 * (1.0 + t1 / t2);
+            let dt1_dvg = vcs / vgst2vtm / t0;
+            let dt3_dvg = t5 * dt1_dvg;
+
+            let xcsat = model.mxc * t3 * t3 + (1.0 - model.mxc) * t3;
+            let t4 = 2.0 * model.mxc * t3 + (1.0 - model.mxc);
+            let dxcsat_dvg = t4 * dt3_dvg;
+
+            let abeff = xcsat * abulk + (1.0 - xcsat) * model.adice;
+            let dabeff_dvg =
+                xcsat * dabulk_dvg + abulk * dxcsat_dvg - model.adice * dxcsat_dvg;
+            let dabeff_dvb = xcsat * dabulk_dvb;
+            (abeff, dabeff_dvg, dabeff_dvb)
+        }
+    };
+
+    // Shadow abulk with abeff for all subsequent Ids computations.
+    // ngspice uses Abeff (not raw Abulk) in Vdsat, Ids, VACLM, VADIBL, etc.
+    let abulk = abeff;
+    let dabulk_dvg = dabeff_dvg;
+    let dabulk_dvb = dabeff_dvb;
 
     // Mobility
     let (ueff, dueff_dvg, dueff_dvd, dueff_dvb) = {

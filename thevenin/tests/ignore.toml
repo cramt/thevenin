@@ -15,9 +15,9 @@
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
 "bsim3soifd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
-"bsim3soifd/t3.cir" = "~9% Ids error near threshold (BSIM3SOI-FD model value bug)"
-"bsim3soifd/t4.cir" = "~36% Ids error near threshold (sign now correct after vbs clamp fix, remaining model value bug)"
-"bsim3soifd/t5.cir" = "~99% error: expected 1.1e-7, got 6.1e-10 (BSIM3SOI-FD model value bug)"
+"bsim3soifd/t3.cir" = "~5.5% Ids error near threshold (improved from 9% after csieff/litl/Abeff fixes, remaining model value bug)"
+"bsim3soifd/t4.cir" = "~5.7% Ids error near threshold (improved from 36% after csieff/litl/Abeff fixes, remaining model value bug)"
+"bsim3soifd/t5.cir" = "~2.7% Ids error at Vg=0.62V (improved from 99% after csieff/litl/Abeff fixes, remaining model value bug)"
 
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
