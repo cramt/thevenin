@@ -671,8 +671,7 @@ impl VbicModel {
         self.isrr_t = if self.isrr == 0.0 {
             0.0
         } else {
-            let base =
-                tratio.powf(self.xisr) * safe_exp(-self.dear * (1.0 - tratio) / vt);
+            let base = tratio.powf(self.xisr) * safe_exp(-self.dear * (1.0 - tratio) / vt);
             if self.nr == 1.0 {
                 self.isrr * base
             } else {
@@ -869,29 +868,39 @@ impl VbicModel {
         };
 
         let (qb, dqb_dvbei, dqb_dvbci) = if self.qbm == 0.0 {
-            // Standard VBIC base charge: qb = q1z/2 * (1 + sqrt(1 + 4*q2/q1z^2))
-            let q1z_sq = q1z * q1z;
-            let arg = (1.0 + 4.0 * q2 / q1z_sq).max(0.0);
+            // Smooth clamp q1 >= 1e-4, matching ngspice vbicload.c lines 3136-3140.
+            // This prevents numerical issues when q1z approaches zero from Early
+            // effect saturation.
+            let q1z_m = q1z - 1e-4;
+            let q1_denom = (q1z_m * q1z_m + 1e-8).sqrt();
+            let q1 = 0.5 * (q1_denom + q1z_m) + 1e-4;
+            let dq1_dq1z = 0.5 * (q1z_m / q1_denom + 1.0);
+
+            // Chain-rule derivatives through the smooth clamp.
+            let dq1_dvbei = dq1_dq1z * dq1z_dvbei;
+            let dq1_dvbci = dq1_dq1z * dq1z_dvbci;
+
+            // Standard VBIC base charge: qb = (q1 + sqrt(q1^2 + 4*q2)) / 2
+            let q1_sq = q1 * q1;
+            let arg = (q1_sq + 4.0 * q2).max(0.0);
             let sqrt_arg = arg.sqrt();
-            let qb_val = q1z * (1.0 + sqrt_arg) / 2.0;
+            let qb_val = 0.5 * (q1 + sqrt_arg);
 
             // dqb/dvbei
             let dsqrt_dvbei = if sqrt_arg > 0.0 {
-                (4.0 * dq2_dvbei * q1z_sq - 4.0 * q2 * 2.0 * q1z * dq1z_dvbei)
-                    / (2.0 * sqrt_arg * q1z_sq * q1z_sq)
+                (2.0 * q1 * dq1_dvbei + 4.0 * dq2_dvbei) / (2.0 * sqrt_arg)
             } else {
                 0.0
             };
-            let dqb_dvbei_val = dq1z_dvbei * (1.0 + sqrt_arg) / 2.0 + q1z * dsqrt_dvbei / 2.0;
+            let dqb_dvbei_val = 0.5 * (dq1_dvbei + dsqrt_dvbei);
 
             // dqb/dvbci
             let dsqrt_dvbci = if sqrt_arg > 0.0 {
-                (4.0 * dq2_dvbci * q1z_sq - 4.0 * q2 * 2.0 * q1z * dq1z_dvbci)
-                    / (2.0 * sqrt_arg * q1z_sq * q1z_sq)
+                (2.0 * q1 * dq1_dvbci + 4.0 * dq2_dvbci) / (2.0 * sqrt_arg)
             } else {
                 0.0
             };
-            let dqb_dvbci_val = dq1z_dvbci * (1.0 + sqrt_arg) / 2.0 + q1z * dsqrt_dvbci / 2.0;
+            let dqb_dvbci_val = 0.5 * (dq1_dvbci + dsqrt_dvbci);
 
             (qb_val, dqb_dvbei_val, dqb_dvbci_val)
         } else {

@@ -115,8 +115,8 @@ pub(crate) struct DeviceVoltageState {
     prev_jct: RefCell<Vec<f64>>,
     vcrits: Vec<f64>,
     prev_bjt: RefCell<Vec<(f64, f64)>>,
-    prev_mos: RefCell<Vec<(f64, f64, f64)>>,
-    prev_mos6: RefCell<Vec<(f64, f64, f64)>>,
+    prev_mos: RefCell<Vec<(f64, f64, f64, f64)>>,
+    prev_mos6: RefCell<Vec<(f64, f64, f64, f64)>>,
     prev_jfet: RefCell<Vec<(f64, f64)>>,
     jfet_vcrits: Vec<f64>,
     prev_bsim3: RefCell<Vec<(f64, f64, f64)>>,
@@ -151,8 +151,8 @@ impl DeviceVoltageState {
             prev_jct: RefCell::new(vec![0.0; mna.diodes.len()]),
             vcrits,
             prev_bjt: RefCell::new(vec![(0.0, 0.0); mna.bjts.len()]),
-            prev_mos: RefCell::new(vec![(0.0, 0.0, 0.0); mna.mosfets.len()]),
-            prev_mos6: RefCell::new(vec![(0.0, 0.0, 0.0); mna.mos6s.len()]),
+            prev_mos: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mosfets.len()]),
+            prev_mos6: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos6s.len()]),
             prev_jfet: RefCell::new(vec![(0.0, 0.0); mna.jfets.len()]),
             jfet_vcrits,
             prev_bsim3: RefCell::new(vec![(0.0, 0.0, 0.0); mna.bsim3s.len()]),
@@ -212,7 +212,9 @@ impl DeviceVoltageState {
                     .iter()
                     .map(|m| {
                         let (vgs, vds, vbs) = m.terminal_voltages(prev_solution);
-                        (vgs, vds, vbs)
+                        // Initialize von to 0.0 — it will be updated after the
+                        // first companion call, matching ngspice's MOS1von default.
+                        (vgs, vds, vbs, 0.0)
                     })
                     .collect(),
             ),
@@ -221,7 +223,7 @@ impl DeviceVoltageState {
                     .iter()
                     .map(|m| {
                         let (vgs, vds, vbs) = m.terminal_voltages(prev_solution);
-                        (vgs, vds, vbs)
+                        (vgs, vds, vbs, 0.0)
                     })
                     .collect(),
             ),
@@ -315,12 +317,12 @@ impl DeviceVoltageState {
                 prev[i] = bjt.junction_voltages(solution);
             }
         }
-        // Reset MOSFET prev voltages
+        // Reset MOSFET prev voltages (von reset to 0.0 for fresh NR sequence)
         {
             let mut prev = self.prev_mos.borrow_mut();
             for (i, mos) in mna.mosfets.iter().enumerate() {
                 let (vgs, vds, vbs) = mos.terminal_voltages(solution);
-                prev[i] = (vgs, vds, vbs);
+                prev[i] = (vgs, vds, vbs, 0.0);
             }
         }
     }
@@ -344,15 +346,15 @@ impl DeviceVoltageState {
         self.prev_mesa.borrow().clone()
     }
 
-    /// Get the current limited MOSFET voltages (vgs, vds, vbs) for each Level 1 MOSFET.
+    /// Get the current limited MOSFET voltages (vgs, vds, vbs, von) for each Level 1 MOSFET.
     /// Call after `stamp_devices()` to read the voltages used for the last stamp.
-    pub fn prev_mos_voltages(&self) -> Vec<(f64, f64, f64)> {
+    pub fn prev_mos_voltages(&self) -> Vec<(f64, f64, f64, f64)> {
         self.prev_mos.borrow().clone()
     }
 
-    /// Get the current limited MOS6 voltages (vgs, vds, vbs) for each Level 6 MOSFET.
+    /// Get the current limited MOS6 voltages (vgs, vds, vbs, von) for each Level 6 MOSFET.
     /// Call after `stamp_devices()` to read the voltages used for the last stamp.
-    pub fn prev_mos6_voltages(&self) -> Vec<(f64, f64, f64)> {
+    pub fn prev_mos6_voltages(&self) -> Vec<(f64, f64, f64, f64)> {
         self.prev_mos6.borrow().clone()
     }
 
@@ -426,7 +428,12 @@ impl DeviceVoltageState {
                 // during DC OP iterations.  This prevents NR divergence for PMOS
                 // transistors with LAMBDA=0 (gds=0 in saturation).  BSIM3/4 have
                 // their own unconditional limiting and are not affected.
-                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
+                // Use the previous iteration's dynamically computed von (including
+                // body effect) for fetlim, matching ngspice mos1load.c line 351:
+                //   von = model->MOS1type * here->MOS1von;
+                // On the first iteration, von=0.0 (matching ngspice default).
+                let von_prev = prev[mi].3;
+                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
                 // Apply pnjlim to bulk junction voltages (Vbs/Vbd), matching
                 // ngspice mos1load.c lines 375-384.  Without this, large Vbs
                 // jumps can cause exponential overflow in junction currents.
@@ -435,12 +442,14 @@ impl DeviceVoltageState {
                 } else {
                     bsim_pnjlim(raw_vbs - vds, prev[mi].2 - prev[mi].1) + vds
                 };
-                prev[mi] = (vgs, vds, vbs);
 
                 let mut eff_model = mos.model.clone();
                 eff_model.kp = mos.beta();
 
                 let comp = eff_model.companion(vgs, vds, vbs);
+                // Store von for next iteration's fetlim (ngspice mos1load.c line 535):
+                //   here->MOS1von = model->MOS1type * von;
+                prev[mi] = (vgs, vds, vbs, comp.von);
                 stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }
@@ -453,7 +462,9 @@ impl DeviceVoltageState {
 
                 // Always apply voltage limiting for Level 6 MOSFETs (same
                 // rationale as Level 1 above).
-                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
+                // Use previous iteration's dynamic von for fetlim (same as Level 1).
+                let von_prev = prev[mi].3;
+                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
                 // Apply pnjlim to bulk junction voltages (same as Level 1).
                 let vbs = if vds >= 0.0 {
                     bsim_pnjlim(raw_vbs, prev[mi].2)
@@ -462,10 +473,10 @@ impl DeviceVoltageState {
                     let vbd_lim = bsim_pnjlim(vbd, prev[mi].2 - prev[mi].1);
                     vbd_lim + vds
                 };
-                prev[mi] = (vgs, vds, vbs);
 
                 let betac = mos.betac();
                 let comp = mos.model.companion(vgs, vds, vbs, betac);
+                prev[mi] = (vgs, vds, vbs, comp.von);
                 crate::mos6::stamp_mos6(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }

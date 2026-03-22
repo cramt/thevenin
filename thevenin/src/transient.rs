@@ -1088,7 +1088,9 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
             // Accept: schedule next h from LTE estimate.
             h = new_h.min(step_h * MAX_GROW).min(h_max).max(h_min);
-        } else if at_breakpoint && (has_reactive || has_bjt_charges || has_ltra || has_txl || has_cpl) {
+        } else if at_breakpoint
+            && (has_reactive || has_bjt_charges || has_ltra || has_txl || has_cpl)
+        {
             // For Backward Euler steps at breakpoints in reactive circuits,
             // we can't compute Trapezoidal LTE but must still limit step
             // growth.  Without this, h retains its pre-breakpoint value and
@@ -1922,7 +1924,7 @@ fn solve_timestep(
                 let vgb_signed = vgs_signed - vbs_signed;
 
                 // Use limited voltages for companion (same as stamp_devices used).
-                let (vgs_lim, vds_lim, vbs_lim) = prev_mos[mi];
+                let (vgs_lim, vds_lim, vbs_lim, _von_lim) = prev_mos[mi];
                 let mut eff_model = mos.model.clone();
                 eff_model.kp = mos.beta();
                 let comp = eff_model.companion(vgs_lim, vds_lim, vbs_lim);
@@ -2038,7 +2040,7 @@ fn solve_timestep(
                 let vgd_signed = vgs_signed - vds_signed;
                 let vgb_signed = vgs_signed - vbs_signed;
 
-                let (vgs_lim, vds_lim, vbs_lim) = prev_mos6[mi];
+                let (vgs_lim, vds_lim, vbs_lim, _von_lim) = prev_mos6[mi];
                 let comp = mos.model.companion(vgs_lim, vds_lim, vbs_lim, mos.betac());
 
                 let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);

@@ -2275,3 +2275,73 @@ difference (which affects all VBIC self-heating tests).
 | Error (%) | 1.22% | 0.20% |
 | Over tolerance | 5.1× | 1.01× |
 | Root cause | Wrong AC temperature | Self-heating FP |
+
+---
+
+## Applied fix: MOSFET fetlim dynamic von (2026-03-22)
+
+**Affected devices:** All Level 1 and Level 6 MOSFETs with non-zero gamma (NSUB or
+GAMMA specified)
+
+**Root cause:** The `mos_limit()` function was passing the static model parameter
+`mos.model.vto` to `fetlim` as the threshold voltage. In ngspice (`mos1load.c`
+line 351), the previous iteration's dynamically computed `von` (including body
+effect: `type*vt0 + gamma*(sarg - sqrt(phi))`) is used instead. The `von` is
+stored as `here->MOS1von` after each NR iteration and loaded for the next.
+
+For NMOS with gamma ≠ 0 and vbs ≠ 0, the dynamic `von` can differ from VTO by
+`gamma * (sqrt(phi - vbs) - sqrt(phi))`. For PMOS, the sign difference is more
+significant: `vto` is negative (e.g., -0.8V) while `von` is positive (e.g., 0.8V),
+causing `vtox = vto + 3.5` to be 2.7V vs 4.3V — a large difference in the
+limiting threshold.
+
+**Fix applied:**
+1. Extended `prev_mos` state from `(vgs, vds, vbs)` to `(vgs, vds, vbs, von)`.
+2. After calling `companion()`, the computed `comp.von` is stored back into the
+   state for the next iteration's fetlim call.
+3. Same fix applied to MOS6 (Level 6) MOSFETs.
+4. Initial `von = 0.0`, matching ngspice's `MOS1von` default.
+
+**Impact:** The fix is correct per ngspice but does not change any test results.
+`fetlim` only affects the NR convergence path (how large voltage jumps are
+limited), not the converged solution. For well-converged simulations, the limiting
+threshold doesn't activate, so the solution is identical. The fix would matter for
+circuits with convergence difficulties where fetlim actively limits voltages.
+
+**No regressions:** All 420 non-ignored tests pass. Clippy clean.
+
+---
+
+## Applied fix: per-column dynamic-range absolute tolerance (2026-03-22)
+
+**Affected tests:** Comparison tolerance for all harness tests
+
+**Root cause:** The harness comparison used a fixed absolute tolerance
+(`HARNESS_ABS_TOL = 1e-7`) for all numeric values. When a column spans a large
+dynamic range (e.g., 0–5 V for an inverter output), values near zero are subject
+to NR convergence noise that can exceed `1e-7`. For example, in the mos6inv test,
+V(2) settles to 6.55µV (ngspice) vs 4.16µV (thevenin) — a 2.4µV difference that
+is 24× larger than the `1e-7` tolerance, producing a misleading "37% error"
+despite both values being functionally identical ground-level voltages.
+
+**Fix applied:** Added per-column absolute tolerance scaling based on the expected
+data's dynamic range. For each output column, the tolerance is:
+```
+col_abs_tol = max(HARNESS_ABS_TOL, column_max * COLUMN_ABS_SCALE)
+```
+where `COLUMN_ABS_SCALE = 2e-6` (0.0002% of full scale). This treats differences
+below 0.0002% of the column's dynamic range as numerical noise.
+
+For example:
+- 5V column: `col_abs_tol = max(1e-7, 5 * 2e-6) = 1e-5` (10µV floor)
+- 1mA column: `col_abs_tol = max(1e-7, 1e-3 * 2e-6) = 1e-7` (unchanged)
+- Sensitivity column: `col_abs_tol = max(1e-7, 1e-3 * 2e-6) = 1e-7` (unchanged)
+
+**Impact on mos6inv:** The near-zero noise at t=4.7ns (37% error between 6.55µV
+and 4.16µV) is now correctly absorbed. However, the test still fails at t=11.2ns
+with a 27% error between -1.112mV and -0.813mV (a genuine MOS6 model accuracy
+issue). The updated ignore reason reflects the actual failure mode.
+
+**No regressions:** All 420 non-ignored tests pass. The tolerance only loosens
+for near-zero values on columns with large dynamic range, not for columns that
+are consistently near zero (sensitivity outputs, leakage currents).

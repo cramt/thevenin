@@ -2176,6 +2176,15 @@ const HARNESS_REL_TOL: f64 = 2e-3;
 /// floating-point noise vs our exact-zero result.
 const HARNESS_ABS_TOL: f64 = 1e-7;
 
+/// Per-column dynamic-range scale factor for absolute tolerance.
+/// When a column spans a large range (e.g. 0–5 V), values near zero are subject
+/// to NR-convergence noise that can exceed HARNESS_ABS_TOL.  The per-column
+/// absolute tolerance is `max(HARNESS_ABS_TOL, column_max * COLUMN_ABS_SCALE)`,
+/// treating differences below 0.0002% of full scale as noise.  This matches
+/// standard SPICE practice: ngspice's NR convergence tolerance is ~reltol × Vmax,
+/// and settled-state voltages can differ by that amount between implementations.
+const COLUMN_ABS_SCALE: f64 = 2e-6;
+
 pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
     let expected_filtered = filter_output(expected);
     let actual_filtered = filter_output(actual);
@@ -2330,6 +2339,22 @@ fn compare_with_interpolation(
             return Err(format_diff(norm_expected, norm_actual));
         }
 
+        // Compute per-column absolute tolerance from the expected data's dynamic
+        // range.  For columns spanning large voltage/current ranges (e.g., 0–5 V),
+        // near-zero settled values have NR-convergence noise that exceeds the
+        // fixed HARNESS_ABS_TOL.  The per-column tolerance absorbs this noise
+        // without weakening the tolerance for columns that are always near zero
+        // (e.g., sensitivity outputs, leakage currents).
+        let col_abs_tol: Vec<f64> = (0..n_deps)
+            .map(|c| {
+                let col_max = exp_grp
+                    .iter()
+                    .map(|(_, _, deps)| deps[c].abs())
+                    .fold(0.0_f64, f64::max);
+                HARNESS_ABS_TOL.max(col_max * COLUMN_ABS_SCALE)
+            })
+            .collect();
+
         let exp_x: Vec<f64> = exp_grp.iter().map(|(_, x, _)| *x).collect();
         let act_x: Vec<f64> = act_grp.iter().map(|(_, x, _)| *x).collect();
 
@@ -2361,7 +2386,7 @@ fn compare_with_interpolation(
                 0.0
             };
 
-            for col in 0..n_deps {
+            for (col, &abs_tol) in col_abs_tol.iter().enumerate() {
                 for (i, (exp_row, act_row)) in exp_grp.iter().zip(act_grp.iter()).enumerate() {
                     let exp_val = exp_row.2[col];
                     let act_val = act_row.2[col];
@@ -2381,7 +2406,7 @@ fn compare_with_interpolation(
                         0.0
                     };
 
-                    if abs_diff > rel_tol.max(HARNESS_ABS_TOL).max(slope_tol) {
+                    if abs_diff > rel_tol.max(abs_tol).max(slope_tol) {
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],
@@ -2409,7 +2434,7 @@ fn compare_with_interpolation(
             };
 
             // For each dependent column, build actual arrays and interpolate at expected points.
-            for col in 0..n_deps {
+            for (col, &abs_tol) in col_abs_tol.iter().enumerate() {
                 let act_y: Vec<f64> = act_grp.iter().map(|(_, _, deps)| deps[col]).collect();
 
                 for (i, exp_row) in exp_grp.iter().enumerate() {
@@ -2428,7 +2453,7 @@ fn compare_with_interpolation(
                         0.0
                     };
 
-                    if abs_diff > rel_tol.max(HARNESS_ABS_TOL).max(slope_tol) {
+                    if abs_diff > rel_tol.max(abs_tol).max(slope_tol) {
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],

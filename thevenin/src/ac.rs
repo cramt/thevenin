@@ -584,8 +584,7 @@ pub fn stamp_ac_devices(
             vbic.model.clone()
         };
 
-        let comp = model
-            .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
+        let comp = model.companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
         let s = vbic.m * vbic.area;
 
         let bi = vbic.base_bi_idx;
