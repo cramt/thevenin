@@ -1328,7 +1328,49 @@ fn compute_rc_excitation(
     LtraExcitation { input1, input2 }
 }
 
+/// Quadratic (Lagrange) interpolation using 3 points.
+/// Returns coefficients (c1, c2, c3) such that f(t) ≈ c1*v1 + c2*v2 + c3*v3.
+/// Points are at times (t1, t2, t3).  Matches ngspice's LTRAquadInterp.
+fn quad_interp(t: f64, t1: f64, t2: f64, t3: f64) -> Option<(f64, f64, f64)> {
+    if t == t1 {
+        return Some((1.0, 0.0, 0.0));
+    }
+    if t == t2 {
+        return Some((0.0, 1.0, 0.0));
+    }
+    if t == t3 {
+        return Some((0.0, 0.0, 1.0));
+    }
+    if (t2 - t1) == 0.0 || (t3 - t2) == 0.0 || (t1 - t3) == 0.0 {
+        return None;
+    }
+    let f1 = (t - t2) * (t - t3) / ((t1 - t2) * (t1 - t3));
+    let f2 = (t - t1) * (t - t3) / ((t2 - t1) * (t2 - t3));
+    let f3 = (t - t1) * (t - t2) / ((t3 - t1) * (t3 - t2));
+    Some((f1, f2, f3))
+}
+
+/// Quadratic interpolation with linear fallback when no prior point exists.
+/// Matches ngspice's default LTRA_MOD_QUADINTERP behavior: the quadratic
+/// result is used unconditionally (no range-check fallback to linear).
+fn quad_interp_value(
+    vals: &[f64],
+    isaved: usize,
+    lf2: f64,
+    lf3: f64,
+    qf: Option<(f64, f64, f64)>,
+) -> f64 {
+    if let Some((qf1, qf2, qf3)) = qf {
+        vals[isaved - 1] * qf1 + vals[isaved] * qf2 + vals[isaved + 1] * qf3
+    } else {
+        // No prior point available (isaved == 0) — fall back to linear
+        vals[isaved] * lf2 + vals[isaved + 1] * lf3
+    }
+}
+
 /// Interpolate delayed signal values (at time cur_time - td).
+/// Uses quadratic interpolation with mixed-mode fallback, matching ngspice's
+/// default LTRA_MOD_QUADINTERP behavior (fall back to linear if out of range).
 fn interpolate_delayed(
     state: &LtraState,
     time_points: &[f64],
@@ -1351,15 +1393,23 @@ fn interpolate_delayed(
         isaved = isaved.saturating_sub(1);
     }
 
-    // Linear interpolation
+    // Linear interpolation coefficients (always computed)
     let t2 = time_points[isaved];
     let t3 = time_points[isaved + 1];
     let (lf2, lf3) = lin_interp(delayed_time, t2, t3);
 
-    let v1d = state.v1[isaved] * lf2 + state.v1[isaved + 1] * lf3;
-    let i1d = state.i1[isaved] * lf2 + state.i1[isaved + 1] * lf3;
-    let v2d = state.v2[isaved] * lf2 + state.v2[isaved + 1] * lf3;
-    let i2d = state.i2[isaved] * lf2 + state.i2[isaved + 1] * lf3;
+    // Quadratic interpolation coefficients (if we have a prior point)
+    let qf = if isaved > 0 {
+        let t1 = time_points[isaved - 1];
+        quad_interp(delayed_time, t1, t2, t3)
+    } else {
+        None
+    };
+
+    let v1d = quad_interp_value(&state.v1, isaved, lf2, lf3, qf);
+    let i1d = quad_interp_value(&state.i1, isaved, lf2, lf3, qf);
+    let v2d = quad_interp_value(&state.v2, isaved, lf2, lf3, qf);
+    let i2d = quad_interp_value(&state.i2, isaved, lf2, lf3, qf);
 
     (v1d, i1d, v2d, i2d)
 }

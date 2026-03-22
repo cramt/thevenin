@@ -2449,7 +2449,7 @@ comprehensive assessment: no tests can be fixed without major architectural chan
 |---|---|---|
 | VBIC self-heating FP | 4 | 0.2-1.2% error, needs bit-level tracing |
 | VBIC NR convergence | 1 | timeout, needs source/gmin stepping |
-| Transmission line | 6 | 2.2-61% error, MOSFET/line interaction |
+| Transmission line | 5 | 4.6-61% error, MOSFET/line interaction |
 | BJT junction cap | 2 | 6-31% error, needs voltage-dependent charge |
 | Level 2 MOSFET | 1 | 35% error, needs model implementation |
 | HFET bistable | 1 | wrong DC OP, needs source stepping |
@@ -2458,3 +2458,120 @@ comprehensive assessment: no tests can be fixed without major architectural chan
 | Missing subsystems | 5 | BSIM1/2, .control, TEMPER, param expressions |
 | No reference | 1 | ngspice says "To be done" |
 | Timeout | 2 | fourbitadder ×2 |
+
+---
+
+## Applied fix: LTRA convolution chop_reltol + quadratic interpolation (2026-03-22)
+
+**Affected tests:** All 6 transmission line tests (LTRA model)
+
+**Un-ignored:** `harness_transmission_ltra1_1_line` (now passes)
+
+**Two bugs found in the LTRA transmission line model:**
+
+### 1. Wrong tolerance passed to convolution coefficient truncation (CRITICAL)
+
+**File:** `thevenin/src/transient.rs`, lines 947 and 958
+
+The LTRA model has two separate tolerance parameters:
+- `reltol` (REL parameter, default 1.0): general model tolerance
+- `chop_reltol` (COMPACTREL parameter, default 0.0): truncation tolerance for
+  impulse response coefficients
+
+The `rlc_coeffs_setup` and `rc_coeffs_setup` functions were called with
+`inst.model.reltol` (= 1.0 for the test circuit) instead of
+`inst.model.chop_reltol` (= 1e-3, from `compactrel=1.0e-3` in the model).
+
+In ngspice `ltraload.c` line 126, the coefficient setup explicitly uses
+`model->LTRAchopReltol`, NOT `model->LTRAreltol`.
+
+The `reltol` parameter controls when convolution coefficients are truncated to
+zero.  With `reltol=1.0`, the threshold equals the first coefficient's
+magnitude, so ALL subsequent coefficients smaller than the first are zeroed —
+reducing the convolution to essentially 1 term.  With `chop_reltol=0.001`, only
+coefficients 1000× smaller than the first are truncated, retaining the full
+impulse response.
+
+**Fix:** Changed both call sites to pass `inst.model.chop_reltol`.
+
+### 2. Linear-only interpolation for delayed values (should be quadratic)
+
+**File:** `thevenin/src/ltra.rs`, `interpolate_delayed` function
+
+The delayed signal interpolation (v1d, i1d, v2d, i2d at time `t - td`) used
+only linear interpolation between two bracketing timepoints.  ngspice defaults
+to `LTRA_MOD_QUADINTERP` (quadratic Lagrange interpolation using 3 points)
+when `tryToCompact` is false (see `ltraset.c` lines 64-71).
+
+The quadratic interpolation uses the standard Lagrange form:
+```
+f(t) ≈ c1*v(t1) + c2*v(t2) + c3*v(t3)
+```
+where (t1, t2, t3) are the three closest timepoints and (c1, c2, c3) are the
+Lagrange coefficients.  Under `QUADINTERP`, the quadratic result is used
+unconditionally (no range-check fallback to linear).  The `MIXEDINTERP` mode
+(range-check fallback) is only used when `tryToCompact` is true.
+
+Linear interpolation introduces O(h²) error at transitions where the waveform
+has significant curvature; quadratic interpolation has O(h³) error.
+
+**Fix:** Implemented `quad_interp` (3-point Lagrange) and changed
+`interpolate_delayed` to use quadratic interpolation with linear fallback
+only when no prior point exists (isaved == 0).
+
+### Combined impact
+
+| Test | Before | After |
+|---|---|---|
+| `ltra1_1` | ~2.2% V(2) at t=16.95ns | **PASSES** (un-ignored) |
+| `ltra2_2` | ~2.2% V(2) at t=16.95ns | ~5.8% V(3) at t=29.3ns (first failure moved to 2nd stage) |
+| `txl1_1` | ~4.6% V(2) at t=21.05ns | ~4.6% (unchanged, TXL model) |
+| `txl2_3` | ~4.7% V(2) | ~4.7% (unchanged, TXL model) |
+| `cpl3_4` | ~61% | ~61% (unchanged, CPL model) |
+| `cpl_ibm2` | ~13% | ~13% (unchanged, CPL model) |
+
+The fixes only affect LTRA model circuits (ltra1_1, ltra2_2).  TXL and CPL
+models use different code paths and are unaffected.  For ltra2_2 (2-line
+cascade), the first transition at t=16.95ns is now correct but the error
+accumulates through the second CMOS inverter stage.
+
+### Remaining LTRA issues (not fixed)
+
+- **Missing dynamic breakpoints from LTRAaccept:** ngspice detects fast
+  transitions in the characteristic signal (v + Z₀i) and schedules future
+  breakpoints at `t_prev + td`, ensuring accurate resolution of delayed echoes.
+- **Missing STEPLIMIT timestep capping:** ngspice limits max timestep to `td`
+  when `steplimit` is enabled (irrelevant for this circuit: h_max=0.1ns < td=1ns).
+- **Missing maxSafeStep for RLC lines:** ngspice computes a safe step from
+  impulse response curvature during temperature setup.
+
+---
+
+## Applied fix: VBIC transit time rIf parameter correction (2026-03-22)
+
+**Affected parameter:** Forward transit time modulation (TF with XTF/ITF/VTF)
+
+**Root cause:** The transit time modulation factor `rIf` was computed using
+`IKF_t` (high-injection knee current) instead of `ITF` (transit time current
+parameter).  In ngspice `vbicload.c` lines 3843-3852:
+```c
+IITF = 1 / ITF;
+rIf = Ifi * sgIf * IITF;  // rIf = |Ifi| / ITF
+mIf = rIf / (rIf + 1);
+```
+
+Our code had:
+```rust
+rif = ifi / (ifi + ikf_t);  // WRONG: uses IKF instead of ITF
+```
+
+The correct formula gives `mIf = |Ifi| / (|Ifi| + ITF)`, not
+`Ifi / (Ifi + IKF)`.  These are structurally different: IKF controls the
+DC high-injection knee, while ITF controls the AC transit time saturation.
+
+**Fix:** Changed to `rif = ifi * sgif * iitf` where `iitf = 1.0 / self.itf`,
+matching ngspice's formula.
+
+**Impact:** Dormant for current test circuits — transit time only produces
+current via dQ/dt (zero in DC).  Would affect transient analysis of circuits
+with non-default ITF.

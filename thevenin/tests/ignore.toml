@@ -51,10 +51,9 @@
 # === Transmission lines ===
 "transmission/cpl3_4_line.cir" = "~61% error: CPL transient with CMOS driver (timing shift from constant junction cap approximation)"
 "transmission/cpl_ibm2.cir" = "~13% error: CPL transient with CMOS driver (timing shift from constant junction cap approximation)"
-"transmission/ltra1_1_line.cir" = "~2.2% V(2) error at t=16.95ns: CMOS inverter switching accuracy (MOSFET caps explicitly zero; error likely from LTRA companion model or reversed-mode MOSFET accuracy)"
-"transmission/ltra2_2_line.cir" = "~2.2% V(2) error at t=16.95ns: same CMOS driver issue as ltra1_1 (different line model, same error)"
-"transmission/txl1_1_line.cir" = "~4.6% V(2) error at t=21.05ns: TXL CMOS inverter transition (same root cause as LTRA tests)"
-"transmission/txl2_3_line.cir" = "~4.7% V(2) error: TXL three-line cascade, CMOS driver timing (same root cause as LTRA tests)"
+"transmission/ltra2_2_line.cir" = "~5.8% V(3) error at t=29.3ns: cascaded 2-line circuit accumulates CMOS inverter switching errors through second stage"
+"transmission/txl1_1_line.cir" = "~4.6% V(2) error at t=21.05ns: TXL CMOS inverter transition (TXL model, not affected by LTRA convolution fixes)"
+"transmission/txl2_3_line.cir" = "~4.7% V(2) error: TXL three-line cascade, CMOS driver timing (TXL model, not affected by LTRA convolution fixes)"
 
 # === VBIC ===
 "vbic/CEamp.cir" = "VBIC AC: ~0.2% gain error at 6.8MHz (self-heating FP, 0.066dB vs 0.065dB tolerance; fixed AC temp adjustment reduced from 1.2%)"

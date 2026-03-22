@@ -1235,7 +1235,7 @@ impl VbicModel {
         // Forward transit time with ITF/XTF/VTF modulation:
         //   tff = TF * (1 + QTF*q1) * (1 + XTF*exp(Vbci/(1.44*VTF)) * (slTF + mIf^2) * sgIf)
         // where q1 = qdbe/VER + qdbc/VEF (Early charge terms)
-        //       mIf = rIf/(rIf+1), rIf = Ifi/(Ifi+IKF_t)
+        //       mIf = rIf/(rIf+1), rIf = |Ifi|/ITF (ngspice: rIf = Ifi*sgIf*IITF)
         //       sgIf = sign(Ifi), slTF = 0 (simplified)
         let (tff, dtff_dvbei, dtff_dvbci) = if self.tf > 0.0 {
             let q1 = q1_term_vef + q1_term_ver;
@@ -1248,16 +1248,11 @@ impl VbicModel {
 
             if self.xtf > 0.0 && self.itf > 0.0 {
                 // ITF/XTF modulation
-                let rif = if self.ikf_t > 0.0 {
-                    ifi / (ifi + self.ikf_t)
-                } else {
-                    0.0
-                };
-                let drif_dvbei = if self.ikf_t > 0.0 {
-                    difi_dvbei * self.ikf_t / ((ifi + self.ikf_t) * (ifi + self.ikf_t))
-                } else {
-                    0.0
-                };
+                // ngspice: rIf = Ifi * sgIf * IITF = |Ifi| / ITF
+                let sgif = if ifi >= 0.0 { 1.0 } else { -1.0 };
+                let iitf = 1.0 / self.itf;
+                let rif = ifi * sgif * iitf;
+                let drif_dvbei = difi_dvbei * sgif * iitf;
 
                 let mif = rif / (rif + 1.0);
                 let dmif_drif = 1.0 / ((rif + 1.0) * (rif + 1.0));
@@ -1268,7 +1263,6 @@ impl VbicModel {
                 let xvar2 = safe_exp(xvar1);
                 let dxvar2_dvbci = xvar2 * ivtf / 1.44;
 
-                let sgif = if ifi >= 0.0 { 1.0 } else { -1.0 };
                 let sl_tf = 0.0; // slTF simplified
 
                 let xtf_term = 1.0 + self.xtf * xvar2 * (sl_tf + mif * mif) * sgif;

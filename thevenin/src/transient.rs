@@ -944,7 +944,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                             cur_time,
                             &ltra_time_points,
                             time_index,
-                            inst.model.reltol,
+                            inst.model.chop_reltol,
                         );
                     }
                     crate::ltra::LtraCase::Rc => {
@@ -955,7 +955,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                             cur_time,
                             &ltra_time_points,
                             time_index,
-                            inst.model.reltol,
+                            inst.model.chop_reltol,
                         );
                     }
                     _ => {} // LC and RG don't need coefficient setup
