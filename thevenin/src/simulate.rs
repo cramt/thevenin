@@ -236,6 +236,7 @@ fn jct_initial_guess(
     base_matrix: &crate::SparseMatrix,
     base_rhs: &[f64],
 ) -> Vec<f64> {
+    use crate::hfet::{hfet_companion_full, stamp_hfet_with_voltages};
     use crate::mosfet::stamp_mosfet;
 
     let mut system = LinearSystem::new(dim);
@@ -268,6 +269,14 @@ fn jct_initial_guess(
         eff_model.kp = mos.beta();
         let comp = eff_model.companion(vgs, vds, 0.0);
         stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
+    }
+
+    // Stamp each HFET at zero bias (vgs=0, vgd=0), matching ngspice's
+    // MODEINITJCT (hfetload.c:200-209).  This provides non-zero channel
+    // conductances in the initial Jacobian for depletion-mode devices.
+    for hfet in &mna.hfets {
+        let comp = hfet_companion_full(hfet, 0.0, 0.0, options.gmin);
+        stamp_hfet_with_voltages(&comp, hfet, 0.0, 0.0, &mut system.matrix, &mut system.rhs);
     }
 
     // Diagonal gmin for numerical stability.
@@ -357,7 +366,11 @@ fn solve_nonlinear_op_with_guess(
         } else {
             vec![0.0; dim]
         }
-    } else if !mna.mosfets.is_empty() || !mna.bjts.is_empty() || !mna.vbics.is_empty() {
+    } else if !mna.mosfets.is_empty()
+        || !mna.bjts.is_empty()
+        || !mna.vbics.is_empty()
+        || !mna.hfets.is_empty()
+    {
         jct_initial_guess(mna, dim, num_nodes, options, base_matrix, base_rhs)
     } else {
         vec![0.0; dim]

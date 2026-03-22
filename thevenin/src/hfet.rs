@@ -804,10 +804,14 @@ pub fn hfet_companion_full(inst: &HfetInstance, vgs: f64, vgd: f64, gmin: f64) -
 
     // Channel current
     let vds = vgs - vgd;
+    // ngspice HFET1/HFET2 always passes vgs (not vgd) to hfeta, even in
+    // inverse mode.  After `if (vds < 0) { vds = -vds; }`, the ternary
+    // `vds>0 ? vgs : vgd` is always vgs because vds was just negated.
+    // This differs from the MESA model which swaps to vgd in inverse mode.
     let (vgs_ch, vds_ch, inverse) = if vds >= 0.0 {
         (vgs, vds, false)
     } else {
-        (vgd, -vds, true)
+        (vgs, -vds, true)
     };
 
     let (mut cdrain, gm_ch, gds_ch, mut capgs, mut capgd, gmg_ch, gmd_ch) =

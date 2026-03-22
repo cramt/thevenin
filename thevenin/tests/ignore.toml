@@ -34,7 +34,7 @@
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching from constant reverse-bias BJT junction cap approximation"
 
 # === HFET ===
-"hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (NR converges to wrong equilibrium; HFET channel current ~600µA vs ngspice ~36pA — possible model current scaling discrepancy)"
+"hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter: NR converges to Vdd equilibrium instead of negative-V equilibrium; needs source stepping to find correct operating point)"
 
 # === MOS6 ===
 "mos6/mos6inv.cir" = "~37% transient error at t=4.7ns (col 1): MOS6 inverter runs but produces wrong switching waveform"

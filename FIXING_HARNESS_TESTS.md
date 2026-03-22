@@ -1989,3 +1989,62 @@ improvements in NR convergence (gds floor, Vbs pnjlim). The ~37% error
 indicates a genuine model accuracy issue in the MOS6 switching waveform,
 likely from missing Level 6 specific features (e.g., velocity saturation
 or mobility degradation effects not yet implemented).
+
+---
+
+## Applied fix: HFET inverse-mode gate voltage + VBIC ISRR temperature scaling
+
+### HFET inverse-mode gate voltage (hfet.rs)
+
+**Affected test:** `harness_hfet_inverter`
+
+**Root cause:** In `hfet_companion_full()`, when Vds < 0 (inverse/reversed mode),
+our code passed `vgd` as the gate voltage to the `hfeta_full` channel current
+function.  In ngspice's `hfetload.c`, the code always passes `vgs` — after the
+`if (vds < 0) { vds = -vds; }` negation, the ternary `vds>0 ? vgs : vgd` always
+evaluates to `vgs` since `vds` was just negated to positive.  This differs from
+the MESA model (which swaps to `vgd` in inverse mode).
+
+**Impact:** At the ngspice equilibrium V(3) = -0.275V, driver FET z2 operates
+in inverse mode.  With the old code (passing vgd = 0.275V), z2 was near
+threshold (vgt0 = -0.025V, current ~600µA).  With the fix (passing vgs = 0V),
+z2 is in deep subthreshold (vgt0 = -0.3V, current ~1nA).  This 500,000×
+difference explained the 17-million-factor current discrepancy.
+
+**Fix applied:** Changed `(vgd, -vds, true)` to `(vgs, -vds, true)` in the
+inverse-mode branch of `hfet_companion_full()`.
+
+**Test status:** Still fails — the NR converges to V(3) ≈ Vdd (1.96V) instead
+of V(3) = -0.275V.  The DCFL inverter is bistable: both equilibria are valid
+DC solutions.  ngspice finds the correct one through source stepping (gradually
+ramping VDD from 0 to 2V), which guides the circuit through the unique path
+to the low-voltage equilibrium.  Our solver lacks source stepping.
+
+Also added HFETs to the `jct_initial_guess` trigger condition and stamped
+HFET companions at zero bias (matching ngspice's MODEINITJCT: vgs=vgd=0),
+but this wasn't sufficient to change the convergence path.
+
+### VBIC ISRR temperature scaling (vbic.rs)
+
+**Affected tests:** None currently (dormant bug)
+
+**Root cause:** The ISRR (reverse saturation current ratio) temperature scaling
+used `temp_current(ISRR * IS, XISR, DEAR + EA, NR) / IS_T`, which attempted to
+compute ISRR_T by scaling the product `ISRR × IS` with combined activation
+energy `DEAR + EA`, then dividing out IS_T.  This formula doesn't cancel
+correctly when XIS ≠ XISR or NF ≠ NR:
+
+With defaults (XISR=0, XIS=3, DEAR=0, EA=1.12, NR=NF=1):
+- Our old formula: ISRR_T = ISRR / rT^3 (wrong — 3% error at Vrth=3K)
+- Correct formula: ISRR_T = ISRR × (rT^XISR × exp(-DEAR×(1-rT)/Vtv))^(1/NR)
+- With defaults: ISRR_T = ISRR × 1 = 1.0 (no change)
+
+**Fix applied:** Replaced the `temp_current/IS_T` division approach with the
+direct formula matching ngspice `vbictemp.c` lines 203-209.
+
+**Impact:** The bug is dormant for current VBIC tests because the reverse
+transport current Iri is negligible in forward-active mode (~1e-16 A vs
+~5e-5 A collector current).  The fix would matter for circuits with different
+B-E and B-C junction parameters (XISR ≠ XIS) or non-default DEAR.
+
+**No regressions:** All 420 non-ignored tests pass.  Clippy clean.

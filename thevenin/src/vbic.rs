@@ -664,11 +664,21 @@ impl VbicModel {
         // Parasitic transport current ISP
         self.isp_t = temp_current(self.isp, self.xis, self.eap, self.nfp);
 
-        // ISRR
-        self.isrr_t = temp_current(self.isrr * self.is, self.xisr, self.dear + self.ea, self.nr);
-        if self.is_t > 0.0 {
-            self.isrr_t /= self.is_t;
-        }
+        // ISRR — ngspice vbictemp.c computes ISRR_T directly:
+        //   ISRR_T = ISRR * (rT^XISR * exp(-DEAR*(1-rT)/Vtv))^(1/NR)
+        // NOT as (ISRR * IS scaled with EA+DEAR) / IS_T, which doesn't
+        // cancel correctly when XIS != XISR or NF != NR.
+        self.isrr_t = if self.isrr == 0.0 {
+            0.0
+        } else {
+            let base =
+                tratio.powf(self.xisr) * safe_exp(-self.dear * (1.0 - tratio) / vt);
+            if self.nr == 1.0 {
+                self.isrr * base
+            } else {
+                self.isrr * base.powf(1.0 / self.nr)
+            }
+        };
 
         // Base currents - ideal
         self.ibei_t = temp_current(self.ibei, self.xii, self.eaie, self.nei);
