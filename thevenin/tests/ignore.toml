@@ -27,7 +27,7 @@
 "bsim3soipd/t5.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
 
 # === General circuits ===
-"general/rc.cir" = "vacuous pass: .print tran uses v(1) which filters to empty (formatter produces no data rows for this circuit)"
+"general/rc.cir" = "~35% error: .plot-only circuit now produces data table, but expected output (rc.out) was generated with PULSE PW=TSTOP default; current ngspice defaults PW=0, giving triangle wave vs step response"
 "general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
 "general/fourbitadder.cir" = "times out (>30s)"
 "general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET missing velocity saturation/mobility degradation"

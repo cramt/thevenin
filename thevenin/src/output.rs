@@ -125,20 +125,37 @@ fn netlist_temp_tnom(netlist: &Netlist) -> (f64, f64) {
 }
 
 /// Parse `.print` and `.plot` directives from Raw items.
+///
+/// `.plot` is treated as `.print` (with only the first variable, which is
+/// the only one shown numerically in ngspice's ASCII art) only when there
+/// is no matching `.print` for the same analysis type.  When both `.print`
+/// and `.plot` exist for the same analysis, the `.print` data already
+/// provides the comparison baseline and the `.plot` ASCII art is stripped
+/// by `filter_output`.
 fn parse_print_directives(netlist: &Netlist) -> Vec<PrintDirective> {
     let mut directives = Vec::new();
+    let mut plot_directives = Vec::new();
     for item in &netlist.items {
         if let Item::Raw(line) = item {
             let trimmed = line.trim();
             let lower = trimmed.to_lowercase();
-            // Only parse `.print` directives — `.plot` produces ASCII art in
-            // ngspice batch mode which the filter strips, not data tables.
             if lower.starts_with(".print")
                 && let Some(d) = parse_single_print(trimmed)
             {
                 directives.push(d);
+            } else if lower.starts_with(".plot")
+                && let Some(mut d) = parse_single_print(trimmed)
+            {
+                d.vars.truncate(1);
+                plot_directives.push(d);
             }
         }
+    }
+    // Only include .plot directives when the netlist has NO .print directives
+    // at all.  When .print directives exist, the .print data provides the
+    // comparison baseline and all .plot ASCII art is stripped by filter_output.
+    if directives.is_empty() {
+        directives.extend(plot_directives);
     }
     directives
 }
@@ -2054,7 +2071,12 @@ pub fn filter_output(text: &str) -> String {
         ".nodeset",
     ];
 
-    let mut lines: Vec<&str> = Vec::new();
+    // Two-pass filter: first collect non-art lines, then decide what to
+    // do with plot art.  If the output already has normal data rows (from
+    // `.print`), plot art is stripped.  If not, plot art numeric values
+    // are extracted and converted to indexed data rows.
+    let mut data_lines: Vec<String> = Vec::new();
+    let mut plot_art_lines: Vec<(String, String)> = Vec::new(); // (time, value)
     for line in normalized.lines() {
         if line.starts_with("binary raw file")
             || (line.starts_with("ngspice") && line.contains("done"))
@@ -2067,8 +2089,12 @@ pub fn filter_output(text: &str) -> String {
         if filter_patterns.iter().any(|pat| line.contains(pat)) {
             continue;
         }
-        // Filter .plot ASCII art: lines with numeric prefix followed by dot-grid patterns
+        // Collect plot art numeric values separately.
         if is_plot_art(line) {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            if tokens.len() >= 2 {
+                plot_art_lines.push((tokens[0].to_string(), tokens[1].to_string()));
+            }
             continue;
         }
         // Filter circuit listing and node voltage lines that appear in ngspice
@@ -2090,10 +2116,19 @@ pub fn filter_output(text: &str) -> String {
         if token_count < 3 {
             continue;
         }
-        lines.push(line);
+        data_lines.push(line.to_string());
     }
 
-    lines.join("\n")
+    // If no normal data rows exist but plot art was found, convert the
+    // plot art to indexed data rows.  This handles `.plot`-only circuits
+    // where the expected output is entirely ASCII art.
+    if data_lines.is_empty() && !plot_art_lines.is_empty() {
+        for (idx, (time, value)) in plot_art_lines.iter().enumerate() {
+            data_lines.push(format!("{} {} {}", idx, time, value));
+        }
+    }
+
+    data_lines.join("\n")
 }
 
 /// Check if a line contains at least one number in scientific notation (e.g. `1.23e+04`).

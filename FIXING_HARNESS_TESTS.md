@@ -3698,3 +3698,34 @@ Fresh re-investigation of all 37 remaining ignored tests confirmed no tests can 
 
 The DD model needs a SIMULTANEOUS fix of vfbb + all junction formulas + BJT current,
 which requires convergence infrastructure (gmin/source stepping) to maintain NR stability.
+
+---
+
+## Applied fix: `.plot` directive support in formatter
+
+**Affected test:** `harness_general_rc`
+
+**Root cause:** The `parse_print_directives()` function only parsed `.print`
+directives, ignoring `.plot` entirely.  For circuits with ONLY `.plot` (no
+`.print`), the formatter produced no data table.  The comparison function then
+detected a "vacuous pass" — both expected and actual output filtered to empty.
+
+**Fix applied:**
+1. `parse_print_directives()` now also collects `.plot` directives (with only
+   the first variable, since ngspice only shows the first variable numerically
+   in plot art).  `.plot` directives are only used when NO `.print` directives
+   exist in the netlist, to avoid interfering with circuits that have both.
+
+2. `filter_output()` now converts plot art lines to indexed data rows
+   (extracting the numeric prefix: time and value) when no normal data rows
+   exist.  This replaces the previous behavior of stripping all plot art.
+
+**Result:** The rc.cir test is no longer a vacuous pass — it now produces a
+data table and compares against the numeric values from the expected plot art.
+However, a ~35% numerical error remains because the expected output (rc.out)
+was generated with an older ngspice version that defaulted PULSE PW to TSTOP
+(giving a step response), while the current ngspice source code defaults PW
+to 0 (giving a triangle wave).  The stale expected output cannot be matched
+by either ngspice or thevenin with current PULSE defaults.
+
+**Verification:** All 572 existing tests pass with no regressions.
