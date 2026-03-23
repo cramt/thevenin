@@ -62,6 +62,19 @@ const SKIP_CATEGORIES = [
   "TEMPER keyword",
 ];
 
+// Priority order for test selection (highest ROI first)
+const PRIORITY_ORDER = [
+  "vacuous pass",     // Formatter bugs — often quick fixes
+  "~0.",              // Sub-1% errors — closest to passing
+  "~1.",              // 1-2% errors
+  "~2.",              // 2-3% errors
+  "~3.",              // etc.
+  "~4.",
+  "~5.",
+  "DC OP:",           // Convergence failures — harder
+  "NR non-convergence",
+];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -187,31 +200,90 @@ function buildPrompt(): string {
     ? `\n\nTests previously attempted (may have failed — avoid re-attempting unless you have a new approach):\n${attempted.map((l) => `- ${l}`).join("\n")}`
     : "";
 
+  // Try to load triage report if available for better prioritization
+  let triageSection = "";
+  try {
+    const triagePath = resolve(PROJECT_DIR, "triage-report.json");
+    if (existsSync(triagePath)) {
+      const triage = JSON.parse(readFileSync(triagePath, "utf-8"));
+      const nearMisses = (triage.tests ?? [])
+        .filter((t: any) => t.category === "NEAR_MISS")
+        .sort((a: any, b: any) => {
+          const pa = parseFloat(a.error_pct) || 999;
+          const pb = parseFloat(b.error_pct) || 999;
+          return pa - pb;
+        })
+        .slice(0, 10);
+      const vacuous = (triage.tests ?? []).filter((t: any) => t.category === "VACUOUS");
+      const passesNow = (triage.tests ?? []).filter((t: any) => t.category === "PASSES_NOW");
+
+      if (passesNow.length > 0) {
+        triageSection += `\n\nTests that ALREADY PASS (just remove from ignore.toml and commit!):\n${passesNow.map((t: any) => `- ${t.path}`).join("\n")}`;
+      }
+      if (vacuous.length > 0) {
+        triageSection += `\n\nVacuous-pass tests (formatter bugs — often quick fixes):\n${vacuous.map((t: any) => `- ${t.path}: ${t.error_message}`).join("\n")}`;
+      }
+      if (nearMisses.length > 0) {
+        triageSection += `\n\nNearest misses (sorted by error magnitude — best ROI):\n${nearMisses.map((t: any) => `- ${t.path} (${t.error_pct || "unknown %"}): ${t.error_message?.slice(0, 120)}`).join("\n")}`;
+      }
+      triageSection += `\n\nTriage summary: ${JSON.stringify(triage.summary)}`;
+    }
+  } catch {}
+
   return `Read FIXING_HARNESS_TESTS.md for the full methodology, then fix ignored harness tests.
 
 Test architecture: Tests are auto-generated at compile time by the \`ngspice_tests!()\` proc macro
 (in thevenin-test-macro/). It discovers all .cir/.out pairs from ngspice-upstream/tests/ and embeds
 them as string literals. Ignore reasons live in thevenin/tests/ignore.toml (TOML: "path/to/file.cir" = "reason").
 
-Steps:
+## Prioritization strategy
+
+Pick tests in this order (highest ROI first):
+1. **Tests that already pass** — just un-ignore them
+2. **Vacuous passes** — the formatter produces no output; fix the .print resolution or
+   output formatting bug. These are often missing expression evaluation (e.g. \`v(g)/10\`)
+   or device parameter queries (\`@m1[Vbs]\`).
+3. **Near-miss numerical errors (<1%)** — usually a single wrong coefficient, sign, or
+   parameter in the device model. Compare term-by-term against ngspice C source.
+4. **Numerical errors (1-5%)** — same as above but deeper bugs.
+5. **Convergence failures** — hardest. May need solver changes or device initialization fixes.
+
+## Debugging device model bugs efficiently
+
+When you find a numerical mismatch, don't just stare at the full circuit. Instead:
+1. Find which device model is involved (BSIM3SOI, VBIC, BJT, etc.)
+2. In the ngspice C source (\`ngspice-upstream/src/spicelib/devices/<model>/\`), find the
+   corresponding \`*load.c\` file (e.g. \`b3soipdld.c\` for BSIM3SOI-PD)
+3. Compare the Rust companion/eval function against the C source **term by term**
+4. Focus on the specific output variable that's wrong (e.g. Ids, gm, Vth)
+5. Add temporary debug prints comparing intermediate values if needed
+6. Common bug patterns:
+   - Wrong sign (\`-\` vs \`+\`)
+   - Wrong exponent (e.g. \`exp(1.0)\` vs \`exp(vt)\`)
+   - Missing terms (accidentally dropped a line during C→Rust port)
+   - Wrong variable name (off-by-one in similar parameters)
+   - Integer vs float division
+   - Missing \`abs()\` or \`max()\` clamping
+
+## Steps
 1. Read thevenin/tests/ignore.toml to see all ignored tests and their reasons
-2. Pick a group of related ignored tests (prefer numerical accuracy bugs)
+2. Pick a test or group of related tests (follow prioritization above)
 3. Diagnose the root cause using the methodology in FIXING_HARNESS_TESTS.md
 4. Fix the issue in the Rust source code
 5. Run the fixed tests to verify they pass
-6. Run the FULL test suite to check for regressions: nix develop --command cargo nextest run --package thevenin 2>&1 | grep -E "FAIL|test result"
+6. Run the FULL test suite to check for regressions: nix develop --command cargo nextest run --workspace 2>&1 | grep -E "FAIL|Summary"
 7. Run clippy: nix develop --command cargo clippy --workspace -- -D warnings
 8. To un-ignore a fixed test, remove its line from thevenin/tests/ignore.toml
 9. Commit all changes with a descriptive message and push to the current branch
 
-Important rules:
+## Important rules
 - Always run commands through \`nix develop --command ...\`
 - Do NOT attempt tests in these intractable categories: ${SKIP_CATEGORIES.join(", ")}
 - Do NOT attempt tests that would require implementing entire missing subsystems
-- If a test group requires an architectural change (e.g., full voltage-dependent charge integration), document why and move on
-- If after investigation you determine the test cannot be fixed without major changes, say so clearly and do NOT commit
-- Update FIXING_HARNESS_TESTS.md with any new findings (triage updates, applied fixes, investigations)
-${attemptedSection}`;
+- If a test group requires an architectural change, document why and move on — do NOT commit
+- When running the full test suite, use \`--workspace\` to catch regressions across all crates
+- Update FIXING_HARNESS_TESTS.md with any new findings
+${triageSection}${attemptedSection}`;
 }
 
 // ---------------------------------------------------------------------------

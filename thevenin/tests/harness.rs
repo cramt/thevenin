@@ -5,9 +5,88 @@
 //! embedded as string literals (no filesystem access at runtime — works on WASM).
 //!
 //! Ignore reasons are maintained in `tests/ignore.toml`.
+//!
+//! On failure, prints a `TRIAGE_JSON:` line to stdout with structured error info
+//! for machine consumption (used by `scripts/triage-ignored-tests.ts`).
 
 use thevenin::output::{compare_filtered, format_batch_output};
 use thevenin_types::{Analysis, Item, Netlist, SimResult};
+
+/// Failure phases — where in the pipeline did the test fail?
+#[derive(Clone, Copy)]
+enum Phase {
+    Parse,
+    LibProc,
+    ExprResolve,
+    Flatten,
+    Simulate,
+    Compare,
+}
+
+impl Phase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Phase::Parse => "parse",
+            Phase::LibProc => "lib_processing",
+            Phase::ExprResolve => "expr_resolution",
+            Phase::Flatten => "flatten",
+            Phase::Simulate => "simulate",
+            Phase::Compare => "compare",
+        }
+    }
+}
+
+/// Print a machine-readable JSON line to stdout, then panic.
+fn fail_test(path: &str, phase: Phase, error: &str) -> ! {
+    // Categorize from the error message
+    let category = if error.contains("Vacuous pass") {
+        "VACUOUS"
+    } else if error.contains("singular matrix")
+        || error.contains("non-convergence")
+        || error.contains("failed to converge")
+        || error.contains("SolveError")
+    {
+        "CONVERGENCE"
+    } else if error.contains("not implemented")
+        || error.contains("not supported")
+        || error.contains("not yet supported")
+        || error.contains("model not implemented")
+        || phase.as_str() == "parse"
+        || phase.as_str() == "lib_processing"
+        || phase.as_str() == "expr_resolution"
+    {
+        "MISSING_FEATURE"
+    } else if error.contains("mismatch")
+        || error.contains("expected")
+        || error.contains("Interpolation")
+    {
+        "NEAR_MISS"
+    } else {
+        "OTHER"
+    };
+
+    // Escape for JSON (minimal: backslash and double-quote)
+    let escaped = error
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    // Truncate to keep stdout manageable
+    let truncated = if escaped.len() > 2000 {
+        &escaped[..2000]
+    } else {
+        &escaped
+    };
+
+    println!(
+        r#"TRIAGE_JSON:{{"path":"{}","phase":"{}","category":"{}","error":"{}"}}"#,
+        path,
+        phase.as_str(),
+        category,
+        truncated,
+    );
+
+    panic!("Test {path} failed: {error}");
+}
 
 /// Run a single embedded test: parse, preprocess, simulate, format, filter, diff.
 ///
@@ -23,29 +102,37 @@ fn run_embedded_test(path: &str, cir: &str, out: &str, aux_files: &[(&str, &str)
     }
 
     // Parse the netlist (includes already resolved at compile time)
-    let mut netlist =
-        Netlist::parse(cir).unwrap_or_else(|e| panic!("Test {path} parse error: {e}"));
+    let mut netlist = match Netlist::parse(cir) {
+        Ok(n) => n,
+        Err(e) => fail_test(path, Phase::Parse, &e.to_string()),
+    };
 
     // Process .lib directives using the embedded file map
-    thevenin::libproc::process_libs_embedded(&mut netlist, aux_files)
-        .unwrap_or_else(|e| panic!("Test {path} lib processing error: {e}"));
+    if let Err(e) = thevenin::libproc::process_libs_embedded(&mut netlist, aux_files) {
+        fail_test(path, Phase::LibProc, &e.to_string());
+    }
 
     // Resolve expressions/params
-    thevenin::expr::resolve_netlist_exprs(&mut netlist)
-        .unwrap_or_else(|e| panic!("Test {path} expression resolution error: {e}"));
+    if let Err(e) = thevenin::expr::resolve_netlist_exprs(&mut netlist) {
+        fail_test(path, Phase::ExprResolve, &e.to_string());
+    }
 
     // Flatten subcircuits
-    let netlist = thevenin::flatten_netlist(&netlist)
-        .unwrap_or_else(|e| panic!("Test {path} subcircuit flattening error: {e}"));
+    let netlist = match thevenin::flatten_netlist(&netlist) {
+        Ok(n) => n,
+        Err(e) => fail_test(path, Phase::Flatten, &e.to_string()),
+    };
 
     // Run all analyses and collect results
-    let result =
-        run_all_analyses(&netlist).unwrap_or_else(|e| panic!("Test {path} simulation error: {e}"));
+    let result = match run_all_analyses(&netlist) {
+        Ok(r) => r,
+        Err(e) => fail_test(path, Phase::Simulate, &e),
+    };
 
     // Format output in ngspice batch mode and compare
     let actual_output = format_batch_output(&netlist, &result);
     if let Err(e) = compare_filtered(out, &actual_output) {
-        panic!("Test {path} failed: {e}");
+        fail_test(path, Phase::Compare, &e);
     }
 }
 
