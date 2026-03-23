@@ -957,11 +957,14 @@ impl VbicModel {
             (0.0, 0.0)
         };
 
-        // VBBE breakdown term
+        // VBBE breakdown term — ngspice vbicload.c line 3312-3324:
+        //   argx = (-VBBEatT - Vbei) / (NBBEatT * Vtv)
+        //   Ibe += -IBBE * (exp(argx) - EBBEatT)
+        //        = -IBBE_T * (exp(-Vbei/(NBBE_T*Vt)) - 1)
         let (ibe_vbbe, dibe_vbbe_dvbei) = if self.vbbe_t != 0.0 {
-            let arg = (-self.vbbe_t + vbei) / (self.nbbe_t * vt);
+            let arg = -vbei / (self.nbbe_t * vt);
             let e = safe_exp(arg);
-            let i = self.ibbe_t * e;
+            let i = -self.ibbe_t * (e - 1.0);
             let g = self.ibbe_t / (self.nbbe_t * vt) * e;
             (i, g)
         } else {
@@ -1090,9 +1093,11 @@ impl VbicModel {
             };
 
             let (i2, g2) = if self.ibenp_t > 0.0 {
-                let arg = vbep / (self.nen * vt);
+                // Parasitic B-E junction mirrors main B-C: use NCN (not NEN)
+                // matching ngspice vbicload.c line 3572: argn=Vbep/(p[39]*Vtv)
+                let arg = vbep / (self.ncn * vt);
                 let e = safe_exp(arg);
-                (self.ibenp_t * (e - 1.0), self.ibenp_t / (self.nen * vt) * e)
+                (self.ibenp_t * (e - 1.0), self.ibenp_t / (self.ncn * vt) * e)
             } else {
                 (0.0, 0.0)
             };
@@ -1130,39 +1135,44 @@ impl VbicModel {
         // =====================================================================
         // 6. Parasitic transport current
         // =====================================================================
-        let (iccp, diccp_dvbep, diccp_dvbcp) = if self.isp_t > 0.0 {
+        let (iccp, diccp_dvbep, diccp_dvbci, diccp_dvbcp) = if self.isp_t > 0.0 {
+            // Ifp: ngspice vbicload.c line 3234:
+            //   Ifp = ISP_T * (WSP*exp(Vbep/(NFP*Vt)) + (1-WSP)*exp(Vbci/(NFP*Vt)) - 1)
             let arg_f = vbep / (self.nfp * vt);
             let ef = safe_exp(arg_f);
-            let ifp = self.isp_t * (ef - 1.0);
-            let difp_dvbep = self.isp_t / (self.nfp * vt) * ef;
+            let arg_x = vbci / (self.nfp * vt);
+            let ex = safe_exp(arg_x);
+            let wsp = self.wsp;
+            let ifp = self.isp_t * (wsp * ef + (1.0 - wsp) * ex - 1.0);
+            let difp_dvbep = self.isp_t * wsp / (self.nfp * vt) * ef;
+            let difp_dvbci = self.isp_t * (1.0 - wsp) / (self.nfp * vt) * ex;
 
             let arg_r = vbcp / (self.nfp * vt);
             let er = safe_exp(arg_r);
             let irp = self.isp_t * (er - 1.0);
             let dirp_dvbcp = self.isp_t / (self.nfp * vt) * er;
 
-            let (qbp, dqbp_dvbep) = if self.ikp_t > 0.0 {
+            let (qbp, dqbp_dvbep, dqbp_dvbci) = if self.ikp_t > 0.0 {
                 let arg = 1.0 + 4.0 * ifp / self.ikp_t;
                 let sq = arg.max(0.0).sqrt();
                 let qbp_val = (1.0 + sq) / 2.0;
-                let dqbp = if sq > 0.0 {
-                    2.0 * difp_dvbep / (self.ikp_t * sq) / 2.0
-                } else {
-                    0.0
-                };
-                (qbp_val, dqbp)
+                let inv_ikp_sq = if sq > 0.0 { 1.0 / (self.ikp_t * sq) } else { 0.0 };
+                let dqbp_f = difp_dvbep * inv_ikp_sq;
+                let dqbp_c = difp_dvbci * inv_ikp_sq;
+                (qbp_val, dqbp_f, dqbp_c)
             } else {
-                (1.0, 0.0)
+                (1.0, 0.0, 0.0)
             };
 
             let qbp = qbp.max(1e-12);
             let iccp_val = (ifp - irp) / qbp;
             let diccp_dvbep_val = (difp_dvbep * qbp - (ifp - irp) * dqbp_dvbep) / (qbp * qbp);
+            let diccp_dvbci_val = (difp_dvbci * qbp - (ifp - irp) * dqbp_dvbci) / (qbp * qbp);
             let diccp_dvbcp_val = -dirp_dvbcp / qbp;
 
-            (iccp_val, diccp_dvbep_val, diccp_dvbcp_val)
+            (iccp_val, diccp_dvbep_val, diccp_dvbci_val, diccp_dvbcp_val)
         } else {
-            (0.0, 0.0, 0.0)
+            (0.0, 0.0, 0.0, 0.0)
         };
 
         // =====================================================================
@@ -1249,7 +1259,9 @@ impl VbicModel {
             if self.xtf > 0.0 && self.itf > 0.0 {
                 // ITF/XTF modulation
                 // ngspice: rIf = Ifi * sgIf * IITF = |Ifi| / ITF
-                let sgif = if ifi >= 0.0 { 1.0 } else { -1.0 };
+                // ngspice vbicload.c: sgIf=1.0 if Ifi>0, else sgIf=0.0
+                // (zeros out ITF modulation when reverse-active, not negate)
+                let sgif = if ifi > 0.0 { 1.0 } else { 0.0 };
                 let iitf = 1.0 / self.itf;
                 let rif = ifi * sgif * iitf;
                 let drif_dvbei = difi_dvbei * sgif * iitf;
@@ -1373,6 +1385,7 @@ impl VbicModel {
             // Parasitic transport
             iccp,
             diccp_dvbep,
+            diccp_dvbci,
             diccp_dvbcp,
 
             // Avalanche
@@ -1537,6 +1550,7 @@ pub struct VbicCompanion {
     // Parasitic transport current
     pub iccp: f64,
     pub diccp_dvbep: f64,
+    pub diccp_dvbci: f64,
     pub diccp_dvbcp: f64,
 
     // Avalanche
@@ -1875,6 +1889,13 @@ pub fn stamp_vbic_with_voltages(
         m_add(si, bx, -g_bep);
         m_add(si, bp, g_bep);
 
+        // Vbci = V(BI) - V(CI) control (from WSP splitting in Ifp)
+        let g_bci = scale * comp.diccp_dvbci;
+        m_add(bx, bi, g_bci);
+        m_add(bx, ci, -g_bci);
+        m_add(si, bi, -g_bci);
+        m_add(si, ci, g_bci);
+
         // Vbcp = V(SI) - V(BP) control
         let g_bcp = scale * comp.diccp_dvbcp;
         m_add(bx, si, g_bcp);
@@ -1882,7 +1903,7 @@ pub fn stamp_vbic_with_voltages(
         m_add(si, si, -g_bcp);
         m_add(si, bp, g_bcp);
 
-        let i_eq = sign * scale * (comp.iccp - comp.diccp_dvbep * vbep - comp.diccp_dvbcp * vbcp);
+        let i_eq = sign * scale * (comp.iccp - comp.diccp_dvbep * vbep - comp.diccp_dvbci * vbci - comp.diccp_dvbcp * vbcp);
         r_add(bx, -i_eq);
         r_add(si, i_eq);
     }
