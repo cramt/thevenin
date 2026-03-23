@@ -1686,43 +1686,28 @@ pub fn compute_self_heating_power(
     // Vcep = Vbep - Vbcp (parasitic collector-emitter voltage)
     let vcep = vbep - vbcp;
 
-    // External resistance currents (V²/R = V*I)
-    let p_rcx = if model.rcx_t > 0.0 {
-        vrcx * vrcx / model.rcx_t
-    } else {
-        0.0
-    };
-    let p_rbx = if model.rbx_t > 0.0 {
-        vrbx * vrbx / model.rbx_t
-    } else {
-        0.0
-    };
-    let p_re = if model.re_t > 0.0 {
-        vre * vre / model.re_t
-    } else {
-        0.0
-    };
-    let p_rs = if model.rs_t > 0.0 {
-        vrs * vrs / model.rs_t
-    } else {
-        0.0
-    };
+    // External resistance currents (I*V, matching ngspice I = V/R form)
+    let i_rcx = if model.rcx_t > 0.0 { vrcx / model.rcx_t } else { 0.0 };
+    let i_rbx = if model.rbx_t > 0.0 { vrbx / model.rbx_t } else { 0.0 };
+    let i_re = if model.re_t > 0.0 { vre / model.re_t } else { 0.0 };
+    let i_rs = if model.rs_t > 0.0 { vrs / model.rs_t } else { 0.0 };
 
+    // Sum in ngspice's exact addition order (vbicload.c line 3931)
     scale
         * (comp.ibe * vbei
-            + comp.ibex * vbex
-            + (comp.itzf - comp.itzr) * vcei
             + comp.ibc * vbci
+            + (comp.itzf - comp.itzr) * vcei
+            + comp.ibex * vbex
             + comp.ibep * vbep
+            + i_rs * vrs
             + comp.ibcp * vbcp
             + comp.iccp * vcep
+            + i_rcx * vrcx
             + comp.irci * vrci
+            + i_rbx * vrbx
             + comp.irbi * vrbi
-            + comp.irbp * vrbp
-            + p_rcx
-            + p_rbx
-            + p_re
-            + p_rs)
+            + i_re * vre
+            + comp.irbp * vrbp)
 }
 
 /// Stamp the VBIC companion model conductances into the MNA matrix.
