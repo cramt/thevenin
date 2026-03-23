@@ -30,8 +30,8 @@
 "general/rc.cir" = "~35% error: .plot-only circuit now produces data table, but expected output (rc.out) was generated with PULSE PW=TSTOP default; current ngspice defaults PW=0, giving triangle wave vs step response"
 "general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
 "general/fourbitadder.cir" = "times out (>30s)"
-"general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET missing velocity saturation/mobility degradation"
 "general/rtlinv.cir" = "~4.1% transient error at t=9ns: transition timing shift (dynamic BJT caps improved from 5.96% at 7ns)"
+"general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET missing velocity saturation/mobility degradation"
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag, full voltage-dependent cap approach causes transient timing shift)"
 
 # === HFET ===

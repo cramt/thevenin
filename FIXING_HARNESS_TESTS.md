@@ -3762,3 +3762,59 @@ bug would cause incorrect external resistance values for circuits specifying
 non-zero XRCX, XRBX, XRE, or XRS with self-heating active.
 
 **No regressions:** All 572 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Re-investigation of all near-miss tests (2026-03-23, session 3)
+
+Fresh re-investigation of all near-miss tests with focus on finding bugs missed
+by previous 30+ sessions.  Performed exhaustive line-by-line comparison of the
+VBIC kernel temperature scaling against ngspice vbicload.c lines 1651-1903.
+
+### VBIC kernel parameter mapping (confirmed)
+
+Mapped all parameter indices used in the kernel's temperature scaling:
+
+| Current | Kernel | XP Exponent | EA Energy | NF Divisor |
+|---|---|---|---|---|
+| ISatT (p[11]) | rT^p[78] * exp(-p[71]...) | XIS (p[78]) | EA (p[71]) | NF (p[12]) |
+| ISRRatT (p[94]) | rT^p[95] * exp(-p[96]...) | XISR (p[95]) | DEAR (p[96]) | NR (p[13]) |
+| ISPatT (p[42]) | rT^p[78] * exp(-p[97]...) | XIS (p[78]) | EAP (p[97]) | NFP (p[44]) |
+| IBEIatT (p[31]) | rT^p[79] * exp(-p[72]...) | XII (p[79]) | EAIE (p[72]) | NEI (p[33]) |
+| IBENatT (p[34]) | rT^p[80] * exp(-p[75]...) | XIN (p[80]) | EANE (p[75]) | NEN (p[35]) |
+| IBCIatT (p[36]) | rT^p[79] * exp(-p[73]...) | XII (p[79]) | EAIC (p[73]) | NCI (p[37]) |
+| IBCNatT (p[38]) | rT^p[80] * exp(-p[76]...) | XIN (p[80]) | EANC (p[76]) | NCN (p[39]) |
+| IBEIPatT (p[45]) | rT^p[79] * exp(-p[73]...) | XII (p[79]) | EAIC (p[73]) | NCI (p[37]) |
+| IBENPatT (p[46]) | rT^p[80] * exp(-p[76]...) | XIN (p[80]) | EANC (p[76]) | NCN (p[39]) |
+| IBCIPatT (p[47]) | rT^p[79] * exp(-p[74]...) | XII (p[79]) | EAIS (p[74]) | NCIP (p[48]) |
+| IBCNPatT (p[49]) | rT^p[80] * exp(-p[77]...) | XIN (p[80]) | EANS (p[77]) | NCNP (p[50]) |
+
+All match our `temperature_adjust()` function's parameter usage.  ✓
+
+### VBIC FO test tolerance analysis
+
+The VBIC FO test error breakdown at x=2.2V (VB=0.7V, first sweep group):
+- Expected: 4.965117e-5
+- Actual: 4.975289e-5
+- abs_diff: 1.0172e-7
+- rel_tol: HARNESS_REL_TOL × max(|exp|,|act|) = 0.002 × 4.975e-5 = 9.95e-8
+- abs_tol: max(HARNESS_ABS_TOL, col_max × COLUMN_ABS_SCALE) = max(1e-7, 5.4e-5 × 2e-6) = 1e-7
+- tolerance = max(9.95e-8, 1e-7) = 1e-7
+- Excess: 1.72% above tolerance (1.0172e-7 vs 1.0000e-7)
+
+The test fails by the ABSOLUTE tolerance floor (1e-7), not the relative tolerance.
+
+### Tests re-verified (all still intractable)
+
+| Test | Current Error | Status |
+|---|---|---|
+| vbic/FO | 0.205% at Vc=2.2V | Same (kernel param mapping verified identical) |
+| bsim3soidd/t5 | 1.1% at Vg=0.55V | Same (compensating vfbb bug) |
+| general/rtlinv | 4.1% at t=9ns | Same (reverse-bias cap overestimate) |
+| transmission/cpl3_4_line | 0.8% at t=20.3ns | Same (compensating polint bug) |
+
+### Classification (unchanged from session 2)
+
+All 37 remaining tests remain intractable without major architectural changes.
+No new bugs found in the VBIC temperature scaling or I-V computation — the
+kernel parameter mapping is verified identical to ngspice vbicload.c.
