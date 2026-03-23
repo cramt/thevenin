@@ -808,16 +808,28 @@ impl DeviceVoltageState {
                     vbcp,
                 );
 
-                // Self-heating thermal stamps
+                // Self-heating thermal stamps (full electro-thermal Jacobian)
+                //
+                // ngspice (vbicload.c lines 1297-1464) stamps:
+                // 1. Thermal diagonal: G_th = 1/RTH (Irth)
+                // 2. Thermal RHS: Ith (power dissipation)
+                // 3. Reverse coupling: dI_branch/dVrth in electrical rows
+                //    (how each branch current changes with temperature)
+                // 4. Thermal self-derivative: dIth/dVrth on thermal diagonal
+                // 5. Forward coupling: dIth/dV_j in thermal row
+                //    (how power changes with each electrical voltage)
+                //
+                // We compute derivatives numerically by perturbing Vrth.
                 if let Some(rth_idx) = vbic.rth_idx {
                     let g_th = 1.0 / model.rth;
+                    let sign = model.vbic_type.sign();
+                    let scale = vbic.m * vbic.area;
 
                     // Conductance: Irth = Vrth / RTH
                     system.matrix.add(rth_idx, rth_idx, g_th);
 
                     // Compute external resistance voltages for power calculation
                     let node = |idx: Option<usize>| idx.map(|i| solution[i]).unwrap_or(0.0);
-                    let sign = model.vbic_type.sign();
                     let v_c = node(vbic.coll_idx);
                     let v_b = node(vbic.base_idx);
                     let v_e = node(vbic.emit_idx);
@@ -839,6 +851,172 @@ impl DeviceVoltageState {
                     // RHS: Ith flows into thermal node (power source).
                     // G_th * Vrth is handled by the matrix stamp above.
                     system.rhs[rth_idx] += ith;
+
+                    // --- Full thermal Jacobian via numerical differentiation ---
+                    // Compute companion at perturbed temperature to get dI/dVrth
+                    // for all branch currents. This enables proper NR coupling
+                    // between thermal and electrical domains, matching ngspice's
+                    // auto-generated kernel derivatives.
+                    if vrth.abs() > 1e-20 || ith.abs() > 1e-20 {
+                        let delta = 1e-6; // 1μK temperature perturbation
+                        let inv_delta = 1.0 / delta;
+
+                        let mut model_pert = vbic.model.clone();
+                        model_pert.temperature_adjust(vbic.t_ambient + vrth + delta);
+                        let comp_pert = model_pert.companion(
+                            vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin,
+                        );
+
+                        // Node aliases
+                        let rth = Some(rth_idx);
+                        let bi = vbic.base_bi_idx;
+                        let bx = vbic.base_bx_idx;
+                        let bp = vbic.base_bp_idx;
+                        let ci = vbic.coll_ci_idx;
+                        let cx = vbic.coll_cx_idx;
+                        let ei = vbic.emit_ei_idx;
+                        let si = vbic.subs_si_idx;
+                        let c_ext = vbic.coll_idx;
+                        let b_ext = vbic.base_idx;
+                        let e_ext = vbic.emit_idx;
+                        let s_ext = vbic.subs_idx;
+
+                        // Helper: stamp reverse coupling for branch from np→nm
+                        // dI/dVrth into electrical rows at thermal column
+                        let mut m_add = |r: Option<usize>, c: Option<usize>, val: f64| {
+                            if let (Some(r), Some(c)) = (r, c) {
+                                system.matrix.add(r, c, val);
+                            }
+                        };
+                        let mut r_add = |r: Option<usize>, val: f64| {
+                            if let Some(r) = r {
+                                system.rhs[r] += val;
+                            }
+                        };
+
+                        // --- Reverse stamps: dI_branch/dVrth (electrical rows) ---
+                        // Matches ngspice vbicload.c lines 1297-1414.
+                        // Each branch: matrix[np, rth] += g, matrix[nm, rth] -= g
+                        //              rhs[np] += g*vrth, rhs[nm] -= g*vrth
+                        // NOTE: No VBICtype sign multiplier — ngspice's self-heating
+                        // stamps don't apply model->VBICtype because type^2=1 cancels
+                        // in the derivative (the kernel uses type-adjusted voltages).
+
+                        // Helper macro for stamping a branch dI/dVrth
+                        macro_rules! stamp_thermal_branch {
+                            ($np:expr, $nm:expr, $di:expr) => {
+                                let g = scale * $di;
+                                m_add($np, rth, g);
+                                m_add($nm, rth, -g);
+                                r_add($np, g * vrth);
+                                r_add($nm, -g * vrth);
+                            };
+                        }
+
+                        // 1. Ibe: bi → ei
+                        let d_ibe = (comp_pert.ibe - comp.ibe) * inv_delta;
+                        stamp_thermal_branch!(bi, ei, d_ibe);
+
+                        // 2. Ibex: bx → ei
+                        let d_ibex = (comp_pert.ibex - comp.ibex) * inv_delta;
+                        stamp_thermal_branch!(bx, ei, d_ibex);
+
+                        // 3. Iciei: ci → ei (transport current)
+                        let d_iciei = (comp_pert.iciei - comp.iciei) * inv_delta;
+                        stamp_thermal_branch!(ci, ei, d_iciei);
+
+                        // 4. Ibc: bi → ci (with avalanche)
+                        let d_ibc = (comp_pert.ibc - comp.ibc) * inv_delta;
+                        stamp_thermal_branch!(bi, ci, d_ibc);
+
+                        // 5. Ibep: bx → bp
+                        let d_ibep = (comp_pert.ibep - comp.ibep) * inv_delta;
+                        stamp_thermal_branch!(bx, bp, d_ibep);
+
+                        // 6. Rcx: c_ext → cx
+                        if model.rcx > 0.0 && model.rcx_t > 0.0 {
+                            let i_rcx = vrcx / model.rcx_t;
+                            let i_rcx_pert = if model_pert.rcx_t > 0.0 {
+                                vrcx / model_pert.rcx_t
+                            } else {
+                                0.0
+                            };
+                            let d_ircx = (i_rcx_pert - i_rcx) * inv_delta;
+                            stamp_thermal_branch!(c_ext, cx, d_ircx);
+                        }
+
+                        // 7. Rci: cx → ci
+                        let d_irci = (comp_pert.irci - comp.irci) * inv_delta;
+                        stamp_thermal_branch!(cx, ci, d_irci);
+
+                        // 8. Rbx: b_ext → bx
+                        if model.rbx > 0.0 && model.rbx_t > 0.0 {
+                            let i_rbx = vrbx / model.rbx_t;
+                            let i_rbx_pert = if model_pert.rbx_t > 0.0 {
+                                vrbx / model_pert.rbx_t
+                            } else {
+                                0.0
+                            };
+                            let d_irbx = (i_rbx_pert - i_rbx) * inv_delta;
+                            stamp_thermal_branch!(b_ext, bx, d_irbx);
+                        }
+
+                        // 9. Rbi: bx → bi
+                        let d_irbi = (comp_pert.irbi - comp.irbi) * inv_delta;
+                        stamp_thermal_branch!(bx, bi, d_irbi);
+
+                        // 10. Re: ei → e_ext
+                        if model.re > 0.0 && model.re_t > 0.0 {
+                            let i_re = vre / model.re_t;
+                            let i_re_pert = if model_pert.re_t > 0.0 {
+                                vre / model_pert.re_t
+                            } else {
+                                0.0
+                            };
+                            let d_ire = (i_re_pert - i_re) * inv_delta;
+                            stamp_thermal_branch!(ei, e_ext, d_ire);
+                        }
+
+                        // 11. Rbp: bp → cx
+                        let d_irbp = (comp_pert.irbp - comp.irbp) * inv_delta;
+                        stamp_thermal_branch!(bp, cx, d_irbp);
+
+                        // 12. Ibcp: si → bp (parasitic B-C junction)
+                        let d_ibcp = (comp_pert.ibcp - comp.ibcp) * inv_delta;
+                        stamp_thermal_branch!(si, bp, d_ibcp);
+
+                        // 13. Iccp: bx → si (parasitic transport)
+                        let d_iccp = (comp_pert.iccp - comp.iccp) * inv_delta;
+                        stamp_thermal_branch!(bx, si, d_iccp);
+
+                        // 14. Rs: si → s_ext
+                        if model.rs > 0.0 && model.rs_t > 0.0 {
+                            let i_rs = vrs / model.rs_t;
+                            let i_rs_pert = if model_pert.rs_t > 0.0 {
+                                vrs / model_pert.rs_t
+                            } else {
+                                0.0
+                            };
+                            let d_irs = (i_rs_pert - i_rs) * inv_delta;
+                            stamp_thermal_branch!(si, s_ext, d_irs);
+                        }
+
+                        // --- Thermal self-derivative: dIth/dVrth ---
+                        // Matches ngspice vbicload.c line 1433:
+                        //   *(here->VBICtempTempPtr) += -Ith_Vrth;
+                        let ith_pert = compute_self_heating_power(
+                            &comp_pert, &model_pert, vbei, vbex, vbci, vbep, vbcp, vrci,
+                            vrbi, vrbp, vrcx, vrbx, vre, vrs, vbic.area, vbic.m,
+                        );
+                        let d_ith = (ith_pert - ith) * inv_delta;
+                        // Ith enters thermal node as positive (our convention).
+                        // NR linearization: Ith ≈ Ith0 + dIth/dVrth*(Vrth-Vrth0)
+                        // Matrix gets +dIth/dVrth, RHS gets -(Ith0 - dIth/dVrth*Vrth0)
+                        // which is already accounted for by adding dIth/dVrth to diagonal
+                        // and dIth/dVrth*vrth to RHS.
+                        system.matrix.add(rth_idx, rth_idx, d_ith);
+                        system.rhs[rth_idx] += d_ith * vrth;
+                    }
                 }
             }
         }

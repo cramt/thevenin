@@ -1414,46 +1414,41 @@ pub fn bsim3soi_fd_companion(
         )
     };
 
-    // Abulk calculation
-    let (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb) = if sp.a0 == 0.0 {
-        (1.0, 0.0, 1.0, 0.0, 0.0)
-    } else {
-        let t10_k = sp.keta * vbseff;
-        let (t11, dt11_dvb) = if t10_k >= -0.9 {
-            let t11 = 1.0 / (1.0 + t10_k);
-            (t11, -sp.keta * t11 * t11)
-        } else {
-            let t12 = 1.0 / (0.8 + t10_k);
-            let t11 = (17.0 + 20.0 * t10_k) * t12;
-            (t11, -sp.keta * t12 * t12)
-        };
+    // Abulk calculation (ngspice FD formula: keta applied multiplicatively, +1 at end)
+    // Matches b3soifdld.c lines 1428-1490 exactly.
+    let (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb) = {
+        let (mut abulk0, mut dabulk0_dvb, mut abulk, mut dabulk_dvg, mut dabulk_dvb) =
+            if sp.a0 == 0.0 {
+                (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64)
+            } else {
+                let t1 = 0.5 * sp.k1 / sqrt_phi;
 
-        let t10_k1 = 0.5 * sp.k1 / sqrt_phi;
-        let t1 = t10_k1 * t11;
-        let dt1_dvb = t10_k1 * dt11_dvb;
+                // ngspice b3soifdld.c line 1436: T9 = sqrt(xj * Xdep)
+                // xj defaults to tsi in FD-SOI (b3soifdset.c line 216)
+                let t9 = (model.tsi * xdep).sqrt();
+                let tmp1 = leff + 2.0 * t9;
+                let t5 = leff / tmp1;
+                let tmp2_a = sp.a0 * t5;
+                let _tmp3_a = weff + sp.b1;
+                let tmp4_a = sp.b0 / (weff + sp.b1);
+                let t2 = tmp2_a + tmp4_a;
+                let dt2_dvb = -t9 * tmp2_a / tmp1 / xdep * dxdep_dvb;
+                let _t6 = t5 * t5;
+                let t7 = t5 * t5 * t5;
 
-        // ngspice b3soifdld.c line 1436: T9 = sqrt(xj * Xdep)
-        // xj defaults to tsi in FD-SOI (b3soifdset.c line 216)
-        let t9 = (model.tsi * xdep).sqrt();
-        let tmp1 = leff + 2.0 * t9;
-        let t5 = leff / tmp1;
-        let tmp2_a = sp.a0 * t5;
-        let tmp3_a = weff + sp.b1;
-        let tmp4_a = sp.b0 / tmp3_a;
-        let t2 = tmp2_a + tmp4_a;
-        let dt2_dvb = -t9 * tmp2_a / tmp1 / xdep * dxdep_dvb;
-        let t6 = t5 * t5;
-        let t7 = t5 * t6;
+                let abulk0 = t1 * t2; // NO +1 yet
+                let dabulk0_dvb = t1 * dt2_dvb;
 
-        let mut abulk0 = 1.0 + t1 * t2;
-        let mut dabulk0_dvb = t1 * dt2_dvb + t2 * dt1_dvb;
+                let t8 = sp.ags * sp.a0 * t7;
+                let dabulk_dvg = -t1 * t8;
+                let abulk = abulk0 + dabulk_dvg * vgsteff; // NO +1 yet
+                let dabulk_dvb =
+                    dabulk0_dvb - t8 * vgsteff * 3.0 * t1 * dt2_dvb / tmp2_a;
 
-        let t8 = sp.ags * sp.a0 * t7;
-        let dabulk_dvg = -t1 * t8;
-        let mut abulk = abulk0 + dabulk_dvg * vgsteff;
-        let mut dabulk_dvb =
-            dabulk0_dvb - t8 * vgsteff * (dt1_dvb + 3.0 * t1 * dt2_dvb / tmp2_a.max(1e-20));
+                (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb)
+            };
 
+        // Clamp before keta (ngspice b3soifdld.c lines 1458-1470)
         if abulk0 < 0.01 {
             let t9 = 1.0 / (3.0 - 200.0 * abulk0);
             abulk0 = (0.02 - abulk0) * t9;
@@ -1464,6 +1459,26 @@ pub fn bsim3soi_fd_companion(
             abulk = (0.02 - abulk) * t9;
             dabulk_dvb *= t9 * t9;
         }
+
+        // Keta multiplicative correction (applied AFTER clamp, BEFORE +1)
+        // ngspice b3soifdld.c lines 1472-1487
+        let t2_k = sp.keta * vbseff;
+        let (t0_k, dt0k_dvb) = if t2_k >= -0.9 {
+            let t0 = 1.0 / (1.0 + t2_k);
+            (t0, -sp.keta * t0 * t0)
+        } else {
+            let t1 = 1.0 / (0.8 + t2_k);
+            ((17.0 + 20.0 * t2_k) * t1, -sp.keta * t1 * t1)
+        };
+        dabulk_dvg *= t0_k;
+        dabulk_dvb = dabulk_dvb * t0_k + abulk * dt0k_dvb;
+        dabulk0_dvb = dabulk0_dvb * t0_k + abulk0 * dt0k_dvb;
+        abulk *= t0_k;
+        abulk0 *= t0_k;
+
+        // Add 1 at the end (ngspice b3soifdld.c lines 1489-1490)
+        abulk += 1.0;
+        abulk0 += 1.0;
 
         (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb)
     };
