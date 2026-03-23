@@ -677,11 +677,16 @@ fn mult_c(ar: f64, ai: f64, br: f64, bi: f64) -> (f64, f64) {
 
 /// Update h1 convolution accumulators with new voltage data.
 pub fn update_cnv_txl(tx: &mut TxLine, h: f64, v_i: f64, v_o: f64, dv_i: f64, dv_o: f64) {
+    // bi and bo accumulate multiplicative factors c/x across iterations,
+    // matching ngspice txlload.c:update_cnv_txl where `bi *= t; bo *= t;`
+    // mutate bi/bo in-place across the loop.
+    let mut bi = dv_i;
+    let mut bo = dv_o;
     for i in 0..3 {
         let e = tx.h1e[i];
         let t = tx.h1_term[i].c / tx.h1_term[i].x;
-        let bi = dv_i * t;
-        let bo = dv_o * t;
+        bi *= t;
+        bo *= t;
         tx.h1_term[i].cnv_i = (tx.h1_term[i].cnv_i - bi * h) * e
             + (e - 1.0) * (v_i * t + 1.0e12 * bi / tx.h1_term[i].x);
         tx.h1_term[i].cnv_o = (tx.h1_term[i].cnv_o - bo * h) * e

@@ -3206,3 +3206,66 @@ bugs), transmission lines with MOSFETs (3 tests, MOSFET driver timing), BJT tran
 (2 tests, constant junction cap), Level 2 MOSFET (1 test, missing features), HFET
 (1 test, source stepping needed), sensitivity (1 test, LU precision), missing subsystems
 (5 tests, BSIM1/2/.control/TEMPER), no reference (1 test), timeout (2 tests).
+
+---
+
+## Applied fix: TXL h1 convolution accumulation (2026-03-23)
+
+**Affected tests:** `harness_transmission_txl1_1_line` (now passes),
+`harness_transmission_txl2_3_line` (improved from 4.7% to 2.4%)
+
+**Un-ignored:** `harness_transmission_txl1_1_line` (now passes)
+
+**Root cause:** The `update_cnv_txl` function had a convolution accumulation bug
+identical to the one previously fixed in the CPL model (`update_cnv_cpl`).  In
+ngspice `txlload.c:update_cnv_txl` (lines 313-338), the voltage derivative
+variables `bi` and `bo` accumulate multiplicative factors `c/x` across the 3-term
+loop:
+
+```c
+bi = tx->in_node->dv;   // starts as dv_i
+bo = tx->out_node->dv;  // starts as dv_o
+for (i = 0; i < 3; i++) {
+    t = tm->c / tm->x;
+    bi *= t;   // ← ACCUMULATES: bi = dv_i × Π(c_j/x_j, j=0..i)
+    bo *= t;   // ← ACCUMULATES: bo = dv_o × Π(c_j/x_j, j=0..i)
+    tm->cnv_i = (tm->cnv_i - bi*h) * e + (e-1)*(ai*t + 1e12*bi/tm->x);
+    tm->cnv_o = (tm->cnv_o - bo*h) * e + (e-1)*(ao*t + 1e12*bo/tm->x);
+}
+```
+
+Our code had:
+```rust
+let bi = dv_i * t;   // ← NOT accumulated: only current iteration's c_i/x_i
+let bo = dv_o * t;
+```
+
+This meant iterations 1 and 2 used only `dv * c_i/x_i` instead of the
+accumulated product `dv * Π(c_j/x_j, j=0..i)`, corrupting the h1 convolution
+state which feeds into `right_consts_txl` for the transient RHS computation.
+
+**Fix applied:** Changed `update_cnv_txl` to accumulate `bi` and `bo` across
+loop iterations, matching ngspice:
+```rust
+let mut bi = dv_i;
+let mut bo = dv_o;
+for i in 0..3 {
+    let t = tx.h1_term[i].c / tx.h1_term[i].x;
+    bi *= t;   // accumulate
+    bo *= t;   // accumulate
+    // ... rest of formula unchanged
+}
+```
+
+**Impact on tests:**
+
+| Test | Before | After |
+|---|---|---|
+| `txl1_1_line` | ~4.6% V(2) error at t=21.05ns | **PASSES** (un-ignored) |
+| `txl2_3_line` | ~4.7% V(2) error | ~2.4% V(2) error at t=16.2ns |
+
+The txl2_3 test is a 3-line cascade; the first stage is now correct but errors
+accumulate through the second and third CMOS inverter stages (same pattern as
+ltra2_2_line for the LTRA model).
+
+**No regressions:** All 422 non-ignored tests pass.  Clippy clean.
