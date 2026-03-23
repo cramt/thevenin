@@ -1432,7 +1432,9 @@ pub fn bsim3soi_fd_companion(
         let t1 = t10_k1 * t11;
         let dt1_dvb = t10_k1 * dt11_dvb;
 
-        let t9 = (model.tox.max(1e-12) * xdep).sqrt();
+        // ngspice b3soifdld.c line 1436: T9 = sqrt(xj * Xdep)
+        // xj defaults to tsi in FD-SOI (b3soifdset.c line 216)
+        let t9 = (model.tsi * xdep).sqrt();
         let tmp1 = leff + 2.0 * t9;
         let t5 = leff / tmp1;
         let tmp2_a = sp.a0 * t5;

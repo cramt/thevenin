@@ -15,9 +15,9 @@
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
 "bsim3soifd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
-"bsim3soifd/t3.cir" = "~5.5% Ids error near threshold (improved from 9% after csieff/litl/Abeff fixes, remaining model value bug)"
-"bsim3soifd/t4.cir" = "~3.9% Ids error near threshold (improved from 5.7% by Vbsdio fix; remaining ~1.6mV Vth offset)"
-"bsim3soifd/t5.cir" = "~2.7% Ids error at Vg=0.62V (improved from 99% after csieff/litl/Abeff fixes, remaining model value bug)"
+"bsim3soifd/t3.cir" = "~5.6% Ids error near threshold (T9 tox→tsi fix correct but exposes compensating bug in Abulk chain)"
+"bsim3soifd/t4.cir" = "~4.1% Ids error near threshold (T9 tox→tsi fix correct but exposes compensating bug; remaining ~1.6mV Vth offset)"
+"bsim3soifd/t5.cir" = "~2.8% Ids error at Vg=0.62V (T9 tox→tsi fix correct but exposes compensating bug in Abulk chain)"
 
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
@@ -49,7 +49,7 @@
 "transient/fourbitadder.cir" = "times out (>30s)"
 
 # === Transmission lines ===
-"transmission/cpl3_4_line.cir" = "~1.0% V(2) error at t=19.7ns: CPL 4-line impulse response (polint Neville fix correct but exposed compensating setup bug; no MOSFETs)"
+"transmission/cpl3_4_line.cir" = "~0.8% V(2) error at t=20.3ns: CPL 4-line (improved from 1.0% by R_m off-diagonal clamping; polint compensating bug remains; no MOSFETs)"
 "transmission/cpl_ibm2.cir" = "~6.4% error at t=9.65ns: CPL 2-line coupling error (polint Neville fix correct but exposed compensating setup bug; no MOSFETs)"
 "transmission/ltra2_2_line.cir" = "~5.8% V(3) error at t=29.3ns: cascaded 2-line circuit accumulates CMOS inverter switching errors through second stage"
 "transmission/txl2_3_line.cir" = "~2.4% V(2) error at t=16.2ns: TXL three-line cascade accumulates CMOS inverter switching errors through second/third stages (improved from 4.7% by h1 convolution accumulation fix)"

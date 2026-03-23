@@ -172,10 +172,17 @@ impl CplModel {
         };
 
         let mut r_m = unpack(&r_vals, dim);
-        // Clamp R diagonal (ngspice: MAX(f, 1.0e-4))
-        for (i, row) in r_m.iter_mut().enumerate().take(dim) {
-            if row[i] < 1.0e-4 {
-                row[i] = 1.0e-4;
+        // Clamp ALL R_m upper-triangle elements (including off-diagonal)
+        // to >= 1e-4, matching ngspice cplsetup.c line 475:
+        //   R_m[i][j] = MAX(f, 1.0e-4);
+        // This applies to both diagonal and off-diagonal entries.
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..dim {
+            for j in i..dim {
+                if r_m[i][j] < 1.0e-4 {
+                    r_m[i][j] = 1.0e-4;
+                    r_m[j][i] = 1.0e-4;
+                }
             }
         }
 

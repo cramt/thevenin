@@ -3324,3 +3324,118 @@ line-by-line comparison of the entire Vbs0t→Vbs0→Vbs0mos→Vthfd→Vbs0eff�
 chain against ngspice.
 
 **No regressions:** All 423 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Applied fix: BSIM3SOI-FD Abulk T9 parameter (tox→tsi) (2026-03-23)
+
+**Affected tests:** `harness_bsim3soifd_t3`, `harness_bsim3soifd_t4`, `harness_bsim3soifd_t5`
+
+**Root cause:** The Abulk body charge coefficient T9 in the BSIM3SOI-FD companion
+function used `model.tox` (gate oxide thickness, ~4.5nm) instead of `model.tsi`
+(silicon film thickness, ~50nm, which is the FD-SOI default for `xj`).
+
+In ngspice `b3soifdld.c` line 1436:
+```c
+T9 = sqrt(model->B3SOIFDxj * Xdep);
+```
+
+Our code had:
+```rust
+let t9 = (model.tox.max(1e-12) * xdep).sqrt();
+```
+
+The DD and PD variants already correctly used `model.xj`. Only the FD variant
+had this bug, making T9 about 3.3× too small (sqrt(tox/tsi) = sqrt(0.09) ≈ 0.3).
+This propagated through `tmp1 = Leff + 2*T9` → `T5 = Leff/tmp1` → Abulk0, affecting
+the body charge factor used in Vdsat, fgche1, fgche2, and ultimately Ids.
+
+**Fix applied:** Changed `model.tox.max(1e-12)` to `model.tsi`, matching ngspice's
+use of `xj` (which defaults to `tsi` in FD-SOI per `b3soifdset.c` line 216).
+
+**Impact on tests:**
+
+| Test | Before | After |
+|---|---|---|
+| `bsim3soifd/t3` | ~5.5% Ids error | ~5.6% Ids error (slightly worse) |
+| `bsim3soifd/t4` | ~3.9% Ids error | ~4.1% Ids error (slightly worse) |
+| `bsim3soifd/t5` | ~2.7% Ids error | ~2.8% Ids error (slightly worse) |
+
+The fix is correct per ngspice but slightly worsened all three FD tests, indicating
+a compensating bug elsewhere in the FD model that was partially cancelled by the
+wrong T9.  Per project policy ("fixes that bring the code closer to ngspice's exact
+formulas even though the overall test error doesn't improve yet"), the fix is kept.
+
+**Also investigated (derivative-only bugs, not fixed):**
+- `dueff_dvd` and `dueff_dvb` hardcoded to zero (affects Gds/Gmbs convergence only)
+- Missing `uc*Vbseff` in dueff_dvg for mobMod==1 (derivative-only)
+- Missing `dVbseff_dVg`/`dVbseff_dVd` chain-rule terms in Vgsteff derivatives
+- Missing `Gmb0 * dVbseff_dVg` in final Gm, `Gmb0 * dVbseff_dVd` in final Gds
+
+None of these affect DC Ids values — they only affect NR convergence speed via the
+Jacobian accuracy.
+
+**No regressions:** All 423 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Applied fix: CPL R_m off-diagonal clamping (2026-03-23)
+
+**Affected tests:** `harness_transmission_cpl3_4_line` (improved),
+`harness_transmission_cpl_ibm2` (unchanged)
+
+**Root cause:** In ngspice `cplsetup.c` line 475, ALL upper-triangle R_m elements
+(both diagonal AND off-diagonal) are clamped to `MAX(f, 1.0e-4)`:
+```c
+R_m[i][j] = CPLmodPtr(here)->Rm[counter] = MAX(f, 1.0e-4);
+```
+
+This applies inside the `if (i > j) ... else ...` block where `j >= i`, meaning
+it covers both the diagonal (`i == j`) and off-diagonal (`i < j`) entries.
+
+Our code only clamped the diagonal elements:
+```rust
+for (i, row) in r_m.iter_mut().enumerate().take(dim) {
+    if row[i] < 1.0e-4 { row[i] = 1.0e-4; }
+}
+```
+
+For the `cpl3_4_line` test, the R matrix is diagonal (off-diagonal = 0):
+```
+R = 0.3  0    0    0
+    0    0.3  0    0
+    0    0    0.3  0
+    0    0    0    0.3
+```
+
+In ngspice, the zeros become 1e-4; in our code, they stayed at 0.  This affected
+the `R_m[i][k] * y` term in `loop_zy`, which feeds through the eigendecomposition
+pipeline to produce slightly different modal impedances and impulse response
+coefficients.
+
+**Fix applied:** Changed the R_m clamping loop to iterate over all upper-triangle
+elements (`for i in 0..dim { for j in i..dim { ... } }`), matching ngspice.
+
+**Impact on tests:**
+
+| Test | Before | After |
+|---|---|---|
+| `cpl3_4_line` | ~1.0% V(2) error at t=19.7ns | ~0.8% V(2) error at t=20.3ns (21% improvement) |
+| `cpl_ibm2` | ~6.4% error | ~6.4% error (unchanged) |
+
+The cpl3_4_line mismatch point moved to a later time (the previous worst point now
+passes), reducing the peak error from 1.0% to 0.8%.  The IBM2 test was unaffected
+because its 2-line R matrix has a much smaller off-diagonal-to-diagonal ratio
+(1e-4/0.5 = 0.02%), making the perturbation negligible.
+
+**Also investigated (no additional bugs found):**
+- Exhaustive comparison of `loop_zy`, `eval_si_si_1`, Jacobi rotation (`diag`,
+  `rotate`), `poly_match`, `approx_mode`, `pade_apx`, `find_roots`, `get_c`,
+  `mult_p`, `matrix_p_mult`, `gaussian_elimination` — all match ngspice exactly
+- The `Right_deg = 2` constant only affects memory allocation (`new_memory`), not
+  the polynomial degree used in `matrix_p_mult` (which uses `deg_o = Left_deg = 7`)
+- The remaining ~0.8% error is from the compensating bug exposed by the polint
+  Neville fix, which could not be identified by code comparison — likely in FP
+  evaluation order through the eigendecomposition → polynomial → Padé pipeline
+
+**No regressions:** All 423 non-ignored tests pass.  Clippy clean.
