@@ -3548,3 +3548,62 @@ Vbsmos → Vbseff → Vth chain, no discrepancy was found.
 | Missing subsystems | 5 | BSIM1/2, .control, TEMPER, param expressions |
 | No reference | 1 | ngspice says "To be done" |
 | Timeout | 2 | fourbitadder ×2 |
+
+---
+
+## Applied fix: BSIM3SOI-PD junction temperature scaling (2026-03-23)
+
+**Affected model:** BSIM3SOI-PD
+
+**Root cause:** The PD junction current temperature scaling had an `exp(1.0)` bug that
+made `jrec = isrec * 2.718` at the nominal temperature (where it should be `isrec`).
+
+The buggy formula was:
+```rust
+jrec = isrec * exp((nrecf0 * 0.026 * (1 + ntrecf * (TRatio-1))) / (nrecf0 * 0.026))
+     = isrec * exp(1 + ntrecf * (TRatio-1))  // spurious exp(1) factor!
+```
+
+At TRatio=1 (temp=tnom), this simplifies to `isrec * exp(1) = 2.718 * isrec`.
+
+The correct formula from ngspice `b3soipdtemp.c` lines 683-700 is:
+```c
+T4 = Eg300 / vtm * (TempRatio - 1.0);
+T7 = xrec * T4 / nrecf0;
+jrec = isrec * exp(T7);  // At TRatio=1: exp(0) = 1, so jrec = isrec ✓
+```
+
+**Also fixed:** The `jbjt`, `jdif`, and `jtun` temperature scaling formulas were using
+a simplified `exp(Eg/(2kT_tnom)) / exp(Eg/(2kT_temp))` form instead of ngspice's
+`exp(xbjt * Eg300/(vtm_tnom * ndiode) * (TRatio-1))` form. At TRatio=1, both give 1.0,
+so this is a dormant fix for non-default-temperature simulations.
+
+**Impact on tests:** None visible — the PD tests with percentage errors (t4 at 5.6%)
+use a tied-body configuration where junction currents don't affect drain current.
+
+### DD variant investigation (no fix applied)
+
+The same `exp(1.0)` jrec bug exists in the DD variant. Additionally, the DD variant has
+several other junction current bugs:
+
+1. **Area scaling**: Uses `wdios * tsi` (with ASD=0.3 factor) instead of ngspice DD's
+   `weff * tsi` — makes all junction currents 0.3× too small for ASD<1
+2. **Recombination emission**: Uses PD-style `exp(Vbs/(nrecf0*0.026))` instead of
+   DD-style `sqrt(exp(Vbs/(Vtm*ndiode)))`
+3. **BJT current formula**: Uses PD-style `(1-arfabjt) * weff/nseg * lratio` instead of
+   DD-style `(1-BjtA) * weff` with Vds-dependent BjtA
+4. **Missing Ic**: ngspice adds `Ic = Ibjt - Ibs3 + Ibd3` to drain current
+5. **Default values**: xbjt/xdif/xrec default to 1.0 instead of ngspice's 2/2/20
+
+**Why not fixed:** The DD model has a known compensating bug in the vfbb sign (`+vfbb`
+instead of ngspice's `-type*vfbb`, a ~90mV error). This compensation is deeply entangled
+with the junction current bugs. Fixing the jrec formula alone (which at tnom changes
+jrec from 2.718×isrec to isrec) made the t5 test error WORSE (1.1% → 2.85%) because
+the recombination current contributes to the body current balance. Fixing both area
+scaling and jrec together caused t3 (floating body) to hit singular matrix.
+
+The DD model needs a comprehensive fix of vfbb + junction currents + BJT formulas
+simultaneously, which requires careful convergence tuning (gmin stepping or source
+stepping) that we don't yet have.
+
+**No regressions:** All 423 non-ignored tests pass. Clippy clean.

@@ -1943,7 +1943,7 @@ pub fn bsim3soi_dd_companion(
         }
     };
 
-    // Junction currents (4-component SOI model, same as PD)
+    // Junction currents (4-component SOI model)
     let nvtm1 = vtm * sp.ndiode;
     let vbd = vbs_i - vds_i;
 

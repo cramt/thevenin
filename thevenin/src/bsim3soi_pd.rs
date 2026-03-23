@@ -11,8 +11,8 @@ use thevenin_types::{Expr, ModelDef};
 
 use crate::mosfet::MosfetType;
 use crate::physics::{
-    CHARGE_Q, EPSOX, EPSSI, EXP_THRESHOLD, EXPL_THRESHOLD, KBOQ, MAX_EXP, MIN_EXP, MIN_EXPL,
-    soi_dexp,
+    CHARGE_Q, EG300, EPSOX, EPSSI, EXP_THRESHOLD, EXPL_THRESHOLD, KBOQ, MAX_EXP, MIN_EXP,
+    MIN_EXPL, soi_dexp,
 };
 
 const DELTA_1: f64 = 0.02;
@@ -849,19 +849,20 @@ impl Bsim3SoiPdModel {
             * (21.5565981 - eg / (2.0 * vtm)).exp();
         let vbi = vtm * (1e20 * self.npeak / (ni_temp * ni_temp)).abs().ln();
 
-        // SOI junction parameters
-        let t0 = (eg / (2.0 * KBOQ * tnom_k)).exp();
-        let t_eg = (eg / (2.0 * KBOQ * temp)).exp();
-        let t0_ratio = t0 / t_eg;
-        // t0_ratio accounts for temperature change from Tnom
+        // SOI junction parameters — matching ngspice b3soipdtemp.c lines 683-700
+        // PD uses DEXP formula: jrec = isrec * exp(xrec * Eg300/(vtm0*nrecf0) * (TRatio-1))
+        let vtm_tnom = KBOQ * tnom_k;
+        let t4_temp = EG300 / vtm_tnom * (temp_ratio - 1.0);
 
-        let jbjt = self.isbjt * t0_ratio;
-        let jdif = self.isdif * t0_ratio;
-        let jrec = self.isrec
-            * ((self.nrecf0 * 0.026 * (1.0 + self.ntrecf * (temp_ratio - 1.0)))
-                / (self.nrecf0 * 0.026))
-                .exp();
-        let jtun = self.istun;
+        let t7_bjt = self.xbjt * t4_temp / self.ndiode;
+        let t7_dif = self.xdif * t4_temp / self.ndiode;
+        let t7_rec = self.xrec * t4_temp / self.nrecf0;
+        let t7_tun = self.xtun * (temp_ratio - 1.0);
+
+        let jbjt = self.isbjt * t7_bjt.exp();
+        let jdif = self.isdif * t7_dif.exp();
+        let jrec = self.isrec * t7_rec.exp();
+        let jtun = self.istun * t7_tun.exp();
 
         // Diode widths
         let wdios = weff * self.asd;
