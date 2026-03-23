@@ -3269,3 +3269,58 @@ accumulate through the second and third CMOS inverter stages (same pattern as
 ltra2_2_line for the LTRA model).
 
 **No regressions:** All 422 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Applied fix: BSIM3SOI-FD Vbsdio unconditional assignment (2026-03-23)
+
+**Affected test:** `harness_bsim3soifd_t4` (5-terminal tied-body configuration)
+
+**Root cause:** In the BSIM3SOI-FD model, the `Vbsdio` variable (body-source voltage
+used for all subsequent MOSFET equations) should be unconditionally set to `Vbs0eff`
+(the self-consistent surface potential), regardless of whether the body is floating or
+tied.  This matches ngspice `b3soifdld.c` line 1090:
+
+```c
+Vbs = Vbsdio = Vbs0eff;    // Unconditional — no bodyMod check
+dVbsdio_dVb = 0.0;          // No dependency on external body voltage
+```
+
+In the FD (fully depleted) model, the silicon film is fully depleted, so the surface
+potential is determined by the gate and back-gate voltages, not the external body contact.
+The body node only affects junction currents, not the channel equations.
+
+Our code had a conditional:
+```rust
+let vbsdio = if floating_body {
+    vbs0eff_fd
+} else {
+    smooth_max(vbs_i, vbs0eff_fd + OFF_VBSDIO)  // WRONG for FD
+};
+```
+
+For the 5-terminal t4 test (RBODY=RBSH=0, bodyMod=2), this computed
+`Vbsdio ≈ Vbs0eff + 0.02` instead of `Vbs0eff`, introducing a ~20mV offset
+that lowered Vth by ~2mV and increased subthreshold current by ~8%.
+
+**Fix applied:** Changed Vbsdio to unconditionally use `Vbs0eff` for the FD model.
+
+**Verification:** Confirmed that ngspice's DD model correctly uses the
+`smooth_max(Vbs, Vbs0eff + OFF_VBSDIO)` formula (our DD code matches), and the
+PD model doesn't use Vbsdio at all (our PD code matches).  The fix is FD-only.
+
+**Impact on tests:**
+
+| Test | Before | After |
+|---|---|---|
+| `bsim3soifd/t4` | ~5.7% Ids error at Vg=0.40V | ~3.9% Ids error at Vg=0.42V |
+| `bsim3soifd/t3` | ~5.5% Ids error (floating body) | unchanged (floating body path) |
+| `bsim3soifd/t5` | ~2.7% Ids error (floating body) | unchanged (floating body path) |
+
+The remaining ~3.9% error in t4 is from the same ~1.6mV Vth offset that affects all
+three FD tests.  This offset corresponds to a systematic overcurrent of ~5% in the
+subthreshold/near-threshold region, and its root cause is unidentified despite exhaustive
+line-by-line comparison of the entire Vbs0t→Vbs0→Vbs0mos→Vthfd→Vbs0eff→Vbsdio→Vbsmos→Vbseff→Vth
+chain against ngspice.
+
+**No regressions:** All 423 non-ignored tests pass.  Clippy clean.

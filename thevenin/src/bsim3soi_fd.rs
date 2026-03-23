@@ -1216,16 +1216,12 @@ pub fn bsim3soi_fd_companion(
 
     let vbs0eff_fd = vbs0 - nfb * 0.5 * (t1_eff + t2_eff);
 
-    // Vbsdio for FD: when body is floating (bodyMod=0), Vbsdio = Vbs0eff, dVbsdio/dVb = 0
-    // (matching b3soifdld.c line 1090). When body has an external contact, use smooth-max.
-    let vbsdio = if floating_body {
-        // FD floating body: channel current independent of body voltage
-        vbs0eff_fd
-    } else {
-        let t1_vbsdio = vbs_i - (vbs0eff_fd + OFF_VBSDIO) - DELT_VBSDIO;
-        let t2_vbsdio = (t1_vbsdio * t1_vbsdio + DELT_VBSDIO * DELT_VBSDIO).sqrt();
-        vbs0eff_fd + OFF_VBSDIO + 0.5 * (t1_vbsdio + t2_vbsdio)
-    };
+    // Vbsdio for FD: Vbsdio = Vbs0eff unconditionally, regardless of body mode.
+    // ngspice b3soifdld.c line 1090: "Vbs = Vbsdio = Vbs0eff;" with dVbsdio_dVb = 0.
+    // In the FD model, the fully-depleted surface potential is determined by the
+    // gate and back-gate voltages, not the external body contact voltage.
+    // The body node only affects junction currents, not the channel equations.
+    let vbsdio = vbs0eff_fd;
 
     // Prepare Vbsmos (account for silicon capacitance correction)
     let t1_bsmos = vbs0teff - vbsdio - DELT_VBSMOS;
