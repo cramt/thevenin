@@ -3853,3 +3853,44 @@ parameters) but are real correctness issues:
 - **Smooth depletion charge (AJ > 0)**: Sign of dv term is wrong and linear
   correction term is missing. Only affects models with AJE/AJC > 0 (default
   is -0.5, so standard branch is used).
+
+---
+
+## Applied fix: BSIM3SOI-FD derivative chain for dVbseff/dVg and dVbseff/dVd (2026-03-24)
+
+**Affected tests:** All BSIM3SOI-FD tests (derivative-only improvement)
+
+**Root cause:** In the FD (fully-depleted) SOI model, Vbseff (effective body-source
+voltage) depends on Vgs through the body coupling chain:
+  Vthfd → Vbs0teff → Vbs0eff → Vbsdio → Vbsmos → Vbseff
+
+ngspice tracks dVbseff/dVg and dVbseff/dVd through this chain and includes them
+in the final Gm and Gds via `Gm += Gmb0 * dVbseff_dVg` and
+`Gds += Gmb0 * dVbseff_dVd` (b3soifdld.c lines 2112-2114).
+
+Our code was missing this entire derivative chain, using only `Gm = Gm0 * dVgsteff_dVg`
+without the body transconductance coupling.
+
+**Fix applied:**
+1. Added computation of dVbseff_dVg and dVbseff_dVd through the full chain:
+   - `dVthfd_dVd = -theta0vb0 * eta_eff` (DIBL derivative)
+   - `dVbs0teff_dVg = smooth_factor * dVgs_eff_dVg`
+   - `dVbs0eff_dVg = Nfb * smooth_factor * dVgs_eff_dVg`
+   - Propagated through Vbsdio → Vbsmos → Vbseff using chain rule
+2. Updated Vgsteff derivatives to include chain-rule terms:
+   `dVgsteff_dVg += (-dVth_dVb) * dVbseff_dVg` (and similarly for dVd)
+3. Updated final Gm and Gds:
+   `Gm = Gm0 * dVgsteff_dVg + Gmb0 * dVbseff_dVg`
+   `Gds = Gm0 * dVgsteff_dVd + Gmb0 * dVbseff_dVd + Gds0`
+
+**Impact:** Derivative-only fix — does not change DC operating point values.
+Improves Jacobian accuracy for NR convergence. FD t3/t4/t5 errors unchanged
+(5.6%/4.1%/2.8%). FD inv2 still fails with NR non-convergence after 200 iterations
+(needs source/gmin stepping for the CMOS inverter circuit). No regressions in 572
+passing tests.
+
+**Remaining derivative bugs in BSIM3SOI-FD:**
+- `dueff_dvd` and `dueff_dvb` still hardcoded to zero
+- Missing `uc*Vbseff` in dueff_dvg for mobMod==1
+- Missing `T2` factor in dueff_dvg for mobMod==3
+- Missing `Gme` (back-gate transconductance) entirely

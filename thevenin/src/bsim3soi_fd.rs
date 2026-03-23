@@ -1236,6 +1236,42 @@ pub fn bsim3soi_fd_companion(
     let t3_vbseff = (t2_vbseff * t2_vbseff + 4.0 * DELT_VBSEFF * t1_vbseff).sqrt();
     let vbseff = t1_vbseff - 0.5 * (t2_vbseff + t3_vbseff);
 
+    // ========== dVbseff/dVg and dVbseff/dVd derivative chain ==========
+    // In the FD model, Vbseff depends on Vgs through the body coupling chain:
+    //   Vthfd → Vbs0teff → Vbs0eff → Vbsdio → Vbsmos → Vbseff
+    // Tracking these derivatives matches ngspice b3soifdld.c lines 1061-1157
+    // and feeds into the final Gm/Gds via the chain rule (lines 2112-2114).
+
+    // dVthfd/dVd: only DIBL contributes (ngspice line 1045)
+    let dvthfd_dvd = -t3_eta_eff * sp.theta0vb0;
+
+    // Smoothing factor for Vbs0teff (ngspice line 1061-1062)
+    let t5_eff = 0.5 * (1.0 + t1_eff / t2_eff);
+    let dvbs0teff_dvg = t5_eff * dvgs_eff_dvg;
+    let dvbs0teff_dvd = -t5_eff * dvthfd_dvd;
+
+    // dVbs0eff/dVg, dVbs0eff/dVd (ngspice lines 1078-1079)
+    let dvbs0eff_dvg = nfb * t5_eff * dvgs_eff_dvg;
+    let dvbs0eff_dvd = -nfb * t5_eff * dvthfd_dvd;
+
+    // For FD: Vbsdio = Vbs0eff (ngspice line 1090-1092)
+    let dvbsdio_dvg = dvbs0eff_dvg;
+    let dvbsdio_dvd = dvbs0eff_dvd;
+
+    // dT3_bsmos chain (ngspice lines 1101-1103)
+    let t5_bsmos = 0.5 * (1.0 + t1_bsmos / t2_bsmos);
+    let dt3_bsmos_dvg = t5_bsmos * (dvbs0teff_dvg - dvbsdio_dvg);
+    let dt3_bsmos_dvd = t5_bsmos * (dvbs0teff_dvd - dvbsdio_dvd);
+
+    // dVbsmos/dVg, dVbsmos/dVd (ngspice lines 1111-1112)
+    let dvbsmos_dvg = dvbsdio_dvg - t4_bsmos * dt3_bsmos_dvg;
+    let dvbsmos_dvd = dvbsdio_dvd - t4_bsmos * dt3_bsmos_dvd;
+
+    // dVbseff/dVg, dVbseff/dVd (ngspice lines 1153-1155)
+    let t4_vbs_clamp = 0.5 * (1.0 + t2_vbseff / t3_vbseff);
+    let dvbseff_dvg = t4_vbs_clamp * dvbsmos_dvg;
+    let dvbseff_dvd = t4_vbs_clamp * dvbsmos_dvd;
+
     // ========== Main MOSFET equations (same structure as PD) ==========
     let phis = phi - vbseff;
     let sqrt_phis = phis.abs().sqrt();
@@ -1342,19 +1378,34 @@ pub fn bsim3soi_fd_companion(
     let vgst_nvt = vgst / t10;
     let exp_arg = (2.0 * sp.voff - vgst) / t10;
 
+    // Chain-rule correction: Vgsteff depends on Vbseff, which depends on Vg/Vd.
+    // ngspice b3soifdld.c lines 1322-1326, 1339-1342, 1379-1383:
+    //   T0 = -dVth_dVb
+    //   dVgsteff_dVg += T0 * dVbseff_dVg
+    //   dVgsteff_dVd += T0 * dVbseff_dVd
+    let t0_chain = -dvth_dvb; // dVth/dVbseff, used for Vbseff coupling
+
     let (vgsteff, dvgsteff_dvg, dvgsteff_dvd, dvgsteff_dvb) = if vgst_nvt > EXP_THRESHOLD {
-        (vgst, dvgs_eff_dvg, -dvth_dvd, -dvth_dvb)
+        (
+            vgst,
+            dvgs_eff_dvg + t0_chain * dvbseff_dvg,
+            -dvth_dvd + t0_chain * dvbseff_dvd,
+            -dvth_dvb,
+        )
     } else if exp_arg > EXP_THRESHOLD {
         let t0 = (vgst - sp.voff) / (n * vtm);
         let exp_vgst = t0.exp();
         let vgsteff_val = vtm * sp.cdep0 / cox * exp_vgst;
         let t3 = vgsteff_val / (n * vtm);
-        let t1 = -t3 * (dvth_dvb + t0 * vtm * dn_dvb);
+        let t1_vb = -t3 * (dvth_dvb + t0 * vtm * dn_dvb);
+        // ngspice line 1339: T1 = t3*dVgs_eff_dVg + T1_coeff*dVbseff_dVg
+        // where T1_coeff ≈ t0_chain * t3 (derived from chain rule)
+        let t1_chain = t0_chain * t3;
         (
             vgsteff_val,
-            t3 * dvgs_eff_dvg,
-            -t3 * (dvth_dvd + t0 * vtm * dn_dvd),
-            t1,
+            t3 * dvgs_eff_dvg + t1_chain * dvbseff_dvg,
+            -t3 * (dvth_dvd + t0 * vtm * dn_dvd) + t1_chain * dvbseff_dvd,
+            t1_vb,
         )
     } else {
         let exp_vgst = vgst_nvt.exp();
@@ -1372,12 +1423,16 @@ pub fn bsim3soi_fd_companion(
 
         let vgsteff_val = t1 / t2_val;
         let t3 = t2_val * t2_val;
-        let t4 = (t2_val * dt1_dvb - t1 * dt2_dvb) / t3;
+        let t4_vb = (t2_val * dt1_dvb - t1 * dt2_dvb) / t3;
+        let base_dvg = (t2_val * dt1_dvg - t1 * dt2_dvg) / t3;
+        let base_dvd = (t2_val * dt1_dvd - t1 * dt2_dvd) / t3;
+        // ngspice line 1382-1383: add chain-rule correction
+        let t4_chain = t0_chain * base_dvg;
         (
             vgsteff_val,
-            (t2_val * dt1_dvg - t1 * dt2_dvg) / t3 * dvgs_eff_dvg,
-            (t2_val * dt1_dvd - t1 * dt2_dvd) / t3,
-            t4,
+            base_dvg * dvgs_eff_dvg + t4_chain * dvbseff_dvg,
+            base_dvd + t4_chain * dvbseff_dvd,
+            t4_vb,
         )
     };
 
@@ -1843,8 +1898,9 @@ pub fn bsim3soi_fd_companion(
 
     // Final Gm, Gds, Gmbs (ngspice b3soifdld.c lines 2112-2114)
     // FD: Gmc = 0 (no Vcs cross-terms)
-    let gm = gm0 * dvgsteff_dvg;
-    let gds = gm0 * dvgsteff_dvd + gds0;
+    // Include Gmb0 * dVbseff coupling: Vbseff depends on Vg/Vd in FD SOI
+    let gm = gm0 * dvgsteff_dvg + gmbs0 * dvbseff_dvg;
+    let gds = gm0 * dvgsteff_dvd + gmbs0 * dvbseff_dvd + gds0;
     // FD floating body: dIds/dVb = 0 because Vbsdio = Vbs0eff is independent of Vb
     // (dVbsdio/dVb = 0, see b3soifdld.c line 1095)
     // FD: dVbseff_dVb is not tracked (floating body sets gmbs=0; non-floating rare)
