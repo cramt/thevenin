@@ -790,7 +790,8 @@ impl Bsim3SoiPdModel {
 
         // Series resistance
         let rds0 = if self.rdsw > 0.0 {
-            (self.rdsw + self.prt * t_ratio_minus1) / weff.powf(self.wr) * 1e-6 // Convert from Ohm·µm to Ohm
+            // ngspice b3soipdtemp.c: rds0 = (rdsw + prt*T0) / pow(weff*1e6, wr)
+            (self.rdsw + self.prt * t_ratio_minus1) / (weff * 1e6).powf(self.wr)
         } else {
             0.0
         };

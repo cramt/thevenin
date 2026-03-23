@@ -3439,3 +3439,112 @@ because its 2-line R matrix has a much smaller off-diagonal-to-diagonal ratio
   evaluation order through the eigendecomposition → polynomial → Padé pipeline
 
 **No regressions:** All 423 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Applied fix: BSIM3SOI rds0 wr exponent correction (2026-03-23)
+
+**Affected models:** BSIM3SOI-DD, BSIM3SOI-FD, BSIM3SOI-PD
+
+**Root cause:** The series resistance `rds0` computation used incorrect exponents
+for the `wr` (width dependence of parasitic resistance) parameter:
+
+In ngspice (`b3soiddtemp.c`, `b3soifdtemp.c`, `b3soipdtemp.c`):
+```c
+rds0denom = pow(weff * 1E6, wr);
+rds0 = (rdsw + prt * T0) / rds0denom;
+```
+
+**FD variant bug:** Used `1/wr` instead of `wr`:
+```rust
+let wr2 = 1.0 / self.wr;  // WRONG
+let rds0denom = (weff * 1e6).powf(wr2);
+```
+Fixed to: `(weff * 1e6).powf(self.wr)`.
+
+**DD and PD variant bug:** The `1e6` scaling factor was outside the `powf` call:
+```rust
+(rdsw + prt * T0) / weff.powf(self.wr) * 1e-6  // WRONG for wr != 1
+```
+For `wr=1`: `1/weff * 1e-6 = 1/(weff*1e6)` — correct (coincidentally).
+For `wr=2`: `1/weff² * 1e-6 ≠ 1/(weff*1e6)² = 1/(weff²*1e12)` — factor of 1e6 error!
+Fixed to: `(rdsw + prt * T0) / (weff * 1e6).powf(self.wr)`.
+
+**Impact:** Dormant for all current test circuits (WR=1 default). Would cause severe
+series resistance errors for circuits specifying WR≠1 (e.g., WR=0.5 for narrow devices
+where parasitic resistance scales sub-linearly with width).
+
+**No regressions:** All 423 non-ignored tests pass.  Clippy clean.
+
+---
+
+## Comprehensive re-investigation: all 37 remaining tests intractable (2026-03-23)
+
+Performed a fresh comprehensive investigation of all 37 remaining ignored tests with
+new analysis approaches.  Conclusion: no tests can be fixed without major architectural
+changes.
+
+### VBIC self-heating (4 tests): thermal node stamping verified
+
+Detailed comparison of the VBIC thermal node stamping against ngspice `vbicload.c`
+lines 1410-1460.  ngspice stamps the FULL thermal Jacobian including:
+- `Ith_Vrth` on the thermal diagonal (dIth/dVrth coupling)
+- ALL 15 cross-derivatives (`Ith_Vbei`, `Ith_Vbci`, `Ith_Vcei`, etc.) in the thermal
+  row, coupling the thermal node to every electrical node
+- Full Norton equivalent: `rhs = -Ith - Ith_Vrth*Vrth - sum(Ith_Vx*Vx)`
+
+Our code only stamps `1/RTH` on diagonal and `+Ith` on RHS (simplified stamp).
+
+**Mathematical verification:** At convergence, both stamps produce the same equation
+`Vrth/RTH = Ith`.  The cross-derivatives only affect NR convergence speed, not the
+converged solution.  This was confirmed by previous attempts to add the full Jacobian
+(which had zero effect on accuracy).
+
+**Temperature path verification:** Confirmed that our single-step scaling (TNOM →
+TNOM+Vrth) is mathematically identical to ngspice's two-step process (vbictemp: TNOM →
+TAMB, kernel: TAMB → TAMB+Vrth) when TAMB=TNOM.  The kernel's `Tini = 273.15 + p[0]`
+where `p[0] = TAMB`, giving `rT = Tdev/Tini = (TAMB+Vrth)/(TAMB)`.  When TAMB=TNOM,
+this equals our `rT = (TNOM+Vrth)/TNOM`.
+
+**Error magnitude analysis:** The 0.205% FO error at Vc=2.2V represents ~39% of the
+total self-heating contribution at that point (Vrth ≈ 0.034K, ΔIc/Ic ≈ 0.52%).  This
+is far too large for FP rounding differences (~1 ULP through the thermal feedback).
+Despite this, exhaustive comparison of all formulas, constants, and parameters has found
+no code-level difference.  The root cause remains unidentified.
+
+### BSIM3SOI-FD (3 tests): all DC function values verified
+
+Exhaustive line-by-line comparison of the BSIM3SOI-FD drain current (Ids) computation
+against ngspice `b3soifdld.c`.  ALL DC function value computations match exactly:
+
+- **Abulk/Abeff** (Xcsat blending): ✓
+- **ueff** (mobility, all three mobMod cases): ✓
+- **Vgsteff** (effective gate overdrive, all branches): ✓
+- **Vdsat** (drain saturation voltage): ✓
+- **Vdseff** (smooth saturation clamp): ✓
+- **fgche1/fgche2** (channel conductance): ✓
+- **Ids** (drain current formula): ✓
+- **Va** (Early voltage: Vasat, VACLM, VADIBL): ✓
+- **Vth** (threshold voltage, all terms including DeltVthtemp, Delt_vth, DeltVthw): ✓
+- **n** (subthreshold swing factor): ✓
+- **Vbseff** (effective body-source voltage, full clamp chain): ✓
+
+The ~2.8% excess current in FD t5 corresponds to ~1.6mV Vth offset.  Despite checking
+every formula in the entire Vbs0t → Vbs0 → Vbs0mos → Vthfd → Vbs0eff → Vbsdio →
+Vbsmos → Vbseff → Vth chain, no discrepancy was found.
+
+### Classification (unchanged)
+
+| Category | Tests | Status |
+|---|---|---|
+| VBIC self-heating FP | 4 | 0.2-1.2% error, verified same-solution stamps |
+| VBIC NR convergence | 1 | timeout, needs source/gmin stepping |
+| Transmission line | 5 | 0.8-5.8% error, MOSFET/line interaction |
+| BJT junction cap | 2 | 4.1-31% error, needs voltage-dependent charge |
+| Level 2 MOSFET | 1 | 35% error, needs model implementation |
+| HFET bistable | 1 | wrong DC OP, needs source stepping |
+| Sensitivity LU | 1 | 47× error, needs analytical sensitivity |
+| BSIM3SOI | 15 | 1.1-5.6% error, multiple compensating bugs |
+| Missing subsystems | 5 | BSIM1/2, .control, TEMPER, param expressions |
+| No reference | 1 | ngspice says "To be done" |
+| Timeout | 2 | fourbitadder ×2 |

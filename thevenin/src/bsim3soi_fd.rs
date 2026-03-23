@@ -816,8 +816,8 @@ impl Bsim3SoiFdModel {
         let vsattemp = self.vsat - self.at * temp_ratio_minus1;
 
         // Series resistance
-        let wr2 = 1.0 / self.wr;
-        let rds0denom = (weff * 1e6).powf(wr2);
+        // ngspice b3soifdtemp.c: rds0denom = pow(weff * 1e6, wr)
+        let rds0denom = (weff * 1e6).powf(self.wr);
         let rds0 = (self.rdsw + self.prt * temp_ratio_minus1) / rds0denom;
 
         // ua/ub/uc with temperature
