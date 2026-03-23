@@ -795,6 +795,7 @@ impl DeviceVoltageState {
                     &mut system.matrix,
                     &mut system.rhs,
                     vbic,
+                    &model,
                     &comp,
                     vbei,
                     vbex,

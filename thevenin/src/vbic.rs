@@ -1723,7 +1723,7 @@ pub fn stamp_vbic(
     // Delegate to the full stamping function with zero voltages.
     // This gives correct matrix stamps; RHS will only contain the raw currents.
     stamp_vbic_with_voltages(
-        matrix, rhs, inst, comp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        matrix, rhs, inst, &inst.model, comp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
     );
 }
 
@@ -1731,11 +1731,16 @@ pub fn stamp_vbic(
 ///
 /// This is the proper stamping function that takes operating point voltages
 /// to compute the Norton equivalent current sources for the RHS.
+///
+/// `model` is the temperature-adjusted model (including self-heating if active).
+/// External resistance stamps use `model.*_t` to ensure the correct
+/// temperature-dependent conductances when self-heating is active.
 #[expect(clippy::too_many_arguments)]
 pub fn stamp_vbic_with_voltages(
     matrix: &mut crate::SparseMatrix,
     rhs: &mut [f64],
     inst: &VbicInstance,
+    model: &VbicModel,
     comp: &VbicCompanion,
     vbei: f64,
     vbex: f64,
@@ -1747,7 +1752,7 @@ pub fn stamp_vbic_with_voltages(
     vrbp: f64,
     vbcp: f64,
 ) {
-    let sign = inst.model.vbic_type.sign();
+    let sign = model.vbic_type.sign();
     let scale = inst.m * inst.area;
 
     let bi = inst.base_bi_idx;
@@ -1962,23 +1967,23 @@ pub fn stamp_vbic_with_voltages(
     // -----------------------------------------------------------------
     // 11. External resistances
     // -----------------------------------------------------------------
-    if inst.model.rcx > 0.0 && inst.model.rcx_t > 0.0 {
-        let g = scale / inst.model.rcx_t;
+    if model.rcx > 0.0 && model.rcx_t > 0.0 {
+        let g = scale / model.rcx_t;
         crate::stamp_conductance(matrix, c_ext, cx, g);
     }
 
-    if inst.model.rbx > 0.0 && inst.model.rbx_t > 0.0 {
-        let g = scale / inst.model.rbx_t;
+    if model.rbx > 0.0 && model.rbx_t > 0.0 {
+        let g = scale / model.rbx_t;
         crate::stamp_conductance(matrix, b_ext, bx, g);
     }
 
-    if inst.model.re > 0.0 && inst.model.re_t > 0.0 {
-        let g = scale / inst.model.re_t;
+    if model.re > 0.0 && model.re_t > 0.0 {
+        let g = scale / model.re_t;
         crate::stamp_conductance(matrix, e_ext, ei, g);
     }
 
-    if inst.model.rs > 0.0 && inst.model.rs_t > 0.0 {
-        let g = scale / inst.model.rs_t;
+    if model.rs > 0.0 && model.rs_t > 0.0 {
+        let g = scale / model.rs_t;
         crate::stamp_conductance(matrix, s_ext, si, g);
     }
 }

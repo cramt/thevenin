@@ -3729,3 +3729,36 @@ to 0 (giving a triangle wave).  The stale expected output cannot be matched
 by either ngspice or thevenin with current PULSE defaults.
 
 **Verification:** All 572 existing tests pass with no regressions.
+
+---
+
+## Applied fix: VBIC external resistance self-heating temperature adjustment (2026-03-23)
+
+**Affected code:** `stamp_vbic_with_voltages()` in `vbic.rs`, AC stamping in `ac.rs`
+
+**Root cause:** When self-heating is active (RTH > 0), the VBIC device stamps
+are computed using a temperature-adjusted model clone (`model`) that accounts
+for the Vrth thermal voltage.  However, the external resistance conductance
+stamps (RCX, RBX, RE, RS) inside `stamp_vbic_with_voltages()` and in the AC
+analysis were using `inst.model.*_t` (the ambient-temperature model) instead
+of the self-heating-adjusted model.  This means the MNA matrix had incorrect
+external resistance conductances when:
+1. Self-heating is active (RTH > 0), AND
+2. Resistance temperature coefficients are non-zero (e.g., XRCX, XRBX ≠ 0)
+
+**Fix applied:**
+1. Added `model: &VbicModel` parameter to `stamp_vbic_with_voltages()` so the
+   caller can pass the temperature-adjusted model.
+2. Changed external resistance stamps from `inst.model.*_t` to `model.*_t`.
+3. Updated the `stamp_vbic()` wrapper to pass `&inst.model` (unchanged for
+   non-self-heating callers).
+4. Updated `device_stamp.rs` to pass `&model` (the self-heating clone).
+5. Updated `ac.rs` to use the already-computed self-heating-adjusted `model`
+   for external resistance stamps.
+
+**Impact:** Dormant for all current VBIC test circuits because they use default
+XR=0 temperature exponents (making R_T = R regardless of temperature).  The
+bug would cause incorrect external resistance values for circuits specifying
+non-zero XRCX, XRBX, XRE, or XRS with self-heating active.
+
+**No regressions:** All 572 non-ignored tests pass.  Clippy clean.

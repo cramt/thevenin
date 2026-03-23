@@ -641,18 +641,19 @@ pub fn stamp_ac_devices(
             stamp_vccs(&mut sys.real, bx, bi, bi, ci, s * comp.dirbi_dvbci);
         }
 
-        // External resistances
-        if vbic.model.rcx > 0.0 && vbic.model.rcx_t > 0.0 {
-            crate::stamp_conductance(&mut sys.real, vbic.coll_idx, cx, s / vbic.model.rcx_t);
+        // External resistances — use self-heating-adjusted model so that
+        // resistance temperature coefficients (XR parameters) are correct.
+        if model.rcx > 0.0 && model.rcx_t > 0.0 {
+            crate::stamp_conductance(&mut sys.real, vbic.coll_idx, cx, s / model.rcx_t);
         }
-        if vbic.model.rbx > 0.0 && vbic.model.rbx_t > 0.0 {
-            crate::stamp_conductance(&mut sys.real, vbic.base_idx, bx, s / vbic.model.rbx_t);
+        if model.rbx > 0.0 && model.rbx_t > 0.0 {
+            crate::stamp_conductance(&mut sys.real, vbic.base_idx, bx, s / model.rbx_t);
         }
-        if vbic.model.re > 0.0 && vbic.model.re_t > 0.0 {
-            crate::stamp_conductance(&mut sys.real, vbic.emit_idx, ei, s / vbic.model.re_t);
+        if model.re > 0.0 && model.re_t > 0.0 {
+            crate::stamp_conductance(&mut sys.real, vbic.emit_idx, ei, s / model.re_t);
         }
-        if vbic.model.rs > 0.0 && vbic.model.rs_t > 0.0 {
-            crate::stamp_conductance(&mut sys.real, vbic.subs_idx, si, s / vbic.model.rs_t);
+        if model.rs > 0.0 && model.rs_t > 0.0 {
+            crate::stamp_conductance(&mut sys.real, vbic.subs_idx, si, s / model.rs_t);
         }
 
         // Capacitances (imaginary part) — total charge derivatives including transit time
