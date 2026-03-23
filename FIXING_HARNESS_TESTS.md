@@ -3110,3 +3110,99 @@ The fix worsens ALL DD tests, confirming the documented compensating bug
 interaction.  Reverted.  The BSIM3SOI-FD model already has the correct
 vfbb sign (fixed in a prior session).
 - Timeout (2 tests): fourbitadder complexity
+
+---
+
+## Applied fix: CPL polint Neville tableau path correction (2026-03-22)
+
+**Affected tests:** `harness_transmission_cpl3_4_line`, `harness_transmission_cpl_ibm2`
+
+**Root cause:** The `polint` polynomial interpolation function (Neville's algorithm,
+ported from Numerical Recipes) had an off-by-one error in the Neville descent path.
+After reading `ya[ns]` (the initial closest-point value), the code incremented `ns`
+with `ns += 1` (line 594, comment: "1-based for Neville descent").
+
+In ngspice's 1-based implementation (`cplsetup.c` line 682), `*y = ya[ns--]` reads
+the value then post-decrements `ns`.  In our 0-based Rust, after `y = ya[ns]`, the
+0-based `ns` already equals the C post-decremented value — no adjustment is needed.
+The `ns += 1` made `ns` one too large, causing:
+
+1. The branch condition `2 * ns < n - m` was biased toward the `d` (else) branch
+2. When the `c` branch was taken, `c[ns]` read one element too far right
+3. When the `d` branch was taken, `d[ns-1]` read one element too far right
+
+This corrupted the polynomial coefficients produced by `poly_match`, which propagated
+through the Padé approximation pipeline (`approx_mode` → `generate_siv`/`generate_iwi_iwv`
+→ `pade_apx` → `find_roots` → `get_c`) to produce incorrect h1t/h2t/h3t pole/residue
+values.
+
+**Fix applied:** Removed `ns += 1` on line 594.  The 0-based `ns` is already correct
+after reading `ya[ns]`.
+
+**Impact on tests:**
+
+| Test | Before | After | Change |
+|---|---|---|---|
+| `cpl3_4_line` | ~0.57% V(2) at t=21.1ns | ~1.0% V(2) at t=19.7ns | Worse |
+| `cpl_ibm2` | ~5.3% at t=7.75ns | ~6.4% at t=9.65ns | Worse |
+
+The fix is correct (matches ngspice's Neville algorithm exactly), but exposes a
+**compensating bug** elsewhere in the CPL code.  Exhaustive line-by-line comparison
+of all setup functions (`loop_zy`, `eval_si_si_1`, `store_si_sv_1`, `eval_frequency`,
+`poly_match`, `approx_mode`, `generate_siv`, `generate_iwi_iwv`, `pade_apx`,
+`find_roots`, `get_c`, `mult_p`, `matrix_p_mult`, `rotate`, `diag`, `gaussian_elimination`)
+and all transient execution functions (`prepare_cpl_transient`, `apply_cpl_transient`,
+`update_cnv_cpl`, `update_cnv_a_cpl`, `update_delayed_cnv_cpl`, `get_pvs_vi`) confirmed
+they match ngspice exactly.  The compensating bug could not be identified.
+
+**Possible remaining differences:**
+- Jacobi rotation tie-breaking order (Rust `Vec::sort_by` vs ngspice linked-list
+  insertion sort) — different paths through equal-magnitude off-diagonal elements
+- Subtle FP evaluation order in polynomial coefficient fitting (accumulated rounding
+  through the `poly_match` → `approx_mode` pipeline)
+- An unidentified difference in the Padé coefficient computation that only manifests
+  with certain polynomial input patterns
+
+**No regressions:** All 422 non-ignored tests pass.  Clippy clean.
+The polint fix is kept because correctness over test scores — the wrong Neville path
+was masking the real compensating bug, which must be found and fixed independently.
+
+---
+
+## Comprehensive investigation: all 37 remaining tests intractable (2026-03-22)
+
+Fresh investigation of all 37 remaining ignored tests with new approaches:
+
+### CPL transmission lines (2 tests, no MOSFETs — most tractable category)
+
+Exhaustive line-by-line comparison of ALL CPL code against ngspice's `cplsetup.c`
+and `cplload.c`.  Every function matches exactly (see polint section above for list).
+The coupling matrix assignment vs accumulation difference (ngspice uses `=` for h3t/h2t
+mode coupling, Rust uses `+=`) was investigated but found to be irrelevant — the `ext`
+flag (extended timestep coupling) is always false for these test circuits because the
+timestep (200ps) is smaller than the mode delays (~1ns).
+
+The remaining error is from the compensating bug exposed by the polint fix, which
+cannot be identified by code comparison alone — it may be in FP evaluation order
+through the eigendecomposition → polynomial fitting → Padé approximation pipeline.
+
+### VBIC self-heating (4 tests — closest to passing numerically)
+
+| Test | Error | Over tolerance |
+|---|---|---|
+| CEamp | 0.201% at 1.479GHz | 0.62% above threshold |
+| FO | 0.205% at Vc=2.2V | 1.72% above threshold |
+| temp | 0.226% at Vb=0.57V | 13% above threshold |
+| FG | 0.234% at Vb=0.74V | 17% above threshold |
+
+All four are from the self-heating FP evaluation order difference.  No code-level
+bug found despite exhaustive comparison of all 91 parameter defaults, physical
+constants, temperature scaling formulas, and power computation.
+
+### All other categories (31 tests)
+
+All other categories remain as previously documented: BSIM3SOI (15 tests, compensating
+bugs), transmission lines with MOSFETs (3 tests, MOSFET driver timing), BJT transient
+(2 tests, constant junction cap), Level 2 MOSFET (1 test, missing features), HFET
+(1 test, source stepping needed), sensitivity (1 test, LU precision), missing subsystems
+(5 tests, BSIM1/2/.control/TEMPER), no reference (1 test), timeout (2 tests).

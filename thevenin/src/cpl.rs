@@ -591,7 +591,9 @@ fn polint(xa: &[f64], ya: &[f64], n: usize, x: f64) -> f64 {
     }
 
     let mut y = ya[ns];
-    ns += 1; // 1-based for Neville descent
+    // Note: ns is already correct for 0-based indexing.
+    // In ngspice (1-based), `*y = ya[ns--]` post-decrements ns.
+    // Our 0-based ns is already equivalent to the C post-decremented value.
     for m in 1..n {
         for i in 0..(n - m) {
             let ho = xa[i] - x;
