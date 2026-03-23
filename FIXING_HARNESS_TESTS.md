@@ -3816,5 +3816,40 @@ The test fails by the ABSOLUTE tolerance floor (1e-7), not the relative toleranc
 ### Classification (unchanged from session 2)
 
 All 37 remaining tests remain intractable without major architectural changes.
-No new bugs found in the VBIC temperature scaling or I-V computation — the
-kernel parameter mapping is verified identical to ngspice vbicload.c.
+The VBIC self-heating ~0.2% error is confirmed as FP evaluation order difference
+(temperature scaling formulas are mathematically identical to ngspice vbicload.c).
+
+### VBIC model equation bugs fixed (session 36)
+
+Deep term-by-term comparison of `vbic_companion()` vs ngspice `vbic_4T_et_cf_fj`
+found four bugs that don't affect the current test suite (dormant for default
+parameters) but are real correctness issues:
+
+1. **Ibep non-ideal emission coefficient**: Used NEN instead of NCN (p[39]) for
+   the parasitic B-E junction non-ideal current. The parasitic B-E mirrors the
+   main B-C junction, so it should use NCN. NEN=NCN=2 in all test models, so
+   no observable effect.
+
+2. **sgIf transit time**: Set to -1.0 when Ifi ≤ 0, but ngspice uses 0.0 (zeros
+   out ITF modulation in reverse-active mode, doesn't negate it). Would corrupt
+   mIf for circuits operating in reverse active with XTF > 0.
+
+3. **Ifp parasitic transport WSP parameter**: Missing WSP (portion of ICCP)
+   splitting. ngspice uses `Ifp = ISP*(WSP*exp(Vbep/NFP/Vt) + (1-WSP)*exp(Vbci/NFP/Vt) - 1)`.
+   Our code always used WSP=1.0 implicitly. Added full WSP support including
+   diccp_dvbci cross-derivative and Jacobian stamps.
+
+4. **VBBE breakdown formula**: Three errors: (a) Vbei sign was positive instead
+   of negative, (b) term was added to Ibe instead of subtracted, (c) missing
+   EBBEatT equilibrium offset. Only affects circuits with VBBE > 0 (breakdown
+   enabled, non-default).
+
+### Additional bugs identified but not yet fixed
+
+- **NKF exponent**: Base charge formula hardcodes NKF=0.5 (sqrt). Models with
+  NKF ≠ 0.5 (e.g., NKF=1/3) would compute qb incorrectly.
+- **Alternate qb formula (QBM ≠ 0)**: Uses simplified SGP-like formulation
+  instead of ngspice's generalized power law.
+- **Smooth depletion charge (AJ > 0)**: Sign of dv term is wrong and linear
+  correction term is missing. Only affects models with AJE/AJC > 0 (default
+  is -0.5, so standard branch is used).
