@@ -3722,11 +3722,16 @@ detected a "vacuous pass" — both expected and actual output filtered to empty.
 
 **Result:** The rc.cir test is no longer a vacuous pass — it now produces a
 data table and compares against the numeric values from the expected plot art.
-However, a ~35% numerical error remains because the expected output (rc.out)
-was generated with an older ngspice version that defaulted PULSE PW to TSTOP
-(giving a step response), while the current ngspice source code defaults PW
-to 0 (giving a triangle wave).  The stale expected output cannot be matched
-by either ngspice or thevenin with current PULSE defaults.
+
+**Update (2026-03-24):** Fixed the PULSE PW default from 0 to TSTOP in
+`waveform.rs`.  The rc.out reference was generated with the old ngspice
+default (PW=TSTOP), so our simulator must match that.  With this fix the
+waveform is now correct (step response, not triangle wave) and the error
+drops from ~35% to ~0.22%.  The remaining 0.22% gap at t=0.2 is from
+integration accuracy differences (trapezoidal/Backward Euler method
+transition at the PULSE breakpoint at t=0.1).  The `.plot` output precision
+(4 significant digits) contributes to the tight comparison.  All other PULSE
+tests explicitly specify PW so the default change has no effect.
 
 **Verification:** All 572 existing tests pass with no regressions.
 
@@ -3894,3 +3899,42 @@ passing tests.
 - Missing `uc*Vbseff` in dueff_dvg for mobMod==1
 - Missing `T2` factor in dueff_dvg for mobMod==3
 - Missing `Gme` (back-gate transconductance) entirely
+
+---
+
+## Applied fix: PULSE PW default changed from 0 to TSTOP (2026-03-24)
+
+**Affected code:** `waveform.rs` — `evaluate()` and `breakpoints()` functions.
+
+**Root cause:** When PULSE parameters are omitted (e.g., `PULSE(0 1)` in rc.cir),
+the default for PW (pulse width) was 0, producing a triangle wave.  The ngspice
+reference outputs were generated with the old default PW=TSTOP, which produces a
+step response.
+
+**Investigation of ngspice source:**
+- VSRC: after commit 7159d6aa4 (Feb 2026), VSRC defaults PW to 0
+- ISRC: still defaults PW to TSTOP (CKTfinalTime)
+- Before this commit, BOTH sources defaulted PW to TSTOP
+- The reference `.out` files predate this commit and used PW=TSTOP
+
+**Fix applied:** Changed two lines in `waveform.rs`:
+1. `evaluate()`: `opt(pw).unwrap_or(0.0)` → `opt(pw).unwrap_or(tran.tstop)`
+2. `breakpoints()`: same change
+
+**Impact on rc.cir:** Error drops from ~35% (wrong waveform) to ~0.22%
+(correct waveform, minor integration accuracy gap). No other test circuits
+use PULSE without specifying PW, so no other tests are affected.
+
+**VBIC investigation findings (2026-03-24):**
+Investigated whether VBIC FG/FO/temp tests (0.2-0.234% errors) can be fixed:
+- Self-heating IS fully implemented (contrary to vbic.rs comment)
+- Tested with self-heating forcibly disabled: error is 0.232% BELOW expected
+- With self-heating enabled: error is 0.234% ABOVE expected
+- **Conclusion:** ~0.23% error is in the base VBIC model, not self-heating.
+  Self-heating overcorrects (shifts from -0.23% to +0.23%).
+- Temperature scaling formulas, physical constants (kB, qe), and parameter
+  defaults all match ngspice vbictemp.c exactly.
+- Root cause appears to be in the companion evaluation or internal resistance
+  voltage drops — a ~60μV effective Vbe offset would explain the error.
+- This is extremely difficult to fix without finding the specific term that
+  differs.

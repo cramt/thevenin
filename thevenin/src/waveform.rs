@@ -36,7 +36,7 @@ pub fn evaluate(wf: &Waveform, t: f64, tran: &TranParams) -> f64 {
             opt(td).unwrap_or(0.0),
             opt(tr).unwrap_or(tran.tstep).max(tran.tstep),
             opt(tf).unwrap_or(tran.tstep).max(tran.tstep),
-            opt(pw).unwrap_or(0.0).max(0.0),
+            opt(pw).unwrap_or(tran.tstop).max(0.0),
             opt(per),
             t,
             tran.tstep,
@@ -300,7 +300,7 @@ pub fn breakpoints(wf: &Waveform, tran: &TranParams) -> Vec<f64> {
             let td_val = opt(td).unwrap_or(0.0);
             let tr_val = opt(tr).unwrap_or(tran.tstep).max(tran.tstep);
             let tf_val = opt(tf).unwrap_or(tran.tstep).max(tran.tstep);
-            let pw_val = opt(pw).unwrap_or(0.0).max(0.0);
+            let pw_val = opt(pw).unwrap_or(tran.tstop).max(0.0);
             let period = per
                 .as_ref()
                 .map(val)
