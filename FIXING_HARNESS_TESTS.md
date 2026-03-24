@@ -4132,3 +4132,65 @@ cannot break any currently passing test.
 
 All 35 remaining tests are genuinely intractable without major model or
 architectural changes.
+
+---
+
+### Session 45: Forward coupling investigation + BSIM3SOI-DD analysis (2026-03-24)
+
+**VBIC self-heating forward coupling (dIth/dV_electrical):**
+
+Identified that ngspice stamps forward coupling derivatives (`Ith_Vbei`,
+`Ith_Vbci`, `Ith_Vcei`, etc.) into the thermal row of the Jacobian (vbicload.c
+lines 1435-1464), while our code only includes the self-derivative (`dIth/dVrth`)
+and reverse coupling (`dI_branch/dVrth`).
+
+Attempted to implement forward coupling both analytically (using companion model
+conductances) and numerically (perturbing each branch voltage and recomputing
+companion + Ith).  Both approaches cause **singular matrix** errors during NR
+iteration.  Root cause: the sparse matrix solver (triplet→dense→faer) appears
+numerically sensitive to the additional off-diagonal entries in the thermal row,
+especially when the thermal node coupling is weak (low Vrth).
+
+A single-term experiment (only `dP/dVcei = scale*(Itzf-Itzr)`) converged
+successfully but produced **bit-identical results** to the version without forward
+coupling — confirming that the forward coupling affects only the NR convergence
+path, not the converged solution value.
+
+**Conclusion:** The 0.205% VBIC FO error is genuinely from FP evaluation order
+differences in the two-step temperature evaluation.  Forward coupling cannot fix
+this because the converged values satisfy `g_th*Vrth = Ith` regardless of the
+Jacobian quality.
+
+**BSIM3SOI-DD model comparison findings:**
+
+Thorough term-by-term comparison of the Rust companion function against ngspice
+b3soiddld.c revealed:
+
+1. **Impact ionization formula bug** (latent): Our enable condition checks
+   `alpha0 <= 0.0` but ngspice checks `(alpha1 + alpha0/Leff) <= 0.0`.  For the
+   test model (ALPHA0=0, ALPHA1=1.5), this incorrectly disables impact ionization.
+   However, with BETA0=20.5, the impact ionization current is exponentially
+   negligible (~1e-9 × Ids) at all test operating points, so fixing it would not
+   change any test results.
+
+2. **Gm/Gds/Gmbs cross-coupling terms missing**: The final transconductance
+   assembly omits `Gmb0 * dVbseff_dVg`, `Gmb0 * dVbseff_dVd`, and all
+   `Gmc * dVcs_*` cross-terms (b3soiddld.c lines 2148-2150).  These affect the
+   NR Jacobian but not the converged Ids value.  For the DD t5 test (single
+   MOSFET with external voltage sources), the Ids value is fully determined by
+   the device equations regardless of derivative accuracy.
+
+3. **vfbb sign error** (confirmed, still the root cause): The 0.201% error at
+   Vg=1.43V, Ve=4V is directly from the back-gate flat-band voltage sign
+   mismatch.  Fixing it requires simultaneously finding and fixing the
+   compensating bugs in the Vbs0→Vbseff body coupling chain.
+
+**Impact ionization: correct formula reference (for future fix):**
+```
+T2 = alpha1 + alpha0/Leff
+Vdsatii = EsatL * Vgsteff / (EsatL + Vgsteff * T0_aii)  // using aii/bii/cii/dii
+Vdseffii = Vdsatii - smooth_clip(Vdsatii - Vds)
+diffVdsii = Vds - Vdseffii
+Iii = T2 * diffVdsii * exp(-beta0/diffVdsii) * Ids
+```
+This affects both DD and FD variants (identical simplified formula in both).
