@@ -1133,8 +1133,29 @@ impl VbicModel {
         };
 
         // =====================================================================
-        // 6. Parasitic transport current
+        // 6. Parasitic base charge and transport current
         // =====================================================================
+        // qbp is shared between Iccp (parasitic transport) and Irbp (parasitic
+        // base resistance), so compute it first.
+        let (qbp, dqbp_dvbep, dqbp_dvbci) = if self.isp_t > 0.0 && self.ikp_t > 0.0 {
+            let arg_f = vbep / (self.nfp * vt);
+            let ef = safe_exp(arg_f);
+            let arg_x = vbci / (self.nfp * vt);
+            let ex = safe_exp(arg_x);
+            let wsp = self.wsp;
+            let ifp_val = self.isp_t * (wsp * ef + (1.0 - wsp) * ex - 1.0);
+            let difp_dvbep = self.isp_t * wsp / (self.nfp * vt) * ef;
+            let difp_dvbci = self.isp_t * (1.0 - wsp) / (self.nfp * vt) * ex;
+
+            let arg = 1.0 + 4.0 * ifp_val / self.ikp_t;
+            let sq = arg.max(0.0).sqrt();
+            let qbp_val = ((1.0 + sq) / 2.0).max(1e-12);
+            let inv_ikp_sq = if sq > 0.0 { 1.0 / (self.ikp_t * sq) } else { 0.0 };
+            (qbp_val, difp_dvbep * inv_ikp_sq, difp_dvbci * inv_ikp_sq)
+        } else {
+            (1.0, 0.0, 0.0)
+        };
+
         let (iccp, diccp_dvbep, diccp_dvbci, diccp_dvbcp) = if self.isp_t > 0.0 {
             // Ifp: ngspice vbicload.c line 3234:
             //   Ifp = ISP_T * (WSP*exp(Vbep/(NFP*Vt)) + (1-WSP)*exp(Vbci/(NFP*Vt)) - 1)
@@ -1152,19 +1173,6 @@ impl VbicModel {
             let irp = self.isp_t * (er - 1.0);
             let dirp_dvbcp = self.isp_t / (self.nfp * vt) * er;
 
-            let (qbp, dqbp_dvbep, dqbp_dvbci) = if self.ikp_t > 0.0 {
-                let arg = 1.0 + 4.0 * ifp / self.ikp_t;
-                let sq = arg.max(0.0).sqrt();
-                let qbp_val = (1.0 + sq) / 2.0;
-                let inv_ikp_sq = if sq > 0.0 { 1.0 / (self.ikp_t * sq) } else { 0.0 };
-                let dqbp_f = difp_dvbep * inv_ikp_sq;
-                let dqbp_c = difp_dvbci * inv_ikp_sq;
-                (qbp_val, dqbp_f, dqbp_c)
-            } else {
-                (1.0, 0.0, 0.0)
-            };
-
-            let qbp = qbp.max(1e-12);
             let iccp_val = (ifp - irp) / qbp;
             let diccp_dvbep_val = (difp_dvbep * qbp - (ifp - irp) * dqbp_dvbep) / (qbp * qbp);
             let diccp_dvbci_val = (difp_dvbci * qbp - (ifp - irp) * dqbp_dvbci) / (qbp * qbp);
@@ -1205,21 +1213,20 @@ impl VbicModel {
         };
 
         // --- Irbp: parasitic base resistance ---
-        // RBP is modulated by parasitic qbp
-        let (irbp, dirbp_dvrbp) = if self.rbp_t > 0.0 {
-            let defl = if self.isp_t > 0.0 && self.ikp_t > 0.0 {
-                let arg_f = vbep / (self.nfp * vt);
-                let ef = safe_exp(arg_f);
-                let ifp_val = self.isp_t * (ef - 1.0);
-                let q_arg = (1.0 + 4.0 * ifp_val / self.ikp_t).max(0.0).sqrt();
-                (1.0 + q_arg) / 2.0
-            } else {
-                1.0
-            };
-            let g = defl / self.rbp_t;
-            (vrbp * g, g)
+        // RBP is modulated by parasitic qbp (same qbp as Iccp).
+        // Irbp = Vrbp * qbp / RBP_t
+        // dIrbp/dVrbp = qbp / RBP_t
+        // dIrbp/dVbep = Vrbp / RBP_t * dqbp/dVbep  (cross-term)
+        // dIrbp/dVbci = Vrbp / RBP_t * dqbp/dVbci  (cross-term)
+        let (irbp, dirbp_dvrbp, dirbp_dvbep, dirbp_dvbci) = if self.rbp_t > 0.0 {
+            // Reuse qbp and derivatives from parasitic transport section.
+            // When ISP=0 or IKP=0, qbp=1 and derivatives are zero.
+            let g = qbp / self.rbp_t;
+            let d_bep = vrbp * dqbp_dvbep / self.rbp_t;
+            let d_bci = vrbp * dqbp_dvbci / self.rbp_t;
+            (vrbp * g, g, d_bep, d_bci)
         } else {
-            (0.0, 0.0)
+            (0.0, 0.0, 0.0, 0.0)
         };
 
         // =====================================================================
@@ -1404,6 +1411,8 @@ impl VbicModel {
             dirbi_dvbci,
             irbp,
             dirbp_dvrbp,
+            dirbp_dvbep,
+            dirbp_dvbci,
 
             // Depletion charges
             qbe,
@@ -1573,6 +1582,8 @@ pub struct VbicCompanion {
     // Parasitic base resistance current
     pub irbp: f64,
     pub dirbp_dvrbp: f64,
+    pub dirbp_dvbep: f64,
+    pub dirbp_dvbci: f64,
 
     // Depletion charges and capacitances (raw, for reference)
     pub qbe: f64,
@@ -1981,9 +1992,45 @@ pub fn stamp_vbic_with_voltages(
     }
 
     // -----------------------------------------------------------------
-    // 10. Irbp: BP -> CX, controlled by Vrbp
+    // 10. Irbp: BP -> CX, controlled by Vrbp, Vbep, Vbci (qbp cross-terms)
+    //     Matches ngspice vbicload.c lines 1224-1242.
     // -----------------------------------------------------------------
-    stamp_branch!(bp, cx, bp, cx, comp.dirbp_dvrbp, comp.irbp, vrbp);
+    {
+        // Primary control: Vrbp = V(BP) - V(CX)
+        let g_rbp = scale * comp.dirbp_dvrbp;
+        m_add(bp, bp, g_rbp);
+        m_add(bp, cx, -g_rbp);
+        m_add(cx, bp, -g_rbp);
+        m_add(cx, cx, g_rbp);
+
+        // Cross-term: dIrbp/dVbep (from qbp dependence on Vbep = V(BX) - V(BP))
+        let g_bep = scale * comp.dirbp_dvbep;
+        if g_bep.abs() > 0.0 {
+            m_add(bp, bx, g_bep);
+            m_add(bp, bp, -g_bep);
+            m_add(cx, bx, -g_bep);
+            m_add(cx, bp, g_bep);
+        }
+
+        // Cross-term: dIrbp/dVbci (from qbp dependence on Vbci = V(BI) - V(CI))
+        let g_bci = scale * comp.dirbp_dvbci;
+        if g_bci.abs() > 0.0 {
+            m_add(bp, bi, g_bci);
+            m_add(bp, ci, -g_bci);
+            m_add(cx, bi, -g_bci);
+            m_add(cx, ci, g_bci);
+        }
+
+        // RHS: -(Irbp - dIrbp/dVrbp*Vrbp - dIrbp/dVbep*Vbep - dIrbp/dVbci*Vbci)
+        let i_eq = sign
+            * scale
+            * (comp.irbp
+                - comp.dirbp_dvrbp * vrbp
+                - comp.dirbp_dvbep * vbep
+                - comp.dirbp_dvbci * vbci);
+        r_add(bp, -i_eq);
+        r_add(cx, i_eq);
+    }
 
     // -----------------------------------------------------------------
     // 11. External resistances
