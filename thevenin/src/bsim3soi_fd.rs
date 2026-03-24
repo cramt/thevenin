@@ -892,9 +892,10 @@ impl Bsim3SoiFdModel {
         let t0_tun = temp_ratio.powf(t7_tun);
         let jtun = self.istun * t0_tun;
 
-        // Diode widths
-        let wdios = weff * self.asd;
-        let wdiod = weff * self.asd;
+        // Diode widths: FD sets Ibs=Ibd=0 and IGIDL=0 (no junction currents),
+        // so these are only used if GIDL is ever enabled. ngspice FD has no wdios/wdiod.
+        let wdios = weff;
+        let wdiod = weff;
 
         // Overlap caps
         let cgso_eff = self.cgso.max(0.0);
@@ -1598,13 +1599,34 @@ pub fn bsim3soi_fd_companion(
 
         let ueff = sp.u0temp / denomi;
         let t9 = -ueff / denomi;
-        let dueff_dvg_raw = if model.mob_mod == 1 || model.mob_mod == 3 {
-            t9 * (sp.uatemp + 2.0 * sp.ubtemp * (vgsteff + vth + vth) / model.tox) / model.tox
+        // ngspice b3soifdld.c lines 1521-1557: full dDenomi derivatives
+        if model.mob_mod == 1 {
+            // mob_mod 1: T2 = ua + uc*Vbseff, T3 = (Vgsteff+2*Vth)/tox
+            let t0 = vgsteff + vth + vth;
+            let t2 = sp.uatemp + sp.uctemp * vbseff;
+            let t3 = t0 / model.tox;
+            let ddenomi_dvg = (t2 + 2.0 * sp.ubtemp * t3) / model.tox;
+            let ddenomi_dvd = ddenomi_dvg * 2.0 * dvth_dvd;
+            let ddenomi_dvb = ddenomi_dvg * 2.0 * dvth_dvb + sp.uctemp * t3;
+            (ueff, t9 * ddenomi_dvg, t9 * ddenomi_dvd, t9 * ddenomi_dvb)
+        } else if model.mob_mod == 2 {
+            // mob_mod 2: dDenomi/dVd = 0
+            let ddenomi_dvg = (sp.uatemp + sp.uctemp * vbseff
+                + 2.0 * sp.ubtemp * vgsteff / model.tox)
+                / model.tox;
+            let ddenomi_dvb = vgsteff * sp.uctemp / model.tox;
+            (ueff, t9 * ddenomi_dvg, 0.0, t9 * ddenomi_dvb)
         } else {
-            t9 * (sp.uatemp + sp.uctemp * vbseff + 2.0 * sp.ubtemp * vgsteff / model.tox)
-                / model.tox
-        };
-        (ueff, dueff_dvg_raw, 0.0, 0.0)
+            // mob_mod 0/3 (else): T2 = 1 + uc*Vbseff, T4 = T3*(ua+ub*T3)
+            let t0 = vgsteff + vth + vth;
+            let t2 = 1.0 + sp.uctemp * vbseff;
+            let t3 = t0 / model.tox;
+            let t4 = t3 * (sp.uatemp + sp.ubtemp * t3);
+            let ddenomi_dvg = (sp.uatemp + 2.0 * sp.ubtemp * t3) * t2 / model.tox;
+            let ddenomi_dvd = ddenomi_dvg * 2.0 * dvth_dvd;
+            let ddenomi_dvb = ddenomi_dvg * 2.0 * dvth_dvb + sp.uctemp * t4;
+            (ueff, t9 * ddenomi_dvg, t9 * ddenomi_dvd, t9 * ddenomi_dvb)
+        }
     };
 
     // Saturation voltage Vdsat

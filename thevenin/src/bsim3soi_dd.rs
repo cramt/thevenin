@@ -943,8 +943,10 @@ impl Bsim3SoiDdModel {
                 .exp();
         let jtun = self.istun;
 
-        let wdios = weff * self.asd;
-        let wdiod = weff * self.asd;
+        // ngspice DD uses weff directly for IGIDL (b3soiddld.c line 2222/2248),
+        // not wdios/wdiod. The DD model has no separate wdios/wdiod variables.
+        let wdios = weff;
+        let wdiod = weff;
 
         let lratio = if self.lbjt0 > 0.0 {
             (1.0 - leff / (leff + self.lbjt0)) / (1.0 + (self.ndif * leff / (leff + self.lbjt0)))
@@ -1602,13 +1604,32 @@ pub fn bsim3soi_dd_companion(
 
     let ueff = sp.u0temp / denomi;
     let t9 = -ueff / denomi;
-    let dueff_dvg = if model.mob_mod == 1 || model.mob_mod == 3 {
-        t9 * (sp.ua + 2.0 * sp.ub * (vgsteff + vth + vth) / model.tox) / model.tox
+    // ngspice b3soiddld.c: full dDenomi derivatives matching FD/PD patterns
+    let (dueff_dvg, dueff_dvd, dueff_dvb) = if model.mob_mod == 1 {
+        let t0 = vgsteff + vth + vth;
+        let t2 = sp.ua + sp.uc * vbseff;
+        let t3 = t0 / model.tox;
+        let ddenomi_dvg = (t2 + 2.0 * sp.ub * t3) / model.tox;
+        let ddenomi_dvd = ddenomi_dvg * 2.0 * dvth_dvd;
+        let ddenomi_dvb = ddenomi_dvg * 2.0 * dvth_dvb + sp.uc * t3;
+        (t9 * ddenomi_dvg, t9 * ddenomi_dvd, t9 * ddenomi_dvb)
+    } else if model.mob_mod == 2 {
+        let ddenomi_dvg = (sp.ua + sp.uc * vbseff
+            + 2.0 * sp.ub * vgsteff / model.tox)
+            / model.tox;
+        let ddenomi_dvb = vgsteff * sp.uc / model.tox;
+        (t9 * ddenomi_dvg, 0.0, t9 * ddenomi_dvb)
     } else {
-        t9 * (sp.ua + sp.uc * vbseff + 2.0 * sp.ub * vgsteff / model.tox) / model.tox
+        // mob_mod 0/3 (else)
+        let t0 = vgsteff + vth + vth;
+        let t2 = 1.0 + sp.uc * vbseff;
+        let t3 = t0 / model.tox;
+        let t4 = t3 * (sp.ua + sp.ub * t3);
+        let ddenomi_dvg = (sp.ua + 2.0 * sp.ub * t3) * t2 / model.tox;
+        let ddenomi_dvd = ddenomi_dvg * 2.0 * dvth_dvd;
+        let ddenomi_dvb = ddenomi_dvg * 2.0 * dvth_dvb + sp.uc * t4;
+        (t9 * ddenomi_dvg, t9 * ddenomi_dvd, t9 * ddenomi_dvb)
     };
-    let dueff_dvd = 0.0;
-    let dueff_dvb = 0.0;
 
     // Saturation voltage Vdsat
     let wvcox = weff_ch * sp.vsattemp * cox;

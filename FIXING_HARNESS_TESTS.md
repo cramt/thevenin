@@ -4419,8 +4419,62 @@ equation Vrth/RTH = Ith is satisfied regardless of Jacobian completeness.
 |----------|-------|--------|
 | VBIC self-heating FP | 4 | 0.2-3.3% error, confirmed intractable (FP eval order) |
 | BSIM3SOI-DD junction | 3 | Correct width fix applied, needs convergence improvement |
-| BSIM3SOI-FD body chain | 3 | 2.8-5.6% error, compensating bug in Abulk chain |
-| BSIM3SOI-PD | 3 | Convergence + 5.6% error |
+| BSIM3SOI-FD body chain | 3 | 0.54-7.1% error, all formulas verified identical; ~1.6mV Vth offset unidentified |
+| BSIM3SOI-PD | 3 | Convergence + 6.3% error; junction width corrected (weff*asd→weff) |
 | Transmission line FP | 4 | 0.8-6.4% error, eigendecomposition FP order |
 | General circuits | 4 | 4-35% error, various root causes |
 | Other | 14 | Missing features, timeouts, no reference |
+
+---
+
+## Applied fix: BSIM3SOI junction width and mobility derivatives
+
+**Affected models:** BSIM3SOI-DD, FD, PD (all three variants)
+
+### Junction width correction (DD, FD, PD)
+
+**Root cause:** The IGIDL width factor and (for PD) junction diode current width
+factor were computed as `weff * asd`, which is incorrect:
+
+- **DD model (ngspice b3soiddld.c line 2222):** uses `weff` directly for IGIDL.
+  The DD model has no separate `wdios`/`wdiod` variables.
+- **PD model (ngspice b3soipdtemp.c lines 181-182):** uses
+  `wdiod = weff / nseg + pdbcp` and `wdios = weff / nseg + psbcp`.
+  ASD is NOT used for junction current width — it controls the source/drain
+  bottom diffusion capacitance smoothing (b3soipdtemp.c line 862).
+- **FD model:** sets Ibs=Ibd=0 and IGIDL=0; wdios/wdiod are unused.
+
+With the test model cards (ASD=0.3, nseg=1 default, psbcp/pdbcp=0 default),
+this fix changes junction widths from `0.3 * weff` to `weff` — a 3.3× increase.
+
+**Impact:** For the PD t4 test (tied body), the fix has no measurable effect
+because junction currents are negligible compared to channel current at the
+failing operating point (Vg=0.44V). For PD t3/t5 (floating body), the tests
+still fail with NR non-convergence.
+
+### Mobility derivative correction (DD, FD, PD)
+
+**Root cause:** All three BSIM3SOI variants had identical derivative bugs in the
+mobility (ueff) computation:
+
+1. **Wrong branch for MOBMOD=0:** The derivative condition
+   `mob_mod == 1 || mob_mod == 3` skipped mob_mod=0, which falls through to
+   the mob_mod=2 derivative formula. But MOBMOD=0 uses the same value formula
+   as the "else" (mob_mod=3) branch.
+
+2. **Missing `T2` factor for mob_mod=3/0:** ngspice computes
+   `dDenomi_dVg = (ua + 2*ub*T3) * T2 / tox` where `T2 = 1 + uc*Vbseff`.
+   Our code omitted the `* T2` factor.
+
+3. **Missing `uc*Vbseff` for mob_mod=1:** ngspice computes
+   `dDenomi_dVg = (T2 + 2*ub*T3) / tox` where `T2 = ua + uc*Vbseff`.
+   Our code used just `ua`.
+
+4. **`dueff_dvd` and `dueff_dvb` hardcoded to 0:** ngspice computes:
+   - `dDenomi_dVd = dDenomi_dVg * 2 * dVth_dVd` (mob_mod 1 and 3)
+   - `dDenomi_dVb = dDenomi_dVg * 2 * dVth_dVb + uc * T3/T4`
+
+**Impact:** These are derivative-only bugs that do not change converged DC
+values in simple single-MOSFET test circuits (the NR converges to the same
+solution regardless of Jacobian accuracy). However, correct derivatives improve
+NR convergence reliability for complex circuits and transient analysis accuracy.
