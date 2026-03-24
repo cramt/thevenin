@@ -867,47 +867,62 @@ impl VbicModel {
             0.0
         };
 
-        let (qb, dqb_dvbei, dqb_dvbci) = if self.qbm == 0.0 {
-            // Smooth clamp q1 >= 1e-4, matching ngspice vbicload.c lines 3136-3140.
-            // This prevents numerical issues when q1z approaches zero from Early
-            // effect saturation.
-            let q1z_m = q1z - 1e-4;
-            let q1_denom = (q1z_m * q1z_m + 1e-8).sqrt();
-            let q1 = 0.5 * (q1_denom + q1z_m) + 1e-4;
-            let dq1_dq1z = 0.5 * (q1z_m / q1_denom + 1.0);
+        // Smooth clamp q1 >= 1e-4, matching ngspice vbicload.c lines 3136-3140.
+        // This is computed unconditionally before the QBM branch selection,
+        // matching the C code's control flow.
+        let q1z_m = q1z - 1e-4;
+        let q1_denom = (q1z_m * q1z_m + 1e-8).sqrt();
+        let q1 = 0.5 * (q1_denom + q1z_m) + 1e-4;
+        let dq1_dq1z = 0.5 * (q1z_m / q1_denom + 1.0);
+        let dq1_dvbei = dq1_dq1z * dq1z_dvbei;
+        let dq1_dvbci = dq1_dq1z * dq1z_dvbci;
 
-            // Chain-rule derivatives through the smooth clamp.
-            let dq1_dvbei = dq1_dq1z * dq1z_dvbei;
-            let dq1_dvbci = dq1_dq1z * dq1z_dvbci;
+        let (qb, dqb_dvbei, dqb_dvbci) = if self.qbm < 0.5 {
+            // Standard VBIC base charge (ngspice vbicload.c lines 3150-3179):
+            //   xvar3 = q1^(1/nkf), xvar1 = xvar3 + 4*q2
+            //   xvar4 = xvar1^nkf,  qb = 0.5*(q1 + xvar4)
+            // With default nkf=0.5 this simplifies to:
+            //   qb = 0.5*(q1 + sqrt(q1^2 + 4*q2))
+            let inv_nkf = 1.0 / self.nkf;
+            let xvar3 = q1.powf(inv_nkf);
+            let xvar1 = xvar3 + 4.0 * q2;
+            let xvar4 = xvar1.powf(self.nkf);
+            let qb_val = 0.5 * (q1 + xvar4);
 
-            // Standard VBIC base charge: qb = (q1 + sqrt(q1^2 + 4*q2)) / 2
-            let q1_sq = q1 * q1;
-            let arg = (q1_sq + 4.0 * q2).max(0.0);
-            let sqrt_arg = arg.sqrt();
-            let qb_val = 0.5 * (q1 + sqrt_arg);
-
-            // dqb/dvbei
-            let dsqrt_dvbei = if sqrt_arg > 0.0 {
-                (2.0 * q1 * dq1_dvbei + 4.0 * dq2_dvbei) / (2.0 * sqrt_arg)
+            // Derivatives via chain rule matching ngspice lines 3153-3179:
+            let dxvar3_dq1 = xvar3 * inv_nkf / q1;
+            let dxvar4_dxvar1 = if xvar1 > 0.0 {
+                xvar4 * self.nkf / xvar1
             } else {
                 0.0
             };
-            let dqb_dvbei_val = 0.5 * (dq1_dvbei + dsqrt_dvbei);
 
-            // dqb/dvbci
-            let dsqrt_dvbci = if sqrt_arg > 0.0 {
-                (2.0 * q1 * dq1_dvbci + 4.0 * dq2_dvbci) / (2.0 * sqrt_arg)
-            } else {
-                0.0
-            };
-            let dqb_dvbci_val = 0.5 * (dq1_dvbci + dsqrt_dvbci);
+            let dqb_dvbei_val = 0.5
+                * (dq1_dvbei
+                    + dxvar4_dxvar1 * (dxvar3_dq1 * dq1_dvbei + 4.0 * dq2_dvbei));
+            let dqb_dvbci_val = 0.5
+                * (dq1_dvbci
+                    + dxvar4_dxvar1 * (dxvar3_dq1 * dq1_dvbci + 4.0 * dq2_dvbci));
 
             (qb_val, dqb_dvbei_val, dqb_dvbci_val)
         } else {
-            // Alternate base charge formulation: qb = q1z*(1 + q2)
-            let qb_val = q1z * (1.0 + q2);
-            let dqb_dvbei_val = dq1z_dvbei * (1.0 + q2) + q1z * dq2_dvbei;
-            let dqb_dvbci_val = dq1z_dvbci * (1.0 + q2) + q1z * dq2_dvbci;
+            // Alternate base charge (ngspice vbicload.c lines 3181-3199):
+            //   xvar1 = 1 + 4*q2, xvar2 = xvar1^nkf
+            //   qb = 0.5*q1*(1 + xvar2)
+            let xvar1 = 1.0 + 4.0 * q2;
+            let xvar2 = xvar1.powf(self.nkf);
+            let qb_val = 0.5 * q1 * (1.0 + xvar2);
+
+            let dxvar2_dxvar1 = if xvar1 > 0.0 {
+                xvar2 * self.nkf / xvar1
+            } else {
+                0.0
+            };
+            let dqb_dvbei_val =
+                0.5 * ((1.0 + xvar2) * dq1_dvbei + q1 * dxvar2_dxvar1 * 4.0 * dq2_dvbei);
+            let dqb_dvbci_val =
+                0.5 * ((1.0 + xvar2) * dq1_dvbci + q1 * dxvar2_dxvar1 * 4.0 * dq2_dvbci);
+
             (qb_val, dqb_dvbei_val, dqb_dvbci_val)
         };
 
