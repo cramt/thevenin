@@ -714,12 +714,70 @@ pub fn stamp_ac_devices(
             stamp_imag_conductance(&mut sys.imag, vbic.base_idx, vbic.coll_idx, xqbco);
         }
 
-        // Self-heating thermal node: G_th + j*omega*CTH
+        // Self-heating thermal node: G_th + j*omega*CTH + charge-thermal cross-coupling
         if let Some(rth_idx) = vbic.rth_idx {
             let g_th = 1.0 / vbic.model.rth;
             sys.real.add(rth_idx, rth_idx, g_th);
             if vbic.model.cth > 0.0 {
                 sys.imag.add(rth_idx, rth_idx, omega * vbic.model.cth);
+            }
+
+            // Charge-thermal cross-coupling: j*omega * dQ/dVrth
+            // Matches ngspice vbicacld.c lines 494-515.
+            // Compute dQ/dVrth via numerical perturbation of temperature.
+            if vrth.abs() > 1e-20 || vbic.model.rth > 0.0 {
+                let delta = 1e-6; // 1μK temperature perturbation
+                let inv_delta = 1.0 / delta;
+
+                let mut model_pert = vbic.model.clone();
+                model_pert.temperature_adjust(vbic.t_ambient + vrth + delta);
+                let comp_pert = model_pert.companion(
+                    vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin,
+                );
+
+                let rth = Some(rth_idx);
+
+                // dQbe/dVrth: BI→EI
+                let dqbe_vrth = (comp_pert.qbe_total - comp.qbe_total) * inv_delta;
+                if dqbe_vrth.abs() > 0.0 {
+                    let xq = omega * s * dqbe_vrth;
+                    stamp_imag_conductance_col(&mut sys.imag, bi, ei, rth, xq);
+                }
+
+                // dQbex/dVrth: BX→EI
+                let dqbex_vrth = (comp_pert.qbex_total - comp.qbex_total) * inv_delta;
+                if dqbex_vrth.abs() > 0.0 {
+                    let xq = omega * s * dqbex_vrth;
+                    stamp_imag_conductance_col(&mut sys.imag, bx, ei, rth, xq);
+                }
+
+                // dQbc/dVrth: BI→CI
+                let dqbc_vrth = (comp_pert.qbc_total - comp.qbc_total) * inv_delta;
+                if dqbc_vrth.abs() > 0.0 {
+                    let xq = omega * s * dqbc_vrth;
+                    stamp_imag_conductance_col(&mut sys.imag, bi, ci, rth, xq);
+                }
+
+                // dQbcx/dVrth: BI→CX
+                let dqbcx_vrth = (comp_pert.qbcx_total - comp.qbcx_total) * inv_delta;
+                if dqbcx_vrth.abs() > 0.0 {
+                    let xq = omega * s * dqbcx_vrth;
+                    stamp_imag_conductance_col(&mut sys.imag, bi, cx, rth, xq);
+                }
+
+                // dQbep/dVrth: BX→BP
+                let dqbep_vrth = (comp_pert.qbep_total - comp.qbep_total) * inv_delta;
+                if dqbep_vrth.abs() > 0.0 {
+                    let xq = omega * s * dqbep_vrth;
+                    stamp_imag_conductance_col(&mut sys.imag, bx, bp, rth, xq);
+                }
+
+                // dQbcp/dVrth: SI→BP
+                let dqbcp_vrth = (comp_pert.qbcp_total - comp.qbcp_total) * inv_delta;
+                if dqbcp_vrth.abs() > 0.0 {
+                    let xq = omega * s * dqbcp_vrth;
+                    stamp_imag_conductance_col(&mut sys.imag, si, bp, rth, xq);
+                }
             }
         }
     }
@@ -1258,6 +1316,29 @@ pub fn stamp_imag_conductance(
     if let (Some(i), Some(j)) = (ni, nj) {
         matrix.add(i, j, -b);
         matrix.add(j, i, -b);
+    }
+}
+
+/// Stamp an imaginary cross-coupling term: a charge derivative controlled by
+/// a column node (e.g., thermal node) affecting current at branch np→nm.
+///
+/// Matches ngspice's `*(here->VBICnp_temp_Ptr + 1) += val`:
+///   matrix[np, col] += val
+///   matrix[nm, col] -= val
+fn stamp_imag_conductance_col(
+    matrix: &mut crate::SparseMatrix,
+    np: Option<usize>,
+    nm: Option<usize>,
+    col: Option<usize>,
+    val: f64,
+) {
+    if let Some(c) = col {
+        if let Some(p) = np {
+            matrix.add(p, c, val);
+        }
+        if let Some(m) = nm {
+            matrix.add(m, c, -val);
+        }
     }
 }
 

@@ -1243,7 +1243,7 @@ impl VbicModel {
             depletion_charge(vbcp, self.cjcp_t, self.ps_t, self.ms, self.ajs, self.fc);
 
         // External BE depletion charge (1-WBE fraction)
-        let (_qbex, cqbex) =
+        let (qbex, cqbex) =
             depletion_charge(vbex, self.cje_t, self.pe_t, self.me, self.aje, self.fc);
 
         // =====================================================================
@@ -1344,12 +1344,20 @@ impl VbicModel {
         } else {
             (0.0, 0.0)
         };
-        let _ = ifp_for_charge; // Ifp value used for charge only
         let cqbep_vbep = cqbep + self.tr * difp_dvbep_for_charge;
         let cqbep_vbci = 0.0; // Ifp doesn't depend on Vbci in 4T model
 
         // Qbcp = CJCP_t * qdbcp + CCSO * Vbcp
         let cqbcp_vbcp = cqbcp + self.ccso;
+
+        // Total charges for AC thermal cross-coupling (dQ/dVrth via numerical perturbation).
+        // Matches ngspice vbicload.c lines 3871-3924.
+        let qbe_total = qbe * self.wbe + tff * ifi / qb;
+        let qbex_total = qbex * (1.0 - self.wbe);
+        let qbc_total = qbc + self.tr * iri + self.qco * kbci;
+        let qbcx_total = self.qco * kbcx;
+        let qbep_total = qbep + self.tr * ifp_for_charge;
+        let qbcp_total = qbcp + self.ccso * vbcp;
 
         // Apply gmin stabilisation to junction currents (matches ngspice vbicload.c lines 756-771).
         // CKTgmin is added to each junction to prevent singular matrices and provide a numerical
@@ -1438,6 +1446,14 @@ impl VbicModel {
             itzf,
             itzr,
             qb,
+
+            // Total charges for AC thermal cross-coupling
+            qbe_total,
+            qbex_total,
+            qbc_total,
+            qbcx_total,
+            qbep_total,
+            qbcp_total,
         }
     }
 
@@ -1610,6 +1626,16 @@ pub struct VbicCompanion {
     pub itzf: f64,
     pub itzr: f64,
     pub qb: f64,
+
+    // Total charges for AC thermal cross-coupling (dQ/dVrth via numerical perturbation).
+    // These are the total charges at each junction including depletion + transit time,
+    // matching ngspice vbicload.c lines 3871-3924.
+    pub qbe_total: f64,   // CJE_t * qdbe * WBE + tff * Ifi / qb
+    pub qbex_total: f64,  // CJE_t * qdbex * (1-WBE)
+    pub qbc_total: f64,   // CJC_t * qdbc + TR * Iri + QCO * Kbci
+    pub qbcx_total: f64,  // QCO * Kbcx
+    pub qbep_total: f64,  // CJEP_t * qdbep + TR * Ifp
+    pub qbcp_total: f64,  // CJCP_t * qdbcp + CCSO * Vbcp
 }
 
 /// Resolved node indices for a VBIC instance in the MNA system.
