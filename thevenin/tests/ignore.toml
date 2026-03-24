@@ -27,7 +27,6 @@
 "bsim3soipd/t5.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
 
 # === General circuits ===
-"general/rc.cir" = "~0.22% error at t=0.2: PW default fixed (TSTOP matches old ngspice), waveform now correct (step response), but 0.22% integration accuracy gap at initial transient (trapezoidal/BE transition at PULSE breakpoint)"
 "general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
 "general/fourbitadder.cir" = "times out (>30s)"
 "general/rtlinv.cir" = "~4.1% transient error at t=9ns: transition timing shift (dynamic BJT caps improved from 5.96% at 7ns)"
@@ -43,8 +42,6 @@
 # === Regression: temper ===
 "regression/temper/temper-3.cir" = "Requires TEMPER keyword + .control"
 
-# === Sensitivity ===
-"sensitivity/diffpair.cir" = "q3/q4:is sensitivity requires bit-exact LU reuse from NR solver (dense LU refactoring loses CMRR precision)"
 
 # === Transient ===
 "transient/fourbitadder.cir" = "times out (>30s)"

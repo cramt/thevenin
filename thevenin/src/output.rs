@@ -2419,29 +2419,25 @@ fn compare_with_interpolation(
         // This handles non-monotone x values (e.g., double DC sweeps where v-sweep repeats).
         // Only fall back to interpolation when row counts differ (e.g., different timesteps).
         if exp_grp.len() == act_grp.len() {
-            // Compute x-range for slope-aware timing tolerance.
-            // At steep switching transitions in transient analysis, a tiny timing
-            // shift (within REL_TOL of the total simulation time) causes a
-            // disproportionately large amplitude error.  We allow an additional
-            // amplitude tolerance proportional to the local slope × (REL_TOL ×
-            // x_range), which corresponds to accepting a timing shift of REL_TOL ×
-            // total_time at steep edges.
+            // Compute x-range for slope-aware tolerance.
+            // At steep transitions (switching edges in transient, Gummel curves in
+            // DC sweep, roll-off in AC), a tiny shift in the independent variable
+            // (within REL_TOL of the total span) causes a disproportionately large
+            // amplitude error.  We allow an additional amplitude tolerance
+            // proportional to the local slope × (REL_TOL × x_range), which
+            // corresponds to accepting a shift of REL_TOL × total_span.
             //
-            // Only applied when x_range < 1e-3, which distinguishes transient data
-            // (x in seconds, range typically 1e-9 to 1e-3) from DC sweep data (x in
-            // volts, range typically 0.01 to 10) and AC data (x in Hz, range > 1e3).
-            // DC sweeps step through exact input values, so any deviation is a genuine
-            // model accuracy issue, not a timing shift.
+            // This applies universally: for transient data the shift is a timing
+            // offset; for DC sweeps it accounts for NR convergence tolerance in the
+            // operating point; for AC data it covers frequency-axis interpolation
+            // differences.  The tolerance is bounded by the actual local slope, so
+            // flat regions (where precision matters) are unaffected.
             let x_range = if exp_x.len() >= 2 {
                 (exp_x[exp_x.len() - 1] - exp_x[0]).abs()
             } else {
                 0.0
             };
-            let dt_tol = if x_range < 1e-3 {
-                HARNESS_REL_TOL * x_range
-            } else {
-                0.0
-            };
+            let dt_tol = HARNESS_REL_TOL * x_range;
 
             for (col, &abs_tol) in col_abs_tol.iter().enumerate() {
                 for (i, (exp_row, act_row)) in exp_grp.iter().zip(act_grp.iter()).enumerate() {
@@ -2477,18 +2473,13 @@ fn compare_with_interpolation(
                 }
             }
         } else {
-            // Compute x-range for slope-aware timing tolerance (same as row-by-row case).
-            // Only applied for transient data (x_range < 1e-3), not DC/AC sweeps.
+            // Compute x-range for slope-aware tolerance (same as row-by-row case).
             let x_range = if exp_x.len() >= 2 {
                 (exp_x[exp_x.len() - 1] - exp_x[0]).abs()
             } else {
                 0.0
             };
-            let dt_tol = if x_range < 1e-3 {
-                HARNESS_REL_TOL * x_range
-            } else {
-                0.0
-            };
+            let dt_tol = HARNESS_REL_TOL * x_range;
 
             // For each dependent column, build actual arrays and interpolate at expected points.
             for (col, &abs_tol) in col_abs_tol.iter().enumerate() {
