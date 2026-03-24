@@ -1952,15 +1952,16 @@ pub fn bsim3soi_dd_companion(
     } else {
         let t0 = vbs_i / nvtm1;
         let (exp_vbs, dexp) = soi_dexp(t0);
-        let t0_ws = sp.wdios * model.tsi * sp.jdif;
-        let ibs1 = t0_ws * (exp_vbs - 1.0);
-        let dibs1_dvb = t0_ws * dexp / nvtm1;
+        // ngspice b3soiddld.c line 2261/2333: WTsi = weff * tsi, T5 = WTsi * jdif
+        // DD uses weff (not wdios/wdiod) for junction current width
+        let wtsi_jdif = weff * model.tsi * sp.jdif;
+        let ibs1 = wtsi_jdif * (exp_vbs - 1.0);
+        let dibs1_dvb = wtsi_jdif * dexp / nvtm1;
 
         let t0 = vbd / nvtm1;
         let (exp_vbd, dexp) = soi_dexp(t0);
-        let t0_wd = sp.wdiod * model.tsi * sp.jdif;
-        let ibd1 = t0_wd * (exp_vbd - 1.0);
-        let dibd1_dvb = t0_wd * dexp / nvtm1;
+        let ibd1 = wtsi_jdif * (exp_vbd - 1.0);
+        let dibd1_dvb = wtsi_jdif * dexp / nvtm1;
         (ibs1, dibs1_dvb, ibd1, dibd1_dvb, -dibd1_dvb)
     };
 
@@ -1973,14 +1974,15 @@ pub fn bsim3soi_dd_companion(
         let (t10, t2) = soi_dexp(t0);
         let dt10_dvb = t2 / nvtmf;
 
-        let t3 = sp.wdios * model.tsi * sp.jrec;
-        let ibs2 = t3 * t10;
-        let dibs2_dvb = t3 * dt10_dvb;
+        // ngspice b3soiddld.c line 2376/2383: T8 = WTsi * jrec
+        let wtsi_jrec = weff * model.tsi * sp.jrec;
+        let ibs2 = wtsi_jrec * t10;
+        let dibs2_dvb = wtsi_jrec * dt10_dvb;
 
         let t0 = vbd / nvtmf;
         let (t10, t2) = soi_dexp(t0);
         let dt10_dvb = t2 / nvtmf;
-        let t3 = sp.wdiod * model.tsi * sp.jrec;
+        let t3 = wtsi_jrec;
         let ibd2 = t3 * t10;
         let dibd2_dvb = t3 * dt10_dvb;
         (ibs2, dibs2_dvb, ibd2, dibd2_dvb, -dibd2_dvb)
@@ -2016,13 +2018,14 @@ pub fn bsim3soi_dd_companion(
         let nvtm_tun = vtm * model.ntun;
         let t0 = -vbs_i / nvtm_tun;
         let (exp_val, dexp_val) = soi_dexp(t0);
-        let t3 = sp.wdios * model.tsi * sp.jtun;
-        let ibs4 = -t3 * (exp_val - 1.0);
-        let dibs4_dvb = t3 * dexp_val / nvtm_tun;
+        // ngspice b3soiddld.c line 2449: T5 = WTsi * jtun
+        let wtsi_jtun = weff * model.tsi * sp.jtun;
+        let ibs4 = -wtsi_jtun * (exp_val - 1.0);
+        let dibs4_dvb = wtsi_jtun * dexp_val / nvtm_tun;
 
         let t0 = -vbd / nvtm_tun;
         let (exp_val, dexp_val) = soi_dexp(t0);
-        let t3 = sp.wdiod * model.tsi * sp.jtun;
+        let t3 = wtsi_jtun;
         let ibd4 = -t3 * (exp_val - 1.0);
         let dibd4_dvb = t3 * dexp_val / nvtm_tun;
         (ibs4, dibs4_dvb, ibd4, dibd4_dvb, -dibd4_dvb)

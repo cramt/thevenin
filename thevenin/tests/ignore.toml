@@ -8,9 +8,9 @@
 # === BSIM3SOI-DD ===
 "bsim3soidd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
 "bsim3soidd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
-"bsim3soidd/t3.cir" = "~18% Ids error near threshold (BSIM3SOI-DD excess current bug exposed by vfb fix)"
-"bsim3soidd/t4.cir" = "~22% Ids error (BSIM3SOI-DD excess current bug exposed by vfb fix)"
-"bsim3soidd/t5.cir" = "~0.2% Ids error at Vg=1.43V (vfbb sign error in back-gate coupling; was ~1.1%, slope tolerance absorbed most; see FIXING_HARNESS_TESTS.md)"
+"bsim3soidd/t3.cir" = "NR non-convergence (junction width fix weff→wdios/wdiod corrected; body voltage equilibrium shifted, needs convergence improvement)"
+"bsim3soidd/t4.cir" = "NR non-convergence (junction width fix weff→wdios/wdiod corrected; body voltage equilibrium shifted, needs convergence improvement)"
+"bsim3soidd/t5.cir" = "NR non-convergence (junction width fix weff→wdios/wdiod corrected; was ~0.2% Ids error, body voltage equilibrium shifted, needs convergence improvement)"
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"

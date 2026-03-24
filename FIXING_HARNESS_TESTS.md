@@ -4354,3 +4354,73 @@ All 574 passing tests still pass; no regressions.
 require either coordinated multi-bug fixes (BSIM3SOI vfbb + body chain) or
 architectural changes (VBIC single-pass kernel, BJT analytical charge).
 No simple targeted fixes remain.
+
+---
+
+## Session 50: BSIM3SOI-DD junction width fix + VBIC forward coupling investigation
+
+### Applied fix: BSIM3SOI-DD junction current width scaling (bsim3soi_dd.rs)
+
+**Root cause:** The ngspice C source (`b3soiddld.c` line 2261) computes junction
+current width as `WTsi = pParam->B3SOIDDweff * model->B3SOIDDtsi` — using the
+effective channel width `weff` for ALL junction current components (diffusion,
+recombination, tunneling).
+
+The Rust code incorrectly used `sp.wdios * model.tsi` (source side) and
+`sp.wdiod * model.tsi` (drain side), where `wdios = weff * ASD` and
+`wdiod = weff * ASD`.  With the test model's `ASD = 0.3`, this made diffusion,
+recombination, and tunneling junction currents **0.3× too small** (3.3× error).
+
+Note: The BJT component (`Ibs3/Ibd3`) already used `weff` correctly.
+Note: The BSIM3SOI-PD variant correctly uses `wdios/wdiod` (matching its C source
+at `b3soipdld.c` line 1825-1826).  The BSIM3SOI-FD variant has no junction currents.
+
+**Impact:** The fix corrects a functional value error in junction currents.  However,
+the 3.3× increase in junction current magnitude shifts the floating body voltage
+equilibrium significantly, causing NR non-convergence on all DD floating-body tests
+(t3, t4, t5).  Previously these tests had numerical errors (0.2-22%); now they fail
+to converge entirely.  This is the correct junction width per the C reference — the
+convergence failure indicates the solver needs improvements (source stepping,
+better initial guess for body node) that are separate from the model equation fix.
+
+No regressions on the 574 passing tests.
+
+**Affected tests:**
+| Test | Before | After |
+|------|--------|-------|
+| bsim3soidd/t3 | ~18% Ids error | NR non-convergence |
+| bsim3soidd/t4 | ~22% Ids error | NR non-convergence |
+| bsim3soidd/t5 | ~0.2% Ids error | NR non-convergence |
+
+### Investigation: VBIC forward coupling stamps (reverted)
+
+Attempted to implement the missing forward coupling stamps (dIth/dV_j in the thermal
+row, ngspice vbicload.c lines 1435-1464).  These are the derivatives of thermal power
+with respect to each electrical junction voltage, stamped in the Jacobian's thermal row
+at each electrical node column.
+
+Computed all 13 derivatives analytically from the companion model's stored derivatives.
+The implementation matched ngspice's stamp pattern: `matrix[rth, np] += dIth/dVj`,
+`matrix[rth, nm] -= dIth/dVj`, `rhs[rth] += dIth/dVj * Vj`.
+
+**Result:** Caused NR non-convergence (singular matrix) on ALL VBIC self-heating tests,
+including the previously-passing `noise_scale_test`.  Reverted.
+
+**Analysis:** The forward coupling stamps add entries in the thermal row at many
+electrical node columns.  While mathematically correct (verified stamp pattern and
+sign convention against ngspice), the additional matrix entries may interact poorly
+with our matrix solver's pivoting or the NR convergence path.  The forward coupling
+only affects convergence speed (not converged values) since the thermal balance
+equation Vrth/RTH = Ith is satisfied regardless of Jacobian completeness.
+
+### Updated triage
+
+| Category | Count | Status |
+|----------|-------|--------|
+| VBIC self-heating FP | 4 | 0.2-3.3% error, confirmed intractable (FP eval order) |
+| BSIM3SOI-DD junction | 3 | Correct width fix applied, needs convergence improvement |
+| BSIM3SOI-FD body chain | 3 | 2.8-5.6% error, compensating bug in Abulk chain |
+| BSIM3SOI-PD | 3 | Convergence + 5.6% error |
+| Transmission line FP | 4 | 0.8-6.4% error, eigendecomposition FP order |
+| General circuits | 4 | 4-35% error, various root causes |
+| Other | 14 | Missing features, timeouts, no reference |
