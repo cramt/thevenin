@@ -1710,12 +1710,11 @@ pub fn bsim3soi_dd_companion(
         dvdsat_dvd - 0.5 * (dvdsat_dvd - 1.0 + t0 * (dvdsat_dvd - 1.0) + t3 * dvdsat_dvd);
     let dvdseff_dvb = dvdsat_dvb - 0.5 * (dvdsat_dvb + t0 * dvdsat_dvb + t3 * dvdsat_dvb);
 
-    let (vdseff, dvdseff_dvg, dvdseff_dvd, dvdseff_dvb) = if vdseff > vds_i {
-        // Clamped to vds_i: derivatives follow vds_i (dvd/dvd=1, rest=0)
-        (vds_i, 0.0_f64, 1.0_f64, 0.0_f64)
-    } else {
-        (vdseff, dvdseff_dvg, dvdseff_dvd, dvdseff_dvb)
-    };
+    // Clamp Vdseff to Vds but keep smooth-formula derivatives (matches
+    // ngspice b3soiddld.c:1840-1843 which only clamps the value, not the
+    // derivatives).  Preserving derivatives avoids a Jacobian discontinuity
+    // at the clamping boundary, improving NR convergence in the linear region.
+    let vdseff = if vdseff > vds_i { vds_i } else { vdseff };
     let diff_vds = vds_i - vdseff;
 
     // Vasat (saturation Early voltage)

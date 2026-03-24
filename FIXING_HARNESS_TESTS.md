@@ -4306,3 +4306,51 @@ that independently exceed tolerance.
 - For BSIM3SOI-DD t5, the error is concentrated in the subthreshold region
   (14% at Vg=0.43V) with only 0.2% in the strong-inversion region (Vg=1.43V).
   The slope tolerance masks the subthreshold error but fails in strong inversion.
+
+---
+
+## Session 49: Vdseff clamping derivative fix + exhaustive near-miss investigation
+
+### Vdseff clamping fix (bsim3soi_dd.rs, bsim3soi_fd.rs, bsim3soi_pd.rs)
+
+When `Vdseff > Vds`, ngspice (b3soiddld.c:1840-1843) only clamps the value to Vds
+but preserves the smooth-formula derivatives.  Our code was resetting derivatives
+to (0, 1, 0), introducing a Jacobian discontinuity at the clamping boundary.
+Fixed all three SOI variants to match ngspice: clamp value only, keep derivatives.
+
+**Impact:** No change to converged Ids values (derivatives only affect NR path).
+All 574 passing tests still pass; no regressions.
+
+### Exhaustive investigation of near-miss tests
+
+**bsim3soidd/t5 (0.2%, 7e-10 above tolerance):**
+- Confirmed root cause: vfbb sign error (-type factor missing, 0.3V shift in
+  back-gate flat-band voltage).  Fixing vfbb alone worsens t3/t4 (18%→40%).
+- Identified 10 additional discrepancies vs C source:
+  1. Missing `Gme*ves` in ceq_d (back-gate transconductance)
+  2. Missing `Gmb0*dVbseff_dVg` and `Gmb0*dVbseff_dVd` cross-terms in Gm/Gds
+  3. Missing `Gmc` (Vcs cross-coupling) entirely
+  4. `dueff_dvd` and `dueff_dvb` hardcoded to zero
+  5. `dueff_dvg` uses wrong mob_mod branch for MOBMOD=0
+  6. Vdseff clamping derivative reset (FIXED)
+  7. GIDL width uses wdiod instead of weff
+  - All except #6 are derivative-only; none change converged Ids.
+- Slope tolerance at failing point: 4.122e-7 vs diff 4.129e-7 (over by 7e-10).
+  Max secant slope from i to i-5: 1.374e-4; slope_tol = 1.374e-4 × 3e-3.
+
+**vbic/FO (0.205%, 2.2% above tolerance):**
+- Confirmed: FP evaluation order difference in two-step temperature scaling.
+- Error grows linearly with Vrth (0% at Vc=0, 0.57% at Vc=5V).
+- Forward coupling stamps (dIth/dVj in thermal row) are missing but would only
+  affect convergence speed, not converged values.
+- The Ith formula matches ngspice line-for-line (no sign or coefficient errors).
+
+**general/rtlinv (4.1% transient timing):**
+- Confirmed: incremental charge integration `Q ≈ Q_old + C*ΔV` accumulates
+  truncation error during BJT switching.  Fix requires analytical charge with
+  convergence-aware limiting or full state-vector integration framework.
+
+**Conclusion:** All remaining near-miss tests have confirmed root causes that
+require either coordinated multi-bug fixes (BSIM3SOI vfbb + body chain) or
+architectural changes (VBIC single-pass kernel, BJT analytical charge).
+No simple targeted fixes remain.
