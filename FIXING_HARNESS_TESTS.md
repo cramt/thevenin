@@ -3980,7 +3980,7 @@ Fresh re-investigation confirmed all 37 tests remain intractable:
 
 | Category | Tests | Error | Status |
 |---|---|---|---|
-| VBIC self-heating FP | 4 | 0.200-0.234% | Compiler FP (40 sessions confirm) |
+| VBIC self-heating FP | 4 | 0.200-0.234% | Compiler FP (42 sessions confirm) |
 | general/rc.cir | 1 | 0.22% | Integration accuracy + 4-digit `.plot` precision |
 | BSIM3SOI DD/FD/PD | 15 | 1.1-22% / singular | Compensating bugs |
 | Transmission lines | 4 | 0.8-6.4% | Compensating polint/setup bugs |
@@ -3991,3 +3991,22 @@ Fresh re-investigation confirmed all 37 tests remain intractable:
 | Missing subsystems | 5 | N/A | BSIM1/2, .control, TEMPER, params |
 | No reference | 1 | N/A | "To be done" |
 | Timeout | 2 | N/A | fourbitadder ×2 |
+
+### Session 42 (2026-03-24): Exhaustive VBIC parameter audit
+
+Performed a complete mapping of ngspice's `pnom[]` array indices to VBIC model parameters
+via the `memcpy(&pnom, &model->VBICtnom, sizeof(pnom))` in `vbictemp.c`. Key verifications:
+
+- **pnom[78]=XIS, pnom[88]=QBM (default 0.0), pnom[89]=NKF (default 0.5)**
+- **pnom[94]=ISRR, pnom[95]=XISR (default 0.0), pnom[96]=DEAR (default 0.0)**
+- ISRR scaling uses XISR (not XIS) in BOTH ngspice and thevenin — no parameter mapping bug
+- QBM=0 with NKF=0.5 reduces to `qb = 0.5*(q1 + sqrt(q1^2 + 4*q2))` in both implementations
+- psiio formula: `0.5*PE*rT/Vtv` algebraically simplifies to `PE/(2*Vt_nom)` — mathematically identical
+- Physical constants (KB=1.380662e-23, QE=1.602189e-19) match exactly
+- All 14 stamp sections (Ibe, Ibex, Iciei, Ibc, Ibep, Ircx, Irci, Irbx, Irbi, Ire, Irbp, Ibcp, Iccp, Irs) verified correct
+- Self-heating sign convention verified: thevenin uses positive power, ngspice uses negative Ith; both produce identical NR equations
+- Changing NR numerical differentiation delta (1e-6 → 1e-8): **no effect** on output
+- Tightening NR reltol (1e-3 → 1e-4): **no effect** on output
+- Conclusion: the ~0.2% error is genuinely from FP evaluation order in the two-step
+  temperature_adjust+companion architecture vs ngspice's single-pass auto-generated kernel.
+  Would require rewriting the entire VBIC evaluation to single-pass to eliminate.
