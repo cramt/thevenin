@@ -10,7 +10,7 @@
 "bsim3soidd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
 "bsim3soidd/t3.cir" = "~18% Ids error near threshold (BSIM3SOI-DD excess current bug exposed by vfb fix)"
 "bsim3soidd/t4.cir" = "~22% Ids error (BSIM3SOI-DD excess current bug exposed by vfb fix)"
-"bsim3soidd/t5.cir" = "~1.1% Ids error at Ve=-4 (vfbb sign error in back-gate coupling, see FIXING_HARNESS_TESTS.md)"
+"bsim3soidd/t5.cir" = "~0.2% Ids error at Vg=1.43V (vfbb sign error in back-gate coupling; was ~1.1%, slope tolerance absorbed most; see FIXING_HARNESS_TESTS.md)"
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
@@ -53,9 +53,9 @@
 "transmission/txl2_3_line.cir" = "~2.4% V(2) error at t=16.2ns: TXL three-line cascade accumulates CMOS inverter switching errors through second/third stages (improved from 4.7% by h1 convolution accumulation fix)"
 
 # === VBIC ===
-"vbic/CEamp.cir" = "VBIC AC: ~0.2% gain error at 1.48GHz (self-heating FP, 0.028dB vs 0.027dB tolerance; improved from 6.8MHz/0.066dB by q1 clamp fix)"
+"vbic/CEamp.cir" = "VBIC AC: ~22% gain error at 6.9GHz (self-heating error grows with frequency; passes near-band points via slope tolerance)"
 "vbic/diffamp.cir" = "VBIC diffamp: NR non-convergence (13-transistor circuit with self-heating, source stepping also fails)"
-"vbic/FG.cir" = "VBIC FG: 0.234% DC error at Vb=0.74V (self-heating FP evaluation order, grows linearly with Vrth)"
-"vbic/FO.cir" = "VBIC FO: 0.205% DC error at Vc=2.2V (self-heating FP evaluation order, 0.005% above 0.2% tolerance)"
-"vbic/temp.cir" = "VBIC temp: 0.226% DC error at Vb=0.57V (self-heating FP evaluation order, grows linearly with Vrth)"
+"vbic/FG.cir" = "VBIC FG: ~3.3% DC error at Vb=0.89V (self-heating error grows with current; passes low-bias points via slope tolerance)"
+"vbic/FO.cir" = "VBIC FO: 0.205% DC error at Vc=2.2V (self-heating FP evaluation order, grows with Vrth)"
+"vbic/temp.cir" = "VBIC temp: ~2.3% DC error at Vb=0.76V (self-heating error grows with current; passes low-bias points via slope tolerance)"
 
