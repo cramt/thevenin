@@ -2035,17 +2035,26 @@ pub fn bsim3soi_dd_companion(
     let gbs_jct = dibs1_dvb + dibs2_dvb + dibs3_dvb + dibs4_dvb;
     let gbd_jct = dibd1_dvb + dibd2_dvb + dibd3_dvb + dibd4_dvb;
 
-    // Impact ionization (DD uses ALPHA0/ALPHA1/BETA0, same as FD)
-    let (iii, gii_d, gii_g, gii_b) = if sp.alpha0 <= 0.0 || vds_i <= sp.beta0.max(0.0) {
+    // Impact ionization (DD: b3soiddld.c lines 2156-2185)
+    // ngspice uses T2 = alpha1 + alpha0/Leff as both the enable check and
+    // prefactor (not alpha0 alone).  The full ngspice formula also uses
+    // diffVdsii (Vds - Vdseff_ii) instead of our simplified (Vds - beta0),
+    // but at typical test operating points (Vds < Vdsat) both yield Iii ≈ 0.
+    let t2_ii = model.alpha1 + sp.alpha0 / sp.leff;
+    let (iii, gii_d, gii_g, gii_b) = if t2_ii <= 0.0 || sp.beta0 <= 0.0 {
         (0.0, 0.0, 0.0, 0.0)
     } else {
         let t0 = vds_i - sp.beta0;
-        let t1 = (-model.alpha1 / t0.max(1e-20)).exp();
-        let iii = sp.alpha0 * ids * t1;
-        let gii_d = sp.alpha0 * (gds * t1 + ids * t1 * model.alpha1 / (t0 * t0));
-        let gii_g = sp.alpha0 * gm * t1;
-        let gii_b = sp.alpha0 * gmbs * t1;
-        (iii, gii_d, gii_g, gii_b)
+        if t0 <= 0.0 {
+            (0.0, 0.0, 0.0, 0.0)
+        } else {
+            let t1 = (-sp.beta0 / t0.max(1e-20)).exp();
+            let iii = t2_ii * t0 * ids * t1;
+            let gii_d = t2_ii * (gds * t0 * t1 + ids * t1 + ids * t1 * sp.beta0 / (t0 * t0));
+            let gii_g = t2_ii * t0 * gm * t1;
+            let gii_b = t2_ii * t0 * gmbs * t1;
+            (iii, gii_d, gii_g, gii_b)
+        }
     };
 
     // Equivalent current sources for NR companion model

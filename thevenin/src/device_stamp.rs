@@ -640,7 +640,7 @@ impl DeviceVoltageState {
                     &bsim.model,
                     floating_body,
                 );
-                stamp_bsim3soi_fd(&mut system.matrix, &mut system.rhs, bsim, &comp);
+                stamp_bsim3soi_fd(&mut system.matrix, &mut system.rhs, bsim, &comp, gmin);
             }
         }
 

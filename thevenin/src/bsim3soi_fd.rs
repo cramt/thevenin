@@ -1914,18 +1914,9 @@ pub fn bsim3soi_fd_companion(
     let gbs_jct = 0.0;
     let gbd_jct = 0.0;
 
-    // Impact ionization (FD uses AII/BII/CII/DII)
-    let (iii, gii_d, gii_g, gii_b) = if model.alpha0 <= 0.0 || vds_i <= sp.beta0.max(0.0) {
-        (0.0, 0.0, 0.0, 0.0)
-    } else {
-        let t0 = vds_i - sp.beta0;
-        let t1 = (-model.alpha1 / t0.max(1e-20)).exp();
-        let iii = sp.alpha0 * ids * t1;
-        let gii_d = sp.alpha0 * (gds * t1 + ids * t1 * model.alpha1 / (t0 * t0));
-        let gii_g = sp.alpha0 * gm * t1;
-        let gii_b = sp.alpha0 * gmbs * t1;
-        (iii, gii_d, gii_g, gii_b)
-    };
+    // Impact ionization: FD variant in ngspice (b3soifdld.c lines 2121-2124)
+    // completely disables impact ionization (Iii=0, all derivatives=0).
+    let (iii, gii_d, gii_g, gii_b) = (0.0, 0.0, 0.0, 0.0);
 
     // Body node current balance
     let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i);
@@ -1993,6 +1984,7 @@ pub fn stamp_bsim3soi_fd(
     rhs: &mut [f64],
     inst: &Bsim3SoiFdInstance,
     comp: &Bsim3SoiFdCompanion,
+    gmin: f64,
 ) {
     let dp = inst.drain_eff_idx();
     let g = inst.gate_idx;
@@ -2083,6 +2075,14 @@ pub fn stamp_bsim3soi_fd(
         && comp.iii != 0.0
     {
         rhs[bi] += ceq_iii;
+    }
+
+    // Floating-body stability: add Gmin body-to-source coupling when there
+    // is no external body contact.  Matches PD/DD variants which already
+    // include this stamp to prevent the body node from becoming singular
+    // when junction conductances are very small.
+    if inst.body_idx.is_none() {
+        crate::stamp_conductance(matrix, b, sp, gmin);
     }
 
     // Body resistance to external body contact
