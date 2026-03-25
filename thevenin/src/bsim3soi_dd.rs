@@ -2082,8 +2082,8 @@ pub fn bsim3soi_dd_companion(
 
     // Equivalent current sources for NR companion model
     let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i);
-    let ceq_bs = -(ibs - gbs_jct * vbs_i);
-    let ceq_bd = -(ibd - gbd_jct * vbd);
+    let ceq_bs = ibs - gbs_jct * vbs_i;
+    let ceq_bd = ibd - gbd_jct * vbd;
     let ceq_iii = iii - gii_d * vds_i - gii_g * vgs_i - gii_b * vbs_i;
     let ceq_gidl = igidl - ggidl_d * vds_i - ggidl_g * vgs_i;
     let ceq_sgidl = isgidl - gsgidl_g * vgs_i;
@@ -2291,7 +2291,7 @@ pub fn stamp_bsim3soi_dd(
     let ceq_sgidl = sign * m * comp.ceq_sgidl;
 
     if let Some(d) = dp {
-        rhs[d] -= ceq_d + ceq_bd + ceq_iii + ceq_gidl;
+        rhs[d] -= ceq_d - ceq_bd + ceq_iii + ceq_gidl;
     }
     if let Some(s) = sp {
         rhs[s] += ceq_d + ceq_bs - ceq_sgidl;

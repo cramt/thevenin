@@ -1870,8 +1870,8 @@ pub fn bsim3soi_pd_companion(
 
     // Equivalent current sources for NR companion model
     let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i);
-    let ceq_bs = -(ibs - gbs_jct * vbs_i);
-    let ceq_bd = -(ibd - gbd_jct * vbd);
+    let ceq_bs = ibs - gbs_jct * vbs_i;
+    let ceq_bd = ibd - gbd_jct * vbd;
     // Impact ionization: Iii = f(Vgs, Vds, Vbs); ceq = Iii - dI/dV * V0
     let ceq_iii = iii - gii_d * vds_i - gii_g * vgs_i - gii_b * vbs_i;
     // GIDL: Igidl = f(Vds, Vgs); ceq = Igidl - dI/dV * V0
@@ -2090,7 +2090,7 @@ pub fn stamp_bsim3soi_pd(
 
     if let Some(d) = dp {
         // Channel (out) + BD junction (out) + Iii (out) + GIDL drain (out)
-        rhs[d] -= ceq_d + ceq_bd + ceq_iii + ceq_gidl;
+        rhs[d] -= ceq_d - ceq_bd + ceq_iii + ceq_gidl;
     }
     if let Some(s) = sp {
         // Channel (in) + BS junction (in) + GIDL source (out)

@@ -7,10 +7,10 @@
 
 # === BSIM3SOI-DD ===
 "bsim3soidd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
-"bsim3soidd/RampVg2.cir" = "floating body Vbs ~0 vs expected ~92mV: @m1[Vbs] query now works but DD body voltage equilibrium wrong (GIDL/junction leakage insufficient)"
-"bsim3soidd/t3.cir" = "NR non-convergence (junction width fix weff→wdios/wdiod corrected; body voltage equilibrium shifted, needs convergence improvement)"
-"bsim3soidd/t4.cir" = "NR non-convergence (junction width fix weff→wdios/wdiod corrected; body voltage equilibrium shifted, needs convergence improvement)"
-"bsim3soidd/t5.cir" = "NR non-convergence (junction width fix weff→wdios/wdiod corrected; was ~0.2% Ids error, body voltage equilibrium shifted, needs convergence improvement)"
+"bsim3soidd/RampVg2.cir" = "floating body Vbs ~0 vs expected ~92mV: @m1[Vbs] query works, junction ceq signs fixed, but DD body voltage equilibrium still wrong"
+"bsim3soidd/t3.cir" = "~20% Ids error at Vg=0.04V (junction ceq signs fixed: convergence restored, but body voltage equilibrium offset)"
+"bsim3soidd/t4.cir" = "~22% Ids error at Vg=0.35V (junction ceq signs fixed: convergence restored, but body voltage equilibrium offset)"
+"bsim3soidd/t5.cir" = "~34% Ids error at Vg=0.38V (junction ceq signs fixed: convergence restored, but body voltage equilibrium offset)"
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
@@ -22,9 +22,9 @@
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
 "bsim3soipd/RampVg2.cir" = "NR non-convergence during transient (PULSE waveform parsed, V(g)/10 resolved; SOI-PD model singular matrix at gate ramp)"
-"bsim3soipd/t3.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
-"bsim3soipd/t4.cir" = "~6.3% Ids error at Vg=0.44V (junction width corrected from weff*asd to weff; tied-body test, error from model value bug)"
-"bsim3soipd/t5.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
+"bsim3soipd/t3.cir" = "~134% Ids error at Vg=0.01V (junction ceq signs fixed: convergence restored, large body voltage offset)"
+"bsim3soipd/t4.cir" = "~6.3% Ids error at Vg=0.44V (junction ceq signs fixed: convergence improved, tied-body test)"
+"bsim3soipd/t5.cir" = "~513% Ids error at Vg=0.23V (junction ceq signs fixed: convergence restored, large body voltage offset)"
 
 # === General circuits ===
 "general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
