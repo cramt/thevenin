@@ -56,10 +56,14 @@ const STOP_FILE = resolve(PROJECT_DIR, "scripts", ".stop-fix-tests");
 
 // Test categories that are intractable — agent should not waste time on these
 const SKIP_CATEGORIES = [
-  ".control scripting",
+  ".control:",            // .control interpreter features (alter, vector indexing, resume, complex math)
+  ".control scripting",   // legacy label
+  ".elseif inline",       // pre-existing parser bug
   "XSPICE (US-056)",
   "BSIM1/BSIM2 (US-052/053)",
-  "TEMPER keyword",
+  "TEMPER keyword",       // legacy label (all TEMPER tests now pass)
+  "imaginary unit",       // needs complex number math in vecexpr
+  "resume command",       // needs paused simulation infrastructure
 ];
 
 // Priority order for test selection (highest ROI first)
