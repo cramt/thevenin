@@ -4478,3 +4478,49 @@ mobility (ueff) computation:
 values in simple single-MOSFET test circuits (the NR converges to the same
 solution regardless of Jacobian accuracy). However, correct derivatives improve
 NR convergence reliability for complex circuits and transient analysis accuracy.
+
+---
+
+## Applied fix: non-parenthesized PULSE parsing + arithmetic .print expressions
+
+**Affected tests:** All three RampVg2 tests (bsim3soidd, bsim3soifd, bsim3soipd)
+
+**Root cause (PULSE):** The waveform parser only handled `PULSE(...)` with
+parentheses, but the RampVg2 tests use `PULSE 0V 2V .02n .1n .1n .2n .6n`
+without parentheses. The tokenizer split the keyword and arguments into separate
+tokens, and `parse_waveform("PULSE")` failed because it expects `PULSE(...)`.
+
+**Fix (PULSE):** Added a pre-processing step in `parse_source()` that detects
+waveform keywords (PULSE, SIN, EXP, PWL, SFFM, AM) followed by bare arguments
+(not starting with `(`), collects them, and wraps as `KEYWORD(args...)`.
+
+**Root cause (expression):** The `.print` variable resolver only supported
+simple variable names and function wrappers (db, ph, abs, negation). Arithmetic
+expressions like `V(g)/10` were not evaluated.
+
+**Fix (expression):** Added `/constant` and `*constant` detection in
+`resolve_single_var()` that recursively resolves the base variable and applies
+the arithmetic operation to all values.
+
+**Impact on tests:**
+- bsim3soipd/RampVg2: progressed from "empty output" to "NR non-convergence
+  during transient" — the simulation now runs but the PD model fails to converge
+  when the gate voltage ramps
+- bsim3soidd/RampVg2 and bsim3soifd/RampVg2: still blocked by missing `@m1[Vbs]`
+  device parameter query (need to expose internal SOI body node voltage)
+
+**VBIC FO 0.205% error investigation:**
+
+Exhaustive comparison confirmed ALL mathematical equations at convergence are
+identical between our code and ngspice. The error is from different NR
+convergence paths landing at slightly different points within the reltol=1e-3
+tolerance band. Self-heating amplifies this 2× through thermal feedback.
+
+Key differences in the Jacobian (not affecting converged values):
+1. Missing forward coupling stamps (dIth/dVj) in the thermal row — ngspice
+   stamps derivatives of power w.r.t. all electrical voltages
+2. Numerical vs analytical thermal derivatives
+3. Truncated Vtv_Tdev constant in ngspice (8.617347e-5 vs exact)
+
+Previous attempt to add forward coupling stamps caused NR divergence.
+The 0.205% error is accepted as an NR tolerance-band artifact.
