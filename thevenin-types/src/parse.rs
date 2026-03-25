@@ -578,7 +578,9 @@ fn is_waveform_keyword(s: &str) -> bool {
 /// Parse everything after `name n+ n-` for a V or I source.
 fn parse_source(tokens: &[String]) -> Source {
     // Pre-process tokens: join waveform keywords split from their arg lists.
-    // e.g. ["SIN", "(0 1 100MEG 1NS)"] → ["SIN(0 1 100MEG 1NS)"]
+    // Handles both parenthesized and non-parenthesized forms:
+    //   ["SIN", "(0 1 100MEG 1NS)"] → ["SIN(0 1 100MEG 1NS)"]
+    //   ["PULSE", "0V", "2V", ".02n", ...] → ["PULSE(0V 2V .02n ...)"]
     let mut joined: Vec<String> = Vec::with_capacity(tokens.len());
     let mut i = 0;
     while i < tokens.len() {
@@ -586,6 +588,25 @@ fn parse_source(tokens: &[String]) -> Source {
         {
             joined.push(format!("{}{}", tokens[i], tokens[i + 1]));
             i += 2;
+        } else if is_waveform_keyword(&tokens[i])
+            && i + 1 < tokens.len()
+            && !tokens[i + 1].starts_with('(')
+        {
+            // Non-parenthesized form: PULSE 0V 2V .02n ... — collect all
+            // remaining numeric-looking tokens as arguments.
+            let keyword = &tokens[i];
+            i += 1;
+            let mut args = Vec::new();
+            while i < tokens.len() {
+                let upper = tokens[i].to_uppercase();
+                // Stop at keywords (DC, AC, or another waveform)
+                if upper == "DC" || upper == "AC" || is_waveform_keyword(&tokens[i]) {
+                    break;
+                }
+                args.push(tokens[i].clone());
+                i += 1;
+            }
+            joined.push(format!("{}({})", keyword, args.join(" ")));
         } else {
             joined.push(tokens[i].clone());
             i += 1;

@@ -7,21 +7,21 @@
 
 # === BSIM3SOI-DD ===
 "bsim3soidd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
-"bsim3soidd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
+"bsim3soidd/RampVg2.cir" = "missing @m1[Vbs] device parameter query in .print (V(g)/10 arithmetic now supported; PULSE without parens now parsed)"
 "bsim3soidd/t3.cir" = "NR non-convergence (junction width fix weff→wdios/wdiod corrected; body voltage equilibrium shifted, needs convergence improvement)"
 "bsim3soidd/t4.cir" = "NR non-convergence (junction width fix weff→wdios/wdiod corrected; body voltage equilibrium shifted, needs convergence improvement)"
 "bsim3soidd/t5.cir" = "NR non-convergence (junction width fix weff→wdios/wdiod corrected; was ~0.2% Ids error, body voltage equilibrium shifted, needs convergence improvement)"
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
-"bsim3soifd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
+"bsim3soifd/RampVg2.cir" = "missing @m1[Vbs] device parameter query in .print (V(g)/10 arithmetic now supported; PULSE without parens now parsed)"
 "bsim3soifd/t3.cir" = "~6.8% Ids error at Vg=0.08V,col1 (all value formulas verified identical to ngspice; ~1.6mV Vth offset source unidentified)"
 "bsim3soifd/t4.cir" = "~7.1% Ids error at Vg=0.46V (all value formulas verified identical to ngspice; ~1.6mV Vth offset source unidentified)"
 "bsim3soifd/t5.cir" = "~0.54% Ids error at Vg=1.11V (all value formulas verified identical to ngspice; ~1.6mV Vth offset source unidentified)"
 
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
-"bsim3soipd/RampVg2.cir" = "empty output: @m1[Vbs] device parameter query and V(g)/10 expression not supported in .print"
+"bsim3soipd/RampVg2.cir" = "NR non-convergence during transient (PULSE waveform parsed, V(g)/10 resolved; SOI-PD model singular matrix at gate ramp)"
 "bsim3soipd/t3.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"
 "bsim3soipd/t4.cir" = "~6.3% Ids error at Vg=0.44V (junction width corrected from weff*asd to weff; tied-body test, error from model value bug)"
 "bsim3soipd/t5.cir" = "DC OP: singular matrix (BSIM3SOI-PD NR non-convergence)"

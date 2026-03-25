@@ -1916,6 +1916,23 @@ fn resolve_single_var(plot: &SimPlot, var: &str) -> Option<(String, Vec<f64>)> {
         return Some((format!("-{inner}"), neg_data));
     }
 
+    // Arithmetic: expr/constant or expr*constant (e.g. v(g)/10, i(vs)*1000)
+    if let Some((lhs, rhs)) = var_lower.split_once('/')
+        && let Ok(divisor) = rhs.trim().parse::<f64>()
+        && divisor != 0.0
+        && let Some((name, base)) = resolve_single_var(plot, lhs.trim())
+    {
+        let scaled: Vec<f64> = base.iter().map(|v| v / divisor).collect();
+        return Some((format!("{name}/{rhs}"), scaled));
+    }
+    if let Some((lhs, rhs)) = var_lower.split_once('*')
+        && let Ok(factor) = rhs.trim().parse::<f64>()
+        && let Some((name, base)) = resolve_single_var(plot, lhs.trim())
+    {
+        let scaled: Vec<f64> = base.iter().map(|v| v * factor).collect();
+        return Some((format!("{name}*{rhs}"), scaled));
+    }
+
     let data = resolve_base_var(plot, &var_lower)?;
     Some((var_lower, data))
 }
