@@ -4660,3 +4660,22 @@ from BSIM3SOI MOSFET instances during transient simulation.
   NR non-convergence during transient
 
 Test count: 583 → 584 passing, 43 → 42 skipped.
+
+### Junction current sign bug fix (DD and PD models)
+
+Found a critical sign bug in the BSIM3SOI-DD and PD junction current Norton equivalent
+computation. The `ceq_bs` and `ceq_bd` formulas had an erroneous leading minus sign:
+```rust
+// WRONG: let ceq_bs = -(ibs - gbs_jct * vbs_i);
+// RIGHT: let ceq_bs = ibs - gbs_jct * vbs_i;
+```
+
+This caused:
+1. Junction currents to be stamped as flowing INTO the body instead of OUT
+2. GIDL and impact ionization currents stamped as flowing OUT instead of IN
+3. NR convergence failures in DD t3/t4/t5 and PD t3/t5 (the Jacobian was
+   inconsistent with the RHS, causing singular matrix errors)
+
+After fix: DD t3/t4/t5 and PD t3/t5 all converge but have ~20-500% body voltage
+errors due to remaining model issues. The drain stamp also needed correction:
+`rhs[d] -= ceq_d - ceq_bd + ceq_iii + ceq_gidl` (ceq_bd subtracted, not added).
