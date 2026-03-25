@@ -118,9 +118,8 @@
             export RUST_BACKTRACE=1
             export RUST_LOG=info
 
-            # Auto-init submodules if missing
-            if [ -f .gitmodules ] && [ ! -f ngspice-upstream/.git ]; then
-              echo "Initializing git submodules..."
+            # Ensure submodules are initialised and at the committed revision
+            if [ -f .gitmodules ]; then
               git submodule update --init --recursive
             fi
 
