@@ -4629,3 +4629,34 @@ Discovered 9 non-harness tests with stale `#[ignore]` annotations that now pass:
 | res_array_full_output_comparison | resistance | Full output comparison working |
 
 Test count: 574 → 583 passing, 52 → 43 skipped.
+
+---
+
+## Session 54 — @device[param] queries for .print directives (2026-03-25)
+
+### Feature: `@device[param]` device parameter queries
+
+Implemented support for the SPICE `@device[param]` syntax in `.print` directives.
+This enables querying device-internal parameters like `@m1[Vbs]` (body-source voltage)
+from BSIM3SOI MOSFET instances during transient simulation.
+
+**Implementation:**
+- `MnaSystem::query_device_param()` in `mna.rs`: dispatches to device instances
+  by name, supports `vbs`, `vgs`, `vds`, `ves` for BSIM3SOI DD/FD/PD models
+- `collect_device_param_queries()` in `transient.rs`: scans `.print` directives
+  for `@device[param]` patterns and validates against available device instances
+- `record_point()` extended to record device parameter values as SimVectors
+  at each transient timepoint
+- Output resolution via existing `find_vec_by_name()` — no changes needed in
+  `output.rs` since SimVector names match `.print` variable names exactly
+
+**Results:**
+- **bsim3soifd/RampVg2.cir: PASSES** — un-ignored. FD model correctly computes
+  floating body Vbs ≈ 0.0V (matching ngspice reference where FD also shows 0)
+- **bsim3soidd/RampVg2.cir: still fails** — @m1[Vbs] query works but DD body
+  voltage equilibrium is wrong (~0 vs expected ~92mV). The DD floating body
+  requires GIDL/junction leakage currents to charge to the correct voltage.
+- **bsim3soipd/RampVg2.cir: unchanged** — uses `.save` (not `.print`) and has
+  NR non-convergence during transient
+
+Test count: 583 → 584 passing, 43 → 42 skipped.
