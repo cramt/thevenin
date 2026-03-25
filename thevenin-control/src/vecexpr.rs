@@ -75,9 +75,11 @@ enum Token {
     Le,
     /// Single `=` — treated as equality (ngspice compat).
     SingleEq,
-    // Parens, comma
+    // Parens, brackets, comma
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     Comma,
 }
 
@@ -100,7 +102,7 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
                 // If previous token is a number, ident, or rparen, this is subtraction
                 let is_binary = matches!(
                     tokens.last(),
-                    Some(Token::Num(_) | Token::Ident(_) | Token::Str(_) | Token::RParen)
+                    Some(Token::Num(_) | Token::Ident(_) | Token::Str(_) | Token::RParen | Token::RBracket)
                 );
                 if is_binary {
                     tokens.push(Token::Minus);
@@ -160,6 +162,14 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
                 chars.next();
                 tokens.push(Token::Comma);
             }
+            '[' => {
+                chars.next();
+                tokens.push(Token::LBracket);
+            }
+            ']' => {
+                chars.next();
+                tokens.push(Token::RBracket);
+            }
             '{' => {
                 // {plotname}.vecname — plot-qualified vector reference
                 chars.next();
@@ -205,7 +215,8 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
                 tokens.push(Token::Str(s));
             }
             '@' => {
-                // @device[param]
+                // @device[param] — stop reading after first `]` so that
+                // @v1[dc][2] becomes DeviceParam("@v1[dc]"), LBracket, Num(2), RBracket
                 let mut s = String::new();
                 while let Some(&c) = chars.peek() {
                     if c == ' ' || c == '\t' || c == '+' || c == '-' || c == '*' || c == '/'
@@ -215,6 +226,9 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
                     }
                     s.push(c);
                     chars.next();
+                    if c == ']' {
+                        break; // End of device param — any further [idx] is postfix indexing
+                    }
                 }
                 tokens.push(Token::DeviceParam(s));
             }
@@ -455,6 +469,25 @@ fn parse_unary(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<Ve
 }
 
 fn parse_primary(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecVal, String> {
+    let mut val = parse_primary_base(tokens, pos, ctx)?;
+    // Apply postfix indexing: vec[idx] — extract a single element from a vector
+    while *pos < tokens.len() && tokens[*pos] == Token::LBracket {
+        *pos += 1;
+        let index = parse_or(tokens, pos, ctx)?;
+        if *pos < tokens.len() && tokens[*pos] == Token::RBracket {
+            *pos += 1;
+        }
+        let idx = index.as_scalar() as usize;
+        val = if idx < val.data.len() {
+            VecVal::scalar(val.data[idx])
+        } else {
+            VecVal::scalar(0.0)
+        };
+    }
+    Ok(val)
+}
+
+fn parse_primary_base(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecVal, String> {
     if *pos >= tokens.len() {
         return Err("unexpected end of expression".to_string());
     }
@@ -525,7 +558,13 @@ fn parse_primary(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<
         Token::DeviceParam(s) => {
             let s = s.clone();
             *pos += 1;
-            // @device[param] — look up model/instance parameter from netlist
+            // First try as a named vector (e.g., after DC sweep, @v1[dc] may be a vector)
+            if let Some(v) = ctx.find_vector(&s) {
+                return Ok(VecVal {
+                    data: vec_to_real(v),
+                });
+            }
+            // Fall back to scalar device/instance parameter from netlist
             if let Some(val) = resolve_device_param(&s, ctx) {
                 Ok(VecVal::scalar(val))
             } else {
@@ -753,6 +792,36 @@ fn eval_function(name: &str, args: &[VecVal], ctx: &SimContext) -> Result<VecVal
             let n = args[0].data.len() as f64;
             Ok(VecVal::scalar(if n > 0.0 { sum / n } else { 0.0 }))
         }
+        "ceil" | "ceiling" => {
+            require_args(name, args, 1)?;
+            Ok(VecVal {
+                data: args[0].data.iter().map(|v| v.ceil()).collect(),
+            })
+        }
+        "floor" | "int" => {
+            require_args(name, args, 1)?;
+            Ok(VecVal {
+                data: args[0].data.iter().map(|v| v.floor()).collect(),
+            })
+        }
+        "nint" | "round" => {
+            require_args(name, args, 1)?;
+            Ok(VecVal {
+                data: args[0].data.iter().map(|v| v.round()).collect(),
+            })
+        }
+        "tan" => {
+            require_args(name, args, 1)?;
+            Ok(VecVal {
+                data: args[0].data.iter().map(|v| v.tan()).collect(),
+            })
+        }
+        "atan" => {
+            require_args(name, args, 1)?;
+            Ok(VecVal {
+                data: args[0].data.iter().map(|v| v.atan()).collect(),
+            })
+        }
         _ => Err(format!("unknown function: {name}")),
     }
 }
@@ -904,14 +973,26 @@ fn is_ident_char(b: u8) -> bool {
 }
 
 /// Extract real-valued data from a SimVector, using complex magnitudes if needed.
+///
+/// Noise spectrum vectors (`onoise_spectrum`, `inoise_spectrum`) are stored as
+/// V²/Hz (power spectral density) for batch output compatibility, but `.control`
+/// scripts expect V/√Hz (amplitude spectral density) — matching ngspice's
+/// interactive convention.  This function applies the sqrt conversion automatically.
 fn vec_to_real(v: &thevenin_types::SimVector) -> Vec<f64> {
-    if !v.real.is_empty() {
+    let data = if !v.real.is_empty() {
         v.real.clone()
     } else if !v.complex.is_empty() {
         // For complex vectors, return real part (matching ngspice default behavior)
         v.complex.iter().map(|c| c.re).collect()
     } else {
         vec![0.0]
+    };
+    // Noise spectrum vectors: convert V²/Hz → V/√Hz for .control access.
+    let name_lower = v.name.to_lowercase();
+    if name_lower.ends_with("noise_spectrum") {
+        data.iter().map(|x| x.sqrt()).collect()
+    } else {
+        data
     }
 }
 

@@ -123,7 +123,7 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
         let inoise_sq = onoise_sq * gain_sq_inv;
 
         freq_data.push(freq);
-        onoise_data.push(onoise_sq); // V²/Hz (matches ngspice output format)
+        onoise_data.push(onoise_sq); // V²/Hz for batch output and integration
         inoise_data.push(inoise_sq); // V²/Hz
     }
 
@@ -266,6 +266,18 @@ fn compute_total_noise(
         let thermal_noise = 4.0 * K_BOLTZ * T_NOM * g;
         let transfer_sq = adjoint_transfer_sq(adjoint, res.pos_idx, res.neg_idx);
         total += thermal_noise * transfer_sq;
+
+        // Resistor flicker (1/f) noise: KF * |I/m|^AF / (A_eff * f^EF).
+        // Matches ngspice resnoise.c: m * KF * |I/m|^AF / (A_eff * f^EF).
+        if res.kf > 0.0 && freq > 0.0 {
+            let v_pos = res.pos_idx.map(|i| op_solution[i]).unwrap_or(0.0);
+            let v_neg = res.neg_idx.map(|i| op_solution[i]).unwrap_or(0.0);
+            let i_dc = (v_pos - v_neg) / res.resistance;
+            let i_per_m = i_dc / res.m;
+            let flicker = res.m * res.kf * i_per_m.abs().powf(res.af)
+                / (res.noise_area * freq.powf(res.ef));
+            total += flicker * transfer_sq;
+        }
     }
 
     // Diode noise sources.

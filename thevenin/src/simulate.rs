@@ -711,6 +711,15 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
         }
     }
 
+    // Add device parameter alias for the sweep vector so that
+    // .control scripts can access it as @v1[dc] (matching ngspice save behavior).
+    let sweep_param_name = format!("@{}[dc]", src.to_lowercase());
+    vecs.push(SimVector {
+        name: sweep_param_name,
+        real: vecs[0].real.clone(),
+        complex: vec![],
+    });
+
     Ok(SimResult {
         plots: vec![SimPlot {
             name: "dc1".to_string(),

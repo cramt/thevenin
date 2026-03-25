@@ -104,6 +104,16 @@ pub struct ResistorInstance {
     pub resistance: f64,
     /// AC resistance value in Ohms (from `ac=` parameter), if different from DC.
     pub ac_resistance: Option<f64>,
+    /// Flicker noise coefficient (model parameter KF, default 0).
+    pub kf: f64,
+    /// Flicker noise exponent (model parameter AF, default 1).
+    pub af: f64,
+    /// Frequency exponent (model parameter EF, default 1).
+    pub ef: f64,
+    /// Effective noise area in m² (from L, W, short, narrow, lf, wf).
+    pub noise_area: f64,
+    /// Instance multiplier.
+    pub m: f64,
 }
 
 /// A resolved diode instance with matrix indices and model parameters.
@@ -654,6 +664,72 @@ fn resolve_resistor_value(
         }
     };
     Ok(apply_multipliers(base_r, params))
+}
+
+/// Extract resistor flicker noise parameters (KF, AF, EF, effective noise area)
+/// from the resistor model definition and instance parameters.
+fn extract_resistor_noise_params(
+    value: &Expr,
+    params: &[thevenin_types::Param],
+    models: &std::collections::BTreeMap<String, &thevenin_types::ModelDef>,
+) -> (f64, f64, f64, f64) {
+    fn get_num(list: &[thevenin_types::Param], name: &str) -> Option<f64> {
+        list.iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .and_then(|p| {
+                if let Expr::Num(v) = &p.value {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
+    }
+
+    // Model name is either the value itself (when it's a model reference) or
+    // a separate "model" param (when a numeric value + model name are both given).
+    let model_name = match value {
+        Expr::Param(name) => Some(name.to_uppercase()),
+        _ => params
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case("model"))
+            .and_then(|p| {
+                if let Expr::Param(name) = &p.value {
+                    Some(name.to_uppercase())
+                } else {
+                    None
+                }
+            }),
+    };
+
+    let mdef = model_name.and_then(|n| models.get(&n));
+
+    if let Some(mdef) = mdef {
+        let kf = get_num(&mdef.params, "kf").unwrap_or(0.0);
+        let af = get_num(&mdef.params, "af").unwrap_or(1.0);
+        let ef = get_num(&mdef.params, "ef").unwrap_or(1.0);
+        // Length/width corrections for noise area (short=dlr, narrow=dw).
+        let short = get_num(&mdef.params, "short")
+            .or_else(|| get_num(&mdef.params, "dlr"))
+            .unwrap_or(0.0);
+        let narrow = get_num(&mdef.params, "narrow")
+            .or_else(|| get_num(&mdef.params, "dw"))
+            .unwrap_or(0.0);
+        let lf = get_num(&mdef.params, "lf").unwrap_or(1.0);
+        let wf = get_num(&mdef.params, "wf").unwrap_or(1.0);
+        // Instance dimensions.
+        let l_inst = get_num(params, "l").unwrap_or(0.0);
+        let w_inst = get_num(params, "w").unwrap_or(0.0);
+        let l_eff = (l_inst - 2.0 * short).max(1e-30);
+        let w_eff = (w_inst - 2.0 * narrow).max(1e-30);
+        let noise_area = if l_inst > 0.0 && w_inst > 0.0 {
+            l_eff.powf(lf) * w_eff.powf(wf)
+        } else {
+            1.0 // No dimensions → default area (noise formula degenerates)
+        };
+        (kf, af, ef, noise_area)
+    } else {
+        (0.0, 1.0, 1.0, 1.0)
+    }
 }
 
 /// Apply `m` (multiplicity) and `scale` instance parameters to a resistance.
@@ -2962,12 +3038,31 @@ fn stamp_element(
                         None
                     }
                 });
+            // Extract noise parameters from model (if present).
+            let (kf, af, ef, noise_area) =
+                extract_resistor_noise_params(value, params, models);
+            let m_val = params
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case("m"))
+                .and_then(|p| {
+                    if let thevenin_types::Expr::Num(v) = &p.value {
+                        Some(*v)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(1.0);
             resistors.push(ResistorInstance {
                 name: element.name.clone(),
                 pos_idx: ni,
                 neg_idx: nj,
                 resistance: r,
                 ac_resistance,
+                kf,
+                af,
+                ef,
+                noise_area,
+                m: m_val,
             });
         }
         ElementKind::VoltageSource { pos, neg, source } => {

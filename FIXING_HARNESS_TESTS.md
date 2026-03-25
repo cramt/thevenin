@@ -382,6 +382,9 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 64 | BJT junction_charge exponent fix | bjt.rs | `arg^(1-M)` instead of `arg^(2-M)` |
 | 65 | .control AC vector lookup — use vec_to_real() for complex vectors | vecexpr.rs | `v(3)` in .control now works for AC analysis results |
 | 66 | .param spaces-around-equals in process_conditionals | parse.rs | `.param key = value` form now parsed for .if/.elseif conditions |
+| 67 | .control vector indexing `foo[2]` + `@v1[dc]` sweep vector | vecexpr.rs, simulate.rs, parse.rs | Vector indexing, DC sweep param alias, model name capture |
+| 68 | .control `ceil`/`floor`/`nint`/`tan`/`atan` functions | vecexpr.rs | Missing math functions in .control evaluator |
+| 69 | Resistor flicker noise (KF/AF/EF) + noise output V/√Hz | noise.rs, mna.rs, parse.rs, vecexpr.rs | Flicker noise with model params, sqrt conversion for .control |
 
 ## Investigations that did not yield fixes
 
@@ -405,7 +408,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 
 ## Current status of all remaining ignored tests (as of 2026-03-25)
 
-**Test counts:** ~588 passing, ~31 ignored
+**Test counts:** ~590 passing, ~41 ignored
 
 ### VBIC (4 tests)
 

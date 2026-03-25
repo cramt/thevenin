@@ -855,11 +855,22 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             let pos = need!(0, "n+").to_string();
             let neg = need!(1, "n-").to_string();
             let value = parse_expr(need!(2, "value"));
-            let params: Vec<Param> = rest[3..]
+            let mut params: Vec<Param> = rest[3..]
                 .iter()
                 .filter(|t| t.contains('='))
                 .filter_map(|t| parse_kv(t))
                 .collect();
+            // Capture model name: a non-key=value token after the value that
+            // isn't a number. E.g., "R1 1 2 1k rmodel l=1u" → model=rmodel.
+            for t in &rest[3..] {
+                if !t.contains('=') && t.parse::<f64>().is_err() && !t.is_empty() {
+                    params.push(Param {
+                        name: "model".to_string(),
+                        value: Expr::Param(t.to_string()),
+                    });
+                    break;
+                }
+            }
             match letter {
                 'R' => ElementKind::Resistor {
                     pos,
