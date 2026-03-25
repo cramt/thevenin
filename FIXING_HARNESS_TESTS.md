@@ -4754,3 +4754,36 @@ central differencing. The error is in the fixed point itself (model equations).
 root causes. None can be fixed without either (a) exactly matching ngspice FP
 evaluation order, (b) implementing missing subsystems (.control, BSIM1/2,
 XSPICE), or (c) deep solver/model architectural changes.
+
+---
+
+### Session 57 (2026-03-25): BJT junction_charge bug fix
+
+**Bug found:** `junction_charge()` in `bjt.rs` had an incorrect exponent in the
+reverse-bias depletion charge formula. It computed `arg^(2-M)` instead of
+`arg^(1-M)` where `arg = 1 - V/VJ`.
+
+The root cause: `sarg = arg.powf(1.0 - m)` gives `arg^(1-M)`, so `arg * sarg`
+gives `arg^(2-M)`. But ngspice uses `sarg = arg^(-M)`, making `arg * sarg =
+arg^(1-M)`. The fix: use `sarg` directly instead of `arg * sarg`.
+
+**Impact:** The bug was masked because:
+- The transient solver uses incremental charge `Q_old + C*ΔV` (which uses
+  `junction_cap`, not `junction_charge`)
+- The bug only affected `compute_charges()` used for DC initialization and LTE
+- At DC init, the wrong initial charge becomes a constant offset that doesn't
+  affect incremental differences
+
+**Investigation findings:**
+- VBIC FO (0.204% error): error is fundamental to self-heating FP evaluation
+  order. Adding forward coupling stamps (dIth/dVj) to the thermal row was
+  attempted but causes NR instability because the off-diagonal entries exceed
+  the thermal conductance.
+- RTL inverter (4.1%): error is in transient timing, not affected by the
+  junction_charge fix because the transient loop uses incremental charges.
+  The CCS constant capacitor treatment is equivalent to ngspice when MJS=0
+  (default). Transit time modulation (XTF/VTF/ITF) defaults to 0 so is not
+  a factor either.
+- Switching from incremental to analytical charges in the NR loop causes
+  convergence failures — the incremental approach provides better NR
+  conditioning.
