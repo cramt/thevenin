@@ -840,8 +840,14 @@ impl DeviceVoltageState {
                     let v_si = node(vbic.subs_si_idx);
                     let vrcx = sign * (v_c - v_cx);
                     let vrbx = sign * (v_b - v_bx);
-                    let vre = sign * (v_ei - v_e);
-                    let vrs = sign * (v_si - v_s);
+                    // ngspice convention: Vre = type*(V(emit) - V(emitEI)),
+                    // Vrs = type*(V(subs) - V(subsSI)).
+                    // Previous code had (v_ei - v_e) and (v_si - v_s) which
+                    // is the opposite sign.  The power computation (vre²/RE)
+                    // is unaffected, but the thermal derivative direction for
+                    // the RE/RS reverse-coupling stamps was inverted.
+                    let vre = sign * (v_e - v_ei);
+                    let vrs = sign * (v_s - v_si);
 
                     let ith = compute_self_heating_power(
                         &comp, &model, vbei, vbex, vbci, vbep, vbcp, vrci, vrbi, vrbp, vrcx, vrbx,

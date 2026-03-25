@@ -4544,3 +4544,38 @@ Tested two approaches to reduce the VBIC FO 0.205% error:
 **Conclusion:** The 0.205% error is an irreducible FP evaluation order artifact.
 All 35 remaining ignored tests have deep, well-documented root causes. No tests
 have become easier to fix since the last investigation round.
+
+---
+
+## Session 53: VBIC Vre/Vrs sign fix and tolerance analysis
+
+### Fix: Vre/Vrs sign convention in self-heating thermal stamps
+
+**File:** `thevenin/src/device_stamp.rs`
+
+The external emitter resistance voltage `Vre` and substrate resistance voltage `Vrs`
+in the VBIC self-heating power/derivative computation had the opposite sign from
+ngspice's convention:
+
+- ngspice: `Vre = type * (V(emit) - V(emitEI))`, `Vrs = type * (V(subs) - V(subsSI))`
+- Our code (before): `vre = sign * (v_ei - v_e)`, `vrs = sign * (v_si - v_s)`
+- Our code (after): `vre = sign * (v_e - v_ei)`, `vrs = sign * (v_s - v_si)`
+
+The power computation `Ith = Σ(I*V)` is unaffected (uses V²/R which is sign-independent).
+The thermal derivative stamps `dIre/dVrth` and `dIrs/dVrth` had inverted signs in the
+Jacobian, but since these only affect NR convergence rate (not the converged solution),
+no test output changes.
+
+### Tolerance analysis: VBIC FO fails by 1.7% above abs_tol
+
+The VBIC FO test error at Vc=2.2V is:
+- Expected: 4.965117e-5, Got: 4.975285e-5, diff = 1.0168e-7
+- rel_tol = HARNESS_REL_TOL × max(exp, act) = 2e-3 × 4.975e-5 = 9.95e-8
+- abs_tol = HARNESS_ABS_TOL = 1e-7
+- slope_tol = max_slope × dt_tol = 3.115e-6 × 0.01 = 3.115e-8
+- Effective tolerance = max(9.95e-8, 1e-7, 3.115e-8) = 1e-7
+- diff (1.017e-7) exceeds abs_tol (1.0e-7) by only 1.7%
+
+The error is 0.204% relative, just above the 0.2% HARNESS_REL_TOL. The slope tolerance
+doesn't help because the DC sweep curve is nearly flat (slope ~3e-6) at this operating
+point. All 35 remaining ignored tests still fail with their documented root causes.
