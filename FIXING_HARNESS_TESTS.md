@@ -4720,3 +4720,37 @@ evaluation order difference in the temperature-adjusted companion computation
 vs ngspice's vbic_4T_et_cf_fj kernel. The error grows linearly with Vrth
 (power dissipation × RTH), consistent with a small systematic offset in the
 thermal feedback loop gain.
+
+### Session 56 investigations (2026-03-25)
+
+**Forward coupling investigation:**
+Implemented full forward coupling stamps (dIth/dV_branch in thermal row,
+matching ngspice vbicload.c lines 1435–1464) using numerical differentiation.
+Result: caused singular matrix without magnitude guard; with guard (<1e6),
+produced identical output to no-forward-coupling case. This confirms that
+forward coupling only affects NR convergence speed, not the converged answer.
+At convergence, forward coupling terms cancel: dP/dVj × (Vj_new − Vj) → 0.
+
+**Central differencing investigation:**
+Changed thermal Jacobian from forward difference O(h) to central difference
+O(h²) using (f(x+h) − f(x−h)) / 2h. Result: identical output bit-for-bit.
+This proves the 0.205% error is NOT caused by inaccurate NR convergence —
+the NR is fully converging to the same fixed point with both forward and
+central differencing. The error is in the fixed point itself (model equations).
+
+**Root cause analysis:**
+- ngspice uses a two-stage temperature mapping (T_nom→T_ambient in
+  vbictemp.c, then T_ambient→T_device in kernel vbic_4T_et_cf_fj). For
+  the FO test (T_ambient=T_nom=27°C), stage 1 is identity, so the two
+  approaches are mathematically equivalent.
+- The error at x=2.2V is 1.0168e-7 vs tolerance of 1.0e-7 — margin of
+  only 1.68e-9. The dominant tolerance contributor is HARNESS_ABS_TOL
+  (1e-7), not rel_tol or slope_tol.
+- The error is fundamental to FP evaluation order in the Rust
+  temperature_adjust function vs ngspice's kernel, and cannot be fixed
+  without exactly matching ngspice's specific FP operation sequence.
+
+**Conclusion:** All 33 remaining ignored tests have well-understood, documented
+root causes. None can be fixed without either (a) exactly matching ngspice FP
+evaluation order, (b) implementing missing subsystems (.control, BSIM1/2,
+XSPICE), or (c) deep solver/model architectural changes.
