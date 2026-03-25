@@ -4579,3 +4579,53 @@ The VBIC FO test error at Vc=2.2V is:
 The error is 0.204% relative, just above the 0.2% HARNESS_REL_TOL. The slope tolerance
 doesn't help because the DC sweep curve is nearly flat (slope ~3e-6) at this operating
 point. All 35 remaining ignored tests still fail with their documented root causes.
+
+---
+
+## Session 53 — Forward coupling experiment + stale test cleanup (2026-03-25)
+
+### Forward coupling stamps (dIth/dV_j in thermal row)
+
+Attempted implementing the missing 15 forward coupling Jacobian entries in the thermal
+row for VBIC self-heating (matching ngspice vbicload.c lines 1435-1464). These entries
+tell the NR solver how power dissipation changes with each electrical voltage.
+
+**Implementation:** Computed dPower/dVj analytically from companion model derivatives
+for all 15 branch voltages. Each derivative decomposed into node-pair matrix stamps
+with sign factor for PNP polarity.
+
+**Results:**
+- NPN tests (FO, temp): No accuracy improvement (same error as before)
+- PNP test (FG): **Convergence failure** (singular matrix)
+- AC test (CEamp): **Convergence failure** (singular matrix)
+- Diffamp: Still singular matrix (unchanged)
+
+**Root cause of regressions:** The forward coupling stamps make the thermal row of the
+Jacobian more "coupled" to the electrical system. At operating points where the thermal
+conductance G_th is small relative to the forward coupling entries, the matrix becomes
+ill-conditioned. This is particularly problematic for:
+1. PNP devices (the sign factor in the matrix decomposition creates asymmetry)
+2. AC analysis (the linearized AC matrix inherits the ill-conditioned thermal row)
+3. Circuits with tight GMIN settings (FG uses GMIN=1e-13)
+
+**Conclusion:** Forward coupling does NOT affect the converged DC solution (only
+convergence speed). The 0.2% FO error is an inherent NR convergence-path artifact
+from the finite convergence tolerance (reltol=1e-3). The stamps were reverted.
+
+### Stale test cleanup
+
+Discovered 9 non-harness tests with stale `#[ignore]` annotations that now pass:
+
+| Test | Module | Reason now passes |
+|------|--------|-------------------|
+| bsim3soi_fd_dc_sweep | bsim3soi_fd | Source stepping improvements |
+| bsim3soi_pd_pmos_op | bsim3soi_pd | SOI PD convergence fixed |
+| test_hfet_inverter | hfet | HFET transient/DC support added |
+| test_vbic_temp_step_debug | vbic | VBIC temperature sweep working |
+| test_vbic_temp_150c | vbic | .OPTIONS TEMP support added |
+| res_simple_full_output_comparison | resistance | Transient analysis working |
+| res_partition_full_output_comparison | resistance | AC analysis working |
+| res_array_dc_op | resistance | Resistor model/geometry support |
+| res_array_full_output_comparison | resistance | Full output comparison working |
+
+Test count: 574 → 583 passing, 52 → 43 skipped.
