@@ -245,9 +245,18 @@ impl BreakpointTable {
         self.times.get(self.next_idx).copied()
     }
 
-    /// Check if `t` is at or very near a breakpoint.
+    /// Check if `t` is at or very near an *upcoming* breakpoint.
+    /// Only checks breakpoints that haven't been advanced past by
+    /// `next_after`.  This prevents a breakpoint at t=0 from forcing
+    /// BackwardEuler + step reduction for many subsequent steps that
+    /// are still within the `min_break` tolerance window.
     fn is_at_breakpoint(&self, t: f64) -> bool {
-        self.times.iter().any(|&bp| (t - bp).abs() < self.min_break)
+        if self.next_idx < self.times.len() {
+            let bp = self.times[self.next_idx];
+            (bp - t).abs() < self.min_break
+        } else {
+            false
+        }
     }
 }
 
@@ -264,11 +273,6 @@ const MIN_SHRINK: f64 = 0.125; // 1/8
 /// Maximum factor to grow timestep.
 const MAX_GROW: f64 = 2.0;
 
-/// Estimate the new timestep based on LTE for capacitors, inductors, and
-/// BJT dynamic junction charges.
-///
-/// Uses the difference between Trap and BE predictions as the LTE estimate.
-/// Uses divided differences of charge/flux over 3 timepoints to estimate the
 /// second derivative, matching ngspice's CKTterr function.  For trapezoidal
 /// order 2, the truncation error coefficient is 1/12 and the timestep scales
 /// as sqrt(tol / |divided_diff|).

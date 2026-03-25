@@ -27,7 +27,7 @@
 
 # === General circuits ===
 "general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
-"general/fourbitadder.cir" = "times out (>30s)"
+"general/fourbitadder.cir" = "reference output file says 'To be done' -- no reference to compare against"
 "general/rtlinv.cir" = "~4.1% transient error at t=9ns: transition timing shift (dynamic BJT caps improved from 5.96% at 7ns)"
 "general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET missing velocity saturation/mobility degradation"
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag, full voltage-dependent cap approach causes transient timing shift)"
@@ -43,7 +43,6 @@
 
 
 # === Transient ===
-"transient/fourbitadder.cir" = "times out (>30s)"
 
 # === Transmission lines ===
 "transmission/cpl3_4_line.cir" = "~0.8% V(2) error at t=20.3ns: CPL 4-line (improved from 1.0% by R_m off-diagonal clamping; polint compensating bug remains; no MOSFETs)"
