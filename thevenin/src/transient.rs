@@ -831,6 +831,17 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
+    // Scan .print directives for @device[param] queries and create output vectors.
+    let device_param_queries = collect_device_param_queries(netlist, &mna);
+    let mut device_param_vecs: Vec<SimVector> = device_param_queries
+        .iter()
+        .map(|(device, param)| SimVector {
+            name: format!("@{}[{}]", device.to_lowercase(), param.to_lowercase()),
+            real: Vec::new(),
+            complex: vec![],
+        })
+        .collect();
+
     let has_nonlinear = mna.has_nonlinear();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
     let nr_options = NrOptions::default();
@@ -889,6 +900,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             &mut time_vec,
             &mut node_vecs,
             &mut branch_vecs,
+            &device_param_queries,
+            &mut device_param_vecs,
         );
     }
 
@@ -1495,6 +1508,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 &mut time_vec,
                 &mut node_vecs,
                 &mut branch_vecs,
+                &device_param_queries,
+                &mut device_param_vecs,
             );
         }
     }
@@ -1503,6 +1518,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mut vecs = vec![time_vec];
     vecs.extend(node_vecs);
     vecs.extend(branch_vecs);
+    vecs.extend(device_param_vecs);
 
     Ok(SimResult {
         plots: vec![SimPlot {
@@ -1517,7 +1533,52 @@ fn node_voltage(solution: &[f64], idx: Option<usize>) -> f64 {
     idx.map(|i| solution[i]).unwrap_or(0.0)
 }
 
+/// Parse `@m1[vbs]` into `("m1", "vbs")`.
+fn parse_device_param_query(var: &str) -> Option<(String, String)> {
+    let rest = var.strip_prefix('@')?;
+    let bracket_start = rest.find('[')?;
+    let bracket_end = rest.find(']')?;
+    if bracket_end <= bracket_start + 1 {
+        return None;
+    }
+    let device = rest[..bracket_start].to_string();
+    let param = rest[bracket_start + 1..bracket_end].to_string();
+    Some((device, param))
+}
+
+/// Scan netlist `.print` directives for `@device[param]` queries that the MNA
+/// system can resolve. Returns a deduplicated list of (device, param) pairs.
+fn collect_device_param_queries(netlist: &Netlist, mna: &MnaSystem) -> Vec<(String, String)> {
+    let mut queries = Vec::new();
+    for line in netlist.source.lines() {
+        let trimmed = line.trim().to_lowercase();
+        if !trimmed.starts_with(".print") {
+            continue;
+        }
+        for token in trimmed.split_whitespace().skip(2) {
+            // Split on commas (e.g. "@m1[Vbs], V(g)/10")
+            for part in token.split(',') {
+                let part = part.trim();
+                if let Some((device, param)) = parse_device_param_query(part) {
+                    // Verify the MNA system can actually resolve this query
+                    // by checking with a dummy (zero) solution.
+                    let dummy = vec![0.0; mna.system.matrix.dim()];
+                    if mna.query_device_param(&device, &param, &dummy).is_some() {
+                        // Avoid duplicates
+                        let key = (device.clone(), param.clone());
+                        if !queries.contains(&key) {
+                            queries.push(key);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    queries
+}
+
 /// Record a solution point into output vectors.
+#[expect(clippy::too_many_arguments)]
 fn record_point(
     t: f64,
     solution: &[f64],
@@ -1526,6 +1587,8 @@ fn record_point(
     time_vec: &mut SimVector,
     node_vecs: &mut [SimVector],
     branch_vecs: &mut [SimVector],
+    device_param_queries: &[(String, String)],
+    device_param_vecs: &mut [SimVector],
 ) {
     time_vec.real.push(t);
 
@@ -1535,6 +1598,12 @@ fn record_point(
 
     for (i, _vsrc) in mna.vsource_names.iter().enumerate() {
         branch_vecs[i].real.push(solution[num_nodes + i]);
+    }
+
+    // Record device parameter queries.
+    for (i, (device, param)) in device_param_queries.iter().enumerate() {
+        let val = mna.query_device_param(device, param, solution).unwrap_or(0.0);
+        device_param_vecs[i].real.push(val);
     }
 }
 

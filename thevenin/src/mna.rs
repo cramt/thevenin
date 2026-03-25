@@ -470,6 +470,54 @@ impl MnaSystem {
                 .sum::<usize>()
     }
 
+    /// Query a device instance parameter from the current solution vector.
+    ///
+    /// Supports `@device[param]` syntax from `.print` directives.
+    /// Currently handles SOI MOSFET terminal voltages: `vbs`, `vgs`, `vds`, `ves`.
+    pub fn query_device_param(&self, device: &str, param: &str, solution: &[f64]) -> Option<f64> {
+        let param_lower = param.to_lowercase();
+        // BSIM3SOI-DD instances
+        for inst in &self.bsim3soi_dds {
+            if inst.name.eq_ignore_ascii_case(device) {
+                let (vgs, vds, vbs, ves) = inst.terminal_voltages(solution);
+                return match param_lower.as_str() {
+                    "vbs" => Some(vbs),
+                    "vgs" => Some(vgs),
+                    "vds" => Some(vds),
+                    "ves" => Some(ves),
+                    _ => None,
+                };
+            }
+        }
+        // BSIM3SOI-FD instances
+        for inst in &self.bsim3soi_fds {
+            if inst.name.eq_ignore_ascii_case(device) {
+                let (vgs, vds, vbs, ves) = inst.terminal_voltages(solution);
+                return match param_lower.as_str() {
+                    "vbs" => Some(vbs),
+                    "vgs" => Some(vgs),
+                    "vds" => Some(vds),
+                    "ves" => Some(ves),
+                    _ => None,
+                };
+            }
+        }
+        // BSIM3SOI-PD instances
+        for inst in &self.bsim3soi_pds {
+            if inst.name.eq_ignore_ascii_case(device) {
+                let (vgs, vds, vbs, ves) = inst.terminal_voltages(solution);
+                return match param_lower.as_str() {
+                    "vbs" => Some(vbs),
+                    "vgs" => Some(vgs),
+                    "vds" => Some(vds),
+                    "ves" => Some(ves),
+                    _ => None,
+                };
+            }
+        }
+        None
+    }
+
     /// Stamp LTRA DC equations into the given linear system.
     /// Called by DC solver paths (not stored in the base matrix so that
     /// transient can use different convolution-based stamps).
