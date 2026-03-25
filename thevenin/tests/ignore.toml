@@ -21,7 +21,6 @@
 
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
-"bsim3soipd/RampVg2.cir" = "NR non-convergence during transient (PULSE waveform parsed, V(g)/10 resolved; SOI-PD model singular matrix at gate ramp)"
 "bsim3soipd/t3.cir" = "~134% Ids error at Vg=0.01V (junction ceq signs fixed: convergence restored, large body voltage offset)"
 "bsim3soipd/t4.cir" = "~6.3% Ids error at Vg=0.44V (junction ceq signs fixed: convergence improved, tied-body test)"
 "bsim3soipd/t5.cir" = "~513% Ids error at Vg=0.23V (junction ceq signs fixed: convergence restored, large body voltage offset)"
