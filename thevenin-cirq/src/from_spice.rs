@@ -131,7 +131,7 @@ fn lower_item(
             circuit.temperature = Some(*t);
         }
         // Ignored: Analysis, Comment, Save, Raw
-        Item::Analysis(_) | Item::Comment(_) | Item::Save(_) | Item::Raw(_) => {}
+        Item::Analysis(_) | Item::Comment(_) | Item::Save(_) | Item::Raw(_) | Item::Control(_) => {}
     }
     Ok(())
 }

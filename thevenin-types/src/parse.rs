@@ -74,7 +74,31 @@ fn preprocess(input: &str) -> Vec<(usize, String)> {
     // continuation lines past comment lines.
     let mut last_noncomment: Option<usize> = None;
 
+    // Inside .control/.endc blocks, pass lines through verbatim — the `$`
+    // character is used for variable references, not inline comments.
+    let mut in_control = false;
+
     for (lineno, raw) in input.lines().enumerate() {
+        let trimmed_upper = raw.trim().to_uppercase();
+
+        if trimmed_upper.starts_with(".CONTROL") {
+            in_control = true;
+            last_noncomment = Some(out.len());
+            out.push((lineno + 1, raw.trim().to_string()));
+            continue;
+        }
+        if in_control {
+            if trimmed_upper.starts_with(".ENDC") {
+                in_control = false;
+                last_noncomment = Some(out.len());
+                out.push((lineno + 1, raw.trim().to_string()));
+            } else {
+                // Pass .control lines verbatim (preserve $ variable refs)
+                out.push((lineno + 1, raw.to_string()));
+            }
+            continue;
+        }
+
         let line = strip_inline_comment(raw).trim();
         if line.is_empty() {
             continue;
@@ -1484,15 +1508,16 @@ fn parse_dot(
         }
 
         ".CONTROL" => {
-            // Skip everything until .endc
+            let mut control_lines = Vec::new();
             while let Some((_, l)) = rest_lines.peek() {
                 if l.to_uppercase().trim_start().starts_with(".ENDC") {
                     rest_lines.next();
                     break;
                 }
+                control_lines.push(l.to_string());
                 rest_lines.next();
             }
-            Ok(Item::Raw(String::new()))
+            Ok(Item::Control(control_lines))
         }
 
         ".ENDL" => {

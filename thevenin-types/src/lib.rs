@@ -1042,6 +1042,8 @@ pub enum Item {
     Save(Vec<String>),
     /// `.temp value` — circuit simulation temperature in °C.
     Temp(f64),
+    /// A `.control` ... `.endc` block — raw command lines for the control interpreter.
+    Control(Vec<String>),
     /// A full-line comment (`* ...`).
     Comment(String),
     /// Anything not recognised — stored verbatim for lossless round-trip.
@@ -1089,6 +1091,13 @@ impl fmt::Display for Item {
                 Ok(())
             }
             Item::Temp(t) => write!(f, ".temp {t}"),
+            Item::Control(lines) => {
+                writeln!(f, ".control")?;
+                for l in lines {
+                    writeln!(f, "{l}")?;
+                }
+                write!(f, ".endc")
+            }
             Item::Comment(s) => write!(f, "* {s}"),
             Item::Raw(s) => write!(f, "{s}"),
         }

@@ -1,0 +1,12 @@
+[package]
+name = "thevenin-control"
+version = "0.1.0"
+edition = "2024"
+description = ".control block interpreter for thevenin circuit simulator"
+license = "BSD-3-Clause"
+publish = false
+
+[dependencies]
+thevenin-types = { path = "../thevenin-types" }
+thevenin = { path = "../thevenin" }
+thiserror.workspace = true

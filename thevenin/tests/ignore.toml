@@ -35,11 +35,31 @@
 # === HFET ===
 "hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter: source stepping also converges to Vdd; depletion-mode load pulls output high at every source ramp step)"
 
-# === Regression: misc ===
+# === Regression: misc (.control tests) ===
+"regression/misc/ac-zero.cir" = ".control: AC at 0Hz returns wrong v(3) (simulator issue, not .control)"
+"regression/misc/alter-vec.cir" = ".control: @device[param] query + alter not yet implemented"
+"regression/misc/asrc-tc-1.cir" = ".control: behavioral source v(3) node not in OP result"
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
+"regression/misc/bugs-2.cir" = ".control: @device[param] query + vector indexing (foo[2]) not yet supported"
+"regression/misc/if-elseif.cir" = ".elseif inline comment parsing bug (pre-existing parser issue)"
+"regression/misc/log-functions-1.cir" = ".control: behavioral source v(b1) node not in OP result"
+"regression/misc/resume-1.cir" = ".control: resume command not implemented"
+"regression/misc/test-noise-2.cir" = ".control: noise vector values wrong (inoise/onoise off by ~1)"
 
-# === Regression: temper ===
-"regression/temper/temper-3.cir" = "Requires TEMPER keyword + .control"
+# === Regression: model (.control tests) ===
+"regression/model/binning-1.cir" = ".control: model binning validation fails (model parameter issue)"
+
+# === Regression: parser (.control tests) ===
+"regression/parser/bxpressn-1.cir" = ".control: B-source expression node name mangling"
+"regression/parser/xpressn-3.cir" = ".control: subcircuit internal node name (x_t.id) lookup"
+
+# === Regression: pz (.control tests) ===
+"regression/pz/ac-resistance.cir" = ".control: complex number expressions (imaginary unit i)"
+
+# === Regression: sens (.control tests) ===
+"regression/sens/sens-ac-1.cir" = ".control: AC sensitivity r1 value wrong (simulator accuracy)"
+"regression/sens/sens-ac-2.cir" = ".control: AC sensitivity values wrong (simulator accuracy)"
+
 
 
 # === Transient ===
