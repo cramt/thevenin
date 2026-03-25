@@ -714,12 +714,15 @@ pub fn stamp_ac_devices(
             stamp_imag_conductance(&mut sys.imag, vbic.base_idx, vbic.coll_idx, xqbco);
         }
 
-        // Self-heating thermal node: G_th + j*omega*CTH + charge-thermal cross-coupling
+        // Self-heating thermal node: SCALE*G_th + j*omega*SCALE*CTH + charge-thermal cross-coupling
+        // ngspice multiplies Irth_Vrth and Qcth_Vrth by SCALE (vbicload.c lines 4095-4098),
+        // so thermal conductance and capacitance must include the area*m factor.
+        // `s` = vbic.m * vbic.area (already defined above as SCALE).
         if let Some(rth_idx) = vbic.rth_idx {
-            let g_th = 1.0 / vbic.model.rth;
+            let g_th = s / vbic.model.rth;
             sys.real.add(rth_idx, rth_idx, g_th);
             if vbic.model.cth > 0.0 {
-                sys.imag.add(rth_idx, rth_idx, omega * vbic.model.cth);
+                sys.imag.add(rth_idx, rth_idx, omega * s * vbic.model.cth);
             }
 
             // Charge-thermal cross-coupling: j*omega * dQ/dVrth

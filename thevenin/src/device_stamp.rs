@@ -821,11 +821,12 @@ impl DeviceVoltageState {
                 //
                 // We compute derivatives numerically by perturbing Vrth.
                 if let Some(rth_idx) = vbic.rth_idx {
-                    let g_th = 1.0 / model.rth;
                     let sign = model.vbic_type.sign();
                     let scale = vbic.m * vbic.area;
-
-                    // Conductance: Irth = Vrth / RTH
+                    // Conductance: Irth = SCALE * Vrth / RTH
+                    // ngspice multiplies Irth_Vrth by SCALE (vbicload.c line 4096),
+                    // so the thermal conductance must include the area*m factor.
+                    let g_th = scale / model.rth;
                     system.matrix.add(rth_idx, rth_idx, g_th);
 
                     // Compute external resistance voltages for power calculation
