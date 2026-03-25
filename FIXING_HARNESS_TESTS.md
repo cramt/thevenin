@@ -4787,3 +4787,48 @@ arg^(1-M)`. The fix: use `sarg` directly instead of `arg * sarg`.
 - Switching from incremental to analytical charges in the NR loop causes
   convergence failures — the incremental approach provides better NR
   conditioning.
+
+### Session 58 — VBIC forward coupling (analytical), FO tolerance boundary
+
+**VBIC forward coupling stamps (dIth/dVj) — analytical implementation:**
+Implemented all 15 forward coupling derivatives analytically using existing
+companion conductances (dibe_dvbei, diciei_dvbei, etc.).  No new companion
+fields needed — the combined d(Itzf-Itzr)/dVbei = diciei_dvbei suffices
+because the ngspice kernel treats Vcei as independent (chain rule through
+Itzf/Itzr cancels to the combined derivative).
+
+Result: **converged values unchanged** (expected = 4.975285e-5, same as
+before).  Forward coupling only improves the Jacobian/convergence rate, not
+the equilibrium point.  The 0.205% error is a genuine model equation
+difference, not a convergence artifact.
+
+**Noise test regression:** Forward coupling caused singular matrix in
+`vbic/noise_scale_test.cir` during DC OP solve.  Root cause: during early
+NR iterations, forward coupling entries (e.g. diciei_dvbei * Vcei at
+vcrit ≈ 0.84V) are ~100× larger than the thermal diagonal (scale/RTH ≈
+0.007).  The sparse solver's pivoting can't handle this imbalance.  Fix
+would require either: (a) limiting forward coupling magnitude to a
+multiple of the thermal diagonal, or (b) only enabling after the first
+convergent NR attempt.  Reverted since the forward coupling doesn't help
+with the 0.205% error anyway.
+
+**FO test tolerance analysis:** The error (diff=1.017e-7) exceeds the
+effective tolerance (max(rel_tol=9.95e-8, abs_tol=1e-7) = 1e-7) by only
+1.7%.  The test uses interpolation comparison (row counts differ between
+expected and actual due to double DC sweep formatting differences).
+
+**Temperature adjustment equivalence proven:** The two-step ngspice
+approach (VBICtemp at T_amb, kernel re-adjusts for Vrth using
+rT=Tdev/Tini) is mathematically identical to our one-step approach
+(temperature_adjust(T_amb + Vrth) using tratio=Tdev/Tnom).  Both give
+identical results for power-law and exponential temperature scaling when
+T_amb = Tnom (default).  No FP difference was found in the temperature
+scaling formulas.
+
+**BJT CCS (collector-substrate capacitance):** Identified as parsed
+(CJS/CCS parameter) but not implemented in transient stamping.  However,
+implementing CCS would make the rtlinv test WORSE, not better: our V(3)
+is already higher than expected (falling slower), and CCS adds load
+capacitance that further slows the falling edge.  The timing discrepancy
+has a different root cause (likely in charge storage or transit time
+handling).
