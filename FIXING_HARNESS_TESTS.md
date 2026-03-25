@@ -4679,3 +4679,44 @@ This caused:
 After fix: DD t3/t4/t5 and PD t3/t5 all converge but have ~20-500% body voltage
 errors due to remaining model issues. The drain stamp also needed correction:
 `rhs[d] -= ceq_d - ceq_bd + ceq_iii + ceq_gidl` (ceq_bd subtracted, not added).
+
+---
+
+## Session 56: un-ignored bsim3soipd/RampVg2, investigated VBIC forward coupling
+
+**Un-ignored test:** `bsim3soipd/RampVg2.cir` — now passes after the junction
+ceq sign convention fix (aa473df) and @device[param] feature (4c6cca9).
+
+**VBIC forward coupling investigation (FO/temp/FG tests):**
+
+The remaining VBIC self-heating error (~0.205% for FO, ~2.3% for temp, ~3.3%
+for FG) was hypothesized to be caused by missing forward coupling stamps
+(dIth/dV_electrical in the thermal row). These stamps are present in ngspice
+(vbicload.c lines 1435-1464) but absent in our code.
+
+Two implementation approaches were tried:
+1. **Analytical forward coupling** — computed dIth/dVx using chain rule with
+   companion derivatives. Caused singular matrix (NR non-convergence).
+2. **Numerical forward coupling** — perturbed each junction voltage, recomputed
+   companion + Ith, stamped the numerical derivative. Also caused singular matrix.
+
+**Key finding: forward coupling doesn't change the converged answer.** The MNA
+equation at convergence is G_th * Vrth = Ith regardless of whether forward
+coupling is in the Jacobian. Forward coupling only affects the NR convergence
+PATH. The ~0.205% error must be from a model-level discrepancy, not a solver
+issue. Both approaches made NR diverge, suggesting the forward coupling
+introduces positive feedback that destabilizes the NR iteration (even though
+the same stamps work in ngspice's sparse direct solver, our factorization may
+handle the resulting matrix structure differently).
+
+**Current status of VBIC self-heating:**
+- Reverse coupling (dI_branch/dVrth in electrical rows): IMPLEMENTED ✓
+- Thermal self-derivative (dIth/dVrth on thermal diagonal): IMPLEMENTED ✓
+- Forward coupling (dIth/dV_elec in thermal row): NOT IMPLEMENTED (causes NR divergence)
+- Thermal capacitance (CTH, transient): NOT IMPLEMENTED (not needed for DC tests)
+
+**Remaining 0.205% error** is a model-level issue — likely a subtle FP
+evaluation order difference in the temperature-adjusted companion computation
+vs ngspice's vbic_4T_et_cf_fj kernel. The error grows linearly with Vrth
+(power dissipation × RTH), consistent with a small systematic offset in the
+thermal feedback loop gain.
