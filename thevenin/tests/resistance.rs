@@ -172,7 +172,6 @@ fn res_simple_transient_data_constant() {
     }
 }
 
-#[ignore = "TODO: requires transient analysis (.tran) - US-009"]
 #[test]
 fn res_simple_full_output_comparison() {
     // Full transient output comparison against .out reference.
@@ -223,7 +222,6 @@ fn res_partition_ac_expected_values() {
     }
 }
 
-#[ignore = "TODO: requires AC analysis (.ac) - US-012"]
 #[test]
 fn res_partition_full_output_comparison() {
     // Full AC output comparison against .out reference.
@@ -249,7 +247,6 @@ fn res_array_parses() {
     assert!(netlist.elements().count() >= 11);
 }
 
-#[ignore = "TODO: requires resistor model support (RSH, geometry W/L, multiplier m, scale) and AC/transient analysis"]
 #[test]
 fn res_array_dc_op() {
     // Model-based resistor R3 uses rmodel1 with RSH=1000, which requires
@@ -270,7 +267,6 @@ fn res_array_dc_op() {
     assert_abs_diff_eq!(op_branch_current(&result, "VR5"), 1e-4, epsilon = 1e-9);
 }
 
-#[ignore = "TODO: requires transient analysis (.tran) - US-009, AC analysis (.ac) - US-012, and resistor model support"]
 #[test]
 fn res_array_full_output_comparison() {
     let _netlist = parse_cir(RES_ARRAY_CIR, "res_array.cir");

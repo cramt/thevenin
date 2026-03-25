@@ -140,7 +140,6 @@ Ve e 0 0.0
 
 /// Test PMOS SOI operating point.
 #[test]
-#[ignore = "US-059: PD floating body NR convergence — needs systematic diff against ngspice companion/stamp"]
 fn bsim3soi_pd_pmos_op() {
     let cir = format!(
         "\

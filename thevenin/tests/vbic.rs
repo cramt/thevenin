@@ -289,7 +289,6 @@ R3 R3_P R3_N 500k
 // ===================== temp debug: identify convergence failure step =====================
 
 #[test]
-#[ignore = "debug test for finding convergence failure step"]
 fn test_vbic_temp_step_debug() {
     // Try DC sweep at 150°C in small ranges to find the failing step
     for (start, stop) in &[
@@ -328,7 +327,6 @@ Q1 Q1_C Q1_B 0 N1
 // ===================== temp: Temperature test (DC sweep at 150°C) =====================
 
 #[test]
-#[ignore = "requires .OPTIONS TEMP support in simulator"]
 fn test_vbic_temp_150c() {
     let cir = format!(
         "\

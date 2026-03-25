@@ -220,7 +220,6 @@ Vb b 0 0.0
 
 /// Test DC sweep for FD SOI MOSFET.
 #[test]
-#[ignore = "SOI FD DC sweep convergence needs source-stepping improvements"]
 fn bsim3soi_fd_dc_sweep() {
     let cir = format!(
         "\

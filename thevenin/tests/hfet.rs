@@ -45,7 +45,6 @@ fn test_hfet_id_vgs() {
 /// DCFL inverter with NHFET subcircuits and transient analysis.
 /// This test is ignored until transient analysis for HFET is verified.
 #[test]
-#[ignore = "HFET inverter requires transient analysis support"]
 fn test_hfet_inverter() {
     let cir = include_str!("fixtures/hfet/inverter.cir");
     let _netlist = Netlist::parse(cir).unwrap();
