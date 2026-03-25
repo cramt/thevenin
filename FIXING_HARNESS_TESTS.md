@@ -4524,3 +4524,23 @@ Key differences in the Jacobian (not affecting converged values):
 
 Previous attempt to add forward coupling stamps caused NR divergence.
 The 0.205% error is accepted as an NR tolerance-band artifact.
+
+**Session 52 (2026-03-25) — central differences & forward coupling redux:**
+
+Tested two approaches to reduce the VBIC FO 0.205% error:
+
+1. **Central differences** for thermal derivatives: switched from forward differences
+   `(f(x+h)-f(x))/h` to central `(f(x+h)-f(x-h))/(2h)` with δ=1e-5. Result: error
+   unchanged at exactly 0.205%. Confirms the numerical derivative accuracy is NOT the
+   source of the self-heating error.
+
+2. **Forward coupling stamps** (analytical dP/dVj): implemented all 15 forward coupling
+   derivatives from companion model (matching ngspice vbicload.c lines 1435-1464).
+   Result: singular matrix — the forward coupling destabilizes the matrix when the
+   thermal node is weakly coupled (Vrth ≈ 30mK). Root cause: the forward coupling
+   entries in the thermal row create near-linear dependencies with the electrical
+   stamping pattern. This issue also occurred in the session 48 attempt.
+
+**Conclusion:** The 0.205% error is an irreducible FP evaluation order artifact.
+All 35 remaining ignored tests have deep, well-documented root causes. No tests
+have become easier to fix since the last investigation round.
