@@ -454,9 +454,12 @@ fn junction_charge(v: f64, cj0: f64, vj: f64, m: f64, fc: f64) -> f64 {
     }
     let fc_vj = fc * vj;
     if v < fc_vj {
+        // Q = VJ * CJ * (1 - (1-V/VJ)^(1-M)) / (1-M)
+        // Matches ngspice bjtload.c: sarg = exp(-xme*log(arg)) = arg^(-M),
+        // then arg * sarg = arg^(1-M).
         let arg = 1.0 - v / vj;
-        let sarg = arg.powf(1.0 - m);
-        vj * cj0 * (1.0 - arg * sarg) / (1.0 - m)
+        let sarg = arg.powf(1.0 - m); // = arg^(1-M) = (1-V/VJ)^(1-M)
+        vj * cj0 * (1.0 - sarg) / (1.0 - m)
     } else {
         // Precomputed coefficients (matching ngspice BJTtf1..BJTtf7)
         let f1 = vj * (1.0 - (1.0 - fc).powf(1.0 - m)) / (1.0 - m);
