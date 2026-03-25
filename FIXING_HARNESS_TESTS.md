@@ -380,6 +380,8 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 62 | `@device[param]` queries for .print directives | mna.rs, transient.rs | `@m1[Vbs]` device parameter queries |
 | 63 | BSIM3SOI-DD/PD junction current ceq sign convention | bsim3soi_dd.rs, bsim3soi_pd.rs | ceq_bs/ceq_bd sign corrected |
 | 64 | BJT junction_charge exponent fix | bjt.rs | `arg^(1-M)` instead of `arg^(2-M)` |
+| 65 | .control AC vector lookup — use vec_to_real() for complex vectors | vecexpr.rs | `v(3)` in .control now works for AC analysis results |
+| 66 | .param spaces-around-equals in process_conditionals | parse.rs | `.param key = value` form now parsed for .if/.elseif conditions |
 
 ## Investigations that did not yield fixes
 
@@ -403,7 +405,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 
 ## Current status of all remaining ignored tests (as of 2026-03-25)
 
-**Test counts:** ~584 passing, ~33 ignored
+**Test counts:** ~588 passing, ~31 ignored
 
 ### VBIC (4 tests)
 
@@ -462,15 +464,17 @@ MOSFET driver error. Extensively investigated across sessions.
 | mosamp | timeout | Level 2 MOSFET features needed |
 | fourbitadder | timeout | Circuit too complex for current solver |
 
-### Missing features / infrastructure (12 tests)
+### Missing features / infrastructure (10 tests)
 
 | Category | Count | Tests |
 |---|---|---|
-| .control scripting | 4 | Various .control-dependent tests |
-| TEMPER keyword | 4 | Needs expression-in-parameter + .control |
+| .control: missing features | 6 | alter-vec (alter cmd), bugs-2 (vec indexing), resume-1 (stop/resume), asrc-tc-1/log-functions-1 (B-source nodes), ac-resistance (imaginary unit) |
+| .control: simulator accuracy | 4 | test-noise-2 (noise 2×), binning-1 (model binning), sens-ac-1/2 (AC sensitivity) |
 | BSIM1/BSIM2 models | 2 | Entire models not implemented |
-| VBIC diffamp | 1 | NR non-convergence (9-transistor, needs source stepping) |
-| No reference output | 1 | general/diffpair (ngspice says "To be done") |
+| VBIC diffamp | 1 | NR non-convergence (13-transistor, needs source stepping) |
+| No reference output | 2 | general/diffpair, general/fourbitadder (ngspice says "To be done") |
+| B-source/parser | 2 | bxpressn-1 (node name mangling), xpressn-3 (subcircuit node lookup) |
+| Misc | 1 | asrc-tc-2 (parameter expressions r={expr}) |
 
 ### Summary classification
 
@@ -481,9 +485,10 @@ MOSFET driver error. Extensively investigated across sessions.
 | Transmission line FP | 4 | No — eigendecomposition + convolution FP |
 | Deep transient dynamics | 2 | No — model accuracy limitation |
 | NR convergence / wrong OP | 2 | No — need solver architectural changes |
-| Missing infrastructure | 12 | No — entire subsystems missing |
+| Missing infrastructure | 10 | No — entire subsystems missing |
 
 All remaining tests have well-understood, documented root causes. None can be
 fixed without either (a) exactly matching ngspice FP evaluation order, (b)
-implementing missing subsystems (.control, BSIM1/2, XSPICE), or (c) deep
-solver/model architectural changes (source stepping, analytical sensitivity).
+implementing missing subsystems (alter, stop/resume, model binning, BSIM1/2),
+or (c) deep solver/model architectural changes (source stepping, analytical
+sensitivity).

@@ -252,7 +252,13 @@ fn process_conditionals(lines: Vec<(usize, String)>) -> Vec<(usize, String)> {
                 if active {
                     // Collect .param definitions for future condition evaluation
                     if tokens[0] == ".PARAM" || tokens[0] == ".PARAMETERS" {
-                        for tok in line.split_whitespace().skip(1) {
+                        // Join tokens after .PARAM and normalize spaces around '='
+                        // to handle both "key=value" and "key = value" forms
+                        let rest: String =
+                            line.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+                        let normalized =
+                            rest.replace(" = ", "=").replace(" =", "=").replace("= ", "=");
+                        for tok in normalized.split_whitespace() {
                             if let Some((k, v)) = tok.split_once('=') {
                                 let k = k.trim().to_lowercase();
                                 let v = v.trim();

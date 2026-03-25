@@ -567,12 +567,12 @@ fn parse_primary(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<
                     }
                     let vec_name = format!("{name}({inner})");
                     if let Some(v) = ctx.find_vector(&vec_name) {
-                        return Ok(VecVal { data: v.real.clone() });
+                        return Ok(VecVal { data: vec_to_real(v) });
                     }
                     // Also try without lowercase normalization
                     let vec_name_lower = vec_name.to_lowercase();
                     if let Some(v) = ctx.find_vector(&vec_name_lower) {
-                        return Ok(VecVal { data: v.real.clone() });
+                        return Ok(VecVal { data: vec_to_real(v) });
                     }
                     return Err(format!("undefined vector: {vec_name}"));
                 }

@@ -35,30 +35,28 @@
 # === HFET ===
 "hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter: source stepping also converges to Vdd; depletion-mode load pulls output high at every source ramp step)"
 
-# === Regression: misc (.control tests) ===
-"regression/misc/ac-zero.cir" = ".control: AC at 0Hz returns wrong v(3) (simulator issue, not .control)"
-"regression/misc/alter-vec.cir" = ".control: @device[param] query + alter not yet implemented"
-"regression/misc/asrc-tc-1.cir" = ".control: behavioral source v(3) node not in OP result"
+# === Regression: misc ===
+"regression/misc/alter-vec.cir" = ".control: @v1[pulse] waveform param query + alter command execution not implemented"
+"regression/misc/asrc-tc-1.cir" = ".control: undefined vector v(3) — behavioral source (ASRC) nodes not in OP result"
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
-"regression/misc/bugs-2.cir" = ".control: @device[param] query + vector indexing (foo[2]) not yet supported"
-"regression/misc/if-elseif.cir" = ".elseif inline comment parsing bug (pre-existing parser issue)"
-"regression/misc/log-functions-1.cir" = ".control: behavioral source v(b1) node not in OP result"
-"regression/misc/resume-1.cir" = ".control: resume command not implemented"
-"regression/misc/test-noise-2.cir" = ".control: noise vector values wrong (inoise/onoise off by ~1)"
+"regression/misc/bugs-2.cir" = ".control: vector indexing foo[2] not supported + @v1[dc] sweep vector lookup needed"
+"regression/misc/log-functions-1.cir" = ".control: undefined vector v(b1) — behavioral source (B-source) nodes not in OP result"
+"regression/misc/resume-1.cir" = ".control: stop when + resume commands not implemented (requires transient state preservation)"
+"regression/misc/test-noise-2.cir" = ".control: noise values ~2x expected (missing resistor flicker noise kf/af implementation)"
 
-# === Regression: model (.control tests) ===
-"regression/model/binning-1.cir" = ".control: model binning validation fails (model parameter issue)"
+# === Regression: model ===
+"regression/model/binning-1.cir" = ".control: BSIM4 model binning (nmos_tst.1/.2 bin selection by L/W) not implemented"
 
-# === Regression: parser (.control tests) ===
-"regression/parser/bxpressn-1.cir" = ".control: B-source expression node name mangling"
-"regression/parser/xpressn-3.cir" = ".control: subcircuit internal node name (x_t.id) lookup"
+# === Regression: parser ===
+"regression/parser/bxpressn-1.cir" = ".control: undefined vector v(n1155_t) — B-source internal node naming not implemented"
+"regression/parser/xpressn-3.cir" = ".control: undefined vector v(x_t.id) — subcircuit internal node lookup not implemented"
 
-# === Regression: pz (.control tests) ===
-"regression/pz/ac-resistance.cir" = ".control: complex number expressions (imaginary unit i)"
+# === Regression: pz ===
+"regression/pz/ac-resistance.cir" = ".control: undefined variable 'i' — complex imaginary unit not implemented in expression evaluator"
 
-# === Regression: sens (.control tests) ===
-"regression/sens/sens-ac-1.cir" = ".control: AC sensitivity r1 value wrong (simulator accuracy)"
-"regression/sens/sens-ac-2.cir" = ".control: AC sensitivity values wrong (simulator accuracy)"
+# === Regression: sens ===
+"regression/sens/sens-ac-1.cir" = ".control: AC sensitivity s[r1]=1.27 vs expected 0.001764 (simulator accuracy issue)"
+"regression/sens/sens-ac-2.cir" = ".control: AC sensitivity values wrong (simulator accuracy issue)"
 
 
 
