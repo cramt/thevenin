@@ -845,9 +845,22 @@ impl Bsim3SoiDdModel {
             self.nsub
         };
         self.qsi = CHARGE_Q * npeak * 1e6 * self.tsi;
-        // csieff and qsieff use surface potential-corrected values
-        self.csieff = self.csi;
-        self.qsieff = self.qsi.max(1e-20);
+
+        // Effective silicon capacitance (for body potential calculation).
+        // ngspice b3soiddset.c lines 975-992: csieff/qsieff depend on VBSA.
+        // When VBSA is too large for the given tsi, fall back to csi/qsi.
+        // Otherwise compute the effective depletion-corrected thickness (tsieff).
+        let tmp1_vbsa = 2.0 * EPSSI * self.vbsa / CHARGE_Q / (1e6 * npeak);
+        let tmp2_tsi2 = self.tsi * self.tsi;
+        if tmp2_tsi2 < tmp1_vbsa {
+            // VBSA too large: ngspice prints warning and uses full tsi
+            self.csieff = self.csi;
+            self.qsieff = self.qsi;
+        } else {
+            let tsieff = (tmp2_tsi2 - tmp1_vbsa).sqrt();
+            self.csieff = EPSSI / tsieff;
+            self.qsieff = CHARGE_Q * npeak * 1e6 * tsieff;
+        }
         // Back-gate flat-band voltage
         // Note: ngspice has vfbb = -type * Vtm * ln(npeak / nsub), but the sign
         // correction is omitted here because it interacts with other body coupling
