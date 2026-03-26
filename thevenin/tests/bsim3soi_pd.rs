@@ -90,7 +90,6 @@ const PMOS_SOI_PARAMS: &str = "\
 /// Test that a single NMOS SOI transistor can reach a DC operating point.
 /// Uses the floating body configuration (4 terminals: d g s e).
 #[test]
-#[ignore = "US-059: PD floating body NR convergence — needs systematic diff against ngspice companion/stamp"]
 fn bsim3soi_pd_nmos_op() {
     let cir = format!(
         "\
@@ -112,7 +111,6 @@ Ve e 0 0.0
 
 /// Test NMOS SOI with different bias points to verify operation regions.
 #[test]
-#[ignore = "US-059: PD floating body NR convergence — needs systematic diff against ngspice companion/stamp"]
 fn bsim3soi_pd_nmos_bias_points() {
     for (vgs, vds) in [(0.5, 0.1), (1.0, 1.0), (1.0, 1.5), (1.5, 1.5)] {
         let cir = format!(
@@ -203,7 +201,6 @@ m2 out in ss e n1 W=10u L=0.25u
 
 /// SOI Inverter with input high — output should be near ground.
 #[test]
-#[ignore = "SOI inverter convergence needs source-stepping improvements"]
 fn bsim3soi_pd_inverter_input_high() {
     let cir = format!(
         "\
@@ -266,7 +263,6 @@ Vb b 0 0.0
 
 /// Test DC sweep from ngspice-upstream/tests/bsim3soipd/inv2.cir pattern.
 #[test]
-#[ignore = "SOI DC sweep convergence needs source-stepping improvements"]
 fn bsim3soi_pd_dc_sweep() {
     let cir = format!(
         "\

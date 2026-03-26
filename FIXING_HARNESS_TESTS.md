@@ -406,9 +406,19 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 
 ---
 
-## Current status of all remaining ignored tests (as of 2026-03-25)
+## Current status of all remaining ignored tests (as of 2026-03-26)
 
-**Test counts:** ~590 passing, ~41 ignored
+**Test counts:** ~595 passing, ~44 skipped (41 harness + 3 unit tests)
+
+### Recently un-ignored (session 70, 2026-03-26)
+
+| Test | Type | Notes |
+|---|---|---|
+| bsim3soi_pd_nmos_op | unit | PD NMOS OP now converges |
+| bsim3soi_pd_nmos_bias_points | unit | PD NMOS multiple bias points pass |
+| bsim3soi_pd_inverter_input_high | unit | PD inverter with input=2.5V converges |
+| bsim3soi_pd_dc_sweep | unit | PD DC sweep (0.1-2.5V) passes |
+| test_fourbitadder | unit | Transient fourbitadder completes in ~61s |
 
 ### VBIC (4 tests)
 
