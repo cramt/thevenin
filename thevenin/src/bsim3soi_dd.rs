@@ -2058,26 +2058,63 @@ pub fn bsim3soi_dd_companion(
     let gbs_jct = dibs1_dvb + dibs2_dvb + dibs3_dvb + dibs4_dvb;
     let gbd_jct = dibd1_dvb + dibd2_dvb + dibd3_dvb + dibd4_dvb;
 
-    // Impact ionization (DD: b3soiddld.c lines 2156-2185)
-    // ngspice uses T2 = alpha1 + alpha0/Leff as both the enable check and
-    // prefactor (not alpha0 alone).  The full ngspice formula also uses
-    // diffVdsii (Vds - Vdseff_ii) instead of our simplified (Vds - beta0),
-    // but at typical test operating points (Vds < Vdsat) both yield Iii ≈ 0.
-    let t2_ii = model.alpha1 + sp.alpha0 / sp.leff;
-    let (iii, gii_d, gii_g, gii_b) = if t2_ii <= 0.0 || sp.beta0 <= 0.0 {
-        (0.0, 0.0, 0.0, 0.0)
-    } else {
-        let t0 = vds_i - sp.beta0;
-        if t0 <= 0.0 {
-            (0.0, 0.0, 0.0, 0.0)
+    // Vdsatii for impact ionization (b3soiddld.c lines 1761-1810)
+    // When AII > 0, the ionization saturation voltage is computed from
+    // AII/BII/CII/DII parameters; otherwise it defaults to Vdsat.
+    let vdsatii = if model.aii > 0.0 {
+        let t0_cii = if model.cii != 0.0 {
+            let t0_lim = model.cii / 3.0_f64.sqrt() + model.dii;
+            let t1_lim = vds_i - t0_lim - 0.1;
+            let t2_lim = (t1_lim * t1_lim + 0.4).sqrt();
+            let t3_lim = t0_lim + 0.5 * (t1_lim + t2_lim);
+            let t4_lim = t3_lim - model.dii;
+            let t5_cii = model.cii / t4_lim;
+            t5_cii * t5_cii
         } else {
-            let t1 = (-sp.beta0 / t0.max(1e-20)).exp();
-            let iii = t2_ii * t0 * ids * t1;
-            let gii_d = t2_ii * (gds * t0 * t1 + ids * t1 + ids * t1 * sp.beta0 / (t0 * t0));
-            let gii_g = t2_ii * t0 * gm * t1;
-            let gii_b = t2_ii * t0 * gmbs * t1;
-            (iii, gii_d, gii_g, gii_b)
-        }
+            0.0
+        };
+        let t0 = t0_cii + 1.0;
+        let t3 = model.aii + model.bii / sp.leff;
+        let t4 = 1.0 / (t0 * vgsteff + t3 * esat_l);
+        esat_l * vgsteff * t4
+    } else {
+        vdsat
+    };
+
+    // Effective Vdsii: smooth clamp Vdseffii ≈ min(Vdsatii, Vds)
+    // (b3soiddld.c lines 1847-1866)
+    let t1_ii = vdsatii - vds_i - sp.delta;
+    let t2_ii_val = (t1_ii * t1_ii + 4.0 * sp.delta * vdsatii).sqrt();
+    let vdseffii = vdsatii - 0.5 * (t1_ii + t2_ii_val);
+    let diff_vdsii = vds_i - vdseffii;
+
+    // Impact ionization (DD: b3soiddld.c lines 2156-2200)
+    // Uses diffVdsii = Vds - Vdseffii (excess drain voltage beyond saturation)
+    // as the electric field driving impact ionization, not Vds - beta0.
+    let t2_alpha = model.alpha1 + sp.alpha0 / sp.leff;
+    let (iii, gii_d, gii_g, gii_b) = if t2_alpha <= 0.0 || sp.beta0 <= 0.0 {
+        (0.0, 0.0, 0.0, 0.0)
+    } else if diff_vdsii > sp.beta0 / EXP_THRESHOLD {
+        let t0 = -sp.beta0 / diff_vdsii;
+        let t1 = t2_alpha * diff_vdsii * t0.exp();
+        let iii = t1 * ids;
+        // Simplified derivatives: dIii/dV ≈ Iii/Ids * dIds/dV
+        // (full ngspice uses decomposed Gm0/Gds0/Gmb0 with chain rule)
+        let t3 = t1 / diff_vdsii * (t0 - 1.0);
+        let gii_d = t1 * gds - t3 * ids;
+        let gii_g = t1 * gm;
+        let gii_b = t1 * gmbs;
+        (iii, gii_d, gii_g, gii_b)
+    } else if diff_vdsii > 0.0 {
+        let t3_min = t2_alpha * MIN_EXP;
+        let t1 = t3_min * diff_vdsii;
+        let iii = t1 * ids;
+        let gii_d = t3_min * ids + t1 * gds;
+        let gii_g = t1 * gm;
+        let gii_b = t1 * gmbs;
+        (iii, gii_d, gii_g, gii_b)
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
     };
 
     // Equivalent current sources for NR companion model

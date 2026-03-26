@@ -1399,9 +1399,9 @@ pub fn bsim3soi_fd_companion(
         let vgsteff_val = vtm * sp.cdep0 / cox * exp_vgst;
         let t3 = vgsteff_val / (n * vtm);
         let t1_vb = -t3 * (dvth_dvb + t0 * vtm * dn_dvb);
-        // ngspice line 1339: T1 = t3*dVgs_eff_dVg + T1_coeff*dVbseff_dVg
-        // where T1_coeff ≈ t0_chain * t3 (derived from chain rule)
-        let t1_chain = t0_chain * t3;
+        // ngspice line 1339: dVgsteff_dVg = T3*dVgs_eff_dVg + T1*dVbseff_dVg
+        // where T1 = dVgsteff/dVbseff = -T3*(dVth_dVb + T0*Vtm*dn_dVb)
+        let t1_chain = t1_vb;
         (
             vgsteff_val,
             t3 * dvgs_eff_dvg + t1_chain * dvbseff_dvg,
@@ -1428,7 +1428,8 @@ pub fn bsim3soi_fd_companion(
         let base_dvg = (t2_val * dt1_dvg - t1 * dt2_dvg) / t3;
         let base_dvd = (t2_val * dt1_dvd - t1 * dt2_dvd) / t3;
         // ngspice line 1382-1383: add chain-rule correction
-        let t4_chain = t0_chain * base_dvg;
+        // T4 = dVgsteff/dVbseff = (T2*dT1_dVb - T1*dT2_dVb) / T3
+        let t4_chain = t4_vb;
         (
             vgsteff_val,
             base_dvg * dvgs_eff_dvg + t4_chain * dvbseff_dvg,

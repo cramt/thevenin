@@ -385,6 +385,8 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 67 | .control vector indexing `foo[2]` + `@v1[dc]` sweep vector | vecexpr.rs, simulate.rs, parse.rs | Vector indexing, DC sweep param alias, model name capture |
 | 68 | .control `ceil`/`floor`/`nint`/`tan`/`atan` functions | vecexpr.rs | Missing math functions in .control evaluator |
 | 69 | Resistor flicker noise (KF/AF/EF) + noise output V/√Hz | noise.rs, mna.rs, parse.rs, vecexpr.rs | Flicker noise with model params, sqrt conversion for .control |
+| 70 | BSIM3SOI-FD Vgsteff chain-rule derivative corrections | bsim3soi_fd.rs | t1_chain/t4_chain used wrong dVgsteff/dVbseff in branches 2+3 |
+| 71 | BSIM3SOI-DD impact ionization Vdseffii formula | bsim3soi_dd.rs | Used Vds-beta0 instead of Vds-Vdseffii (proper Vdsatii/smooth-clamp) |
 
 ## Investigations that did not yield fixes
 
@@ -405,6 +407,10 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | BJT CCS (collector-substrate capacitance) | Would make rtlinv WORSE — CCS adds load capacitance |
 | BSIM3SOI-PD t4 tied-body Vth/mobility audit (session 71) | Full line-by-line comparison: Vth formula, mobility (MOBMOD=0/1/2), Vgsteff, NSUB handling, k1eff, VFB, constants — all match ngspice. Error pattern: 3-4% in strong inversion (Vb-independent), 6-8% near threshold (peaks at Vb≈0). Not a simple Vth offset; ~3% baseline suggests subtlety in Abulk, CLM, or DIBL chain. |
 | VBIC FO tolerance margin analysis (session 71) | diff=1.017e-7 vs tol=1.0e-7 at Vc=2.2. Error grows linearly with Vc (proportional to Vrth). Column max=2.17e-2 gives col_abs=4.35e-8 (insufficient). rel_tol=9.93e-8 < abs_tol=1.0e-7. No single tolerance tweak can pass: error exceeds rel_tol (0.2%) at ALL Vc > 2.2. |
+| BSIM3SOI-FD Vgsteff chain-rule (session 72) | Fixed t1_chain/t4_chain to use correct dVgsteff/dVbseff (t1_vb/t4_vb) in branches 2+3. Jacobian-only fix; converged Ids unchanged (FD t3/t4/t5 errors persist). |
+| BSIM3SOI-DD impact ionization Vdseffii (session 72) | Fixed diffVdsii = Vds - Vdseffii (smooth-clamped Vdsatii) instead of Vds - beta0. Correct formula but Iii ≈ 0 for test params (beta0=20.5V >> diffVdsii≈0.3V → exp(-68) ≈ 0). DD body voltage offset (92mV) comes from body coupling chain, not Iii. |
+| BSIM3SOI-DD body node audit (session 72) | Missing: body-to-P contact current (Ibp/Gbp*), charge-related body conductances (gcb*), minIsub parameter. These omissions remove current paths that stabilize body voltage in floating-body configurations. |
+| CPL Right_deg polynomial truncation (session 72) | Agent reported missing Right_deg=2 truncation in matrix_p_mult_fn, but verified this is UNUSED in ngspice: matrix_p_mult is called with deg_o for both deg and deg_o params. 0.8% error remains FP rounding in convolution accumulation. |
 
 ---
 
