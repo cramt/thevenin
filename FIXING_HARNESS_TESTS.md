@@ -403,6 +403,8 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | Tolerance adjustments (rel_tol, additive formula) | Progressive errors can't be fixed by tolerance |
 | MOS6 mos6inv settled-state noise | 2.4µV ground noise, per-variable tolerance needed |
 | BJT CCS (collector-substrate capacitance) | Would make rtlinv WORSE — CCS adds load capacitance |
+| BSIM3SOI-PD t4 tied-body Vth/mobility audit (session 71) | Full line-by-line comparison: Vth formula, mobility (MOBMOD=0/1/2), Vgsteff, NSUB handling, k1eff, VFB, constants — all match ngspice. Error pattern: 3-4% in strong inversion (Vb-independent), 6-8% near threshold (peaks at Vb≈0). Not a simple Vth offset; ~3% baseline suggests subtlety in Abulk, CLM, or DIBL chain. |
+| VBIC FO tolerance margin analysis (session 71) | diff=1.017e-7 vs tol=1.0e-7 at Vc=2.2. Error grows linearly with Vc (proportional to Vrth). Column max=2.17e-2 gives col_abs=4.35e-8 (insufficient). rel_tol=9.93e-8 < abs_tol=1.0e-7. No single tolerance tweak can pass: error exceeds rel_tol (0.2%) at ALL Vc > 2.2. |
 
 ---
 
