@@ -418,12 +418,14 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | VBIC FO slope tolerance analysis (session 75) | Debugged comparison code path: row-by-row comparison with slope tolerance IS applied (grp_len=707, x_range=5.0, dt_tol=0.01). Slope at Vc=2.2 is only 3.115e-6 V/V (smooth Gummel curve, not a steep edge), giving slope_tol=3.115e-8 — insufficient vs diff=1.017e-7. At Vc=5V, error grows to ~0.47% (3e-7 diff) which exceeds even slope_tol=3.1e-7. Confirmed: FO error cannot be addressed by comparison tolerance improvements because the curve is too smooth for slope tolerance to help. |
 | VBIC kernel vs temperature_adjust FP audit (session 75) | Traced ngspice vbic_4T_et_cf_fj kernel (lines 1591-1720) and vbic_4T_et_cf_t temp function (lines 91-340). Verified: (1) ISatT uses identical formula `IS * (rT^XIS * exp(-EA*(1-rT)/Vtv))^(1/NF)`, (2) both use same constants KB=1.380662e-23, QE=1.602189e-19, (3) NF exponent uses nominal NF in both cases (kernel uses p[12] which is ambient NF, = nominal when Tamb=Tnom), (4) safe_exp doesn't clip for normal operating conditions. No formula difference found; 0.2% error remains attributable to accumulated FP rounding differences across the full computation chain. |
 | BSIM3SOI-DD Ibp/Gbp* body contact analysis (session 75) | Ibp (body-to-P contact current, b3soiddld.c:2482-2561) is zero when bodyMod=0. Test model has RBODY=0 making Ibp and its Gbp* derivatives negligibly small. The Gbp* matrix terms affect body node conditioning but cannot reduce 17-30% Ids error to within tolerance. minIsub ~2.5e-18A for test params (negligible). Missing gcb* are AC/transient charge terms only. DD body voltage offset requires implementing the full body coupling chain (Ibp/Gbp* + gcb* + Gjsd/Gjdd), a large architectural change (~300+ LOC). |
+| VBIC FO additive tolerance experiment (session 76) | Tried adopting SPICE-standard additive tolerance (reltol×\|val\|+abstol, matching ngspice niconv.c). Passed Vc=2.2 (first failure) but failed at Vc=3.75, then Vc=4.8 — error grows with Vrth (self-heating power) across all 7 VB sweeps of the double DC sweep (707 rows). Even with HARNESS_ABS_TOL=2e-7, fails at Vc=4.8 (diff=3.278e-7 vs tol=3.22e-7). At higher VB sweeps (VB=750mV+), rel_error exceeds 0.2% and no tolerance formula can save it. Confirmed: FO requires matching ngspice's exact kernel FP eval order, not tolerance adjustments. |
+| BSIM3SOI-PD parameter audit (session 76) | Comprehensive comparison of Rust PD model defaults vs ngspice b3soipdset.c. Found: (1) PD model has NO binning support (all 180+ L/W/P coefficients missing), (2) several base defaults wrong (k3=80 vs 0, keta=-0.047 vs -0.6, tbox=8e-8 vs 3e-7), (3) SOI-specific params missing (kb1, k1w1, k1w2, fbody, ntox, delvt, ~30 more). However, t4 test model card explicitly sets all critical Vth parameters (K1=0.49, K2=0.1, K3=0, KETA=0.1, VTH0=0.42) and uses no binning coefficients, so these defaults don't affect the 6.3% error. Root cause remains in Abulk/CLM/DIBL computation chain as identified in session 71. The missing parameters are important for future model completeness but don't explain the t4 test failure. |
 
 ---
 
-## Current status of all remaining ignored tests (as of 2026-03-26)
+## Current status of all remaining ignored tests (as of 2026-03-26, session 76)
 
-**Test counts:** ~597 passing, ~42 skipped (39 harness + 3 unit tests)
+**Test counts:** 597 passing, 42 skipped (39 harness + 3 unit tests)
 
 ### Recently un-ignored (session 74, 2026-03-26)
 
@@ -451,10 +453,14 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | temp | 2.3% | Self-heating FP evaluation order |
 | CEamp | AC error | Avalanche derivative coupling + self-heating FP |
 
-The 0.205% FO error exceeds tolerance by only 1.7% (diff=1.017e-7 vs tol=1.0e-7).
-Forward coupling stamps (dIth/dVj) do NOT affect converged values — confirmed across
-6+ implementation attempts. The error is an irreducible FP evaluation order artifact
-between our two-step temperature evaluation and ngspice's single-pass kernel.
+The 0.205% FO error exceeds tolerance by only 1.7% (diff=1.017e-7 vs tol=1.0e-7) at
+the first failing point (VB=700mV, Vc=2.2V). However, the FO test is a double DC sweep
+(7 VB steps × 101 VC steps = 707 rows), and the error grows with self-heating power
+across the entire dataset. At higher VB sweeps (VB≥750mV), the relative error exceeds
+0.2% and no tolerance formula can fix it. Forward coupling stamps (dIth/dVj) do NOT
+affect converged values — confirmed across 6+ implementation attempts. The error is an
+irreducible FP evaluation order artifact between our two-step temperature evaluation
+and ngspice's single-pass kernel.
 
 VBIC self-heating status:
 - Reverse coupling (dI_branch/dVrth in electrical rows): IMPLEMENTED
@@ -480,6 +486,10 @@ Key remaining discrepancies vs C source:
 - Missing Gme (back-gate transconductance) entirely
 - Missing Gmc (Vcs cross-coupling) entirely
 - GIDL width uses wdiod instead of weff (DD)
+- PD model: no L/W/P binning support (180+ missing coefficients), missing SOI-specific
+  params (kb1, k1w1/k1w2, fbody, ntox, delvt, ~30 more), several base defaults differ
+  from ngspice (k3=80 vs 0, keta=-0.047 vs -0.6). Does NOT affect t4 test (model card
+  sets all critical params), but limits model completeness for other circuits.
 
 ### Transmission line (4 tests)
 
@@ -529,4 +539,6 @@ All remaining tests have well-understood, documented root causes. None can be
 fixed without either (a) exactly matching ngspice FP evaluation order, (b)
 implementing missing subsystems (alter, stop/resume, model binning, BSIM1/2),
 or (c) deep solver/model architectural changes (source stepping, analytical
-sensitivity).
+sensitivity). Session 76 verified this by attempting additive tolerance
+(standard SPICE reltol×|val|+abstol from ngspice niconv.c) and comprehensive
+PD parameter audit — neither yielded a fixable test.
