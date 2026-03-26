@@ -2099,11 +2099,11 @@ pub fn stamp_bsim3soi_fd(
     }
 
     // Floating-body stability: add Gmin body-to-source coupling when there
-    // is no external body contact.  Matches PD/DD variants which already
-    // include this stamp to prevent the body node from becoming singular
-    // when junction conductances are very small.
+    // is no external body contact.  Matches ngspice which uses CKTgmin * 1e-6
+    // at the body node to avoid dominating the extremely small floating-body
+    // junction currents.
     if inst.body_idx.is_none() {
-        crate::stamp_conductance(matrix, b, sp, gmin);
+        crate::stamp_conductance(matrix, b, sp, gmin * 1e-6);
     }
 
     // Body resistance to external body contact

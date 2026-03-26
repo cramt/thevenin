@@ -2257,10 +2257,11 @@ pub fn stamp_bsim3soi_dd(
     crate::stamp_conductance(matrix, b, sp, gbs);
 
     // Floating-body stability: add Gmin body-to-source coupling (matching ngspice
-    // b3soiddld.c explicit Gmin stamps). This prevents the body node from becoming
-    // singular when junction conductances are very small.
+    // b3soiddld.c line 4090: Gmin = CKTgmin * 1e-6).  ngspice uses a much smaller
+    // Gmin at the body node than the circuit-level gmin to avoid dominating the
+    // extremely small floating-body junction currents.
     if inst.body_idx.is_none() {
-        crate::stamp_conductance(matrix, b, sp, gmin);
+        crate::stamp_conductance(matrix, b, sp, gmin * 1e-6);
     }
 
     // Impact ionization: Iii flows drain→body (OUT of drain, INTO body).

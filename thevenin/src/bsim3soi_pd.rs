@@ -2004,20 +2004,22 @@ pub fn stamp_bsim3soi_pd(
     crate::stamp_conductance(matrix, b, sp, gbs);
 
     // Floating-body stability: add Gmin body-to-source coupling (matching ngspice
-    // b3soipdld.c B,sp and B,b stamps with explicit Gmin). This prevents the body
-    // node from becoming singular when junction conductances are very small.
+    // b3soipdld.c line 4038: Gmin = CKTgmin * 1e-6).  ngspice uses a much smaller
+    // Gmin at the body node than the circuit-level gmin to avoid dominating the
+    // extremely small floating-body junction currents.
     // When source is ground (sp=None), stamp_conductance only adds to body diagonal,
     // which is equivalent to body-to-ground coupling.
+    let body_gmin = gmin * 1e-6;
     if inst.body_idx.is_none()
         && let Some(bi) = b
     {
         // Body-source coupling: conductance pair between body and source.
         // When sp=None (source=ground), this reduces to body-to-ground conductance.
-        matrix.add(bi, bi, gmin);
+        matrix.add(bi, bi, body_gmin);
         if let Some(s) = sp {
-            matrix.add(bi, s, -gmin);
-            matrix.add(s, bi, -gmin);
-            matrix.add(s, s, gmin);
+            matrix.add(bi, s, -body_gmin);
+            matrix.add(s, bi, -body_gmin);
+            matrix.add(s, s, body_gmin);
         }
     }
 
