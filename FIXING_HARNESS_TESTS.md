@@ -390,6 +390,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 72 | DC nested sweep prev_solution reset | simulate.rs | Reset prev_solution to None at each outer sweep step, matching ngspice MODEINITJCT reset |
 | 73 | BSIM3SOI body-node Gmin scaling (*1e-6) | bsim3soi_*.rs | ngspice uses CKTgmin*1e-6 at body node; prevents body voltage pull with default gmin |
 | 74 | BSIM3SOI-FD/DD kb3/dvbd0/dvbd1 parameter binning | bsim3soi_fd.rs, bsim3soi_dd.rs | ngspice defaults lkb3/wkb3/pkb3/ldvbd0-1/wdvbd0-1/pdvbd0-1 to 1.0 (not 0.0); binned values differ from base for small devices; fixes FD t4/t5 (~1.6mV Vth offset) |
+| 75 | BSIM3SOI-PD poly gate depletion coefficient (1e18→1e6) | bsim3soi_pd.rs | Wrong coefficient disabled poly depletion entirely; ~4% Ids error in strong inversion; fixes PD t4 |
 
 ## Investigations that did not yield fixes
 
@@ -423,9 +424,15 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 
 ---
 
-## Current status of all remaining ignored tests (as of 2026-03-26, session 76)
+## Current status of all remaining ignored tests (as of 2026-03-26, session 77)
 
-**Test counts:** 597 passing, 42 skipped (39 harness + 3 unit tests)
+**Test counts:** 598 passing, 41 skipped (38 harness + 3 unit tests)
+
+### Recently un-ignored (session 77, 2026-03-26)
+
+| Test | Type | Notes |
+|---|---|---|
+| bsim3soipd/t4 | harness | PD tied-body DC sweep now passes (poly gate depletion coefficient 1e18→1e6) |
 
 ### Recently un-ignored (session 74, 2026-03-26)
 
@@ -468,19 +475,23 @@ VBIC self-heating status:
 - Forward coupling (dIth/dV_elec in thermal row): NOT IMPLEMENTED (causes NR divergence)
 - Thermal capacitance (CTH, transient): NOT IMPLEMENTED (not needed for DC tests)
 
-### BSIM3SOI (7 tests — FD t4/t5 fixed by kb3/dvbd0/dvbd1 binning)
+### BSIM3SOI (6 tests — FD t4/t5 fixed by binning, PD t4 fixed by poly depletion)
 
 | Test | Status |
 |---|---|
 | DD t3/t4/t5 | ~17-30% Ids error (body voltage equilibrium offset: missing Ibp/gcb*/minIsub body node currents) |
 | FD t3 | ~5.3% Ids error at Vg=1.58V (kb3/dvbd0/dvbd1 binning fixed; remaining error from body coupling chain) |
 | FD inv2 | NR non-convergence (needs source/gmin stepping) |
-| PD t3/t5 | NR non-convergence (floating body convergence) |
-| PD t4 | 6.3% error (tied body, model accuracy) |
+| PD t3/t5 | ~125%/~500% Ids error (floating body voltage offset: missing body current paths) |
 
 FD t4/t5 were fixed by implementing parameter binning for kb3, dvbd0, dvbd1 with the
 correct non-zero defaults (lkb3=wkb3=pkb3=ldvbd0-1=wdvbd0-1=pdvbd0-1 = 1.0, not 0.0).
 This resolved the previously-unidentified ~1.6mV Vth offset.
+
+PD t4 was fixed by correcting the poly gate depletion coefficient from 1e18 to 1e6
+in bsim3soi_pd.rs. The wrong coefficient effectively disabled poly depletion entirely,
+causing ~4% Ids error in strong inversion. All other SOI variants (DD, FD) and BSIM3
+already had the correct 1e6 coefficient.
 
 Key remaining discrepancies vs C source:
 - Missing Gme (back-gate transconductance) entirely
@@ -529,7 +540,7 @@ MOSFET driver error. Extensively investigated across sessions.
 | Category | Count | Fixable? |
 |---|---|---|
 | VBIC self-heating FP | 4 | No — confirmed by 58+ sessions |
-| BSIM3SOI compensating bugs | 7 | No — fixing one worsens others (FD t4/t5 fixed by binning) |
+| BSIM3SOI missing body currents | 6 | No — need Ibp/gcb*/minIsub (~300+ LOC), PD t4 fixed by poly depletion coeff |
 | Transmission line FP | 4 | No — eigendecomposition + convolution FP |
 | Deep transient dynamics | 2 | No — model accuracy limitation |
 | NR convergence / wrong OP | 2 | No — need solver architectural changes |

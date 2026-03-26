@@ -1071,7 +1071,7 @@ pub fn bsim3soi_pd_companion(
     // Poly gate depletion
     let (vgs_eff, dvgs_eff_dvg) =
         if model.ngate > 1e18 && model.ngate < 1e25 && vgs_i > (sp.vfb + phi) {
-            let t1 = 1e18 * CHARGE_Q * EPSSI * model.ngate / (cox * cox);
+            let t1 = 1e6 * CHARGE_Q * EPSSI * model.ngate / (cox * cox);
             let t4 = (1.0 + 2.0 * (vgs_i - sp.vfb - phi) / t1).sqrt();
             let t2 = t1 * (t4 - 1.0);
             let t3 = 0.5 * t2 * t2 / t1;
