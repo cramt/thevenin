@@ -694,6 +694,11 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
         // Double sweep: outer loop is src2, inner loop is src1
         for &v2 in points2 {
             set_source_value(&mut mna, sweep2, v2, &original_rhs, original_dc2);
+            // Reset prev_solution at each outer sweep step so the first inner
+            // point uses MODEINITJCT (fresh device initialization), matching
+            // ngspice's dctrcurv.c which resets CKTmode to MODEINITJCT when
+            // advancing to the next outer sweep level.
+            prev_solution = None;
             // Save RHS after setting src2 (base for src1 sweep)
             let rhs_after_src2 = mna.system.rhs.clone();
             for &v1 in &points1 {

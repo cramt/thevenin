@@ -387,6 +387,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 69 | Resistor flicker noise (KF/AF/EF) + noise output V/√Hz | noise.rs, mna.rs, parse.rs, vecexpr.rs | Flicker noise with model params, sqrt conversion for .control |
 | 70 | BSIM3SOI-FD Vgsteff chain-rule derivative corrections | bsim3soi_fd.rs | t1_chain/t4_chain used wrong dVgsteff/dVbseff in branches 2+3 |
 | 71 | BSIM3SOI-DD impact ionization Vdseffii formula | bsim3soi_dd.rs | Used Vds-beta0 instead of Vds-Vdseffii (proper Vdsatii/smooth-clamp) |
+| 72 | DC nested sweep prev_solution reset | simulate.rs | Reset prev_solution to None at each outer sweep step, matching ngspice MODEINITJCT reset |
 
 ## Investigations that did not yield fixes
 
