@@ -14,10 +14,7 @@
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
-
-"bsim3soifd/t3.cir" = "~6.8% Ids error at Vg=0.08V,col1 (all value formulas verified identical to ngspice; ~1.6mV Vth offset source unidentified)"
-"bsim3soifd/t4.cir" = "~7.1% Ids error at Vg=0.46V (all value formulas verified identical to ngspice; ~1.6mV Vth offset source unidentified)"
-"bsim3soifd/t5.cir" = "~0.54% Ids error at Vg=1.11V (all value formulas verified identical to ngspice; ~1.6mV Vth offset source unidentified)"
+"bsim3soifd/t3.cir" = "~5.3% Ids error at Vg=1.58V,col1 (kb3/dvbd0/dvbd1 binning fixed; remaining error from body coupling chain)"
 
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"

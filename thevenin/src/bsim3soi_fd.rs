@@ -190,6 +190,21 @@ pub struct Bsim3SoiFdModel {
     pub rth0: f64,
     pub cth0: f64,
 
+    // Binning parameters (L/W/P variants for size-dependent parameters)
+    // These default to 1.0 in ngspice for kb3/dvbd0/dvbd1, which means
+    // even without explicit binning parameters, the effective values differ
+    // from base values for non-unity Inv_L/Inv_W/Inv_LW.
+    pub bin_unit: i32,
+    pub lkb3: f64,
+    pub wkb3: f64,
+    pub pkb3: f64,
+    pub ldvbd0: f64,
+    pub wdvbd0: f64,
+    pub pdvbd0: f64,
+    pub ldvbd1: f64,
+    pub wdvbd1: f64,
+    pub pdvbd1: f64,
+
     // Precomputed
     pub cox: f64,
     pub vtm: f64,
@@ -308,7 +323,8 @@ pub struct Bsim3SoiFdSizeParam {
     // rds0 denominator
     pub rds0denom: f64,
 
-    // FD-specific
+    // FD-specific (binned)
+    pub kb3: f64,
     pub dvbd0: f64,
     pub dvbd1: f64,
 }
@@ -513,6 +529,18 @@ impl Bsim3SoiFdModel {
             asd: 0.3,
             rth0: 0.0,
             cth0: 0.0,
+            // Binning defaults: ngspice b3soifdset.c defaults lkb3/wkb3/pkb3
+            // and l/w/p_dvbd0/dvbd1 to 1.0 (not 0.0).
+            bin_unit: 1,
+            lkb3: 1.0,
+            wkb3: 1.0,
+            pkb3: 1.0,
+            ldvbd0: 1.0,
+            wdvbd0: 1.0,
+            pdvbd0: 1.0,
+            ldvbd1: 1.0,
+            wdvbd1: 1.0,
+            pdvbd1: 1.0,
             cox: 0.0,
             vtm: 0.0,
             phi: 0.0,
@@ -692,6 +720,18 @@ impl Bsim3SoiFdModel {
         set!(asd, "ASD");
         set!(rth0, "RTH0");
         set!(cth0, "CTH0");
+
+        // Binning parameters for kb3/dvbd0/dvbd1 (default 1.0 in ngspice)
+        seti!(bin_unit, "BINUNIT");
+        set!(lkb3, "LKB3");
+        set!(wkb3, "WKB3");
+        set!(pkb3, "PKB3");
+        set!(ldvbd0, "LDVBD0");
+        set!(wdvbd0, "WDVBD0");
+        set!(pdvbd0, "PDVBD0");
+        set!(ldvbd1, "LDVBD1");
+        set!(wdvbd1, "WDVBD1");
+        set!(pdvbd1, "PDVBD1");
 
         // Handle u0 units: ngspice treats u0 > 1 as cm²/Vs, converts by /1e4
         if m.u0 > 1.0 {
@@ -905,6 +945,20 @@ impl Bsim3SoiFdModel {
         let npeak = self.npeak;
         let nsub = self.nsub;
 
+        // Parameter binning for kb3, dvbd0, dvbd1.
+        // ngspice b3soifdtemp.c lines 197-265: binned = base + l*Inv_L + w*Inv_W + p*Inv_LW
+        // The L/W/P coefficients for these three parameters default to 1.0 (not 0.0)
+        // in b3soifdset.c, so even without explicit binning in the model card,
+        // the effective values differ from the base values for small devices.
+        let (inv_l, inv_w, inv_lw) = if self.bin_unit == 1 {
+            (1.0e-6 / leff, 1.0e-6 / weff, 1.0e-12 / (leff * weff))
+        } else {
+            (1.0 / leff, 1.0 / weff, 1.0 / (leff * weff))
+        };
+        let kb3_binned = self.kb3 + self.lkb3 * inv_l + self.wkb3 * inv_w + self.pkb3 * inv_lw;
+        let dvbd0_binned = self.dvbd0 + self.ldvbd0 * inv_l + self.wdvbd0 * inv_w + self.pdvbd0 * inv_lw;
+        let dvbd1_binned = self.dvbd1 + self.ldvbd1 * inv_l + self.wdvbd1 * inv_w + self.pdvbd1 * inv_lw;
+
         Bsim3SoiFdSizeParam {
             leff,
             weff,
@@ -989,8 +1043,9 @@ impl Bsim3SoiFdModel {
             ubtemp,
             uctemp,
             rds0denom,
-            dvbd0: self.dvbd0,
-            dvbd1: self.dvbd1,
+            kb3: kb3_binned,
+            dvbd0: dvbd0_binned,
+            dvbd1: dvbd1_binned,
         }
     }
 }
@@ -1207,7 +1262,7 @@ pub fn bsim3soi_fd_companion(
     // Nfb (feedback factor)
     let k1 = sp.k1;
     let t3_nfb = 1.0 / (k1 * k1);
-    let t4_nfb = model.kb3 * model.cbox / cox;
+    let t4_nfb = sp.kb3 * model.cbox / cox;
     let t8_nfb = (phi - vbs0mos).abs().sqrt();
     let t5_nfb = (1.0 + 4.0 * t3_nfb * (phi + k1 * t8_nfb - vbs0mos))
         .abs()

@@ -389,6 +389,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 71 | BSIM3SOI-DD impact ionization Vdseffii formula | bsim3soi_dd.rs | Used Vds-beta0 instead of Vds-Vdseffii (proper Vdsatii/smooth-clamp) |
 | 72 | DC nested sweep prev_solution reset | simulate.rs | Reset prev_solution to None at each outer sweep step, matching ngspice MODEINITJCT reset |
 | 73 | BSIM3SOI body-node Gmin scaling (*1e-6) | bsim3soi_*.rs | ngspice uses CKTgmin*1e-6 at body node; prevents body voltage pull with default gmin |
+| 74 | BSIM3SOI-FD/DD kb3/dvbd0/dvbd1 parameter binning | bsim3soi_fd.rs, bsim3soi_dd.rs | ngspice defaults lkb3/wkb3/pkb3/ldvbd0-1/wdvbd0-1/pdvbd0-1 to 1.0 (not 0.0); binned values differ from base for small devices; fixes FD t4/t5 (~1.6mV Vth offset) |
 
 ## Investigations that did not yield fixes
 
@@ -419,7 +420,14 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 
 ## Current status of all remaining ignored tests (as of 2026-03-26)
 
-**Test counts:** ~595 passing, ~44 skipped (41 harness + 3 unit tests)
+**Test counts:** ~597 passing, ~42 skipped (39 harness + 3 unit tests)
+
+### Recently un-ignored (session 74, 2026-03-26)
+
+| Test | Type | Notes |
+|---|---|---|
+| bsim3soifd/t4 | harness | FD Vds=1V sweep now passes (kb3/dvbd0/dvbd1 binning fix) |
+| bsim3soifd/t5 | harness | FD Vds=0.05V sweep now passes (kb3/dvbd0/dvbd1 binning fix) |
 
 ### Recently un-ignored (session 70, 2026-03-26)
 
@@ -451,18 +459,21 @@ VBIC self-heating status:
 - Forward coupling (dIth/dV_elec in thermal row): NOT IMPLEMENTED (causes NR divergence)
 - Thermal capacitance (CTH, transient): NOT IMPLEMENTED (not needed for DC tests)
 
-### BSIM3SOI (9 tests)
+### BSIM3SOI (7 tests — FD t4/t5 fixed by kb3/dvbd0/dvbd1 binning)
 
 | Test | Status |
 |---|---|
-| DD t3/t4/t5 | NR non-convergence (correct junction width fix exposed need for solver improvements) |
-| FD t3/t4/t5 | 0.5-7% Ids error (compensating bugs in body coupling chain; ~1.6mV Vth offset unidentified) |
+| DD t3/t4/t5 | ~17-30% Ids error (body voltage equilibrium offset: missing Ibp/gcb*/minIsub body node currents) |
+| FD t3 | ~5.3% Ids error at Vg=1.58V (kb3/dvbd0/dvbd1 binning fixed; remaining error from body coupling chain) |
 | FD inv2 | NR non-convergence (needs source/gmin stepping) |
 | PD t3/t5 | NR non-convergence (floating body convergence) |
 | PD t4 | 6.3% error (tied body, model accuracy) |
 
-All have interacting model bugs where fixing one worsens others. Key remaining
-discrepancies vs C source (derivative-only, don't change converged Ids):
+FD t4/t5 were fixed by implementing parameter binning for kb3, dvbd0, dvbd1 with the
+correct non-zero defaults (lkb3=wkb3=pkb3=ldvbd0-1=wdvbd0-1=pdvbd0-1 = 1.0, not 0.0).
+This resolved the previously-unidentified ~1.6mV Vth offset.
+
+Key remaining discrepancies vs C source:
 - Missing Gme (back-gate transconductance) entirely
 - Missing Gmc (Vcs cross-coupling) entirely
 - GIDL width uses wdiod instead of weff (DD)
@@ -505,7 +516,7 @@ MOSFET driver error. Extensively investigated across sessions.
 | Category | Count | Fixable? |
 |---|---|---|
 | VBIC self-heating FP | 4 | No — confirmed by 58+ sessions |
-| BSIM3SOI compensating bugs | 9 | No — fixing one worsens others |
+| BSIM3SOI compensating bugs | 7 | No — fixing one worsens others (FD t4/t5 fixed by binning) |
 | Transmission line FP | 4 | No — eigendecomposition + convolution FP |
 | Deep transient dynamics | 2 | No — model accuracy limitation |
 | NR convergence / wrong OP | 2 | No — need solver architectural changes |
