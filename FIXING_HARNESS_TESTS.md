@@ -388,6 +388,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 70 | BSIM3SOI-FD Vgsteff chain-rule derivative corrections | bsim3soi_fd.rs | t1_chain/t4_chain used wrong dVgsteff/dVbseff in branches 2+3 |
 | 71 | BSIM3SOI-DD impact ionization Vdseffii formula | bsim3soi_dd.rs | Used Vds-beta0 instead of Vds-Vdseffii (proper Vdsatii/smooth-clamp) |
 | 72 | DC nested sweep prev_solution reset | simulate.rs | Reset prev_solution to None at each outer sweep step, matching ngspice MODEINITJCT reset |
+| 73 | BSIM3SOI body-node Gmin scaling (*1e-6) | bsim3soi_*.rs | ngspice uses CKTgmin*1e-6 at body node; prevents body voltage pull with default gmin |
 
 ## Investigations that did not yield fixes
 
@@ -412,6 +413,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | BSIM3SOI-DD impact ionization Vdseffii (session 72) | Fixed diffVdsii = Vds - Vdseffii (smooth-clamped Vdsatii) instead of Vds - beta0. Correct formula but Iii ≈ 0 for test params (beta0=20.5V >> diffVdsii≈0.3V → exp(-68) ≈ 0). DD body voltage offset (92mV) comes from body coupling chain, not Iii. |
 | BSIM3SOI-DD body node audit (session 72) | Missing: body-to-P contact current (Ibp/Gbp*), charge-related body conductances (gcb*), minIsub parameter. These omissions remove current paths that stabilize body voltage in floating-body configurations. |
 | CPL Right_deg polynomial truncation (session 72) | Agent reported missing Right_deg=2 truncation in matrix_p_mult_fn, but verified this is UNUSED in ngspice: matrix_p_mult is called with deg_o for both deg and deg_o params. 0.8% error remains FP rounding in convolution accumulation. |
+| BSIM3SOI-DD BJT current formulation (session 73) | Found 3 sub-bugs in DD Ibs3/Ibd3: (1) uses `(exp-1)` instead of bare `exp`, (2) uses constant `arfabjt=XBJT` instead of Vds-dependent `BjtA=1-0.5*(Leff-kbjt1*Vds)²/edl²`, (3) missing Ic=Ibjt-Ibs3+Ibd3 in drain current. Also missing Gjsd/Gjdd cross-derivatives. At room temp with gmin=1e-25, BJT currents are ~1e-19 A so impact on body voltage is minimal for these test parameters. Would matter for circuits with larger ISBJT or non-zero RBODY. |
 
 ---
 
