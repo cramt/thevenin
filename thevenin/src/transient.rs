@@ -378,7 +378,7 @@ fn estimate_new_timestep(
 
         // Compute exact analytical charge at current operating point.
         let (q0_be, _capbe, q0_bc, _capbc) = bjt.model.compute_charges(
-            vbe, vbc, comp.cbe_raw, comp.gbe_raw, comp.cbc_raw, comp.gbc_raw,
+            vbe, vbc, &comp,
         );
 
         // B-E charge LTE via divided differences.
@@ -553,12 +553,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let comp = bjt.model.companion(vbe, vbc);
             // Full charge: depletion integral + diffusion charge.
             let (qbe, _, qbc, _) = bjt.model.compute_charges(
-                vbe,
-                vbc,
-                comp.cbe_raw,
-                comp.gbe_raw,
-                comp.cbc_raw,
-                comp.gbc_raw,
+                vbe, vbc, &comp,
             );
             BjtChargeHistory {
                 qbe,
@@ -1182,8 +1177,11 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         for (bi, bjt) in mna.bjts.iter().enumerate() {
             let (vbe, vbc) = bjt.junction_voltages(&solution);
             let comp = bjt.model.companion(vbe, vbc);
-            // Full voltage-dependent depletion cap + diffusion cap.
-            let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * comp.gbe_raw;
+            // Full voltage-dependent depletion cap + qb-normalized diffusion cap.
+            // Matches ngspice bjtload.c: cbe_mod=cbe/qb, gbe_mod=(gbe-cbe_mod*dqbdve)/qb
+            let cbe_mod = comp.cbe_raw / comp.qb;
+            let gbe_mod = (comp.gbe_raw - cbe_mod * comp.dqbdve) / comp.qb;
+            let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * gbe_mod;
             let capbc = bjt.model.cap_bc(vbc) + bjt.model.tr * comp.gbc_raw;
             let qbe = bjt_charge_histories[bi].qbe + capbe * (vbe - bjt_charge_histories[bi].vbe);
             let qbc = bjt_charge_histories[bi].qbc + capbc * (vbc - bjt_charge_histories[bi].vbc);
@@ -1771,8 +1769,11 @@ fn solve_timestep(
                 // Compute companion at current operating point to get gbe, gbc.
                 let comp = bjt.model.companion(vbe, vbc);
 
-                // Full voltage-dependent depletion cap + diffusion cap.
-                let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * comp.gbe_raw;
+                // Full voltage-dependent depletion cap + qb-normalized diffusion cap.
+                // Matches ngspice bjtload.c: cbe_mod=cbe/qb, gbe_mod=(gbe-cbe_mod*dqbdve)/qb
+                let cbe_mod = comp.cbe_raw / comp.qb;
+                let gbe_mod = (comp.gbe_raw - cbe_mod * comp.dqbdve) / comp.qb;
+                let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * gbe_mod;
                 let capbc = bjt.model.cap_bc(vbc) + bjt.model.tr * comp.gbc_raw;
 
                 let hist = &bjt_charge_histories[bi];

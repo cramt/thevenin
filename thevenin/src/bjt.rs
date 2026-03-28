@@ -344,6 +344,8 @@ impl BjtModel {
             gbe_raw: gbe,
             cbc_raw: cbc,
             gbc_raw: gbc,
+            dqbdve,
+            dqbdvc,
         }
     }
 
@@ -389,28 +391,35 @@ impl BjtModel {
     /// Returns `(qbe, capbe, qbc, capbc)` — the FULL charge and capacitance
     /// including depletion + diffusion terms.
     ///
-    /// `cbe` and `gbe` are the junction current and conductance from the companion
-    /// model (needed for the diffusion capacitance terms TF*cbe and TF*gbe).
+    /// The diffusion charge uses the qb-normalized currents matching ngspice
+    /// bjtload.c lines 655-681: `cbe_mod = cbe/qb`, `gbe_mod = (gbe - cbe_mod*dqbdve)/qb`.
+    /// This ensures the diffusion charge is proportional to the transport current
+    /// (Ifi/qb), not the raw junction current.
     pub fn compute_charges(
         &self,
         vbe: f64,
         vbc: f64,
-        cbe: f64,
-        gbe: f64,
-        cbc: f64,
-        gbc: f64,
+        comp: &BjtCompanion,
     ) -> (f64, f64, f64, f64) {
+        let qb = comp.qb;
+
         // B-E charge: depletion + forward transit time diffusion
         let qbe_dep = junction_charge(vbe, self.cje, self.vje, self.mje, self.fc);
         let capbe_dep = junction_cap(vbe, self.cje, self.vje, self.mje, self.fc);
-        let qbe = self.tf * cbe + qbe_dep;
-        let capbe = self.tf * gbe + capbe_dep;
+        // ngspice bjtload.c line 672: cbe = cbe * (1+argtf) / qb
+        // With XTF=0 (default): cbe_mod = cbe / qb
+        let cbe_mod = comp.cbe_raw / qb;
+        // ngspice bjtload.c line 673: gbe = (gbe*(1+arg2) - cbe*dqbdve) / qb
+        // With XTF=0: gbe_mod = (gbe - cbe_mod*dqbdve) / qb
+        let gbe_mod = (comp.gbe_raw - cbe_mod * comp.dqbdve) / qb;
+        let qbe = self.tf * cbe_mod + qbe_dep;
+        let capbe = self.tf * gbe_mod + capbe_dep;
 
         // B-C charge: depletion + reverse transit time diffusion
         let qbc_dep = junction_charge(vbc, self.cjc, self.vjc, self.mjc, self.fc);
         let capbc_dep = junction_cap(vbc, self.cjc, self.vjc, self.mjc, self.fc);
-        let qbc = self.tr * cbc + qbc_dep;
-        let capbc = self.tr * gbc + capbc_dep;
+        let qbc = self.tr * comp.cbc_raw + qbc_dep;
+        let capbc = self.tr * comp.gbc_raw + capbc_dep;
 
         (qbe, capbe, qbc, capbc)
     }
@@ -500,6 +509,10 @@ pub struct BjtCompanion {
     pub cbc_raw: f64,
     /// B-C junction conductance (before Gummel-Poon division by qb).
     pub gbc_raw: f64,
+    /// Derivative of normalized base charge w.r.t. V_be (dQb/dVbe).
+    pub dqbdve: f64,
+    /// Derivative of normalized base charge w.r.t. V_bc (dQb/dVbc).
+    pub dqbdvc: f64,
 }
 
 /// Resolved node indices for a BJT instance in the MNA system.

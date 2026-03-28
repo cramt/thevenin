@@ -24,7 +24,7 @@
 # === General circuits ===
 "general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
 "general/fourbitadder.cir" = "reference output file says 'To be done' -- no reference to compare against"
-"general/rtlinv.cir" = "~4.1% transient error at t=9ns: transition timing shift (dynamic BJT caps improved from 5.96% at 7ns)"
+"general/rtlinv.cir" = "~4.6% transient error at t=9ns: transition timing shift (qb-normalized diffusion charge correct per ngspice but exposes compensating error; without /qb was 4.1%)"
 "general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET missing velocity saturation/mobility degradation"
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag, full voltage-dependent cap approach causes transient timing shift)"
 

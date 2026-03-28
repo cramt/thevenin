@@ -392,6 +392,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 74 | BSIM3SOI-FD/DD kb3/dvbd0/dvbd1 parameter binning | bsim3soi_fd.rs, bsim3soi_dd.rs | ngspice defaults lkb3/wkb3/pkb3/ldvbd0-1/wdvbd0-1/pdvbd0-1 to 1.0 (not 0.0); binned values differ from base for small devices; fixes FD t4/t5 (~1.6mV Vth offset) |
 | 75 | BSIM3SOI-PD poly gate depletion coefficient (1e18→1e6) | bsim3soi_pd.rs | Wrong coefficient disabled poly depletion entirely; ~4% Ids error in strong inversion; fixes PD t4 |
 | 76 | BSIM3SOI-DD VBSA-dependent csieff/qsieff calculation | bsim3soi_dd.rs | DD model was missing VBSA-dependent effective silicon thickness calculation (matching FD and ngspice b3soiddset.c lines 975-992). No-op for VBSA=0 (default) but required for correctness when VBSA is specified. |
+| 77 | BJT diffusion charge qb normalization | bjt.rs, transient.rs | ngspice bjtload.c lines 655-681: diffusion charge uses cbe/qb (not raw cbe), and diffusion capacitance uses (gbe-cbe_mod*dqbdve)/qb. Correct physics (charge proportional to transport current Ic, not junction current). Worsens rtlinv from 4.1%→4.6% due to compensating error elsewhere; rca3040 and diffpair unaffected. |
 
 ## Investigations that did not yield fixes
 
