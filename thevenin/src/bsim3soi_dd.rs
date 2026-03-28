@@ -861,12 +861,9 @@ impl Bsim3SoiDdModel {
             self.csieff = EPSSI / tsieff;
             self.qsieff = CHARGE_Q * npeak * 1e6 * tsieff;
         }
-        // Back-gate flat-band voltage
-        // Note: ngspice has vfbb = -type * Vtm * ln(npeak / nsub), but the sign
-        // correction is omitted here because it interacts with other body coupling
-        // bugs that compensate. Fixing the sign alone worsens DD t3/t4 (12%→40%).
-        // See FIXING_HARNESS_TESTS.md "vfbb sign" investigation.
-        self.vfbb = self.vtm * (npeak * 1e6 / (nsub * 1e6)).ln();
+        // Back-gate flat-band voltage: vfbb = -type * Vtm * ln(npeak / nsub)
+        // Matches ngspice b3soiddtemp.c line 587.
+        self.vfbb = -self.mos_type.sign() * self.vtm * (npeak / nsub).ln();
         // Processed adice: adice0 / (1 + Cboxt/Cox)
         let cboxt = self.cbox * self.csi / (self.cbox + self.csi);
         self.adice = self.adice0 / (1.0 + cboxt / self.cox);
@@ -1368,6 +1365,40 @@ pub fn bsim3soi_dd_companion(
     // The DD-computed Vbs for body node feedback
     let vbs_dd = vbsdio;
 
+    // --- Cross-derivatives: dVbseff/dVg and dVbseff/dVd ---
+    // Track how gate and drain voltages affect Vbseff through the back-gate
+    // coupling chain (Vbs0teff → Vbs0eff → Vbsdio → Vbsmos → Vbseff).
+    // Required for correct Jacobian in floating-body devices (ngspice
+    // b3soiddld.c lines 1090-1191).
+
+    // Smoothing factor from Vbs0teff = Vbs0t - 0.5*(t1_eff + t2_eff)
+    let s_teff = 0.5 * (1.0 + t1_eff / t2_eff);
+
+    // dVthfd/dVd (DIBL in floating-body threshold)
+    let dvthfd_dvd = -t3_eta_fd_eff * sp.theta0vb0;
+
+    // dVbs0teff/dVg, dVbs0teff/dVd (ngspice lines 1090-1091)
+    let dvbs0teff_dvg = s_teff * dvgs_eff_dvg;
+    let dvbs0teff_dvd = -s_teff * dvthfd_dvd;
+
+    // dVbs0eff/dVg, dVbs0eff/dVd (ngspice lines 1107-1108)
+    let dvbs0eff_dvg = nfb * s_teff * dvgs_eff_dvg;
+    let dvbs0eff_dvd = -nfb * s_teff * dvthfd_dvd;
+
+    // dVbsdio/dVg, dVbsdio/dVd (ngspice lines 1124-1125)
+    let dvbsdio_dvg = (1.0 - dvbsdio_dvb) * dvbs0eff_dvg;
+    let dvbsdio_dvd = (1.0 - dvbsdio_dvb) * dvbs0eff_dvd;
+
+    // dVbsmos/dVg, dVbsmos/dVd (ngspice lines 1145-1146)
+    let dt1_bsmos_dvg = dvbs0teff_dvg - dvbsdio_dvg;
+    let dt1_bsmos_dvd = dvbs0teff_dvd - dvbsdio_dvd;
+    let dvbsmos_dvg = dvbsdio_dvg - t4_bsmos * t5_bsmos * dt1_bsmos_dvg;
+    let dvbsmos_dvd = dvbsdio_dvd - t4_bsmos * t5_bsmos * dt1_bsmos_dvd;
+
+    // dVbseff/dVg, dVbseff/dVd (ngspice lines 1188-1189)
+    let dvbseff_dvg = dvbseff_dvbsmos * dvbsmos_dvg;
+    let dvbseff_dvd = dvbseff_dvbsmos * dvbsmos_dvd;
+
     // ========== Main MOSFET equations ==========
     let phis = phi - vbseff;
     let sqrt_phis = phis.abs().sqrt();
@@ -1483,8 +1514,15 @@ pub fn bsim3soi_dd_companion(
     let dvbseff_dvb = dvbseff_dvbsmos * dvbsmos_dvbsdio * dvbsdio_dvb;
 
     let (vgsteff, dvgsteff_dvg, dvgsteff_dvd, dvgsteff_dvb) = if vgst_nvt > EXPL_THRESHOLD {
-        (vgst, dvgs_eff_dvg, -dvth_dvd, -dvth_dvb * dvbseff_dvb)
+        // Strong inversion: Vgsteff = Vgst, chain-rule through Vbseff
+        (
+            vgst,
+            dvgs_eff_dvg - dvth_dvb * dvbseff_dvg,
+            -dvth_dvd - dvth_dvb * dvbseff_dvd,
+            -dvth_dvb * dvbseff_dvb,
+        )
     } else if exp_arg > EXPL_THRESHOLD {
+        // Weak inversion
         let t0 = (vgst - sp.voff) / (n * vtm);
         let exp_vgst = t0.exp();
         let vgsteff_val = vtm * sp.cdep0 / cox * exp_vgst;
@@ -1492,11 +1530,12 @@ pub fn bsim3soi_dd_companion(
         let t1 = -t3 * (dvth_dvb + t0 * vtm * dn_dvb);
         (
             vgsteff_val,
-            t3 * dvgs_eff_dvg,
-            -t3 * (dvth_dvd + t0 * vtm * dn_dvd),
+            t3 * dvgs_eff_dvg + t1 * dvbseff_dvg,
+            -t3 * (dvth_dvd + t0 * vtm * dn_dvd) + t1 * dvbseff_dvd,
             t1 * dvbseff_dvb,
         )
     } else {
+        // Moderate inversion (smooth transition)
         let exp_vgst = vgst_nvt.exp();
         let t1 = t10 * (1.0 + exp_vgst).ln();
         let dt1_dvg = exp_vgst / (1.0 + exp_vgst);
@@ -1515,8 +1554,8 @@ pub fn bsim3soi_dd_companion(
         let t4 = (t2_val * dt1_dvb - t1 * dt2_dvb) / t3;
         (
             vgsteff_val,
-            (t2_val * dt1_dvg - t1 * dt2_dvg) / t3 * dvgs_eff_dvg,
-            (t2_val * dt1_dvd - t1 * dt2_dvd) / t3,
+            (t2_val * dt1_dvg - t1 * dt2_dvg) / t3 * dvgs_eff_dvg + t4 * dvbseff_dvg,
+            (t2_val * dt1_dvd - t1 * dt2_dvd) / t3 + t4 * dvbseff_dvd,
             t4 * dvbseff_dvb,
         )
     };
@@ -1980,9 +2019,10 @@ pub fn bsim3soi_dd_companion(
     let gmbs0 = t0_ids2 * didl_dvb - idl * (dvdseff_dvb + t9_ids * dva_dvb) / va;
 
     // Final Gm, Gds, Gmbs (ngspice lines 2148-2150)
-    // Note: dVbseff_dVg, dVbseff_dVd, dVcs_* are not tracked; omitting Gmb0/Gmc cross-terms
-    let gm = gm0 * dvgsteff_dvg;
-    let gds = gm0 * dvgsteff_dvd + gds0;
+    // Includes Gmb0 cross-coupling through dVbseff_dVg/dVd chain
+    // (Gmc * dVcs_dV* omitted — requires full Vc derivative chain)
+    let gm = gm0 * dvgsteff_dvg + gmbs0 * dvbseff_dvg;
+    let gds = gm0 * dvgsteff_dvd + gmbs0 * dvbseff_dvd + gds0;
     let gmbs = gm0 * dvgsteff_dvb + gmbs0 * dvbseff_dvb;
 
     // GIDL current (drain side)

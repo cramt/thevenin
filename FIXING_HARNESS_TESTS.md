@@ -428,6 +428,7 @@ by itself but is more physically correct.
 | 76 | BSIM3SOI-DD VBSA-dependent csieff/qsieff calculation | bsim3soi_dd.rs | DD model was missing VBSA-dependent effective silicon thickness calculation (matching FD and ngspice b3soiddset.c lines 975-992). No-op for VBSA=0 (default) but required for correctness when VBSA is specified. |
 | 77 | BJT diffusion charge qb normalization | bjt.rs, transient.rs | ngspice bjtload.c lines 655-681: diffusion charge uses cbe/qb (not raw cbe), and diffusion capacitance uses (gbe-cbe_mod*dqbdve)/qb. Correct physics (charge proportional to transport current Ic, not junction current). Worsens rtlinv from 4.1%→4.6% due to compensating error elsewhere; rca3040 and diffpair unaffected. |
 | 78 | BSIM3SOI-DD BJT current formulation rewrite | bsim3soi_dd.rs | Fixed 3 bugs: (1) Ibs3/Ibd3 use bare exp (not exp-1) matching ngspice b3soiddld.c:2425-2430, (2) BjtA=1-0.5*(T1)² with T1=(Leff-kbjt1*Vds)/edl replaces wrong arfabjt=XBJT constant, (3) Ic=Ibjt-Ibs3+Ibd3 collector current added to drain with Gcd/Gcb derivatives. Also fixed Ibs2/Ibd2 to use sqrt(ExpVbs1) per DD model spec (no nrecf0 in DD). DD tests improved in some sweep groups but ~23-30% channel accuracy error remains (confirmed t4 tied-body has same error magnitude, ruling out body voltage as sole cause). |
+| 79 | BSIM3SOI-DD vfbb sign correction + dVbseff cross-derivatives | bsim3soi_dd.rs | Fixed vfbb = -type*Vtm*ln(npeak/nsub) matching ngspice b3soiddtemp.c:587 (was missing -type sign). Also added dVbseff/dVg and dVbseff/dVd chain-rule derivatives through back-gate coupling (Vbs0teff→Vbs0eff→Vbsdio→Vbsmos→Vbseff) and Gmb0 cross-coupling in Gm/Gds assembly. Fixes DD t4 (30%→pass) and t5 (23%→pass). DD t3 improved from 17% to 0.63% (floating body, remaining error from missing Gmc terms). |
 
 ## Investigations that did not yield fixes
 
@@ -470,7 +471,14 @@ by itself but is more physically correct.
 
 ## Current status of all remaining ignored tests (as of 2026-03-28, session 81)
 
-**Test counts:** 598 passing, 41 skipped (38 harness + 3 unit tests: bsim3soi_fd_inverter_op, bsim3soi_pd_inverter_op, test_vbic_diffamp — all NR convergence failures)
+**Test counts:** 600 passing, 39 skipped (36 harness + 3 unit tests: bsim3soi_fd_inverter_op, bsim3soi_pd_inverter_op, test_vbic_diffamp — all NR convergence failures)
+
+### Recently un-ignored (session 82, 2026-03-29)
+
+| Test | Type | Notes |
+|---|---|---|
+| bsim3soidd/t4 | harness | DD tied-body DC sweep now passes (vfbb sign correction: -type*Vtm*ln(npeak/nsub)) |
+| bsim3soidd/t5 | harness | DD floating-body Vd=0.05V sweep now passes (same vfbb sign fix) |
 
 ### Recently un-ignored (session 77, 2026-03-26)
 
@@ -543,14 +551,19 @@ VBIC self-heating status:
 - Forward coupling (dIth/dV_elec in thermal row): NOT IMPLEMENTED (causes NR divergence)
 - Thermal capacitance (CTH, transient): NOT IMPLEMENTED (not needed for DC tests)
 
-### BSIM3SOI (6 tests — FD t4/t5 fixed by binning, PD t4 fixed by poly depletion)
+### BSIM3SOI (4 remaining — DD t4/t5 fixed by vfbb sign, FD t4/t5 by binning, PD t4 by poly depletion)
 
 | Test | Status |
 |---|---|
-| DD t3/t4/t5 | ~23-30% Ids error (BJT currents fixed: bare exp, BjtA, Ic; but t4 tied-body has same error → fundamental channel accuracy issue, not just body voltage) |
+| DD t3 | ~0.6% Ids error at Vd=0.24V (floating body: vfbb sign fixed, dVbseff cross-derivatives added; remaining error from missing Gmc Vcs derivative chain) |
 | FD t3 | ~5.3% Ids error at Vg=1.58V (kb3/dvbd0/dvbd1 binning fixed; remaining error from body coupling chain) |
 | FD inv2 | NR non-convergence (needs source/gmin stepping) |
 | PD t3/t5 | ~125%/~500% Ids error (floating body voltage offset: missing body current paths) |
+
+DD t4/t5 were fixed by correcting the vfbb sign (b3soiddtemp.c line 587: vfbb = -type *
+Vtm * ln(npeak/nsub), was missing -type). Also added dVbseff/dVg and dVbseff/dVd
+chain-rule derivatives and Gmb0 cross-coupling in Gm/Gds. DD t3 improved from 17% to
+0.63% but remains above 0.2% tolerance — missing Gmc (dIds/dVcs) derivative chain needed.
 
 FD t4/t5 were fixed by implementing parameter binning for kb3, dvbd0, dvbd1 with the
 correct non-zero defaults (lkb3=wkb3=pkb3=ldvbd0-1=wdvbd0-1=pdvbd0-1 = 1.0, not 0.0).
@@ -563,7 +576,7 @@ already had the correct 1e6 coefficient.
 
 Key remaining discrepancies vs C source:
 - Missing Gme (back-gate transconductance) entirely
-- Missing Gmc (Vcs cross-coupling) entirely
+- Missing Gmc (Vcs cross-coupling) entirely — primary blocker for DD t3
 - GIDL width uses wdiod instead of weff (DD)
 - PD model: no L/W/P binning support (180+ missing coefficients), missing SOI-specific
   params (kb1, k1w1/k1w2, fbody, ntox, delvt, ~30 more), several base defaults differ
