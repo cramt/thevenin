@@ -8,9 +8,9 @@
 # === BSIM3SOI-DD ===
 "bsim3soidd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
 "bsim3soidd/RampVg2.cir" = "floating body Vbs ~0 vs expected ~92mV: @m1[Vbs] query works, junction ceq signs fixed, but DD body voltage equilibrium still wrong"
-"bsim3soidd/t3.cir" = "~20% Ids error at Vg=0.04V (body voltage equilibrium offset: missing Ibp/gcb*/minIsub body node currents)"
-"bsim3soidd/t4.cir" = "~22% Ids error at Vg=0.35V (body voltage equilibrium offset: missing Ibp/gcb*/minIsub body node currents)"
-"bsim3soidd/t5.cir" = "~34% Ids error at Vg=0.38V (body voltage equilibrium offset: missing Ibp/gcb*/minIsub body node currents)"
+"bsim3soidd/t3.cir" = "~17% Ids error at Vd=0.04V (floating body: BJT currents fixed to bare exp+BjtA, recombination uses sqrt(exp); remaining error from Vth/channel accuracy + missing Gmc/Gme cross-coupling)"
+"bsim3soidd/t4.cir" = "~30% Ids error at Vg=0.33V (tied body: BJT Ic added to drain current; error is fundamental channel current accuracy in subthreshold, not body voltage—t4 is tied body)"
+"bsim3soidd/t5.cir" = "~23% Ids error at Vg=0.38V (floating body: BJT currents fixed to bare exp+BjtA; remaining error from Vth/channel accuracy + missing Gmc/Gme cross-coupling)"
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"

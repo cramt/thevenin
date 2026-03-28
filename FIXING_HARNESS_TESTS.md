@@ -393,6 +393,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 75 | BSIM3SOI-PD poly gate depletion coefficient (1e18→1e6) | bsim3soi_pd.rs | Wrong coefficient disabled poly depletion entirely; ~4% Ids error in strong inversion; fixes PD t4 |
 | 76 | BSIM3SOI-DD VBSA-dependent csieff/qsieff calculation | bsim3soi_dd.rs | DD model was missing VBSA-dependent effective silicon thickness calculation (matching FD and ngspice b3soiddset.c lines 975-992). No-op for VBSA=0 (default) but required for correctness when VBSA is specified. |
 | 77 | BJT diffusion charge qb normalization | bjt.rs, transient.rs | ngspice bjtload.c lines 655-681: diffusion charge uses cbe/qb (not raw cbe), and diffusion capacitance uses (gbe-cbe_mod*dqbdve)/qb. Correct physics (charge proportional to transport current Ic, not junction current). Worsens rtlinv from 4.1%→4.6% due to compensating error elsewhere; rca3040 and diffpair unaffected. |
+| 78 | BSIM3SOI-DD BJT current formulation rewrite | bsim3soi_dd.rs | Fixed 3 bugs: (1) Ibs3/Ibd3 use bare exp (not exp-1) matching ngspice b3soiddld.c:2425-2430, (2) BjtA=1-0.5*(T1)² with T1=(Leff-kbjt1*Vds)/edl replaces wrong arfabjt=XBJT constant, (3) Ic=Ibjt-Ibs3+Ibd3 collector current added to drain with Gcd/Gcb derivatives. Also fixed Ibs2/Ibd2 to use sqrt(ExpVbs1) per DD model spec (no nrecf0 in DD). DD tests improved in some sweep groups but ~23-30% channel accuracy error remains (confirmed t4 tied-body has same error magnitude, ruling out body voltage as sole cause). |
 
 ## Investigations that did not yield fixes
 
@@ -485,7 +486,7 @@ VBIC self-heating status:
 
 | Test | Status |
 |---|---|
-| DD t3/t4/t5 | ~17-30% Ids error (body voltage equilibrium offset: missing Ibp/gcb*/minIsub body node currents) |
+| DD t3/t4/t5 | ~23-30% Ids error (BJT currents fixed: bare exp, BjtA, Ic; but t4 tied-body has same error → fundamental channel accuracy issue, not just body voltage) |
 | FD t3 | ~5.3% Ids error at Vg=1.58V (kb3/dvbd0/dvbd1 binning fixed; remaining error from body coupling chain) |
 | FD inv2 | NR non-convergence (needs source/gmin stepping) |
 | PD t3/t5 | ~125%/~500% Ids error (floating body voltage offset: missing body current paths) |

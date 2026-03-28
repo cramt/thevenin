@@ -2027,77 +2027,142 @@ pub fn bsim3soi_dd_companion(
     };
 
     // Junction currents (4-component SOI model)
+    // ngspice b3soiddld.c lines 2261-2440
     let nvtm1 = vtm * sp.ndiode;
     let vbd = vbs_i - vds_i;
+    let wtsi = weff * model.tsi;
 
-    // Ibs1/Ibd1: Diffusion
-    let (ibs1, dibs1_dvb, ibd1, dibd1_dvb, dibd1_dvd) = if sp.jdif == 0.0 {
-        (0.0, 0.0, 0.0, 0.0, 0.0)
+    // Compute bare exponentials upfront (shared by Ibs1/Ibs2/Ibs3)
+    // ngspice b3soiddld.c lines 2266-2290
+    let t0_bs = vbs_i / nvtm1;
+    let (exp_vbs1, dexp_vbs1) = soi_dexp(t0_bs);
+    let dexp_vbs1_dvb = dexp_vbs1 / nvtm1;
+
+    let t0_bd = vbd / nvtm1;
+    let (exp_vbd1, dexp_vbd1) = soi_dexp(t0_bd);
+    let dexp_vbd1_dvb = dexp_vbd1 / nvtm1;
+
+    // Ibs1/Ibd1: Diffusion (uses exp-1)
+    // ngspice b3soiddld.c lines 2333-2346
+    let (ibs1, dibs1_dvb, ibd1, dibd1_dvb) = if sp.jdif == 0.0 {
+        (0.0, 0.0, 0.0, 0.0)
     } else {
-        let t0 = vbs_i / nvtm1;
-        let (exp_vbs, dexp) = soi_dexp(t0);
-        // ngspice b3soiddld.c line 2261/2333: WTsi = weff * tsi, T5 = WTsi * jdif
-        // DD uses weff (not wdios/wdiod) for junction current width
-        let wtsi_jdif = weff * model.tsi * sp.jdif;
-        let ibs1 = wtsi_jdif * (exp_vbs - 1.0);
-        let dibs1_dvb = wtsi_jdif * dexp / nvtm1;
-
-        let t0 = vbd / nvtm1;
-        let (exp_vbd, dexp) = soi_dexp(t0);
-        let ibd1 = wtsi_jdif * (exp_vbd - 1.0);
-        let dibd1_dvb = wtsi_jdif * dexp / nvtm1;
-        (ibs1, dibs1_dvb, ibd1, dibd1_dvb, -dibd1_dvb)
+        let t5 = wtsi * sp.jdif;
+        let ibs1 = t5 * (exp_vbs1 - 1.0);
+        let dibs1_dvb = t5 * dexp_vbs1_dvb;
+        let ibd1 = t5 * (exp_vbd1 - 1.0);
+        let dibd1_dvb = t5 * dexp_vbd1_dvb;
+        (ibs1, dibs1_dvb, ibd1, dibd1_dvb)
     };
 
-    // Ibs2/Ibd2: Recombination
-    let (ibs2, dibs2_dvb, ibd2, dibd2_dvb, dibd2_dvd) = if sp.jrec == 0.0 {
-        (0.0, 0.0, 0.0, 0.0, 0.0)
+    // Ibs2/Ibd2: Recombination (uses sqrt of ExpVbs1, i.e. exp(V/(2*NVtm1)))
+    // ngspice b3soiddld.c lines 2354-2390: ExpVbs2 = sqrt(ExpVbs1)
+    // DD model does NOT have nrecf0 — uses sqrt(exp) for ideality factor 2*ndiode
+    let (ibs2, dibs2_dvb, ibd2, dibd2_dvb) = if sp.jrec == 0.0 {
+        (0.0, 0.0, 0.0, 0.0)
     } else {
-        let nvtmf = 0.026 * model.nrecf0;
-        let t0 = vbs_i / nvtmf;
-        let (t10, t2) = soi_dexp(t0);
-        let dt10_dvb = t2 / nvtmf;
+        let t8 = wtsi * sp.jrec;
 
-        // ngspice b3soiddld.c line 2376/2383: T8 = WTsi * jrec
-        let wtsi_jrec = weff * model.tsi * sp.jrec;
-        let ibs2 = wtsi_jrec * t10;
-        let dibs2_dvb = wtsi_jrec * dt10_dvb;
-
-        let t0 = vbd / nvtmf;
-        let (t10, t2) = soi_dexp(t0);
-        let dt10_dvb = t2 / nvtmf;
-        let t3 = wtsi_jrec;
-        let ibd2 = t3 * t10;
-        let dibd2_dvb = t3 * dt10_dvb;
-        (ibs2, dibs2_dvb, ibd2, dibd2_dvb, -dibd2_dvb)
-    };
-
-    // Ibs3/Ibd3: BJT
-    let (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd) = if sp.jbjt == 0.0 || sp.lratio == 0.0 {
-        (0.0, 0.0, 0.0, 0.0, 0.0)
-    } else {
-        let t0_bs = vbs_i / nvtm1;
-        let (exp_vbs, dexp_bs) = soi_dexp(t0_bs);
-        let t0_bd = vbd / nvtm1;
-        let (exp_vbd, dexp_bd) = soi_dexp(t0_bd);
-
-        let ien = weff / sp.nseg * model.tsi * sp.jbjt * sp.lratio;
-        let t0 = 1.0 - sp.arfabjt;
-        if t0 < 1e-2 {
-            (0.0, 0.0, 0.0, 0.0, 0.0)
+        let exp_vbs2 = exp_vbs1.sqrt();
+        let dexp_vbs2_dvb = if exp_vbs2 > 1e-20 {
+            0.5 / exp_vbs2 * dexp_vbs1_dvb
         } else {
-            let t1 = t0 * ien;
-            let ibs3 = t1 * (exp_vbs - 1.0);
-            let dibs3_dvb = t1 * dexp_bs / nvtm1;
-            let ibd3 = t1 * (exp_vbd - 1.0);
-            let dibd3_dvb = t1 * dexp_bd / nvtm1;
-            (ibs3, dibs3_dvb, ibd3, dibd3_dvb, -dibd3_dvb)
-        }
+            0.0
+        };
+        let ibs2 = t8 * (exp_vbs2 - 1.0);
+        let dibs2_dvb = t8 * dexp_vbs2_dvb;
+
+        let exp_vbd2 = exp_vbd1.sqrt();
+        let dexp_vbd2_dvb = if exp_vbd2 > 1e-20 {
+            0.5 / exp_vbd2 * dexp_vbd1_dvb
+        } else {
+            0.0
+        };
+        let ibd2 = t8 * (exp_vbd2 - 1.0);
+        let dibd2_dvb = t8 * dexp_vbd2_dvb;
+        (ibs2, dibs2_dvb, ibd2, dibd2_dvb)
     };
+
+    // Ibs3/Ibd3/Ibjt: BJT currents (uses BARE exp, not exp-1!)
+    // ngspice b3soiddld.c lines 2392-2440
+    // BjtA = 1 - 0.5 * T1² where T1 = (Leff - kbjt1*Vds) / edl
+    // Ibs3 = (1-BjtA) * WTsi * jbjt * ExpVbs1  (bare exp!)
+    // Ic = Ibjt - Ibs3 + Ibd3 (collector current added to drain)
+    #[allow(clippy::type_complexity)]
+    let (ibs3, dibs3_dvb, dibs3_dvd, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb) =
+        if sp.jbjt == 0.0 || vds_i == 0.0 {
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        } else {
+            let t5 = wtsi * sp.jbjt;
+
+            // BjtA: Vds-dependent base transport factor
+            // ngspice b3soiddld.c lines 2401-2413
+            let t0_bjt = sp.leff - model.kbjt1 * vds_i;
+            let mut t1_bjt = if model.edl > 0.0 {
+                t0_bjt / model.edl
+            } else {
+                1.0
+            };
+            let mut dt1_dvd = if model.edl > 0.0 {
+                -model.kbjt1 / model.edl
+            } else {
+                0.0
+            };
+
+            // Clamping: ngspice b3soiddld.c lines 2404-2411
+            if t1_bjt < 1e-3 {
+                let t2 = 1.0 / (3.0 - 2e3 * t1_bjt);
+                t1_bjt = (2e-3 - t1_bjt) * t2;
+                dt1_dvd *= t2 * t2;
+            } else if t1_bjt > 1.0 {
+                t1_bjt = 1.0;
+                dt1_dvd = 0.0;
+            }
+
+            let bjt_a = 1.0 - 0.5 * t1_bjt * t1_bjt;
+            let dbjt_a_dvd = -t1_bjt * dt1_dvd;
+
+            // Ibjt = T5 * (ExpVbs1 - ExpVbd1)
+            let ibjt = t5 * (exp_vbs1 - exp_vbd1);
+            let dibjt_dvb = t5 * (dexp_vbs1_dvb - dexp_vbd1_dvb);
+            let dibjt_dvd = t5 * dexp_vbd1_dvb; // dExpVbd1/dVd = dExpVbd1/dVb (since Vbd=Vbs-Vds, d/dVd = -d/dVb... wait)
+
+            // Note: dExpVbd1/dVd = -dExpVbd1/dVb (since Vbd = Vbs - Vds)
+            // But ngspice line 2418: dIbjt_dVd = T5 * dExpVbd1_dVb (positive!)
+            // This is because ngspice uses dVbd/dVd = -1, and dExpVbd1/dVbd > 0,
+            // so dExpVbd1/dVd = dExpVbd1/dVbd * dVbd/dVd = dExpVbd1_dVb * (-1) = -dExpVbd1_dVb
+            // But the sign on Ibjt's ExpVbd1 term is negative:
+            //   Ibjt = T5*(ExpVbs1 - ExpVbd1)
+            //   dIbjt/dVd = T5 * (0 - dExpVbd1/dVd) = T5 * (-(- dExpVbd1_dVb)) = T5 * dExpVbd1_dVb
+            // So ngspice line 2418 is correct.
+            let dibjt_dvd = t5 * dexp_vbd1_dvb;
+
+            let t3 = (1.0 - bjt_a) * t5;
+            let t4 = -t5 * dbjt_a_dvd;
+
+            // Ibs3 = (1-BjtA) * WTsi * jbjt * ExpVbs1 (BARE exp!)
+            let ibs3 = t3 * exp_vbs1;
+            let dibs3_dvb = t3 * dexp_vbs1_dvb;
+            let dibs3_dvd = t4 * exp_vbs1;
+
+            // Ibd3 = (1-BjtA) * WTsi * jbjt * ExpVbd1 (BARE exp!)
+            let ibd3 = t3 * exp_vbd1;
+            let dibd3_dvb = t3 * dexp_vbd1_dvb;
+            // dIbd3/dVd = T4*ExpVbd1 - dIbd3_dVb (ngspice line 2432)
+            // T4*ExpVbd1 from BjtA derivative, -dIbd3_dVb from Vbd=Vbs-Vds chain rule
+            let dibd3_dvd = t4 * exp_vbd1 - dibd3_dvb;
+
+            // Collector current: Ic = Ibjt - Ibs3 + Ibd3
+            let ic = ibjt - ibs3 + ibd3;
+            let gcd = dibjt_dvd - dibs3_dvd + dibd3_dvd;
+            let gcb = dibjt_dvb - dibs3_dvb + dibd3_dvb;
+
+            (ibs3, dibs3_dvb, dibs3_dvd, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb)
+        };
 
     // Ibs4/Ibd4: Tunneling
-    let (ibs4, dibs4_dvb, ibd4, dibd4_dvb, dibd4_dvd) = if sp.jtun == 0.0 {
-        (0.0, 0.0, 0.0, 0.0, 0.0)
+    let (ibs4, dibs4_dvb, ibd4, dibd4_dvb) = if sp.jtun == 0.0 {
+        (0.0, 0.0, 0.0, 0.0)
     } else {
         let nvtm_tun = vtm * model.ntun;
         let t0 = -vbs_i / nvtm_tun;
@@ -2109,10 +2174,9 @@ pub fn bsim3soi_dd_companion(
 
         let t0 = -vbd / nvtm_tun;
         let (exp_val, dexp_val) = soi_dexp(t0);
-        let t3 = wtsi_jtun;
-        let ibd4 = -t3 * (exp_val - 1.0);
-        let dibd4_dvb = t3 * dexp_val / nvtm_tun;
-        (ibs4, dibs4_dvb, ibd4, dibd4_dvb, -dibd4_dvb)
+        let ibd4 = -wtsi_jtun * (exp_val - 1.0);
+        let dibd4_dvb = wtsi_jtun * dexp_val / nvtm_tun;
+        (ibs4, dibs4_dvb, ibd4, dibd4_dvb)
     };
 
     // Total junction currents
@@ -2179,6 +2243,13 @@ pub fn bsim3soi_dd_companion(
     } else {
         (0.0, 0.0, 0.0, 0.0)
     };
+
+    // Add BJT collector current to drain current and its derivatives to
+    // output conductances, matching ngspice b3soiddld.c lines 2566-2572:
+    //   cdrain = Ids + Ic; gds = Gds + Gcd; gmbs = Gmb + Gcb
+    let ids = ids + ic;
+    let gds = gds + gcd;
+    let gmbs = gmbs + gcb;
 
     // Equivalent current sources for NR companion model
     let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i);
