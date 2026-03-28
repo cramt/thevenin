@@ -1474,6 +1474,7 @@ version = "0.2.0"
 dependencies = [
  "approx",
  "faer",
+ "getrandom 0.3.4",
  "getrandom 0.4.2",
  "libm",
  "thevenin-control",

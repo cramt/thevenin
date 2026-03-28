@@ -2,3 +2,4 @@
 runner = "wasmtime"
 [target.wasm32-unknown-unknown]
 runner = "wasm-bindgen-test-runner"
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
