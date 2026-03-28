@@ -13,4 +13,4 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
-toml = "1.0"
+toml = "1.1"
