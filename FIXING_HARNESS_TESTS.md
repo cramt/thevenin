@@ -323,7 +323,17 @@ self-heating or NR convergence:
   (Rust and C compilers may generate different operation ordering for complex
   expressions, causing ~1 ULP accumulation over many FP operations)
 - Missing forward coupling stamps (dIth/dV_j) in thermal row don't affect the
-  converged solution (proven by tighter NR tolerance experiment)
+  converged solution (proven by tighter NR tolerance experiment).
+  Direct implementation confirmed this (session 74): full forward coupling
+  (analytical dP/dV_j in thermal row matrix + RHS cross-terms) caused NR
+  divergence due to matrix conditioning (off-diagonal entries ~100× larger
+  than thermal diagonal at high bias). RHS-only correction (inexact Jacobian)
+  made accuracy worse (0.83% vs 0.39%). The forward coupling entries are
+  correct per ngspice vbicload.c lines 1435-1464 but our NR solver can't
+  handle the mixed-domain scaling without full matrix preconditioning.
+  Also confirmed: varying the numerical differentiation delta (1e-6 to 1e-4)
+  has zero effect on the converged solution — the error is not from numerical
+  derivative precision
 
 ### Harness comparison: SPICE-standard additive tolerance
 Changed harness comparison from `max(rel_tol, abs_tol)` to `rel_tol + abs_tol`,
