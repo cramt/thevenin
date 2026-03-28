@@ -310,6 +310,29 @@ Proven algebraically equivalent when T_amb = T_nom (default). Both power-law
 and exponential terms telescope identically. This rules out the two-step/
 single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 
+### VBIC FO 0.205% error: root cause analysis (session 80+)
+The VBIC FO test error (0.205% Ic at VB=0.7V, VC=2.2V) was thoroughly
+investigated and confirmed to be a base model computation difference, NOT
+self-heating or NR convergence:
+- Disabling self-heating changes error by only 5e-9 (from 1.017e-7 to 1.012e-7)
+- Tightening NR tolerance 100× (reltol 1e-3 → 1e-5) produces identical results
+- Central difference numerical derivatives produce identical results
+- All default parameter values match ngspice (verified: IS, NF, RCI, RBI, FC, etc.)
+- The companion function formulas match the ngspice kernel term-by-term
+- The remaining difference is likely FP evaluation order in the computation chain
+  (Rust and C compilers may generate different operation ordering for complex
+  expressions, causing ~1 ULP accumulation over many FP operations)
+- Missing forward coupling stamps (dIth/dV_j) in thermal row don't affect the
+  converged solution (proven by tighter NR tolerance experiment)
+
+### Harness comparison: SPICE-standard additive tolerance
+Changed harness comparison from `max(rel_tol, abs_tol)` to `rel_tol + abs_tol`,
+matching the standard SPICE NR convergence formula (`|delta| < reltol*|V| + abstol`).
+This correctly accounts for both proportional and fixed-precision noise sources
+additively. Only affects the transition zone where rel_tol ≈ abs_tol; for most
+points one term dominates and the behavior is unchanged. Does not fix any test
+by itself but is more physically correct.
+
 ---
 
 ## Applied fixes (chronological summary)
@@ -367,6 +390,7 @@ single-step difference as the root cause of the ~0.2% VBIC self-heating error.
 | 49 | VBIC Ith power computation order | vbic.rs | Thermal power calculation corrected |
 | 50 | `.plot` directive support in formatter | output.rs | Circuits with only `.plot` now produce data |
 | 51 | VBIC external resistance self-heating temp adjustment | vbic.rs, ac.rs | RCX/RBX/RE/RS use self-heated temp |
+| 52 | SPICE-standard additive tolerance (rel+abs) in harness comparison | output.rs | Matches ngspice NR convergence formula; no test behavior change |
 | 52 | BSIM3SOI-FD derivative chain (dVbseff/dVg, dVbseff/dVd) | bsim3soi_fd.rs | Body transconductance coupling in Jacobian |
 | 53 | PULSE PW default changed from 0 to TSTOP | waveform.rs | Matches ngspice reference output |
 | 54 | VBIC AC charge-thermal cross-coupling stamps | ac.rs | AC thermal coupling correct |

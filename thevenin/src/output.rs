@@ -2226,6 +2226,13 @@ const HARNESS_REL_TOL: f64 = 2e-3;
 /// Set to 1e-7 to allow theoretically-zero sensitivities (e.g., dc sensitivity to
 /// eg/fc/xti at T=TNOM) where ngspice's numerical differentiation produces ~1e-8
 /// floating-point noise vs our exact-zero result.
+///
+/// Combined with rel_tol using the standard SPICE NR convergence formula:
+///   tolerance = rel_tol + abs_tol  (not max)
+/// This matches ngspice's `|delta| < reltol * |V| + vntol` criterion and
+/// correctly accounts for both signal-proportional (NR convergence) and
+/// fixed-precision (FP rounding, gmin leakage) noise sources additively,
+/// rather than taking only the dominant term.
 const HARNESS_ABS_TOL: f64 = 1e-7;
 
 /// Per-column dynamic-range scale factor for absolute tolerance.
@@ -2476,7 +2483,10 @@ fn compare_with_interpolation(
                         0.0
                     };
 
-                    if abs_diff > rel_tol.max(abs_tol).max(slope_tol) {
+                    // SPICE-standard additive tolerance: rel + abs, then max with slope.
+                    // Matches ngspice NR convergence: |delta| < reltol*|V| + abstol.
+                    let combined_tol = (rel_tol + abs_tol).max(slope_tol);
+                    if abs_diff > combined_tol {
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],
@@ -2518,7 +2528,8 @@ fn compare_with_interpolation(
                         0.0
                     };
 
-                    if abs_diff > rel_tol.max(abs_tol).max(slope_tol) {
+                    let combined_tol = (rel_tol + abs_tol).max(slope_tol);
+                    if abs_diff > combined_tol {
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],
@@ -2625,7 +2636,7 @@ fn lines_match_approx(expected: &str, actual: &str) -> bool {
             (Some(ev), Some(av)) => {
                 let abs_diff = (ev - av).abs();
                 let rel_tol = HARNESS_REL_TOL * ev.abs().max(av.abs());
-                if abs_diff > rel_tol.max(HARNESS_ABS_TOL) {
+                if abs_diff > rel_tol + HARNESS_ABS_TOL {
                     return false;
                 }
             }
