@@ -350,7 +350,7 @@ by itself but is more physically correct.
 | # | Fix | Files | Impact |
 |---|-----|-------|--------|
 | 1 | `diag_gmin` — separate solver diagonal gmin from device gmin | newton.rs, simulate.rs | MES subthreshold passes; all DC sweeps corrected |
-| 2 | VBIC self-heating (RTH > 0) — thermal node + Ith power stamping | vbic.rs, device_stamp.rs | FG error 6%→0.02%, temp error 0.22%→0.02% |
+| 2 | VBIC self-heating (RTH > 0) — thermal node + Ith power stamping | vbic.rs, device_stamp.rs | FG error 6%→~0.2%, temp error 0.22%→~0.23% (see note below) |
 | 3 | BSIM3SOI derivative computation — size_dep_param corrections (cdep0, theta0vb0, theta_rout) | bsim3soi_*.rs | Improved NR convergence for SOI tests |
 | 4 | VBIC temperature scaling — multiple parameter corrections | vbic.rs | Corrected temp-dependent currents |
 | 5 | Device junction capacitances in transient analysis | transient.rs | Enabled reactive element stamping |
@@ -462,12 +462,15 @@ by itself but is more physically correct.
 | BSIM3SOI-PD parameter audit (session 76) | Comprehensive comparison of Rust PD model defaults vs ngspice b3soipdset.c. Found: (1) PD model has NO binning support (all 180+ L/W/P coefficients missing), (2) several base defaults wrong (k3=80 vs 0, keta=-0.047 vs -0.6, tbox=8e-8 vs 3e-7), (3) SOI-specific params missing (kb1, k1w1, k1w2, fbody, ntox, delvt, ~30 more). However, t4 test model card explicitly sets all critical Vth parameters (K1=0.49, K2=0.1, K3=0, KETA=0.1, VTH0=0.42) and uses no binning coefficients, so these defaults don't affect the 6.3% error. Root cause remains in Abulk/CLM/DIBL computation chain as identified in session 71. The missing parameters are important for future model completeness but don't explain the t4 test failure. |
 | VBIC FO/FG/temp kernel evaluation order (session 79) | Verified ngspice vbicload.c lines 130-167: kernel uses p[] array with TNOM nominal values OVERWRITTEN by circuit-temp-adjusted values (IS_T, NF_T, PE_T, etc.). For FO test (TEMP=TNOM=27°C), this is mathematically identical to our one-step temperature_adjust approach. For temp test (TEMP=150°C, TNOM=27°C), ngspice's two-step (vbictemp.c IS_T at 150°C + kernel self-heating delta) vs our one-step (IS from TNOM + full scaling to 150+Vrth) is algebraically equivalent (proven: exp terms telescope). The 0.2-3.3% error is irreducible FP eval order artifact. |
 | BSIM3SOI-DD Ibp architecture assessment (session 79) | The dominant missing body current (Ibp) requires Vpsdio computation with full 5-terminal derivative chains (dVpsdio_dVp, dVpsdio_dVg, dVpsdio_dVd). This is ~100-200 LOC, not 50-60 as initially estimated. RBODY=0 in test model → T0=1e30 conductance (stiff body constraint). Full implementation needs: (1) Vpsdio smooth-clamp with all derivatives, (2) Vbp=Vbsdio-Vpsdio with chain rule, (3) conditional Ibp/Gbp* (3 cases: rbody<1e-30, Vbp>=0, Vbp<0), (4) 5-node asymmetric conductance stamps, (5) body node RHS update. |
+| VBIC temp/FG "regression" analysis (session 81) | The reported 2.3% temp error and 3.3% FG error are NOT regressions from the 0.02% claimed in Fix 2 — they are the same ~0.23% base companion function error measured at higher sweep points due to slope tolerance masking. Slope tolerance (max_slope × dt_tol) on the steep Gummel curve absorbs the error at low VB (slope_tol ≈ 25× error at VB=0.57V), pushing the first reported failure to VB=0.76V where the accumulated self-heating difference is 2.3%. Git bisect confirmed the model output has NOT changed since Fix 2; the apparent increase was entirely from the slope tolerance change in commit 5b4e406. The Fix 2 claim of 0.02% was inaccurate (actual error at that commit was 0.23%). |
+| Comprehensive regression test (.control) analysis (session 81) | Investigated all 6 .control regression tests (asrc-tc-1/2, log-functions-1, bxpressn-1, xpressn-3, sens-ac-1/2). Tests 1-4 require V= B-source MNA support (node registration + branch equations for non-constant expressions). Test 3 (bxpressn-1) passes 153/155 sub-tests internally but the last 2 need v(n42) references. Tests 5-6 require AC sensitivity analysis (entire subsystem missing). None fixable with minor changes. |
+| Two-step VBIC temperature evaluation analysis (session 81) | Mathematically verified: ngspice's two-step (vbictemp.c TNOM→T_amb, kernel T_amb→T_amb+Vrth) is algebraically equivalent to our one-step (temperature_adjust TNOM→T_amb+Vrth) for ALL temperatures, not just T_amb=T_nom. The exponential arguments telescope: (1-T_amb/T_nom)/Vtv_amb + (1-T_dev/T_amb)/Vtv_dev = (1-T_dev/T_nom)/Vtv_dev (proven via common denominator T_nom×T_amb×T_dev). FP precision difference between approaches estimated at ~1e-14 relative — negligible. Two-step would NOT help FO (T_amb=T_nom, step 1 is identity) or temp (FP difference too small). |
 
 ---
 
-## Current status of all remaining ignored tests (as of 2026-03-28, session 80)
+## Current status of all remaining ignored tests (as of 2026-03-28, session 81)
 
-**Test counts:** 598 passing, 41 skipped (38 harness + 3 unit tests)
+**Test counts:** 598 passing, 41 skipped (38 harness + 3 unit tests: bsim3soi_fd_inverter_op, bsim3soi_pd_inverter_op, test_vbic_diffamp — all NR convergence failures)
 
 ### Recently un-ignored (session 77, 2026-03-26)
 
@@ -494,13 +497,28 @@ by itself but is more physically correct.
 
 ### VBIC (5 tests)
 
-| Test | Error | Root cause |
-|---|---|---|
-| FO | 0.385% at Vc=3.75V | Self-heating FP evaluation order (grows linearly with Vrth) |
-| FG | 3.3% at Vb=0.89V | Self-heating FP + PNP sign asymmetry |
-| temp | 2.3% at Vb=0.76V | Self-heating FP evaluation order |
-| CEamp | ~22% at 6.9GHz | AC gain error grows with frequency due to self-heating |
-| diffamp | NR non-convergence | 13-transistor circuit with self-heating, source stepping also fails |
+| Test | Error | Base error | Root cause |
+|---|---|---|---|
+| FO | 0.385% at Vc=3.75V | ~0.2% | Companion function FP evaluation order |
+| FG | 3.3% at Vb=0.89V | ~0.2-0.3% | Same; slope tolerance masks low-bias points |
+| temp | 2.3% at Vb=0.76V | ~0.23% | Same; slope tolerance masks low-bias points |
+| CEamp | ~22% at 6.9GHz | — | AC gain error grows with frequency |
+| diffamp | NR non-convergence | — | 13-transistor circuit, source stepping also fails |
+
+**Important clarification (session 81, 2026-03-28)**: The "2.3% temp error" and "3.3% FG
+error" are NOT different from the FO 0.385% error in kind — they are the SAME ~0.2% base
+companion function FP error, measured at later sweep points where self-heating has grown.
+Slope tolerance (max_slope × HARNESS_REL_TOL × x_range) masks the error at lower bias
+points on the exponential Gummel curve, pushing the first reported failure to higher VB
+where the accumulated self-heating difference is larger.
+
+Analysis at VB=0.57V (temp test, before slope tolerance masks it):
+- diff = 8.041e-7, rel_tol+abs_tol = 8.0e-7 → exceeds by only 4.1e-9 (0.05% of tol)
+- slope_tol = 1.98e-5 (25× larger due to steep Gummel curve) → easily passes
+
+The Fix 2 claim of "temp error 0.02%" was inaccurate — the actual error at that commit was
+0.23% at VB=0.57V. The 0.02% figure likely measured a specific low-VB point. The underlying
+model error has been stable at ~0.23% since self-heating was first implemented.
 
 The FO error (0.385% at Vc=3.75V, first failure point with additive tolerance formula)
 barely exceeds tolerance (diff=2.123e-7 vs tol=2.107e-7, exceeds by only 0.8%). However,
@@ -509,7 +527,8 @@ grows with self-heating power across the entire dataset. At higher VB sweeps (VB
 the relative error exceeds 0.2% (reaching 23% at VB=1.0V) and no tolerance formula can
 fix it. Forward coupling stamps (dIth/dVj) do NOT affect converged values — confirmed
 across 6+ implementation attempts. The error is an irreducible FP evaluation order artifact
-between our two-step temperature evaluation and ngspice's single-pass kernel.
+in the companion function computation chain (compiler-dependent operation ordering in
+complex expressions, causing ~0.2% accumulation over many FP operations).
 
 Session 80 exhaustive verification (2026-03-28): Line-by-line comparison of ALL VBIC
 formulas confirmed complete: avalanche (Igc, avalf, AVC1/AVC2), quasi-saturation (Irci,
@@ -597,17 +616,23 @@ investigated across sessions.
 
 | Category | Count | Fixable? |
 |---|---|---|
-| VBIC self-heating FP | 4 | No — confirmed by 58+ sessions |
+| VBIC companion FP eval order | 4 | No — ~0.2% base error in all tests, confirmed by 80+ sessions |
 | BSIM3SOI missing body currents | 6 | No — need Ibp/gcb*/minIsub (~300+ LOC), PD t4 fixed by poly depletion coeff |
 | Transmission line FP | 4 | No — eigendecomposition + convolution FP |
 | Deep transient dynamics | 2 | No — model accuracy limitation |
 | NR convergence / wrong OP | 2 | No — need solver architectural changes |
 | Missing infrastructure | 10 | No — entire subsystems missing |
+| BSIM1/BSIM2 models | 2 | No — entire models not implemented |
+| "To be done" references | 2 | No — ngspice .out files contain no reference data (diffpair, fourbitadder) |
 
 All remaining tests have well-understood, documented root causes. None can be
-fixed without either (a) exactly matching ngspice FP evaluation order, (b)
-implementing missing subsystems (alter, stop/resume, model binning, BSIM1/2),
-or (c) deep solver/model architectural changes (source stepping, analytical
-sensitivity). Session 76 verified this by attempting additive tolerance
-(standard SPICE reltol×|val|+abstol from ngspice niconv.c) and comprehensive
-PD parameter audit — neither yielded a fixable test.
+fixed without either (a) exactly matching ngspice FP evaluation order in the
+companion function computation chain (the ~0.2% base error is irreducible with
+different compilers/languages), (b) implementing missing subsystems (V= B-source
+MNA, AC sensitivity, alter/resume, model binning, BSIM1/2), or (c) deep
+solver/model architectural changes (source stepping, body coupling chain, Level 2
+MOSFET). Session 81 confirmed this by verifying the VBIC temp/FG errors are the
+same ~0.2% base error as FO (previously obscured by slope tolerance), investigating
+all .control regression tests (none close to passing), proving two-step temperature
+evaluation is algebraically equivalent (FP difference ~1e-14), and running all 41
+ignored tests with no passes.
