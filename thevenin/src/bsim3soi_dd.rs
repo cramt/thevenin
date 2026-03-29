@@ -13,7 +13,7 @@ use thevenin_types::{Expr, ModelDef};
 use crate::mosfet::MosfetType;
 use crate::physics::{
     CHARGE_Q, EPSOX, EPSSI, EXP_THRESHOLD, EXPL_THRESHOLD, KBOQ, MAX_EXP, MIN_EXP, MIN_EXPL,
-    bsim_safe_exp as safe_exp, soi_dexp,
+    bsim_safe_exp as safe_exp,
 };
 
 const DELTA_1: f64 = 0.02;
@@ -2121,13 +2121,32 @@ pub fn bsim3soi_dd_companion(
 
     // Compute bare exponentials upfront (shared by Ibs1/Ibs2/Ibs3)
     // ngspice b3soiddld.c lines 2266-2290
+    // NOTE: ngspice DD uses a hardcoded threshold of 30 for junction exponentials
+    // (b3soiddld.c line 2267: "if (T0 < 30)"), NOT the general EXP_THRESHOLD (34)
+    // or EXPL_THRESHOLD (100). The PD model uses DEXP with threshold 100, but DD
+    // has its own inline check. We match ngspice's DD behavior exactly.
+    const DD_JCT_EXP_THRESHOLD: f64 = 30.0;
+    const DD_JCT_EXP30: f64 = 1.0686474581524462e13; // exp(30)
     let t0_bs = vbs_i / nvtm1;
-    let (exp_vbs1, dexp_vbs1) = soi_dexp(t0_bs);
-    let dexp_vbs1_dvb = dexp_vbs1 / nvtm1;
+    let (exp_vbs1, dexp_vbs1_dvb) = if t0_bs < DD_JCT_EXP_THRESHOLD {
+        let e = t0_bs.exp();
+        (e, e / nvtm1)
+    } else {
+        // Linear extrapolation matching ngspice b3soiddld.c lines 2274-2276:
+        //   dExpVbs1_dVb = exp(30) / NVtm1
+        //   ExpVbs1 = dExpVbs1_dVb * Vbs - 29 * exp(30)
+        let deriv = DD_JCT_EXP30 / nvtm1;
+        (deriv * vbs_i - 29.0 * DD_JCT_EXP30, deriv)
+    };
 
     let t0_bd = vbd / nvtm1;
-    let (exp_vbd1, dexp_vbd1) = soi_dexp(t0_bd);
-    let dexp_vbd1_dvb = dexp_vbd1 / nvtm1;
+    let (exp_vbd1, dexp_vbd1_dvb) = if t0_bd < DD_JCT_EXP_THRESHOLD {
+        let e = t0_bd.exp();
+        (e, e / nvtm1)
+    } else {
+        let deriv = DD_JCT_EXP30 / nvtm1;
+        (deriv * vbd - 29.0 * DD_JCT_EXP30, deriv)
+    };
 
     // Ibs1/Ibd1: Diffusion (uses exp-1)
     // ngspice b3soiddld.c lines 2333-2346
@@ -2254,15 +2273,26 @@ pub fn bsim3soi_dd_companion(
         (0.0, 0.0, 0.0, 0.0)
     } else {
         let nvtm_tun = vtm * model.ntun;
+        // ngspice b3soiddld.c line 2297: uses same threshold 30 for tunneling exp
         let t0 = -vbs_i / nvtm_tun;
-        let (exp_val, dexp_val) = soi_dexp(t0);
+        let (exp_val, dexp_val) = if t0 < DD_JCT_EXP_THRESHOLD {
+            let e = t0.exp();
+            (e, e)
+        } else {
+            (DD_JCT_EXP30 * (1.0 + t0 - DD_JCT_EXP_THRESHOLD), DD_JCT_EXP30)
+        };
         // ngspice b3soiddld.c line 2449: T5 = WTsi * jtun
         let wtsi_jtun = weff * model.tsi * sp.jtun;
         let ibs4 = -wtsi_jtun * (exp_val - 1.0);
         let dibs4_dvb = wtsi_jtun * dexp_val / nvtm_tun;
 
         let t0 = -vbd / nvtm_tun;
-        let (exp_val, dexp_val) = soi_dexp(t0);
+        let (exp_val, dexp_val) = if t0 < DD_JCT_EXP_THRESHOLD {
+            let e = t0.exp();
+            (e, e)
+        } else {
+            (DD_JCT_EXP30 * (1.0 + t0 - DD_JCT_EXP_THRESHOLD), DD_JCT_EXP30)
+        };
         let ibd4 = -wtsi_jtun * (exp_val - 1.0);
         let dibd4_dvb = wtsi_jtun * dexp_val / nvtm_tun;
         (ibs4, dibs4_dvb, ibd4, dibd4_dvb)
