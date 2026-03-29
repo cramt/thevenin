@@ -430,6 +430,8 @@ by itself but is more physically correct.
 | 78 | BSIM3SOI-DD BJT current formulation rewrite | bsim3soi_dd.rs | Fixed 3 bugs: (1) Ibs3/Ibd3 use bare exp (not exp-1) matching ngspice b3soiddld.c:2425-2430, (2) BjtA=1-0.5*(T1)² with T1=(Leff-kbjt1*Vds)/edl replaces wrong arfabjt=XBJT constant, (3) Ic=Ibjt-Ibs3+Ibd3 collector current added to drain with Gcd/Gcb derivatives. Also fixed Ibs2/Ibd2 to use sqrt(ExpVbs1) per DD model spec (no nrecf0 in DD). DD tests improved in some sweep groups but ~23-30% channel accuracy error remains (confirmed t4 tied-body has same error magnitude, ruling out body voltage as sole cause). |
 | 79 | BSIM3SOI-DD vfbb sign correction + dVbseff cross-derivatives | bsim3soi_dd.rs | Fixed vfbb = -type*Vtm*ln(npeak/nsub) matching ngspice b3soiddtemp.c:587 (was missing -type sign). Also added dVbseff/dVg and dVbseff/dVd chain-rule derivatives through back-gate coupling (Vbs0teff→Vbs0eff→Vbsdio→Vbsmos→Vbseff) and Gmb0 cross-coupling in Gm/Gds assembly. Fixes DD t4 (30%→pass) and t5 (23%→pass). DD t3 improved from 17% to 0.63% (floating body, remaining error from missing Gmc terms). |
 
+| 80 | BSIM3SOI-PD recombination current reverse bias (T11 term) | bsim3soi_pd.rs | Ibs2/Ibd2 was missing the reverse bias component T11=-exp(-Vbs*vrec0/(NVtmr*(vrec0-Vbs))). Without T11, recombination current was always positive (even at zero/reverse bias), draining body current and causing floating body to drift to -0.42V. PD t3: 134%→3.2%, PD t5: 513%→2.1%. |
+
 ## Investigations that did not yield fixes
 
 | Investigation | Finding |
