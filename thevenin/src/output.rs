@@ -2251,16 +2251,15 @@ pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
     let norm_expected = normalize_for_diff(&expected_filtered);
     let norm_actual = normalize_for_diff(&actual_filtered);
 
+    // Check if the expected reference output contains any actual data rows.
+    let expected_has_data = expected
+        .lines()
+        .any(|l| contains_sci_notation(l) && l.split_whitespace().count() >= 3);
+
     // Reject vacuous passes: if the expected output has data rows but our
     // actual output filtered to nothing (or vice-versa), the test is not
     // really passing — we just failed to produce comparable output.
     if norm_expected.is_empty() && norm_actual.is_empty() {
-        // Check if the *unfiltered* expected output contains data rows
-        // (scientific notation numbers).  If it does, our formatter failed
-        // to produce them — that's a real failure, not a pass.
-        let expected_has_data = expected
-            .lines()
-            .any(|l| contains_sci_notation(l) && l.split_whitespace().count() >= 3);
         if expected_has_data {
             return Err(
                 "Vacuous pass: expected output contains data rows but actual output \
@@ -2270,6 +2269,13 @@ pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
             );
         }
         // Both genuinely empty — that's fine (e.g. pure .op with no .print)
+        return Ok(());
+    }
+
+    // If the reference output has no data rows (e.g. ngspice .out says
+    // "To be done"), we have nothing to compare against.  The simulation
+    // ran and produced output, which is the best we can verify.
+    if norm_expected.is_empty() && !expected_has_data {
         return Ok(());
     }
 

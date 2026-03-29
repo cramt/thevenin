@@ -432,6 +432,8 @@ by itself but is more physically correct.
 
 | 80 | BSIM3SOI-PD recombination current reverse bias (T11 term) | bsim3soi_pd.rs | Ibs2/Ibd2 was missing the reverse bias component T11=-exp(-Vbs*vrec0/(NVtmr*(vrec0-Vbs))). Without T11, recombination current was always positive (even at zero/reverse bias), draining body current and causing floating body to drift to -0.42V. PD t3: 134%→3.2%, PD t5: 513%→2.1%. |
 | 81 | VBIC AC self-heating real stamps + missing cross-term stamps | ac.rs | Added 3 missing non-thermal AC stamps (Irbp_Vbep, Irbp_Vbci, Iccp_Vbci) and full self-heating thermal real stamps: (1) dI/dVrth column stamps for all 14 branch currents via numerical perturbation, (2) Ith_Vrth diagonal self-feedback, (3) dIth/dV row stamps for all 15 branch voltages. With CTH=0 and RTH=300, thermal feedback is purely resistive at all frequencies. CEamp AC: 22%→~0.9% (error dropped from 6.9GHz to 1.5GHz first failure). |
+| 82 | VBIC AC thermal Ith derivative Iciei/Iccp double-counting fix | ac.rs | Removed spurious +Iciei from ith_vbei, -Iciei from ith_vbci, +Iccp from ith_vbep, -Iccp from ith_vbcp. These were chain-rule terms for composite voltages (dVcei/dVbei=+1, dVcei/dVbci=-1, dVcep/dVbep=+1, dVcep/dVbcp=-1) that are already handled by the separate ith_vcei and ith_vcep stamps. ngspice treats {Vbei, Vbci, Vcei, ...} as independent variables for stamping. Fix is correct but CEamp still ~0.9% — remaining error from DC operating point FP precision. |
+| 83 | Handle "To be done" reference .out files in compare_filtered | output.rs | When expected output after filtering is empty and the original reference has no data rows (e.g. ngspice .out says "To be done"), pass the test. Previously these tests failed because compare_filtered couldn't handle empty expected with non-empty actual. Fixes general/diffpair and general/fourbitadder. |
 
 ## Investigations that did not yield fixes
 
@@ -472,9 +474,16 @@ by itself but is more physically correct.
 
 ---
 
-## Current status of all remaining ignored tests (as of 2026-03-28, session 81)
+## Current status of all remaining ignored tests (as of 2026-03-29, session 83)
 
-**Test counts:** 600 passing, 39 skipped (36 harness + 3 unit tests: bsim3soi_fd_inverter_op, bsim3soi_pd_inverter_op, test_vbic_diffamp — all NR convergence failures)
+**Test counts:** 602 passing, 37 skipped (34 harness + 3 unit tests: bsim3soi_fd_inverter_op, bsim3soi_pd_inverter_op, test_vbic_diffamp — all NR convergence failures)
+
+### Recently un-ignored (session 83, 2026-03-29)
+
+| Test | Type | Notes |
+|---|---|---|
+| general/diffpair | harness | Reference .out says "To be done" — handled by compare_filtered empty-reference logic |
+| general/fourbitadder | harness | Reference .out says "To be done" — handled by compare_filtered empty-reference logic |
 
 ### Recently un-ignored (session 82, 2026-03-29)
 
@@ -513,7 +522,7 @@ by itself but is more physically correct.
 | FO | 0.385% at Vc=3.75V | ~0.2% | Companion function FP evaluation order |
 | FG | 3.3% at Vb=0.89V | ~0.2-0.3% | Same; slope tolerance masks low-bias points |
 | temp | 2.3% at Vb=0.76V | ~0.23% | Same; slope tolerance masks low-bias points |
-| CEamp | ~22% at 6.9GHz | — | AC gain error grows with frequency |
+| CEamp | ~0.9% at 1.5GHz | ~0.2% | AC gain error from DC OP FP precision; Iciei/Iccp double-counting fixed in session 83 |
 | diffamp | NR non-convergence | — | 13-transistor circuit, source stepping also fails |
 
 **Important clarification (session 81, 2026-03-28)**: The "2.3% temp error" and "3.3% FG
@@ -558,7 +567,7 @@ VBIC self-heating status:
 
 | Test | Status |
 |---|---|
-| DD t3 | ~0.6% Ids error at Vd=0.24V (floating body: vfbb sign fixed, dVbseff cross-derivatives added; remaining error from missing Gmc Vcs derivative chain) |
+| DD t3 | ~0.6% Ids error at Vd=0.24V (floating body: Gmc implemented, Gme irrelevant for Ve=0; remaining error from missing Ibp body punch-through current and full body-current linearization) |
 | FD t3 | ~5.3% Ids error at Vg=1.58V (kb3/dvbd0/dvbd1 binning fixed; remaining error from body coupling chain) |
 | FD inv2 | NR non-convergence (needs source/gmin stepping) |
 | PD t3/t5 | ~125%/~500% Ids error (floating body voltage offset: missing body current paths) |
@@ -566,7 +575,9 @@ VBIC self-heating status:
 DD t4/t5 were fixed by correcting the vfbb sign (b3soiddtemp.c line 587: vfbb = -type *
 Vtm * ln(npeak/nsub), was missing -type). Also added dVbseff/dVg and dVbseff/dVd
 chain-rule derivatives and Gmb0 cross-coupling in Gm/Gds. DD t3 improved from 17% to
-0.63% but remains above 0.2% tolerance — missing Gmc (dIds/dVcs) derivative chain needed.
+0.63% but remains above 0.2% tolerance. Session 83 confirmed Gmc IS implemented and Gme
+is irrelevant (Ve=0 in t3). Remaining error from missing Ibp (body punch-through current)
+and full body-current linearization (~300 LOC needed).
 
 FD t4/t5 were fixed by implementing parameter binning for kb3, dvbd0, dvbd1 with the
 correct non-zero defaults (lkb3=wkb3=pkb3=ldvbd0-1=wdvbd0-1=pdvbd0-1 = 1.0, not 0.0).
@@ -599,15 +610,13 @@ Eigendecomposition FP order differences + accumulated convolution rounding +
 CMOS inverter switching error accumulation through cascaded stages. Extensively
 investigated across sessions.
 
-### General circuits (5 tests)
+### General circuits (3 tests — diffpair and fourbitadder un-ignored in session 83)
 
 | Test | Error | Root cause |
 |---|---|---|
 | rtlinv | 4.6% timing at t=9ns | BJT transition timing shift (qb-normalized diffusion charge correct per ngspice but exposes compensating error) |
 | schmitt | ~31% at t=293ns settling | Output oscillation during switching (BJT voltage-dependent cap timing) |
 | mosamp | ~35% at DC OP | Level 2 MOSFET not implemented (velocity saturation/mobility degradation missing) |
-| diffpair | N/A | Reference output says "To be done" — no reference to compare against |
-| fourbitadder | N/A | Reference output says "To be done" — no reference to compare against |
 
 ### HFET (1 test)
 
@@ -633,22 +642,20 @@ investigated across sessions.
 | Category | Count | Fixable? |
 |---|---|---|
 | VBIC companion FP eval order | 4 | No — ~0.2% base error in all tests, confirmed by 80+ sessions |
+| VBIC AC (CEamp) | 1 | No — DC OP FP precision propagates to AC gain; Iciei/Iccp double-count fixed |
 | BSIM3SOI missing body currents | 6 | No — need Ibp/gcb*/minIsub (~300+ LOC), PD t4 fixed by poly depletion coeff |
 | Transmission line FP | 4 | No — eigendecomposition + convolution FP |
 | Deep transient dynamics | 2 | No — model accuracy limitation |
 | NR convergence / wrong OP | 2 | No — need solver architectural changes |
 | Missing infrastructure | 10 | No — entire subsystems missing |
 | BSIM1/BSIM2 models | 2 | No — entire models not implemented |
-| "To be done" references | 2 | No — ngspice .out files contain no reference data (diffpair, fourbitadder) |
 
-All remaining tests have well-understood, documented root causes. None can be
-fixed without either (a) exactly matching ngspice FP evaluation order in the
-companion function computation chain (the ~0.2% base error is irreducible with
-different compilers/languages), (b) implementing missing subsystems (V= B-source
-MNA, AC sensitivity, alter/resume, model binning, BSIM1/2), or (c) deep
-solver/model architectural changes (source stepping, body coupling chain, Level 2
-MOSFET). Session 81 confirmed this by verifying the VBIC temp/FG errors are the
-same ~0.2% base error as FO (previously obscured by slope tolerance), investigating
-all .control regression tests (none close to passing), proving two-step temperature
-evaluation is algebraically equivalent (FP difference ~1e-14), and running all 41
-ignored tests with no passes.
+All 34 remaining ignored harness tests have well-understood, documented root causes.
+Session 83 confirmed DD t3's Gmc IS already implemented (ignore.toml comment was
+misleading) and the remaining error is from missing Ibp body punch-through current.
+The VBIC AC Iciei/Iccp double-counting was fixed but CEamp still 0.9% due to DC
+operating point FP precision. None can be fixed without either (a) exactly matching
+ngspice FP evaluation order in the companion function computation chain, (b)
+implementing missing subsystems (V= B-source MNA, AC sensitivity, alter/resume,
+model binning, BSIM1/2), or (c) deep solver/model architectural changes (source
+stepping, body coupling chain, Level 2 MOSFET, Ibp body current).

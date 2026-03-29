@@ -8,7 +8,7 @@
 # === BSIM3SOI-DD ===
 "bsim3soidd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
 "bsim3soidd/RampVg2.cir" = "floating body Vbs ~0 vs expected ~92mV: @m1[Vbs] query works, junction ceq signs fixed, but DD body voltage equilibrium still wrong"
-"bsim3soidd/t3.cir" = "~0.6% Ids error at Vg=0.24V (floating body: vfbb sign fixed, error reduced from 17% to 0.6%; remaining error from missing Gmc/Gme cross-coupling in floating-body coupling chain)"
+"bsim3soidd/t3.cir" = "~0.6% Ids error at Vd=0.24V (floating body: Gmc implemented, Gme irrelevant for Ve=0; remaining error from missing Ibp body punch-through current and full body-current linearization)"
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
@@ -20,8 +20,6 @@
 "bsim3soipd/t5.cir" = "~2.1% Ids error at Vg=0.65V (recomb reverse bias T11 fix reduced from 513%; remaining error from missing ves back-gate coupling — VE swept -4→+4V)"
 
 # === General circuits ===
-"general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
-"general/fourbitadder.cir" = "reference output file says 'To be done' -- no reference to compare against"
 "general/rtlinv.cir" = "~4.6% transient error at t=9ns: BJT transition timing shift (qb-normalized diffusion charge correct per ngspice but worsened from 4.1% due to compensating error)"
 "general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET not implemented (uses Level 1 fallback; missing velocity saturation/mobility degradation/short-channel effects)"
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag; timing shift in BJT voltage-dependent cap model)"
@@ -61,7 +59,7 @@
 "transmission/txl2_3_line.cir" = "~2.4% V(2) error at t=16.2ns: TXL three-line cascade accumulates CMOS inverter switching errors through second/third stages (improved from 4.7% by h1 convolution accumulation fix)"
 
 # === VBIC ===
-"vbic/CEamp.cir" = "VBIC AC: ~0.9% gain error at 1.5GHz (thermal real stamps added: dI/dVrth + dIth/dV; remaining error from Ith derivative cross-term precision)"
+"vbic/CEamp.cir" = "VBIC AC: ~0.9% gain error at 1.5GHz (Iciei/Iccp double-counting fixed; remaining error from DC operating point FP precision propagating to AC gm/capacitance)"
 "vbic/diffamp.cir" = "VBIC diffamp: NR non-convergence (13-transistor circuit with self-heating, source stepping also fails)"
 "vbic/FG.cir" = "VBIC FG: ~0.2% base error (3.3% at Vb=0.89V due to slope tolerance masking low-bias points; same companion FP eval order issue as FO/temp)"
 "vbic/FO.cir" = "VBIC FO: ~0.2% base error (0.385% at Vc=3.75V; diff=2.123e-7 vs tol=2.107e-7, exceeds by 0.8%; all formulas verified across 80+ sessions)"

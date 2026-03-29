@@ -909,7 +909,7 @@ pub fn stamp_ac_devices(
                 // (ngspice vbicacld.c lines 374-375: rth,BI += -Ith_Vbei where Ith_Vbei < 0)
                 let ith_vbei = sc
                     * (comp.dibe_dvbei * vbei + comp.ibe
-                        + comp.diciei_dvbei * vcei + comp.iciei
+                        + comp.diciei_dvbei * vcei
                         + comp.dibc_dvbei * vbci
                         + comp.dirbi_dvbei * vrbi);
                 if let Some(r) = bi {
@@ -920,11 +920,11 @@ pub fn stamp_ac_devices(
                 }
 
                 // Ith_Vbci: Vbci = V(BI)-V(CI), so rth,BI += val; rth,CI -= val
-                // Note: d(Iciei*Vcei)/dVbci = Vcei*dIciei/dVbci + Iciei*dVcei/dVbci
-                //   where dVcei/dVbci = -1, giving the -Iciei term.
+                // Note: ngspice treats Vbei/Vbci/Vcei as independent variables.
+                // The Iciei*Vcei contribution is handled by the separate Ith_Vcei stamp.
                 let ith_vbci = sc
                     * (comp.dibc_dvbci * vbci + comp.ibc
-                        + comp.diciei_dvbci * vcei - comp.iciei
+                        + comp.diciei_dvbci * vcei
                         + comp.dirci_dvbci * vrci
                         + comp.dirbi_dvbci * vrbi
                         + comp.diccp_dvbci * vcep
@@ -957,7 +957,7 @@ pub fn stamp_ac_devices(
                 // Ith_Vbep: Vbep = V(BX)-V(BP), so rth,BX += val; rth,BP -= val
                 let ith_vbep = sc
                     * (comp.dibep_dvbep * vbep + comp.ibep
-                        + comp.diccp_dvbep * vcep + comp.iccp
+                        + comp.diccp_dvbep * vcep
                         + comp.dirbp_dvbep * vrbp);
                 if let Some(r) = bx {
                     sys.real.add(rth_idx, r, ith_vbep);
@@ -969,7 +969,7 @@ pub fn stamp_ac_devices(
                 // Ith_Vbcp: Vbcp = V(S)-V(BP), so rth,S += val; rth,BP -= val
                 let ith_vbcp = sc
                     * (comp.dibcp_dvbcp * vbcp + comp.ibcp
-                        + comp.diccp_dvbcp * vcep - comp.iccp);
+                        + comp.diccp_dvbcp * vcep);
                 if let Some(r) = vbic.subs_idx {
                     sys.real.add(rth_idx, r, ith_vbcp);
                 }
