@@ -1204,6 +1204,7 @@ pub fn bsim3soi_pd_companion(
         + delt_vth_temp
         - dibl_sft;
 
+
     let t6 = sp.k3b * tmp2 - sp.k2 + sp.kt2 * temp_ratio_minus1;
     let dvth_dvb =
         sp.k1eff * dsqrt_phis_ext_dvb - ddelt_vth_dvb - ddelt_vthw_dvb + t6 - ddibl_sft_dvb;
@@ -1680,6 +1681,7 @@ pub fn bsim3soi_pd_companion(
     let t0_ids2 = 1.0 + t9_ids;
     let ids = idl * t0_ids2;
 
+
     // Derivatives of beta
     let dbeta_dvg = cox_wov_l * dueff_dvg + beta * dweff_dvg / weff_ch;
     let dbeta_dvd = cox_wov_l * dueff_dvd;
@@ -1786,24 +1788,65 @@ pub fn bsim3soi_pd_companion(
     };
 
     // Ibs2/Ibd2: Recombination/trap-assisted tunneling
+    // ngspice b3soipdld.c lines 1893-1990: Ibs2 = T3 * (T10 + T11)
+    // T10 = forward bias term: exp(Vbs/NVtmf)
+    // T11 = reverse bias term: -exp(-Vbs * vrec0 / (NVtmr * (vrec0 - Vbs)))
     let (ibs2, dibs2_dvb, ibd2, dibd2_dvb, dibd2_dvd) = if sp.jrec == 0.0 {
         (0.0, 0.0, 0.0, 0.0, 0.0)
     } else {
         let nvtmf = 0.026 * model.nrecf0;
-        let t0 = vbs_i / nvtmf;
-        let (t10, t2) = soi_dexp(t0);
-        let dt10_dvb = t2 / nvtmf;
+        let nvtmr = 0.026 * model.nrecr0;
 
-        let t3 = sp.wdios * model.tsi * sp.jrec;
-        let ibs2 = t3 * t10;
-        let dibs2_dvb = t3 * dt10_dvb;
+        // === Ibs2 ===
+        // Forward bias component (T10)
+        let t0_bs = vbs_i / nvtmf;
+        let (t10_bs, t2_bs) = soi_dexp(t0_bs);
+        let dt10_bs_dvb = t2_bs / nvtmf;
 
-        let t0 = vbd / nvtmf;
-        let (t10, t2) = soi_dexp(t0);
-        let dt10_dvb = t2 / nvtmf;
-        let t3 = sp.wdiod * model.tsi * sp.jrec;
-        let ibd2 = t3 * t10;
-        let dibd2_dvb = t3 * dt10_dvb;
+        // Reverse bias component (T11) — ngspice b3soipdld.c lines 1921-1944
+        let (t11_bs, dt11_bs_dvb) = if model.vrec0 == 0.0 {
+            (0.0, 0.0)
+        } else if (model.vrec0 - vbs_i) < 1e-3 {
+            // Clamp to avoid singularity (ngspice lines 1922-1929)
+            let t1 = 1e3;
+            let t0 = -vbs_i / nvtmr * model.vrec0 * t1;
+            (-t0.exp(), 0.0)
+        } else {
+            let t1 = 1.0 / (model.vrec0 - vbs_i);
+            let t0 = -vbs_i / nvtmr * model.vrec0 * t1;
+            let dt0_dvb = -model.vrec0 / nvtmr * (t1 + vbs_i * t1 * t1);
+            let (exp_t0, dexp_t0) = soi_dexp(t0);
+            (-exp_t0, -dexp_t0 * dt0_dvb)
+        };
+
+        let t3_bs = sp.wdios * model.tsi * sp.jrec;
+        let ibs2 = t3_bs * (t10_bs + t11_bs);
+        let dibs2_dvb = t3_bs * (dt10_bs_dvb + dt11_bs_dvb);
+
+        // === Ibd2 ===
+        // Forward bias component (T10)
+        let t0_bd = vbd / nvtmf;
+        let (t10_bd, t2_bd) = soi_dexp(t0_bd);
+        let dt10_bd_dvb = t2_bd / nvtmf;
+
+        // Reverse bias component (T11) — same formula with Vbd instead of Vbs
+        let (t11_bd, dt11_bd_dvb) = if model.vrec0 == 0.0 {
+            (0.0, 0.0)
+        } else if (model.vrec0 - vbd) < 1e-3 {
+            let t1 = 1e3;
+            let t0 = -vbd / nvtmr * model.vrec0 * t1;
+            (-t0.exp(), 0.0)
+        } else {
+            let t1 = 1.0 / (model.vrec0 - vbd);
+            let t0 = -vbd / nvtmr * model.vrec0 * t1;
+            let dt0_dvb = -model.vrec0 / nvtmr * (t1 + vbd * t1 * t1);
+            let (exp_t0, dexp_t0) = soi_dexp(t0);
+            (-exp_t0, -dexp_t0 * dt0_dvb)
+        };
+
+        let t3_bd = sp.wdiod * model.tsi * sp.jrec;
+        let ibd2 = t3_bd * (t10_bd + t11_bd);
+        let dibd2_dvb = t3_bd * (dt10_bd_dvb + dt11_bd_dvb);
         (ibs2, dibs2_dvb, ibd2, dibd2_dvb, -dibd2_dvb)
     };
 
@@ -1854,6 +1897,7 @@ pub fn bsim3soi_pd_companion(
     let ibd = ibd1 + ibd2 + ibd3 + ibd4;
     let gbs_jct = dibs1_dvb + dibs2_dvb + dibs3_dvb + dibs4_dvb;
     let gbd_jct = dibd1_dvb + dibd2_dvb + dibd3_dvb + dibd4_dvb;
+
 
     // Impact ionization current (Iii)
     let (iii, gii_d, gii_g, gii_b) = if sp.alpha0 <= 0.0 || vds_i <= sp.beta0.max(0.0) {

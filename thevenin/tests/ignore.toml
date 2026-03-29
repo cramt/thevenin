@@ -16,8 +16,8 @@
 
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
-"bsim3soipd/t3.cir" = "~134% Ids error at Vg=0.01V (junction ceq signs fixed: convergence restored, large body voltage offset)"
-"bsim3soipd/t5.cir" = "~513% Ids error at Vg=0.23V (junction ceq signs fixed: convergence restored, large body voltage offset)"
+"bsim3soipd/t3.cir" = "~3.2% Ids error at Vd=0.11V (recomb reverse bias T11 fix reduced from 134%; remaining error from missing Gmc/Gme cross-coupling and unused ves back-gate)"
+"bsim3soipd/t5.cir" = "~2.1% Ids error at Vg=0.65V (recomb reverse bias T11 fix reduced from 513%; remaining error from missing ves back-gate coupling — VE swept -4→+4V)"
 
 # === General circuits ===
 "general/diffpair.cir" = "reference output file says 'To be done' -- no reference to compare against"
