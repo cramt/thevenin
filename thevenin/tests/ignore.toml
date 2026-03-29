@@ -61,7 +61,7 @@
 "transmission/txl2_3_line.cir" = "~2.4% V(2) error at t=16.2ns: TXL three-line cascade accumulates CMOS inverter switching errors through second/third stages (improved from 4.7% by h1 convolution accumulation fix)"
 
 # === VBIC ===
-"vbic/CEamp.cir" = "VBIC AC: ~22% gain error at 6.9GHz (self-heating error grows with frequency; passes near-band points via slope tolerance)"
+"vbic/CEamp.cir" = "VBIC AC: ~0.9% gain error at 1.5GHz (thermal real stamps added: dI/dVrth + dIth/dV; remaining error from Ith derivative cross-term precision)"
 "vbic/diffamp.cir" = "VBIC diffamp: NR non-convergence (13-transistor circuit with self-heating, source stepping also fails)"
 "vbic/FG.cir" = "VBIC FG: ~0.2% base error (3.3% at Vb=0.89V due to slope tolerance masking low-bias points; same companion FP eval order issue as FO/temp)"
 "vbic/FO.cir" = "VBIC FO: ~0.2% base error (0.385% at Vc=3.75V; diff=2.123e-7 vs tol=2.107e-7, exceeds by 0.8%; all formulas verified across 80+ sessions)"

@@ -640,6 +640,17 @@ pub fn stamp_ac_devices(
         if comp.dirbi_dvbci.abs() > 0.0 {
             stamp_vccs(&mut sys.real, bx, bi, bi, ci, s * comp.dirbi_dvbci);
         }
+        // Irbp cross-terms (ngspice vbicacld.c lines 204-211)
+        if comp.dirbp_dvbep.abs() > 0.0 {
+            stamp_vccs(&mut sys.real, bp, cx, bx, bp, s * comp.dirbp_dvbep);
+        }
+        if comp.dirbp_dvbci.abs() > 0.0 {
+            stamp_vccs(&mut sys.real, bp, cx, bi, ci, s * comp.dirbp_dvbci);
+        }
+        // Iccp controlled by Vbci (ngspice vbicacld.c lines 226-227, 232-233)
+        if comp.diccp_dvbci.abs() > 0.0 {
+            stamp_vccs(&mut sys.real, bx, si, bi, ci, s * comp.diccp_dvbci);
+        }
 
         // External resistances — use self-heating-adjusted model so that
         // resistance temperature coefficients (XR parameters) are correct.
@@ -725,10 +736,13 @@ pub fn stamp_ac_devices(
                 sys.imag.add(rth_idx, rth_idx, omega * s * vbic.model.cth);
             }
 
-            // Charge-thermal cross-coupling: j*omega * dQ/dVrth
-            // Matches ngspice vbicacld.c lines 494-515.
-            // Compute dQ/dVrth via numerical perturbation of temperature.
-            if vrth.abs() > 1e-20 || vbic.model.rth > 0.0 {
+            // Real-part thermal stamps: dI/dVrth (column rth) + dIth/dV (row rth)
+            // Matches ngspice vbicacld.c lines 293-403.
+            // Compute dI/dVrth via numerical temperature perturbation,
+            // and dIth/dV analytically from companion derivatives.
+            //
+            // Also computes charge-thermal cross-coupling (imaginary part).
+            {
                 let delta = 1e-6; // 1μK temperature perturbation
                 let inv_delta = 1.0 / delta;
 
@@ -739,6 +753,316 @@ pub fn stamp_ac_devices(
                 );
 
                 let rth = Some(rth_idx);
+
+                // Compute composite and external resistance voltages
+                // needed for thermal stamps.
+                let vcei = vbei - vbci;
+                let vcep = vbep - vbcp;
+                let th_sign = vbic.model.vbic_type.sign();
+                let th_node =
+                    |idx: Option<usize>| idx.map(|i| op_solution[i]).unwrap_or(0.0);
+                let vrcx = th_sign * (th_node(vbic.coll_idx) - th_node(vbic.coll_cx_idx));
+                let vrbx = th_sign * (th_node(vbic.base_idx) - th_node(vbic.base_bx_idx));
+                let vre = th_sign * (th_node(vbic.emit_idx) - th_node(vbic.emit_ei_idx));
+                let vrs = th_sign * (th_node(vbic.subs_idx) - th_node(vbic.subs_si_idx));
+
+                // --- Category A: dI/dVrth stamps (ngspice lines 293-359) ---
+                // Each branch current's temperature derivative is stamped into
+                // the matrix column corresponding to the thermal node.
+
+                // Ibe_Vrth: BI→EI
+                let dibe_vrth = s * (comp_pert.ibe - comp.ibe) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, bi, ei, rth, dibe_vrth);
+
+                // Ibex_Vrth: BX→EI
+                let dibex_vrth = s * (comp_pert.ibex - comp.ibex) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, bx, ei, rth, dibex_vrth);
+
+                // Iciei_Vrth: CI→EI
+                let diciei_vrth = s * (comp_pert.iciei - comp.iciei) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, ci, ei, rth, diciei_vrth);
+
+                // Ibc_Vrth: BI→CI
+                let dibc_vrth = s * (comp_pert.ibc - comp.ibc) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, bi, ci, rth, dibc_vrth);
+
+                // Ibep_Vrth: BX→BP
+                let dibep_vrth = s * (comp_pert.ibep - comp.ibep) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, bx, bp, rth, dibep_vrth);
+
+                // Ircx_Vrth: C→CX (external collector resistance)
+                if model.rcx_t > 0.0 {
+                    let rcx_pert = model_pert.rcx_t;
+                    let dircx_vrth = if rcx_pert > 0.0 {
+                        s * (vrcx / rcx_pert - vrcx / model.rcx_t) * inv_delta
+                    } else {
+                        0.0
+                    };
+                    if dircx_vrth.abs() > 0.0 {
+                        stamp_imag_conductance_col(
+                            &mut sys.real,
+                            vbic.coll_idx,
+                            cx,
+                            rth,
+                            dircx_vrth,
+                        );
+                    }
+                }
+
+                // Irci_Vrth: CX→CI
+                let dirci_vrth = s * (comp_pert.irci - comp.irci) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, cx, ci, rth, dirci_vrth);
+
+                // Irbx_Vrth: B→BX (external base resistance)
+                if model.rbx_t > 0.0 {
+                    let rbx_pert = model_pert.rbx_t;
+                    let dirbx_vrth = if rbx_pert > 0.0 {
+                        s * (vrbx / rbx_pert - vrbx / model.rbx_t) * inv_delta
+                    } else {
+                        0.0
+                    };
+                    if dirbx_vrth.abs() > 0.0 {
+                        stamp_imag_conductance_col(
+                            &mut sys.real,
+                            vbic.base_idx,
+                            bx,
+                            rth,
+                            dirbx_vrth,
+                        );
+                    }
+                }
+
+                // Irbi_Vrth: BX→BI
+                let dirbi_vrth = s * (comp_pert.irbi - comp.irbi) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, bx, bi, rth, dirbi_vrth);
+
+                // Ire_Vrth: E→EI (emitter resistance)
+                if model.re_t > 0.0 {
+                    let re_pert = model_pert.re_t;
+                    let dire_vrth = if re_pert > 0.0 {
+                        s * (vre / re_pert - vre / model.re_t) * inv_delta
+                    } else {
+                        0.0
+                    };
+                    if dire_vrth.abs() > 0.0 {
+                        stamp_imag_conductance_col(
+                            &mut sys.real,
+                            vbic.emit_idx,
+                            ei,
+                            rth,
+                            dire_vrth,
+                        );
+                    }
+                }
+
+                // Irbp_Vrth: BP→CX
+                let dirbp_vrth = s * (comp_pert.irbp - comp.irbp) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, bp, cx, rth, dirbp_vrth);
+
+                // Ibcp_Vrth: SI→BP
+                let dibcp_vrth = s * (comp_pert.ibcp - comp.ibcp) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, si, bp, rth, dibcp_vrth);
+
+                // Iccp_Vrth: BX→SI
+                let diccp_vrth = s * (comp_pert.iccp - comp.iccp) * inv_delta;
+                stamp_imag_conductance_col(&mut sys.real, bx, si, rth, diccp_vrth);
+
+                // Irs_Vrth: S→SI (substrate resistance)
+                if model.rs_t > 0.0 {
+                    let rs_pert = model_pert.rs_t;
+                    let dirs_vrth = if rs_pert > 0.0 {
+                        s * (vrs / rs_pert - vrs / model.rs_t) * inv_delta
+                    } else {
+                        0.0
+                    };
+                    if dirs_vrth.abs() > 0.0 {
+                        stamp_imag_conductance_col(
+                            &mut sys.real,
+                            vbic.subs_idx,
+                            si,
+                            rth,
+                            dirs_vrth,
+                        );
+                    }
+                }
+
+                // --- Category C: -Ith_Vrth stamp (ngspice line 372) ---
+                // Power dissipation changes with temperature; computed via
+                // perturbation of the full Ith expression.
+                let ith = crate::vbic::compute_self_heating_power(
+                    &comp, &model, vbei, vbex, vbci, vbep, vbcp, vrci, vrbi, vrbp,
+                    vrcx, vrbx, vre, vrs, vbic.area, vbic.m,
+                );
+                let ith_pert = crate::vbic::compute_self_heating_power(
+                    &comp_pert, &model_pert, vbei, vbex, vbci, vbep, vbcp, vrci,
+                    vrbi, vrbp, vrcx, vrbx, vre, vrs, vbic.area, vbic.m,
+                );
+                let dith_vrth = (ith_pert - ith) * inv_delta;
+                sys.real.add(rth_idx, rth_idx, dith_vrth);
+
+                // --- Category D: dIth/dV stamps (ngspice lines 374-403) ---
+                // Analytical derivatives of Ith = scale * Σ(V_i * I_i).
+                // Each stamp goes into the rth row at the appropriate column.
+                let sc = s; // scale = m * area
+
+                // Ith_Vbei: Vbei = V(BI)-V(EI), so rth,BI += val; rth,EI -= val
+                // (ngspice vbicacld.c lines 374-375: rth,BI += -Ith_Vbei where Ith_Vbei < 0)
+                let ith_vbei = sc
+                    * (comp.dibe_dvbei * vbei + comp.ibe
+                        + comp.diciei_dvbei * vcei + comp.iciei
+                        + comp.dibc_dvbei * vbci
+                        + comp.dirbi_dvbei * vrbi);
+                if let Some(r) = bi {
+                    sys.real.add(rth_idx, r, ith_vbei);
+                }
+                if let Some(r) = ei {
+                    sys.real.add(rth_idx, r, -ith_vbei);
+                }
+
+                // Ith_Vbci: Vbci = V(BI)-V(CI), so rth,BI += val; rth,CI -= val
+                let ith_vbci = sc
+                    * (comp.dibc_dvbci * vbci + comp.ibc
+                        + comp.diciei_dvbci * vcei
+                        + comp.dirci_dvbci * vrci
+                        + comp.dirbi_dvbci * vrbi
+                        + comp.diccp_dvbci * vcep
+                        + comp.dirbp_dvbci * vrbp);
+                if let Some(r) = bi {
+                    sys.real.add(rth_idx, r, ith_vbci);
+                }
+                if let Some(r) = ci {
+                    sys.real.add(rth_idx, r, -ith_vbci);
+                }
+
+                // Ith_Vcei: Vcei = V(CI)-V(EI), so rth,CI += val; rth,EI -= val
+                let ith_vcei = sc * (comp.iciei); // Iciei = Itzf - Itzr
+                if let Some(r) = ci {
+                    sys.real.add(rth_idx, r, ith_vcei);
+                }
+                if let Some(r) = ei {
+                    sys.real.add(rth_idx, r, -ith_vcei);
+                }
+
+                // Ith_Vbex: Vbex = V(BX)-V(EI), so rth,BX += val; rth,EI -= val
+                let ith_vbex = sc * (comp.dibex_dvbex * vbex + comp.ibex);
+                if let Some(r) = bx {
+                    sys.real.add(rth_idx, r, ith_vbex);
+                }
+                if let Some(r) = ei {
+                    sys.real.add(rth_idx, r, -ith_vbex);
+                }
+
+                // Ith_Vbep: Vbep = V(BX)-V(BP), so rth,BX += val; rth,BP -= val
+                let ith_vbep = sc
+                    * (comp.dibep_dvbep * vbep + comp.ibep
+                        + comp.diccp_dvbep * vcep + comp.iccp
+                        + comp.dirbp_dvbep * vrbp);
+                if let Some(r) = bx {
+                    sys.real.add(rth_idx, r, ith_vbep);
+                }
+                if let Some(r) = bp {
+                    sys.real.add(rth_idx, r, -ith_vbep);
+                }
+
+                // Ith_Vbcp: Vbcp = V(S)-V(BP), so rth,S += val; rth,BP -= val
+                let ith_vbcp = sc
+                    * (comp.dibcp_dvbcp * vbcp + comp.ibcp
+                        + comp.diccp_dvbcp * vcep - comp.iccp);
+                if let Some(r) = vbic.subs_idx {
+                    sys.real.add(rth_idx, r, ith_vbcp);
+                }
+                if let Some(r) = bp {
+                    sys.real.add(rth_idx, r, -ith_vbcp);
+                }
+
+                // Ith_Vcep: Vcep = V(BX)-V(S), so rth,BX += val; rth,S -= val
+                let ith_vcep = sc * comp.iccp;
+                if let Some(r) = bx {
+                    sys.real.add(rth_idx, r, ith_vcep);
+                }
+                if let Some(r) = vbic.subs_idx {
+                    sys.real.add(rth_idx, r, -ith_vcep);
+                }
+
+                // Ith_Vrci: Vrci = V(CX)-V(CI), so rth,CX += val; rth,CI -= val
+                let ith_vrci = sc * (comp.dirci_dvrci * vrci + comp.irci);
+                if let Some(r) = cx {
+                    sys.real.add(rth_idx, r, ith_vrci);
+                }
+                if let Some(r) = ci {
+                    sys.real.add(rth_idx, r, -ith_vrci);
+                }
+
+                // Ith_Vbcx: Vbcx = V(BI)-V(CX), so rth,BI += val; rth,CX -= val
+                let ith_vbcx = sc * (comp.dirci_dvbcx * vrci);
+                if let Some(r) = bi {
+                    sys.real.add(rth_idx, r, ith_vbcx);
+                }
+                if let Some(r) = cx {
+                    sys.real.add(rth_idx, r, -ith_vbcx);
+                }
+
+                // Ith_Vrbi: Vrbi = V(BX)-V(BI), so rth,BX += val; rth,BI -= val
+                let ith_vrbi = sc * (comp.dirbi_dvrbi * vrbi + comp.irbi);
+                if let Some(r) = bx {
+                    sys.real.add(rth_idx, r, ith_vrbi);
+                }
+                if let Some(r) = bi {
+                    sys.real.add(rth_idx, r, -ith_vrbi);
+                }
+
+                // Ith_Vrbp: Vrbp = V(BP)-V(CX), so rth,BP += val; rth,CX -= val
+                let ith_vrbp = sc * (comp.dirbp_dvrbp * vrbp + comp.irbp);
+                if let Some(r) = bp {
+                    sys.real.add(rth_idx, r, ith_vrbp);
+                }
+                if let Some(r) = cx {
+                    sys.real.add(rth_idx, r, -ith_vrbp);
+                }
+
+                // Ith_Vrcx: Vrcx = V(C)-V(CX), so rth,C += val; rth,CX -= val
+                if model.rcx_t > 0.0 {
+                    let ith_vrcx = sc * 2.0 * vrcx / model.rcx_t;
+                    if let Some(r) = vbic.coll_idx {
+                        sys.real.add(rth_idx, r, ith_vrcx);
+                    }
+                    if let Some(r) = cx {
+                        sys.real.add(rth_idx, r, -ith_vrcx);
+                    }
+                }
+
+                // Ith_Vrbx: Vrbx = V(B)-V(BX), so rth,B += val; rth,BX -= val
+                if model.rbx_t > 0.0 {
+                    let ith_vrbx = sc * 2.0 * vrbx / model.rbx_t;
+                    if let Some(r) = vbic.base_idx {
+                        sys.real.add(rth_idx, r, ith_vrbx);
+                    }
+                    if let Some(r) = bx {
+                        sys.real.add(rth_idx, r, -ith_vrbx);
+                    }
+                }
+
+                // Ith_Vre: Vre = V(E)-V(EI), so rth,E += val; rth,EI -= val
+                if model.re_t > 0.0 {
+                    let ith_vre = sc * 2.0 * vre / model.re_t;
+                    if let Some(r) = vbic.emit_idx {
+                        sys.real.add(rth_idx, r, ith_vre);
+                    }
+                    if let Some(r) = ei {
+                        sys.real.add(rth_idx, r, -ith_vre);
+                    }
+                }
+
+                // Ith_Vrs: Vrs = V(S)-V(SI), so rth,S += val; rth,SI -= val
+                if model.rs_t > 0.0 {
+                    let ith_vrs = sc * 2.0 * vrs / model.rs_t;
+                    if let Some(r) = vbic.subs_idx {
+                        sys.real.add(rth_idx, r, ith_vrs);
+                    }
+                    if let Some(r) = si {
+                        sys.real.add(rth_idx, r, -ith_vrs);
+                    }
+                }
 
                 // dQbe/dVrth: BI→EI
                 let dqbe_vrth = (comp_pert.qbe_total - comp.qbe_total) * inv_delta;

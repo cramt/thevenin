@@ -431,6 +431,7 @@ by itself but is more physically correct.
 | 79 | BSIM3SOI-DD vfbb sign correction + dVbseff cross-derivatives | bsim3soi_dd.rs | Fixed vfbb = -type*Vtm*ln(npeak/nsub) matching ngspice b3soiddtemp.c:587 (was missing -type sign). Also added dVbseff/dVg and dVbseff/dVd chain-rule derivatives through back-gate coupling (Vbs0teff→Vbs0eff→Vbsdio→Vbsmos→Vbseff) and Gmb0 cross-coupling in Gm/Gds assembly. Fixes DD t4 (30%→pass) and t5 (23%→pass). DD t3 improved from 17% to 0.63% (floating body, remaining error from missing Gmc terms). |
 
 | 80 | BSIM3SOI-PD recombination current reverse bias (T11 term) | bsim3soi_pd.rs | Ibs2/Ibd2 was missing the reverse bias component T11=-exp(-Vbs*vrec0/(NVtmr*(vrec0-Vbs))). Without T11, recombination current was always positive (even at zero/reverse bias), draining body current and causing floating body to drift to -0.42V. PD t3: 134%→3.2%, PD t5: 513%→2.1%. |
+| 81 | VBIC AC self-heating real stamps + missing cross-term stamps | ac.rs | Added 3 missing non-thermal AC stamps (Irbp_Vbep, Irbp_Vbci, Iccp_Vbci) and full self-heating thermal real stamps: (1) dI/dVrth column stamps for all 14 branch currents via numerical perturbation, (2) Ith_Vrth diagonal self-feedback, (3) dIth/dV row stamps for all 15 branch voltages. With CTH=0 and RTH=300, thermal feedback is purely resistive at all frequencies. CEamp AC: 22%→~0.9% (error dropped from 6.9GHz to 1.5GHz first failure). |
 
 ## Investigations that did not yield fixes
 
