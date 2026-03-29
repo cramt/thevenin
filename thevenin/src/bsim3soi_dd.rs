@@ -388,6 +388,12 @@ pub struct Bsim3SoiDdCompanion {
     pub ibd: f64,
     pub gbs_jct: f64,
     pub gbd_jct: f64,
+    /// dIbs/dVd cross-coupling (Gjsd in ngspice): Vds-dependent source junction derivative
+    /// from BJT base transport factor (BjtA) in Ibs3.
+    pub gjsd: f64,
+    /// Extra dIbd/dVd beyond the two-terminal Vbd chain rule (from BjtA in Ibd3).
+    /// Equal to dibd3_dvd + dibd3_dvb = dBjtA/dVd contribution.
+    pub gjdd_extra: f64,
 
     // Impact ionization
     pub iii: f64,
@@ -2238,7 +2244,9 @@ pub fn bsim3soi_dd_companion(
             let gcd = dibjt_dvd - dibs3_dvd + dibd3_dvd;
             let gcb = dibjt_dvb - dibs3_dvb + dibd3_dvb;
 
-            (ibs3, dibs3_dvb, dibs3_dvd, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb)
+            (
+                ibs3, dibs3_dvb, dibs3_dvd, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb,
+            )
         };
 
     // Ibs4/Ibd4: Tunneling
@@ -2265,6 +2273,16 @@ pub fn bsim3soi_dd_companion(
     let ibd = ibd1 + ibd2 + ibd3 + ibd4;
     let gbs_jct = dibs1_dvb + dibs2_dvb + dibs3_dvb + dibs4_dvb;
     let gbd_jct = dibd1_dvb + dibd2_dvb + dibd3_dvb + dibd4_dvb;
+
+    // Vds-dependent junction cross-coupling derivatives (ngspice b3soiddld.c lines 2472, 2477).
+    // Gjsd = dIbs3/dVd: source junction Vds derivative from BJT transport factor.
+    let gjsd = dibs3_dvd;
+    // Gjdd_extra: the extra dIbd/dVd beyond what stamp_conductance(b,dp,gbd) handles.
+    // stamp_conductance captures -gbd_jct (from Vbd = Vbs - Vds chain rule).
+    // The full Gjdd = -dibd1_dvb - dibd2_dvb + dibd3_dvd - dibd4_dvb
+    //              = -(gbd_jct - dibd3_dvb) + dibd3_dvd = -gbd_jct + dibd3_dvb + dibd3_dvd
+    // Extra = Gjdd - (-gbd_jct) = dibd3_dvb + dibd3_dvd
+    let gjdd_extra = dibd3_dvb + dibd3_dvd;
 
     // Vdsatii for impact ionization (b3soiddld.c lines 1761-1810)
     // When AII > 0, the ionization saturation voltage is computed from
@@ -2334,8 +2352,8 @@ pub fn bsim3soi_dd_companion(
 
     // Equivalent current sources for NR companion model
     let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i);
-    let ceq_bs = ibs - gbs_jct * vbs_i;
-    let ceq_bd = ibd - gbd_jct * vbd;
+    let ceq_bs = ibs - gbs_jct * vbs_i - gjsd * vds_i;
+    let ceq_bd = ibd - gbd_jct * vbd - gjdd_extra * vds_i;
     let ceq_iii = iii - gii_d * vds_i - gii_g * vgs_i - gii_b * vbs_i;
     let ceq_gidl = igidl - ggidl_d * vds_i - ggidl_g * vgs_i;
     let ceq_sgidl = isgidl - gsgidl_g * vgs_i;
@@ -2372,6 +2390,8 @@ pub fn bsim3soi_dd_companion(
         ibd,
         gbs_jct,
         gbd_jct,
+        gjsd,
+        gjdd_extra,
         iii,
         gii_d,
         gii_g,
@@ -2470,6 +2490,42 @@ pub fn stamp_bsim3soi_dd(
     crate::stamp_conductance(matrix, b, dp, gbd);
     // BS junction: gbs between body and source-prime
     crate::stamp_conductance(matrix, b, sp, gbs);
+
+    // --- Junction Vds cross-coupling (ngspice Gjsd/Gjdd) ---
+    // The BJT base transport factor BjtA depends on Vds, creating cross-coupling
+    // derivatives that go beyond the two-terminal Vbd/Vbs junction model.
+    // ngspice b3soiddld.c lines 2472, 2477: Gjsd = dIbs3/dVd, Gjdd includes dIbd/dVd.
+    // The stamp_conductance above handles the Vbd chain rule part; these stamps add
+    // the extra BjtA-dependent terms.
+    let gjsd = m * comp.gjsd;
+    let gjdd_extra = m * comp.gjdd_extra;
+    if gjsd != 0.0 || gjdd_extra != 0.0 {
+        // Source junction cross-coupling: dIbs/dVd = gjsd
+        // Ibs flows sp→b, so at sp: outgoing, at b: incoming
+        if let Some(s) = sp {
+            if let Some(d) = dp {
+                matrix.add(s, d, -gjsd);
+            }
+            matrix.add(s, s, gjsd);
+        }
+        // Drain junction extra cross-coupling: dIbd/dVd extra = gjdd_extra
+        // Ibd flows dp→b, so at dp: outgoing, at b: incoming
+        if let Some(d) = dp {
+            matrix.add(d, d, -gjdd_extra);
+            if let Some(s) = sp {
+                matrix.add(d, s, gjdd_extra);
+            }
+        }
+        // Body node: junction current enters body, Vds coupling
+        if let Some(bi) = b {
+            if let Some(d) = dp {
+                matrix.add(bi, d, gjsd + gjdd_extra);
+            }
+            if let Some(s) = sp {
+                matrix.add(bi, s, -(gjsd + gjdd_extra));
+            }
+        }
+    }
 
     // Floating-body stability: add Gmin body-to-source coupling (matching ngspice
     // b3soiddld.c line 4090: Gmin = CKTgmin * 1e-6).  ngspice uses a much smaller

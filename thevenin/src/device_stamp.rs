@@ -1021,8 +1021,8 @@ impl DeviceVoltageState {
                         // Matrix gets +dIth/dVrth, RHS gets -(Ith0 - dIth/dVrth*Vrth0)
                         // which is already accounted for by adding dIth/dVrth to diagonal
                         // and dIth/dVrth*vrth to RHS.
-                        system.matrix.add(rth_idx, rth_idx, d_ith);
-                        system.rhs[rth_idx] += d_ith * vrth;
+                        m_add(rth, rth, d_ith);
+                        r_add(rth, d_ith * vrth);
                     }
                 }
             }
