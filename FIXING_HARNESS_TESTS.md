@@ -659,3 +659,29 @@ ngspice FP evaluation order in the companion function computation chain, (b)
 implementing missing subsystems (V= B-source MNA, AC sensitivity, alter/resume,
 model binning, BSIM1/2), or (c) deep solver/model architectural changes (source
 stepping, body coupling chain, Level 2 MOSFET, Ibp body current).
+
+### Session 84 findings (2026-03-29)
+
+**BSIM3SOI-DD junction derivatives**: Added missing gjsd (dIbs/dVd) and gjdd_extra
+(dIbd/dVd) cross-coupling terms to the companion struct and stamp function. These
+Vds-dependent derivatives from the BJT body transport factor (BjtA) were computed
+but discarded. Fix is correct but does not help t3.cir because kbjt1=1e-8 makes
+the derivatives negligible (~1e-20 A/V). The remaining 0.629% error originates
+from the floating-body voltage equilibrium, not from the junction Jacobian stamps.
+
+**VBIC forward coupling (dIth/dVj)**: Root cause of the 0.385% VBIC FO error
+CONFIRMED as missing forward coupling stamps in the thermal row of the Jacobian.
+ngspice (vbicload.c lines 1435-1464) stamps 13 separate dIth/dVj entries into
+the thermal row matrix and includes them in the RHS linearization. Our code only
+stamps the thermal self-derivative (dIth/dVrth). Implementation attempted but
+caused NR convergence failure (singular matrix) because the forward coupling
+conductances (up to ~7.2e-3 S from the Iciei term) exceed G_th (~3.3e-3 S),
+making the thermal row non-diagonally-dominant. The existing decoupled approach
+(Gauss-Seidel-like thermal/electrical iteration) is more stable but converges to
+a slightly different operating point within NR tolerance. Fixing this requires
+either solver damping, adaptive coupling, or a continuation strategy.
+
+**Slope window radius**: Increasing the comparison slope window from 5 to 7 or 10
+does NOT help cpl3_4_line (new failure points appear at adjacent timesteps) or any
+other ignored test. The errors are genuine simulation discrepancies, not tolerance
+calibration issues.
