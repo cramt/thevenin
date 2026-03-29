@@ -1898,7 +1898,7 @@ fn resolve_single_var(plot: &SimPlot, var: &str) -> Option<(String, Vec<f64>)> {
             let ph_data: Vec<f64> = vec
                 .complex
                 .iter()
-                .map(|c| c.im.atan2(c.re).to_degrees())
+                .map(|c| c.im.atan2(c.re))
                 .collect();
             return Some((format!("ph({inner})"), ph_data));
         }
