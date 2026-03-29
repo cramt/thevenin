@@ -920,9 +920,11 @@ pub fn stamp_ac_devices(
                 }
 
                 // Ith_Vbci: Vbci = V(BI)-V(CI), so rth,BI += val; rth,CI -= val
+                // Note: d(Iciei*Vcei)/dVbci = Vcei*dIciei/dVbci + Iciei*dVcei/dVbci
+                //   where dVcei/dVbci = -1, giving the -Iciei term.
                 let ith_vbci = sc
                     * (comp.dibc_dvbci * vbci + comp.ibc
-                        + comp.diciei_dvbci * vcei
+                        + comp.diciei_dvbci * vcei - comp.iciei
                         + comp.dirci_dvbci * vrci
                         + comp.dirbi_dvbci * vrbi
                         + comp.diccp_dvbci * vcep
