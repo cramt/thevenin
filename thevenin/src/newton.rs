@@ -143,7 +143,13 @@ where
         system.matrix.clear();
         system.rhs.fill(0.0);
         let mode = if iter == 0 { first_mode } else { NrMode::Float };
-        load_system(&solution, &mut system, attempt.source_factor, attempt.gmin, mode);
+        load_system(
+            &solution,
+            &mut system,
+            attempt.source_factor,
+            attempt.gmin,
+            mode,
+        );
 
         // Add Gmin from each node to ground for numerical stability.
         for i in 0..num_nodes {
@@ -202,7 +208,15 @@ where
             source_factor: 1.0,
             max_iters: options.itl2,
         };
-        let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float)?;
+        let result = try_nr(
+            options,
+            dim,
+            num_nodes,
+            load_system,
+            &solution,
+            &attempt,
+            NrMode::Float,
+        )?;
         total_iters += result.iterations;
         solution = result.solution;
         gmin /= gmin_factor;
@@ -214,7 +228,15 @@ where
         source_factor: 1.0,
         max_iters: options.itl2,
     };
-    let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float)?;
+    let result = try_nr(
+        options,
+        dim,
+        num_nodes,
+        load_system,
+        &solution,
+        &attempt,
+        NrMode::Float,
+    )?;
     total_iters += result.iterations;
 
     Ok(NrResult {
@@ -261,7 +283,15 @@ where
             source_factor: factor,
             max_iters: options.itl2,
         };
-        let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float)?;
+        let result = try_nr(
+            options,
+            dim,
+            num_nodes,
+            load_system,
+            &solution,
+            &attempt,
+            NrMode::Float,
+        )?;
         total_iters += result.iterations;
         solution = result.solution;
     }
@@ -281,7 +311,15 @@ where
             source_factor: 1.0,
             max_iters: options.itl2,
         };
-        match try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float) {
+        match try_nr(
+            options,
+            dim,
+            num_nodes,
+            load_system,
+            &solution,
+            &attempt,
+            NrMode::Float,
+        ) {
             Ok(result) => {
                 total_iters += result.iterations;
                 backup.copy_from_slice(&result.solution);
@@ -308,7 +346,15 @@ where
         source_factor: 1.0,
         max_iters: options.itl2,
     };
-    let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt, NrMode::Float)?;
+    let result = try_nr(
+        options,
+        dim,
+        num_nodes,
+        load_system,
+        &solution,
+        &attempt,
+        NrMode::Float,
+    )?;
     total_iters += result.iterations;
 
     Ok(NrResult {
@@ -498,7 +544,11 @@ mod tests {
         let num_nodes = 2;
         let options = NrOptions::default();
 
-        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64, _mode: NrMode| {
+        let load = |solution: &[f64],
+                    system: &mut LinearSystem,
+                    source_factor: f64,
+                    _gmin: f64,
+                    _mode: NrMode| {
             let v2 = solution[1]; // diode voltage
 
             // Resistor R1 between nodes 0 and 1 (matrix indices)
@@ -563,16 +613,19 @@ mod tests {
 
         // V1=5V, R1=1k to ground
         // V(1) = 5V, I(V1) = -5mA
-        let load =
-            |_solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64, _mode: NrMode| {
-                let g = 1.0 / 1000.0;
-                // Resistor from node 0 to ground
-                system.matrix.add(0, 0, g);
-                // Voltage source: node 0, branch 1
-                system.matrix.add(0, 1, 1.0);
-                system.matrix.add(1, 0, 1.0);
-                system.rhs[1] = 5.0 * source_factor;
-            };
+        let load = |_solution: &[f64],
+                    system: &mut LinearSystem,
+                    source_factor: f64,
+                    _gmin: f64,
+                    _mode: NrMode| {
+            let g = 1.0 / 1000.0;
+            // Resistor from node 0 to ground
+            system.matrix.add(0, 0, g);
+            // Voltage source: node 0, branch 1
+            system.matrix.add(0, 1, 1.0);
+            system.matrix.add(1, 0, 1.0);
+            system.rhs[1] = 5.0 * source_factor;
+        };
 
         let initial = vec![0.0; dim];
         let result = newton_raphson_solve(&options, dim, num_nodes, load, &initial).unwrap();
@@ -619,7 +672,11 @@ mod tests {
         let num_nodes = 2;
         let options = NrOptions::default();
 
-        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64, _mode: NrMode| {
+        let load = |solution: &[f64],
+                    system: &mut LinearSystem,
+                    source_factor: f64,
+                    _gmin: f64,
+                    _mode: NrMode| {
             let v2 = solution[1];
 
             // Resistor

@@ -11,8 +11,8 @@ use thevenin_types::{Expr, ModelDef};
 
 use crate::mosfet::MosfetType;
 use crate::physics::{
-    CHARGE_Q, EG300, EPSOX, EPSSI, EXP_THRESHOLD, EXPL_THRESHOLD, KBOQ, MAX_EXP, MIN_EXP,
-    MIN_EXPL, soi_dexp,
+    CHARGE_Q, EG300, EPSOX, EPSSI, EXP_THRESHOLD, EXPL_THRESHOLD, KBOQ, MAX_EXP, MIN_EXP, MIN_EXPL,
+    soi_dexp,
 };
 
 const DELTA_1: f64 = 0.02;
@@ -1204,7 +1204,6 @@ pub fn bsim3soi_pd_companion(
         + delt_vth_temp
         - dibl_sft;
 
-
     let t6 = sp.k3b * tmp2 - sp.k2 + sp.kt2 * temp_ratio_minus1;
     let dvth_dvb =
         sp.k1eff * dsqrt_phis_ext_dvb - ddelt_vth_dvb - ddelt_vthw_dvb + t6 - ddibl_sft_dvb;
@@ -1418,9 +1417,8 @@ pub fn bsim3soi_pd_companion(
             let ddenomi_dvb = ddenomi_dvg * 2.0 * dvth_dvb + sp.uc * t3;
             (ueff, t9 * ddenomi_dvg, t9 * ddenomi_dvd, t9 * ddenomi_dvb)
         } else if model.mob_mod == 2 {
-            let ddenomi_dvg = (sp.ua + sp.uc * vbseff
-                + 2.0 * sp.ub * vgsteff / model.tox)
-                / model.tox;
+            let ddenomi_dvg =
+                (sp.ua + sp.uc * vbseff + 2.0 * sp.ub * vgsteff / model.tox) / model.tox;
             let ddenomi_dvb = vgsteff * sp.uc / model.tox;
             (ueff, t9 * ddenomi_dvg, 0.0, t9 * ddenomi_dvb)
         } else {
@@ -1681,7 +1679,6 @@ pub fn bsim3soi_pd_companion(
     let t0_ids2 = 1.0 + t9_ids;
     let ids = idl * t0_ids2;
 
-
     // Derivatives of beta
     let dbeta_dvg = cox_wov_l * dueff_dvg + beta * dweff_dvg / weff_ch;
     let dbeta_dvd = cox_wov_l * dueff_dvd;
@@ -1897,7 +1894,6 @@ pub fn bsim3soi_pd_companion(
     let ibd = ibd1 + ibd2 + ibd3 + ibd4;
     let gbs_jct = dibs1_dvb + dibs2_dvb + dibs3_dvb + dibs4_dvb;
     let gbd_jct = dibd1_dvb + dibd2_dvb + dibd3_dvb + dibd4_dvb;
-
 
     // Impact ionization current (Iii)
     let (iii, gii_d, gii_g, gii_b) = if sp.alpha0 <= 0.0 || vds_i <= sp.beta0.max(0.0) {

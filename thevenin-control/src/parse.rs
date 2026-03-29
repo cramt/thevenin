@@ -185,10 +185,7 @@ fn parse_echo(rest: &str) -> Vec<EchoFragment> {
     fragments
 }
 
-fn parse_if(
-    cond: &str,
-    iter: &mut LineIter<'_>,
-) -> Result<Statement, String> {
+fn parse_if(cond: &str, iter: &mut LineIter<'_>) -> Result<Statement, String> {
     let mut body = Vec::new();
     parse_block(iter, &mut body, Some("if"))?;
 
@@ -209,10 +206,7 @@ fn parse_if(
     })
 }
 
-fn parse_foreach(
-    rest: &str,
-    iter: &mut LineIter<'_>,
-) -> Result<Statement, String> {
+fn parse_foreach(rest: &str, iter: &mut LineIter<'_>) -> Result<Statement, String> {
     let parts: Vec<&str> = rest.split_whitespace().collect();
     if parts.is_empty() {
         return Err("foreach without variable name".to_string());
@@ -259,10 +253,7 @@ fn parse_set(rest: &str) -> Result<Statement, String> {
             // Value is until next whitespace (or quoted)
             let (val, rest_after) = if let Some(stripped) = after_eq.strip_prefix('"') {
                 if let Some(end) = stripped.find('"') {
-                    (
-                        stripped[..end].to_string(),
-                        stripped[end + 1..].trim(),
-                    )
+                    (stripped[..end].to_string(), stripped[end + 1..].trim())
                 } else {
                     (stripped.to_string(), "")
                 }
@@ -345,19 +336,12 @@ fn parse_alter(rest: &str) -> Result<Statement, String> {
         let spec = rest[..eq_pos].trim().to_string();
         let val_str = rest[eq_pos + 1..].trim();
         let value = if val_str.starts_with('[') {
-            let inner = val_str
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .trim();
-            let vals: Result<Vec<f64>, _> = inner
-                .split_whitespace()
-                .map(parse_spice_number)
-                .collect();
+            let inner = val_str.trim_start_matches('[').trim_end_matches(']').trim();
+            let vals: Result<Vec<f64>, _> =
+                inner.split_whitespace().map(parse_spice_number).collect();
             AlterValue::Vector(vals.map_err(|e| format!("alter: {e}"))?)
         } else {
-            AlterValue::Scalar(
-                parse_spice_number(val_str).map_err(|e| format!("alter: {e}"))?,
-            )
+            AlterValue::Scalar(parse_spice_number(val_str).map_err(|e| format!("alter: {e}"))?)
         };
         Ok(Statement::Alter { spec, value })
     } else {
@@ -492,10 +476,7 @@ mod tests {
 
     #[test]
     fn test_parse_simple_block() {
-        let lines: Vec<String> = vec![
-            "echo hello".to_string(),
-            "quit 0".to_string(),
-        ];
+        let lines: Vec<String> = vec!["echo hello".to_string(), "quit 0".to_string()];
         let stmts = parse_control_block(&lines).unwrap();
         assert!(stmts.len() == 2);
     }
@@ -519,8 +500,10 @@ mod tests {
     fn test_strip_inline_comment() {
         assert_eq!(strip_inline_comment("hello $ comment"), "hello ");
         assert_eq!(strip_inline_comment("hello $var world"), "hello $var world");
-        assert_eq!(strip_inline_comment("strcmp __flag $curplot $gold"),
-            "strcmp __flag $curplot $gold");
+        assert_eq!(
+            strip_inline_comment("strcmp __flag $curplot $gold"),
+            "strcmp __flag $curplot $gold"
+        );
     }
 
     #[test]
@@ -535,7 +518,9 @@ mod tests {
         let stmts = parse_control_block(&lines).unwrap();
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Statement::If { body, else_body, .. } => {
+            Statement::If {
+                body, else_body, ..
+            } => {
                 assert_eq!(body.len(), 1);
                 assert_eq!(else_body.len(), 1);
             }

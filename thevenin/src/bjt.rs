@@ -395,12 +395,7 @@ impl BjtModel {
     /// bjtload.c lines 655-681: `cbe_mod = cbe/qb`, `gbe_mod = (gbe - cbe_mod*dqbdve)/qb`.
     /// This ensures the diffusion charge is proportional to the transport current
     /// (Ifi/qb), not the raw junction current.
-    pub fn compute_charges(
-        &self,
-        vbe: f64,
-        vbc: f64,
-        comp: &BjtCompanion,
-    ) -> (f64, f64, f64, f64) {
+    pub fn compute_charges(&self, vbe: f64, vbc: f64, comp: &BjtCompanion) -> (f64, f64, f64, f64) {
         let qb = comp.qb;
 
         // B-E charge: depletion + forward transit time diffusion

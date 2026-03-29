@@ -463,8 +463,7 @@ impl DeviceVoltageState {
                     // Apply voltage limiting for Level 1 MOSFETs, matching
                     // ngspice's MODEINITFLOAT which enables DEVfetlim/DEVlimvds.
                     let von_prev = prev[mi].3;
-                    let (vgs, vds) =
-                        mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
                     let vbs = if vds >= 0.0 {
                         bsim_pnjlim(raw_vbs, prev[mi].2)
                     } else {
@@ -496,8 +495,7 @@ impl DeviceVoltageState {
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
                     let von_prev = prev[mi].3;
-                    let (vgs, vds) =
-                        mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
                     let vbs = if vds >= 0.0 {
                         bsim_pnjlim(raw_vbs, prev[mi].2)
                     } else {
@@ -582,8 +580,7 @@ impl DeviceVoltageState {
                     let sign = bsim.model.mos_type.sign();
                     (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0, 0.0)
                 } else {
-                    let (raw_vgs, raw_vds, raw_vbs, raw_ves) =
-                        bsim.terminal_voltages(solution);
+                    let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
                     bsim3soi_pd_limit(
                         raw_vgs,
                         raw_vds,
@@ -614,8 +611,7 @@ impl DeviceVoltageState {
                     let sign = bsim.model.mos_type.sign();
                     (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0, 0.0)
                 } else {
-                    let (raw_vgs, raw_vds, raw_vbs, raw_ves) =
-                        bsim.terminal_voltages(solution);
+                    let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
                     bsim3soi_fd_limit(
                         raw_vgs,
                         raw_vds,
@@ -653,8 +649,7 @@ impl DeviceVoltageState {
                     let sign = bsim.model.mos_type.sign();
                     (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0, 0.0)
                 } else {
-                    let (raw_vgs, raw_vds, raw_vbs, raw_ves) =
-                        bsim.terminal_voltages(solution);
+                    let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
                     bsim3soi_dd_limit(
                         raw_vgs,
                         raw_vds,
@@ -870,9 +865,8 @@ impl DeviceVoltageState {
 
                         let mut model_pert = vbic.model.clone();
                         model_pert.temperature_adjust(vbic.t_ambient + vrth + delta);
-                        let comp_pert = model_pert.companion(
-                            vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin,
-                        );
+                        let comp_pert = model_pert
+                            .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
 
                         // Node aliases
                         let rth = Some(rth_idx);
@@ -1012,8 +1006,22 @@ impl DeviceVoltageState {
                         // Matches ngspice vbicload.c line 1433:
                         //   *(here->VBICtempTempPtr) += -Ith_Vrth;
                         let ith_pert = compute_self_heating_power(
-                            &comp_pert, &model_pert, vbei, vbex, vbci, vbep, vbcp, vrci,
-                            vrbi, vrbp, vrcx, vrbx, vre, vrs, vbic.area, vbic.m,
+                            &comp_pert,
+                            &model_pert,
+                            vbei,
+                            vbex,
+                            vbci,
+                            vbep,
+                            vbcp,
+                            vrci,
+                            vrbi,
+                            vrbp,
+                            vrcx,
+                            vrbx,
+                            vre,
+                            vrs,
+                            vbic.area,
+                            vbic.m,
                         );
                         let d_ith = (ith_pert - ith) * inv_delta;
                         // Ith enters thermal node as positive (our convention).

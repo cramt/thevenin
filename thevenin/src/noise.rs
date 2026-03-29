@@ -274,8 +274,8 @@ fn compute_total_noise(
             let v_neg = res.neg_idx.map(|i| op_solution[i]).unwrap_or(0.0);
             let i_dc = (v_pos - v_neg) / res.resistance;
             let i_per_m = i_dc / res.m;
-            let flicker = res.m * res.kf * i_per_m.abs().powf(res.af)
-                / (res.noise_area * freq.powf(res.ef));
+            let flicker =
+                res.m * res.kf * i_per_m.abs().powf(res.af) / (res.noise_area * freq.powf(res.ef));
             total += flicker * transfer_sq;
         }
     }

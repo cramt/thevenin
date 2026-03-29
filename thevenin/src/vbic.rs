@@ -897,12 +897,10 @@ impl VbicModel {
                 0.0
             };
 
-            let dqb_dvbei_val = 0.5
-                * (dq1_dvbei
-                    + dxvar4_dxvar1 * (dxvar3_dq1 * dq1_dvbei + 4.0 * dq2_dvbei));
-            let dqb_dvbci_val = 0.5
-                * (dq1_dvbci
-                    + dxvar4_dxvar1 * (dxvar3_dq1 * dq1_dvbci + 4.0 * dq2_dvbci));
+            let dqb_dvbei_val =
+                0.5 * (dq1_dvbei + dxvar4_dxvar1 * (dxvar3_dq1 * dq1_dvbei + 4.0 * dq2_dvbei));
+            let dqb_dvbci_val =
+                0.5 * (dq1_dvbci + dxvar4_dxvar1 * (dxvar3_dq1 * dq1_dvbci + 4.0 * dq2_dvbci));
 
             (qb_val, dqb_dvbei_val, dqb_dvbci_val)
         } else {
@@ -1165,7 +1163,11 @@ impl VbicModel {
             let arg = 1.0 + 4.0 * ifp_val / self.ikp_t;
             let sq = arg.max(0.0).sqrt();
             let qbp_val = ((1.0 + sq) / 2.0).max(1e-12);
-            let inv_ikp_sq = if sq > 0.0 { 1.0 / (self.ikp_t * sq) } else { 0.0 };
+            let inv_ikp_sq = if sq > 0.0 {
+                1.0 / (self.ikp_t * sq)
+            } else {
+                0.0
+            };
             (qbp_val, difp_dvbep * inv_ikp_sq, difp_dvbci * inv_ikp_sq)
         } else {
             (1.0, 0.0, 0.0)
@@ -1645,12 +1647,12 @@ pub struct VbicCompanion {
     // Total charges for AC thermal cross-coupling (dQ/dVrth via numerical perturbation).
     // These are the total charges at each junction including depletion + transit time,
     // matching ngspice vbicload.c lines 3871-3924.
-    pub qbe_total: f64,   // CJE_t * qdbe * WBE + tff * Ifi / qb
-    pub qbex_total: f64,  // CJE_t * qdbex * (1-WBE)
-    pub qbc_total: f64,   // CJC_t * qdbc + TR * Iri + QCO * Kbci
-    pub qbcx_total: f64,  // QCO * Kbcx
-    pub qbep_total: f64,  // CJEP_t * qdbep + TR * Ifp
-    pub qbcp_total: f64,  // CJCP_t * qdbcp + CCSO * Vbcp
+    pub qbe_total: f64,  // CJE_t * qdbe * WBE + tff * Ifi / qb
+    pub qbex_total: f64, // CJE_t * qdbex * (1-WBE)
+    pub qbc_total: f64,  // CJC_t * qdbc + TR * Iri + QCO * Kbci
+    pub qbcx_total: f64, // QCO * Kbcx
+    pub qbep_total: f64, // CJEP_t * qdbep + TR * Ifp
+    pub qbcp_total: f64, // CJCP_t * qdbcp + CCSO * Vbcp
 }
 
 /// Resolved node indices for a VBIC instance in the MNA system.
@@ -1753,10 +1755,26 @@ pub fn compute_self_heating_power(
     let vcep = vbep - vbcp;
 
     // External resistance currents (I*V, matching ngspice I = V/R form)
-    let i_rcx = if model.rcx_t > 0.0 { vrcx / model.rcx_t } else { 0.0 };
-    let i_rbx = if model.rbx_t > 0.0 { vrbx / model.rbx_t } else { 0.0 };
-    let i_re = if model.re_t > 0.0 { vre / model.re_t } else { 0.0 };
-    let i_rs = if model.rs_t > 0.0 { vrs / model.rs_t } else { 0.0 };
+    let i_rcx = if model.rcx_t > 0.0 {
+        vrcx / model.rcx_t
+    } else {
+        0.0
+    };
+    let i_rbx = if model.rbx_t > 0.0 {
+        vrbx / model.rbx_t
+    } else {
+        0.0
+    };
+    let i_re = if model.re_t > 0.0 {
+        vre / model.re_t
+    } else {
+        0.0
+    };
+    let i_rs = if model.rs_t > 0.0 {
+        vrs / model.rs_t
+    } else {
+        0.0
+    };
 
     // Sum in ngspice's exact addition order (vbicload.c line 3931)
     scale
@@ -1789,7 +1807,20 @@ pub fn stamp_vbic(
     // Delegate to the full stamping function with zero voltages.
     // This gives correct matrix stamps; RHS will only contain the raw currents.
     stamp_vbic_with_voltages(
-        matrix, rhs, inst, &inst.model, comp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        matrix,
+        rhs,
+        inst,
+        &inst.model,
+        comp,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
     );
 }
 
@@ -1955,7 +1986,12 @@ pub fn stamp_vbic_with_voltages(
         m_add(si, si, -g_bcp);
         m_add(si, bp, g_bcp);
 
-        let i_eq = sign * scale * (comp.iccp - comp.diccp_dvbep * vbep - comp.diccp_dvbci * vbci - comp.diccp_dvbcp * vbcp);
+        let i_eq = sign
+            * scale
+            * (comp.iccp
+                - comp.diccp_dvbep * vbep
+                - comp.diccp_dvbci * vbci
+                - comp.diccp_dvbcp * vbcp);
         r_add(bx, -i_eq);
         r_add(si, i_eq);
     }

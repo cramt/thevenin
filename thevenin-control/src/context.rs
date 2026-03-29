@@ -158,10 +158,7 @@ impl SimContext {
         if name == "curplot" {
             return self.current_plot_name();
         }
-        self.variables
-            .get(name)
-            .cloned()
-            .unwrap_or_default()
+        self.variables.get(name).cloned().unwrap_or_default()
     }
 
     /// Resolve a `$&vector` reference — format scalar value as string.

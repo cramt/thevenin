@@ -4,10 +4,7 @@
 #[derive(Debug, Clone)]
 pub enum Statement {
     /// `let name = expr` or `let name[i] = expr`
-    Let {
-        name: String,
-        expr: String,
-    },
+    Let { name: String, expr: String },
     /// `echo "text" $var $&vec ...`
     Echo(Vec<EchoFragment>),
     /// `if cond ... else ... end`
@@ -40,10 +37,7 @@ pub enum Statement {
         value_exprs: Vec<String>,
     },
     /// `alter @device[param] = value` or `alter @device[param] = [ v1 v2 ... ]`
-    Alter {
-        spec: String,
-        value: AlterValue,
-    },
+    Alter { spec: String, value: AlterValue },
     /// `strcmp result a b`
     Strcmp {
         result: String,

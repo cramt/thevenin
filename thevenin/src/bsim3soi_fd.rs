@@ -956,8 +956,10 @@ impl Bsim3SoiFdModel {
             (1.0 / leff, 1.0 / weff, 1.0 / (leff * weff))
         };
         let kb3_binned = self.kb3 + self.lkb3 * inv_l + self.wkb3 * inv_w + self.pkb3 * inv_lw;
-        let dvbd0_binned = self.dvbd0 + self.ldvbd0 * inv_l + self.wdvbd0 * inv_w + self.pdvbd0 * inv_lw;
-        let dvbd1_binned = self.dvbd1 + self.ldvbd1 * inv_l + self.wdvbd1 * inv_w + self.pdvbd1 * inv_lw;
+        let dvbd0_binned =
+            self.dvbd0 + self.ldvbd0 * inv_l + self.wdvbd0 * inv_w + self.pdvbd0 * inv_lw;
+        let dvbd1_binned =
+            self.dvbd1 + self.ldvbd1 * inv_l + self.wdvbd1 * inv_w + self.pdvbd1 * inv_lw;
 
         Bsim3SoiFdSizeParam {
             leff,
@@ -1554,8 +1556,7 @@ pub fn bsim3soi_fd_companion(
                 let t8 = sp.ags * sp.a0 * t7;
                 let dabulk_dvg = -t1 * t8;
                 let abulk = abulk0 + dabulk_dvg * vgsteff; // NO +1 yet
-                let dabulk_dvb =
-                    dabulk0_dvb - t8 * vgsteff * 3.0 * t1 * dt2_dvb / tmp2_a;
+                let dabulk_dvb = dabulk0_dvb - t8 * vgsteff * 3.0 * t1 * dt2_dvb / tmp2_a;
 
                 (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb)
             };
@@ -1617,8 +1618,7 @@ pub fn bsim3soi_fd_companion(
             let dxcsat_dvg = t4 * dt3_dvg;
 
             let abeff = xcsat * abulk + (1.0 - xcsat) * model.adice;
-            let dabeff_dvg =
-                xcsat * dabulk_dvg + abulk * dxcsat_dvg - model.adice * dxcsat_dvg;
+            let dabeff_dvg = xcsat * dabulk_dvg + abulk * dxcsat_dvg - model.adice * dxcsat_dvg;
             let dabeff_dvb = xcsat * dabulk_dvb;
             (abeff, dabeff_dvg, dabeff_dvb)
         }
@@ -1667,9 +1667,9 @@ pub fn bsim3soi_fd_companion(
             (ueff, t9 * ddenomi_dvg, t9 * ddenomi_dvd, t9 * ddenomi_dvb)
         } else if model.mob_mod == 2 {
             // mob_mod 2: dDenomi/dVd = 0
-            let ddenomi_dvg = (sp.uatemp + sp.uctemp * vbseff
-                + 2.0 * sp.ubtemp * vgsteff / model.tox)
-                / model.tox;
+            let ddenomi_dvg =
+                (sp.uatemp + sp.uctemp * vbseff + 2.0 * sp.ubtemp * vgsteff / model.tox)
+                    / model.tox;
             let ddenomi_dvb = vgsteff * sp.uctemp / model.tox;
             (ueff, t9 * ddenomi_dvg, 0.0, t9 * ddenomi_dvb)
         } else {

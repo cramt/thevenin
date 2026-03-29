@@ -163,13 +163,9 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
             Ok(())
         }
 
-        Statement::RunAnalysis(cmd_line) => {
-            run_analysis(cmd_line, ctx)
-        }
+        Statement::RunAnalysis(cmd_line) => run_analysis(cmd_line, ctx),
 
-        Statement::Alter { spec, value } => {
-            execute_alter(spec, value, ctx)
-        }
+        Statement::Alter { spec, value } => execute_alter(spec, value, ctx),
 
         Statement::Eprint(_) => {
             // Not implemented — skip silently
@@ -204,27 +200,19 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
 
     let result = match &analysis {
         Analysis::Op => thevenin::simulate_op_dc(&netlist).map_err(|e| format!("OP: {e}")),
-        Analysis::Dc { .. } => {
-            thevenin::simulate_dc(&netlist).map_err(|e| format!("DC: {e}"))
-        }
+        Analysis::Dc { .. } => thevenin::simulate_dc(&netlist).map_err(|e| format!("DC: {e}")),
         Analysis::Tran { .. } => {
             thevenin::simulate_tran(&netlist).map_err(|e| format!("Tran: {e}"))
         }
-        Analysis::Ac { .. } => {
-            thevenin::simulate_ac(&netlist).map_err(|e| format!("AC: {e}"))
-        }
+        Analysis::Ac { .. } => thevenin::simulate_ac(&netlist).map_err(|e| format!("AC: {e}")),
         Analysis::Sens { .. } => {
             thevenin::simulate_sens(&netlist).map_err(|e| format!("Sens: {e}"))
         }
         Analysis::Noise { .. } => {
             thevenin::simulate_noise(&netlist).map_err(|e| format!("Noise: {e}"))
         }
-        Analysis::Pz { .. } => {
-            thevenin::simulate_pz(&netlist).map_err(|e| format!("PZ: {e}"))
-        }
-        Analysis::Tf { .. } => {
-            thevenin::simulate_tf(&netlist).map_err(|e| format!("TF: {e}"))
-        }
+        Analysis::Pz { .. } => thevenin::simulate_pz(&netlist).map_err(|e| format!("PZ: {e}")),
+        Analysis::Tf { .. } => thevenin::simulate_tf(&netlist).map_err(|e| format!("TF: {e}")),
     };
 
     // Store resolved model parameters for @model[param] queries
@@ -347,9 +335,7 @@ fn set_netlist_temp(netlist: &mut thevenin_types::Netlist, temp_c: f64) {
     netlist
         .items
         .retain(|item| !matches!(item, thevenin_types::Item::Temp(_)));
-    netlist
-        .items
-        .push(thevenin_types::Item::Temp(temp_c));
+    netlist.items.push(thevenin_types::Item::Temp(temp_c));
 }
 
 /// Evaluate model parameter expressions, substituting TEMPER keyword, and
@@ -375,11 +361,8 @@ fn evaluate_temper_exprs(netlist: &mut thevenin_types::Netlist, temp_c: f64) {
 
             for param in &mut model.params {
                 if let Expr::Brace(expr) = &param.value {
-                    let replaced = crate::vecexpr::replace_word(
-                        expr,
-                        "temper",
-                        &temp_c.to_string(),
-                    );
+                    let replaced =
+                        crate::vecexpr::replace_word(expr, "temper", &temp_c.to_string());
                     let eval_ctx = thevenin::expr::EvalContext::default();
                     if let Ok(val) = eval_ctx.eval_str(&replaced) {
                         param.value = Expr::Num(val);
@@ -388,9 +371,18 @@ fn evaluate_temper_exprs(netlist: &mut thevenin_types::Netlist, temp_c: f64) {
                 // Collect TC parameters from resistor models
                 if let Expr::Num(v) = &param.value {
                     match param.name.to_uppercase().as_str() {
-                        "TC1" => { tc1 = *v; has_tc = true; }
-                        "TC2" => { tc2 = *v; has_tc = true; }
-                        "TCE" => { tce = *v; has_tc = true; }
+                        "TC1" => {
+                            tc1 = *v;
+                            has_tc = true;
+                        }
+                        "TC2" => {
+                            tc2 = *v;
+                            has_tc = true;
+                        }
+                        "TCE" => {
+                            tce = *v;
+                            has_tc = true;
+                        }
                         _ => {}
                     }
                 }
@@ -425,77 +417,83 @@ fn evaluate_temper_exprs(netlist: &mut thevenin_types::Netlist, temp_c: f64) {
 
     for item in &mut netlist.items {
         if let Item::Element(el) = item
-            && let thevenin_types::ElementKind::Resistor {
-                value, params, ..
-            } = &mut el.kind
+            && let thevenin_types::ElementKind::Resistor { value, params, .. } = &mut el.kind
         {
-                // Get TC from instance params or model
-                let mut tc1 = 0.0_f64;
-                let mut tc2 = 0.0_f64;
-                let mut tce = 0.0_f64;
-                let mut has_instance_tc = false;
-                let mut has_instance_tce = false;
+            // Get TC from instance params or model
+            let mut tc1 = 0.0_f64;
+            let mut tc2 = 0.0_f64;
+            let mut tce = 0.0_f64;
+            let mut has_instance_tc = false;
+            let mut has_instance_tce = false;
 
-                for p in params.iter() {
-                    if let Expr::Num(v) = &p.value {
-                        match p.name.to_uppercase().as_str() {
-                            "TC1" => { tc1 = *v; has_instance_tc = true; }
-                            "TC2" => { tc2 = *v; has_instance_tc = true; }
-                            "TCE" => { tce = *v; has_instance_tce = true; }
-                            _ => {}
-                        }
-                    }
-                }
-
-                // If instance has TCE, it overrides TC1/TC2
-                if has_instance_tce {
-                    has_instance_tc = false; // TCE takes precedence
-                }
-
-                // Fall back to model TC if no instance TC
-                if !has_instance_tc && !has_instance_tce {
-                    // Check if element uses a resistor model
-                    if let Expr::Param(model_name) = value
-                        && let Some(&(mtc1, mtc2, mtce)) =
-                            model_tc.get(&model_name.to_uppercase())
-                    {
-                        tc1 = mtc1;
-                        tc2 = mtc2;
-                        tce = mtce;
-                        if mtce != 0.0 {
-                            has_instance_tce = true;
-                        } else {
+            for p in params.iter() {
+                if let Expr::Num(v) = &p.value {
+                    match p.name.to_uppercase().as_str() {
+                        "TC1" => {
+                            tc1 = *v;
                             has_instance_tc = true;
                         }
-                    }
-                }
-
-                // Apply temperature scaling to resistance value
-                if (has_instance_tc || has_instance_tce) && tdiff != 0.0 {
-                    // Get the base resistance value
-                    let base_r = match value {
-                        Expr::Num(r) => Some(*r),
-                        Expr::Param(_model_name) => {
-                            // Model-based resistor: look up the model's R parameter
-                            // The model params were already resolved above
-                            None // handled below via model_r lookup
+                        "TC2" => {
+                            tc2 = *v;
+                            has_instance_tc = true;
                         }
-                        _ => None,
-                    };
-
-                    let factor = if has_instance_tce || tce != 0.0 {
-                        1.01_f64.powf(tce * tdiff)
-                    } else {
-                        1.0 + tc1 * tdiff + tc2 * tdiff * tdiff
-                    };
-
-                    if let Some(r) = base_r {
-                        *value = Expr::Num(r * factor);
+                        "TCE" => {
+                            tce = *v;
+                            has_instance_tce = true;
+                        }
+                        _ => {}
                     }
-                    // For model-based resistors, we can't modify the element value
-                    // directly (it's a model reference). Instead, we need to modify
-                    // the model's R parameter.
                 }
+            }
+
+            // If instance has TCE, it overrides TC1/TC2
+            if has_instance_tce {
+                has_instance_tc = false; // TCE takes precedence
+            }
+
+            // Fall back to model TC if no instance TC
+            if !has_instance_tc && !has_instance_tce {
+                // Check if element uses a resistor model
+                if let Expr::Param(model_name) = value
+                    && let Some(&(mtc1, mtc2, mtce)) = model_tc.get(&model_name.to_uppercase())
+                {
+                    tc1 = mtc1;
+                    tc2 = mtc2;
+                    tce = mtce;
+                    if mtce != 0.0 {
+                        has_instance_tce = true;
+                    } else {
+                        has_instance_tc = true;
+                    }
+                }
+            }
+
+            // Apply temperature scaling to resistance value
+            if (has_instance_tc || has_instance_tce) && tdiff != 0.0 {
+                // Get the base resistance value
+                let base_r = match value {
+                    Expr::Num(r) => Some(*r),
+                    Expr::Param(_model_name) => {
+                        // Model-based resistor: look up the model's R parameter
+                        // The model params were already resolved above
+                        None // handled below via model_r lookup
+                    }
+                    _ => None,
+                };
+
+                let factor = if has_instance_tce || tce != 0.0 {
+                    1.01_f64.powf(tce * tdiff)
+                } else {
+                    1.0 + tc1 * tdiff + tc2 * tdiff * tdiff
+                };
+
+                if let Some(r) = base_r {
+                    *value = Expr::Num(r * factor);
+                }
+                // For model-based resistors, we can't modify the element value
+                // directly (it's a model reference). Instead, we need to modify
+                // the model's R parameter.
+            }
         }
     }
 }
@@ -641,8 +639,8 @@ fn parse_analysis_command(cmd: &str, args: &[&str]) -> Result<Analysis, String> 
 
 fn parse_num(s: &str) -> Result<f64, String> {
     // Strip trailing unit suffixes that aren't SI prefixes
-    let s = s
-        .trim_end_matches(|c: char| c.is_ascii_alphabetic() && !"tTgGkKmMuUnNpPfFaA".contains(c));
+    let s =
+        s.trim_end_matches(|c: char| c.is_ascii_alphabetic() && !"tTgGkKmMuUnNpPfFaA".contains(c));
     crate::parse::parse_spice_number_pub(s)
 }
 
@@ -724,7 +722,10 @@ pub fn interpolate_vars(s: &str, ctx: &SimContext) -> String {
                     }
                 }
                 result.push_str(&ctx.resolve_vec_scalar(&name));
-            } else if chars.peek().is_some_and(|c| c.is_alphanumeric() || *c == '_') {
+            } else if chars
+                .peek()
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+            {
                 let mut name = String::new();
                 while let Some(&c) = chars.peek() {
                     if c.is_alphanumeric() || c == '_' {

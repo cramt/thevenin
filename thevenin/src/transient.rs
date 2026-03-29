@@ -377,9 +377,7 @@ fn estimate_new_timestep(
         let m = bjt.m * bjt.area;
 
         // Compute exact analytical charge at current operating point.
-        let (q0_be, _capbe, q0_bc, _capbc) = bjt.model.compute_charges(
-            vbe, vbc, &comp,
-        );
+        let (q0_be, _capbe, q0_bc, _capbc) = bjt.model.compute_charges(vbe, vbc, &comp);
 
         // B-E charge LTE via divided differences.
         {
@@ -552,9 +550,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let (vbe, vbc) = bjt.junction_voltages(&solution);
             let comp = bjt.model.companion(vbe, vbc);
             // Full charge: depletion integral + diffusion charge.
-            let (qbe, _, qbc, _) = bjt.model.compute_charges(
-                vbe, vbc, &comp,
-            );
+            let (qbe, _, qbc, _) = bjt.model.compute_charges(vbe, vbc, &comp);
             BjtChargeHistory {
                 qbe,
                 cqbe: 0.0, // DC steady state: no charge current
@@ -1604,7 +1600,9 @@ fn record_point(
 
     // Record device parameter queries.
     for (i, (device, param)) in device_param_queries.iter().enumerate() {
-        let val = mna.query_device_param(device, param, solution).unwrap_or(0.0);
+        let val = mna
+            .query_device_param(device, param, solution)
+            .unwrap_or(0.0);
         device_param_vecs[i].real.push(val);
     }
 }
@@ -1656,7 +1654,11 @@ fn solve_timestep(
         }
     }
 
-    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64, _mode: NrMode| {
+    let load = |solution: &[f64],
+                system: &mut LinearSystem,
+                source_factor: f64,
+                gmin: f64,
+                _mode: NrMode| {
         // 1. Copy base linear stamps (R, V, I topology + inductor topology).
         for triplet in base_matrix.triplets() {
             system.matrix.add(triplet.row, triplet.col, triplet.value);
@@ -2214,7 +2216,13 @@ fn solve_timestep(
     } else {
         // Linear: single solve.
         let mut system = LinearSystem::new(dim);
-        load(prev_solution, &mut system, 1.0, nr_options.gmin, NrMode::Float);
+        load(
+            prev_solution,
+            &mut system,
+            1.0,
+            nr_options.gmin,
+            NrMode::Float,
+        );
         let sol = system.solve()?;
         Ok(sol)
     }

@@ -1030,8 +1030,10 @@ impl Bsim3SoiDdModel {
             (1.0 / leff, 1.0 / weff, 1.0 / (leff * weff))
         };
         let kb3_binned = self.kb3 + self.lkb3 * inv_l + self.wkb3 * inv_w + self.pkb3 * inv_lw;
-        let dvbd0_binned = self.dvbd0 + self.ldvbd0 * inv_l + self.wdvbd0 * inv_w + self.pdvbd0 * inv_lw;
-        let dvbd1_binned = self.dvbd1 + self.ldvbd1 * inv_l + self.wdvbd1 * inv_w + self.pdvbd1 * inv_lw;
+        let dvbd0_binned =
+            self.dvbd0 + self.ldvbd0 * inv_l + self.wdvbd0 * inv_w + self.pdvbd0 * inv_lw;
+        let dvbd1_binned =
+            self.dvbd1 + self.ldvbd1 * inv_l + self.wdvbd1 * inv_w + self.pdvbd1 * inv_lw;
 
         Bsim3SoiDdSizeParam {
             leff,
@@ -1726,9 +1728,7 @@ pub fn bsim3soi_dd_companion(
         let ddenomi_dvb = ddenomi_dvg * 2.0 * dvth_dvb + sp.uc * t3;
         (t9 * ddenomi_dvg, t9 * ddenomi_dvd, t9 * ddenomi_dvb)
     } else if model.mob_mod == 2 {
-        let ddenomi_dvg = (sp.ua + sp.uc * vbseff
-            + 2.0 * sp.ub * vgsteff / model.tox)
-            / model.tox;
+        let ddenomi_dvg = (sp.ua + sp.uc * vbseff + 2.0 * sp.ub * vgsteff / model.tox) / model.tox;
         let ddenomi_dvb = vgsteff * sp.uc / model.tox;
         (t9 * ddenomi_dvg, 0.0, t9 * ddenomi_dvb)
     } else {

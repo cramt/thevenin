@@ -3039,8 +3039,7 @@ fn stamp_element(
                     }
                 });
             // Extract noise parameters from model (if present).
-            let (kf, af, ef, noise_area) =
-                extract_resistor_noise_params(value, params, models);
+            let (kf, af, ef, noise_area) = extract_resistor_noise_params(value, params, models);
             let m_val = params
                 .iter()
                 .find(|p| p.name.eq_ignore_ascii_case("m"))

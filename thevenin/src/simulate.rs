@@ -388,7 +388,11 @@ fn solve_nonlinear_op_with_guess(
     // failed attempt poisoning the next one.
     let last_gmin = std::cell::Cell::new(f64::NAN);
 
-    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64, mode: NrMode| {
+    let load = |solution: &[f64],
+                system: &mut LinearSystem,
+                source_factor: f64,
+                gmin: f64,
+                mode: NrMode| {
         // Detect NR attempt boundary: gmin changes when switching between
         // direct NR (gmin=diag_gmin), gmin stepping (gmin=1e-2..1e-12), and
         // source stepping. Reset device prev voltages to match current solution.
@@ -433,8 +437,7 @@ fn solve_nonlinear_op_with_guess(
     //    gradual source ramp to avoid NR divergence.
     let has_tlines = !mna.ltras.is_empty() || !mna.txls.is_empty() || !mna.cpls.is_empty();
     let many_nonlinear = mna.bjts.len() + mna.vbics.len() >= 10;
-    let force_source_stepping =
-        (has_tlines && !mna.mosfets.is_empty()) || many_nonlinear;
+    let force_source_stepping = (has_tlines && !mna.mosfets.is_empty()) || many_nonlinear;
     let result = if force_source_stepping {
         source_stepping_solve(options, dim, num_nodes, load, &initial)
     } else {

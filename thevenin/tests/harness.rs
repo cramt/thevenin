@@ -10,8 +10,8 @@
 //! for machine consumption (used by `scripts/triage-ignored-tests.ts`).
 
 use thevenin::output::{compare_filtered, format_batch_output};
-use thevenin_types::{Analysis, Item, Netlist, SimResult};
 use thevenin_control;
+use thevenin_types::{Analysis, Item, Netlist, SimResult};
 
 /// Failure phases — where in the pipeline did the test fail?
 #[derive(Clone, Copy)]

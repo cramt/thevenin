@@ -102,7 +102,13 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
                 // If previous token is a number, ident, or rparen, this is subtraction
                 let is_binary = matches!(
                     tokens.last(),
-                    Some(Token::Num(_) | Token::Ident(_) | Token::Str(_) | Token::RParen | Token::RBracket)
+                    Some(
+                        Token::Num(_)
+                            | Token::Ident(_)
+                            | Token::Str(_)
+                            | Token::RParen
+                            | Token::RBracket
+                    )
                 );
                 if is_binary {
                     tokens.push(Token::Minus);
@@ -219,8 +225,16 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
                 // @v1[dc][2] becomes DeviceParam("@v1[dc]"), LBracket, Num(2), RBracket
                 let mut s = String::new();
                 while let Some(&c) = chars.peek() {
-                    if c == ' ' || c == '\t' || c == '+' || c == '-' || c == '*' || c == '/'
-                        || c == ')' || c == ',' || c == '>' || c == '<'
+                    if c == ' '
+                        || c == '\t'
+                        || c == '+'
+                        || c == '-'
+                        || c == '*'
+                        || c == '/'
+                        || c == ')'
+                        || c == ','
+                        || c == '>'
+                        || c == '<'
                     {
                         break;
                     }
@@ -235,9 +249,11 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
             c if c.is_ascii_digit() || c == '.' => {
                 let mut num_str = String::new();
                 while let Some(&c) = chars.peek() {
-                    if c.is_ascii_alphanumeric() || c == '.' || c == 'e' || c == 'E'
-                        || ((c == '+' || c == '-')
-                            && num_str.ends_with(['e', 'E']))
+                    if c.is_ascii_alphanumeric()
+                        || c == '.'
+                        || c == 'e'
+                        || c == 'E'
+                        || ((c == '+' || c == '-') && num_str.ends_with(['e', 'E']))
                     {
                         num_str.push(c);
                         chars.next();
@@ -332,9 +348,13 @@ fn parse_or(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecVa
         {
             *pos += 1;
             let right = parse_and(tokens, pos, ctx)?;
-            left = vec_binop(&left, &right, |a, b| {
-                if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }
-            });
+            left = vec_binop(
+                &left,
+                &right,
+                |a, b| {
+                    if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }
+                },
+            );
             continue;
         }
         break;
@@ -350,9 +370,13 @@ fn parse_and(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecV
         {
             *pos += 1;
             let right = parse_comparison(tokens, pos, ctx)?;
-            left = vec_binop(&left, &right, |a, b| {
-                if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 }
-            });
+            left = vec_binop(
+                &left,
+                &right,
+                |a, b| {
+                    if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 }
+                },
+            );
             continue;
         }
         break;
@@ -360,14 +384,17 @@ fn parse_and(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecV
     Ok(left)
 }
 
-fn parse_comparison(
-    tokens: &[Token],
-    pos: &mut usize,
-    ctx: &SimContext,
-) -> Result<VecVal, String> {
+fn parse_comparison(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecVal, String> {
     let mut left = parse_add(tokens, pos, ctx)?;
     while *pos < tokens.len() {
-        enum CmpOp { Gt, Lt, Ge, Le, Eq, Ne }
+        enum CmpOp {
+            Gt,
+            Lt,
+            Ge,
+            Le,
+            Eq,
+            Ne,
+        }
         let op = match &tokens[*pos] {
             Token::Gt => Some(CmpOp::Gt),
             Token::Lt => Some(CmpOp::Lt),
@@ -386,8 +413,16 @@ fn parse_comparison(
                 CmpOp::Lt => vec_binop(&left, &right, |a, b| if a < b { 1.0 } else { 0.0 }),
                 CmpOp::Ge => vec_binop(&left, &right, |a, b| if a >= b { 1.0 } else { 0.0 }),
                 CmpOp::Le => vec_binop(&left, &right, |a, b| if a <= b { 1.0 } else { 0.0 }),
-                CmpOp::Eq => vec_binop(&left, &right, |a, b| if (a - b).abs() < 1e-15 { 1.0 } else { 0.0 }),
-                CmpOp::Ne => vec_binop(&left, &right, |a, b| if (a - b).abs() >= 1e-15 { 1.0 } else { 0.0 }),
+                CmpOp::Eq => {
+                    vec_binop(
+                        &left,
+                        &right,
+                        |a, b| if (a - b).abs() < 1e-15 { 1.0 } else { 0.0 },
+                    )
+                }
+                CmpOp::Ne => vec_binop(&left, &right, |a, b| {
+                    if (a - b).abs() >= 1e-15 { 1.0 } else { 0.0 }
+                }),
             };
         } else {
             break;
@@ -428,7 +463,11 @@ fn parse_mul(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecV
             Token::Slash => {
                 *pos += 1;
                 let right = parse_unary(tokens, pos, ctx)?;
-                left = vec_binop(&left, &right, |a, b| if b != 0.0 { a / b } else { f64::INFINITY });
+                left = vec_binop(
+                    &left,
+                    &right,
+                    |a, b| if b != 0.0 { a / b } else { f64::INFINITY },
+                );
             }
             Token::Caret => {
                 *pos += 1;
@@ -487,7 +526,11 @@ fn parse_primary(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<
     Ok(val)
 }
 
-fn parse_primary_base(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecVal, String> {
+fn parse_primary_base(
+    tokens: &[Token],
+    pos: &mut usize,
+    ctx: &SimContext,
+) -> Result<VecVal, String> {
     if *pos >= tokens.len() {
         return Err("unexpected end of expression".to_string());
     }
@@ -541,10 +584,7 @@ fn parse_primary_base(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Re
             // Try resolving as plot name matching plot type (e.g., "temp-sweep" → the DC temp sweep vector)
             // ngspice names DC temp sweep plot as "temp-sweep"
             for plot in &ctx.plots {
-                if (plot
-                    .name
-                    .to_lowercase()
-                    .contains(&lower.replace('-', "_"))
+                if (plot.name.to_lowercase().contains(&lower.replace('-', "_"))
                     || plot.name.to_lowercase().contains(&lower))
                     && let Some(v) = plot.vecs.first()
                 {
@@ -579,8 +619,13 @@ fn parse_primary_base(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Re
             if *pos < tokens.len() && tokens[*pos] == Token::LParen {
                 // Special case: v(...) and i(...) are vector name lookups, not function calls
                 let lower = name.to_lowercase();
-                if lower == "v" || lower == "i" || lower == "vm" || lower == "vp"
-                    || lower == "vr" || lower == "vi" || lower == "vdb"
+                if lower == "v"
+                    || lower == "i"
+                    || lower == "vm"
+                    || lower == "vp"
+                    || lower == "vr"
+                    || lower == "vi"
+                    || lower == "vdb"
                 {
                     // Reconstruct the full vector name: v(node), i(src), etc.
                     *pos += 1;
@@ -588,10 +633,15 @@ fn parse_primary_base(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Re
                     let mut depth = 1;
                     while *pos < tokens.len() && depth > 0 {
                         match &tokens[*pos] {
-                            Token::LParen => { inner.push('('); depth += 1; }
+                            Token::LParen => {
+                                inner.push('(');
+                                depth += 1;
+                            }
                             Token::RParen => {
                                 depth -= 1;
-                                if depth > 0 { inner.push(')'); }
+                                if depth > 0 {
+                                    inner.push(')');
+                                }
                             }
                             Token::Num(v) => inner.push_str(&format_num_for_vecname(*v)),
                             Token::Ident(s) => inner.push_str(s),
@@ -606,12 +656,16 @@ fn parse_primary_base(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Re
                     }
                     let vec_name = format!("{name}({inner})");
                     if let Some(v) = ctx.find_vector(&vec_name) {
-                        return Ok(VecVal { data: vec_to_real(v) });
+                        return Ok(VecVal {
+                            data: vec_to_real(v),
+                        });
                     }
                     // Also try without lowercase normalization
                     let vec_name_lower = vec_name.to_lowercase();
                     if let Some(v) = ctx.find_vector(&vec_name_lower) {
-                        return Ok(VecVal { data: vec_to_real(v) });
+                        return Ok(VecVal {
+                            data: vec_to_real(v),
+                        });
                     }
                     return Err(format!("undefined vector: {vec_name}"));
                 }
@@ -748,11 +802,7 @@ fn eval_function(name: &str, args: &[VecVal], ctx: &SimContext) -> Result<VecVal
         }
         "vecmin" => {
             require_args(name, args, 1)?;
-            let min = args[0]
-                .data
-                .iter()
-                .copied()
-                .fold(f64::INFINITY, f64::min);
+            let min = args[0].data.iter().copied().fold(f64::INFINITY, f64::min);
             Ok(VecVal::scalar(min))
         }
         "length" | "vector_length" => {
@@ -769,7 +819,9 @@ fn eval_function(name: &str, args: &[VecVal], ctx: &SimContext) -> Result<VecVal
         }
         "v" | "i" | "vm" | "vp" | "vr" | "vi" | "vdb" => {
             // These are handled as vector name lookups in parse_primary, not here
-            Err(format!("{name}() should be resolved as vector lookup, not function"))
+            Err(format!(
+                "{name}() should be resolved as vector lookup, not function"
+            ))
         }
         "vector" => {
             // vector(n) — create a vector [0, 1, ..., n-1]
@@ -782,9 +834,7 @@ fn eval_function(name: &str, args: &[VecVal], ctx: &SimContext) -> Result<VecVal
         "unitvec" => {
             require_args(name, args, 1)?;
             let n = args[0].as_scalar() as usize;
-            Ok(VecVal {
-                data: vec![1.0; n],
-            })
+            Ok(VecVal { data: vec![1.0; n] })
         }
         "mean" | "avg" => {
             require_args(name, args, 1)?;
@@ -954,8 +1004,7 @@ pub fn replace_word(s: &str, word: &str, replacement: &str) -> String {
             // Check word boundary before
             let before_ok = i == 0 || !is_ident_char(bytes[i - 1]);
             // Check word boundary after
-            let after_ok =
-                i + word_len >= bytes.len() || !is_ident_char(bytes[i + word_len]);
+            let after_ok = i + word_len >= bytes.len() || !is_ident_char(bytes[i + word_len]);
             if before_ok && after_ok {
                 result.push_str(replacement);
                 i += word_len;
@@ -1090,19 +1139,31 @@ mod tests {
 
     #[test]
     fn test_replace_word() {
-        assert_eq!(replace_word("abs(a-b)>err*abs(b)", "a", "42"), "abs(42-b)>err*abs(b)");
-        assert_eq!(replace_word("abs(a-b)>err*abs(b)", "b", "7"), "abs(a-7)>err*abs(7)");
-        assert_eq!(replace_word("abs(a-b)>err*abs(b)", "err", "0.1"), "abs(a-b)>0.1*abs(b)");
+        assert_eq!(
+            replace_word("abs(a-b)>err*abs(b)", "a", "42"),
+            "abs(42-b)>err*abs(b)"
+        );
+        assert_eq!(
+            replace_word("abs(a-b)>err*abs(b)", "b", "7"),
+            "abs(a-7)>err*abs(7)"
+        );
+        assert_eq!(
+            replace_word("abs(a-b)>err*abs(b)", "err", "0.1"),
+            "abs(a-b)>0.1*abs(b)"
+        );
     }
 
     #[test]
     fn test_user_defined_function() {
         let mut ctx = empty_ctx();
         // Define mismatch(a,b,err) abs(a-b)>err
-        ctx.functions.insert("mismatch".to_string(), (
-            vec!["a".to_string(), "b".to_string(), "err".to_string()],
-            "abs(a-b)>err".to_string(),
-        ));
+        ctx.functions.insert(
+            "mismatch".to_string(),
+            (
+                vec!["a".to_string(), "b".to_string(), "err".to_string()],
+                "abs(a-b)>err".to_string(),
+            ),
+        );
         let v = eval_vec_expr("mismatch(10, 11, 0.5)", &ctx).unwrap();
         assert_eq!(v.data, vec![1.0]); // |10-11| = 1 > 0.5
         let v = eval_vec_expr("mismatch(10, 10.1, 0.5)", &ctx).unwrap();

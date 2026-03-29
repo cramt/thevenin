@@ -748,9 +748,8 @@ pub fn stamp_ac_devices(
 
                 let mut model_pert = vbic.model.clone();
                 model_pert.temperature_adjust(vbic.t_ambient + vrth + delta);
-                let comp_pert = model_pert.companion(
-                    vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin,
-                );
+                let comp_pert = model_pert
+                    .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
 
                 let rth = Some(rth_idx);
 
@@ -759,8 +758,7 @@ pub fn stamp_ac_devices(
                 let vcei = vbei - vbci;
                 let vcep = vbep - vbcp;
                 let th_sign = vbic.model.vbic_type.sign();
-                let th_node =
-                    |idx: Option<usize>| idx.map(|i| op_solution[i]).unwrap_or(0.0);
+                let th_node = |idx: Option<usize>| idx.map(|i| op_solution[i]).unwrap_or(0.0);
                 let vrcx = th_sign * (th_node(vbic.coll_idx) - th_node(vbic.coll_cx_idx));
                 let vrbx = th_sign * (th_node(vbic.base_idx) - th_node(vbic.base_bx_idx));
                 let vre = th_sign * (th_node(vbic.emit_idx) - th_node(vbic.emit_ei_idx));
@@ -890,12 +888,26 @@ pub fn stamp_ac_devices(
                 // Power dissipation changes with temperature; computed via
                 // perturbation of the full Ith expression.
                 let ith = crate::vbic::compute_self_heating_power(
-                    &comp, &model, vbei, vbex, vbci, vbep, vbcp, vrci, vrbi, vrbp,
-                    vrcx, vrbx, vre, vrs, vbic.area, vbic.m,
+                    &comp, &model, vbei, vbex, vbci, vbep, vbcp, vrci, vrbi, vrbp, vrcx, vrbx, vre,
+                    vrs, vbic.area, vbic.m,
                 );
                 let ith_pert = crate::vbic::compute_self_heating_power(
-                    &comp_pert, &model_pert, vbei, vbex, vbci, vbep, vbcp, vrci,
-                    vrbi, vrbp, vrcx, vrbx, vre, vrs, vbic.area, vbic.m,
+                    &comp_pert,
+                    &model_pert,
+                    vbei,
+                    vbex,
+                    vbci,
+                    vbep,
+                    vbcp,
+                    vrci,
+                    vrbi,
+                    vrbp,
+                    vrcx,
+                    vrbx,
+                    vre,
+                    vrs,
+                    vbic.area,
+                    vbic.m,
                 );
                 let dith_vrth = (ith_pert - ith) * inv_delta;
                 sys.real.add(rth_idx, rth_idx, dith_vrth);
@@ -908,7 +920,8 @@ pub fn stamp_ac_devices(
                 // Ith_Vbei: Vbei = V(BI)-V(EI), so rth,BI += val; rth,EI -= val
                 // (ngspice vbicacld.c lines 374-375: rth,BI += -Ith_Vbei where Ith_Vbei < 0)
                 let ith_vbei = sc
-                    * (comp.dibe_dvbei * vbei + comp.ibe
+                    * (comp.dibe_dvbei * vbei
+                        + comp.ibe
                         + comp.diciei_dvbei * vcei
                         + comp.dibc_dvbei * vbci
                         + comp.dirbi_dvbei * vrbi);
@@ -923,7 +936,8 @@ pub fn stamp_ac_devices(
                 // Note: ngspice treats Vbei/Vbci/Vcei as independent variables.
                 // The Iciei*Vcei contribution is handled by the separate Ith_Vcei stamp.
                 let ith_vbci = sc
-                    * (comp.dibc_dvbci * vbci + comp.ibc
+                    * (comp.dibc_dvbci * vbci
+                        + comp.ibc
                         + comp.diciei_dvbci * vcei
                         + comp.dirci_dvbci * vrci
                         + comp.dirbi_dvbci * vrbi
@@ -956,7 +970,8 @@ pub fn stamp_ac_devices(
 
                 // Ith_Vbep: Vbep = V(BX)-V(BP), so rth,BX += val; rth,BP -= val
                 let ith_vbep = sc
-                    * (comp.dibep_dvbep * vbep + comp.ibep
+                    * (comp.dibep_dvbep * vbep
+                        + comp.ibep
                         + comp.diccp_dvbep * vcep
                         + comp.dirbp_dvbep * vrbp);
                 if let Some(r) = bx {
@@ -967,9 +982,7 @@ pub fn stamp_ac_devices(
                 }
 
                 // Ith_Vbcp: Vbcp = V(S)-V(BP), so rth,S += val; rth,BP -= val
-                let ith_vbcp = sc
-                    * (comp.dibcp_dvbcp * vbcp + comp.ibcp
-                        + comp.diccp_dvbcp * vcep);
+                let ith_vbcp = sc * (comp.dibcp_dvbcp * vbcp + comp.ibcp + comp.diccp_dvbcp * vcep);
                 if let Some(r) = vbic.subs_idx {
                     sys.real.add(rth_idx, r, ith_vbcp);
                 }

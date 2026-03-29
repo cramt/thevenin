@@ -51,9 +51,7 @@ pub fn execute_control_block(netlist: &Netlist) -> Result<ControlResult, String>
     let exit_code = ctx.exit_code.unwrap_or(0);
 
     // Merge all plots into a SimResult
-    let sim_result = SimResult {
-        plots: ctx.plots,
-    };
+    let sim_result = SimResult { plots: ctx.plots };
 
     Ok(ControlResult {
         sim_result,
