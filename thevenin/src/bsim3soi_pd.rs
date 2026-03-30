@@ -804,8 +804,9 @@ impl Bsim3SoiPdModel {
         // Xdep0
         let xdep0 = (2.0 * EPSSI / (CHARGE_Q * self.npeak * 1e6)).sqrt() * sqrt_phi;
 
-        // litl: ngspice b3soipdtemp.c: sqrt(3.0 * xj * tox), used for VACLM.
-        let litl = (EPSSI * self.xj / self.cox).sqrt();
+        // litl: ngspice b3soipdtemp.c line 755: sqrt(3.0 * xj * tox)
+        // ngspice uses hardcoded 3.0 (not EPSSI/EPSOX ≈ 2.99934).
+        let litl = (3.0 * self.xj * self.tox).sqrt();
 
         // Characteristic length for DIBL (theta0vb0) and PDIBL (theta_rout).
         // ngspice b3soipdtemp.c: T1 = sqrt(EPSSI / EPSOX * tox * Xdep0)

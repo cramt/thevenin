@@ -8,7 +8,7 @@
 # === BSIM3SOI-DD ===
 "bsim3soidd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
 "bsim3soidd/RampVg2.cir" = "floating body Vbs ~0 vs expected ~92mV: @m1[Vbs] query works, junction ceq signs fixed, but DD body voltage equilibrium still wrong"
-"bsim3soidd/t3.cir" = "~0.6% Ids error at Vd=0.24V (floating body: Gmc implemented, Gme irrelevant for Ve=0; remaining error from missing Ibp body punch-through current and full body-current linearization)"
+"bsim3soidd/t3.cir" = "~0.6% Ids error at Vd=0.24V (floating body: Gmc implemented, Gme implemented, Ibp=0 for bodyMod=0; confirmed Jacobian-only changes don't affect converged DC — error is in body current equation evaluation order)"
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"

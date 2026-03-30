@@ -380,6 +380,7 @@ pub struct Bsim3SoiDdCompanion {
     pub gm: f64,
     pub gds: f64,
     pub gmbs: f64,
+    pub gme: f64,
     pub mode: i32,
     pub vdsat: f64,
 
@@ -938,9 +939,9 @@ impl Bsim3SoiDdModel {
 
         let xdep0 = (2.0 * EPSSI / (CHARGE_Q * npeak * 1e6)).sqrt() * sqrt_phi;
 
-        // litl: ngspice b3soiddtemp.c: sqrt(3.0 * xj * tox), used for VACLM and dvbd.
-        // Note: sqrt(EPSSI/EPSOX * xj * tox) ≈ sqrt(3 * xj * tox) since EPSSI/EPSOX ≈ 3.
-        let litl = (EPSSI * self.xj / self.cox).sqrt();
+        // litl: ngspice b3soiddtemp.c line 651: sqrt(3.0 * xj * tox)
+        // ngspice uses hardcoded 3.0 (not EPSSI/EPSOX ≈ 2.99934).
+        let litl = (3.0 * self.xj * self.tox).sqrt();
 
         // Characteristic length for DIBL (theta0vb0) and PDIBL (theta_rout).
         // ngspice b3soiddtemp.c line 734: T1 = sqrt(EPSSI / EPSOX * tox * Xdep0)
@@ -983,18 +984,20 @@ impl Bsim3SoiDdModel {
         // vbi = Vt * ln(1e20 * npeak / ni²), matching ngspice b3soiddtemp.c line ~654.
         let vbi = vtm * (1e20 * npeak / (ni_temp * ni_temp)).abs().ln();
 
-        // SOI junction parameters
-        let t0 = (eg / (2.0 * KBOQ * tnom_k)).exp();
-        let t_eg = (eg / (2.0 * KBOQ * temp)).exp();
-        let t0_ratio = t0 / t_eg;
-
-        let jbjt = self.isbjt * t0_ratio;
-        let jdif = self.isdif * t0_ratio;
-        let jrec = self.isrec
-            * ((self.nrecf0 * 0.026 * (1.0 + self.ntrecf * (temp_ratio - 1.0)))
-                / (self.nrecf0 * 0.026))
-                .exp();
-        let jtun = self.istun;
+        // SOI junction parameters — ngspice b3soiddtemp.c lines 574-584
+        // DD model uses power-law + bandgap exponential, NOT the PD nrecf0/ntrecf formula.
+        let eg0 = self.eg; // bandgap at Tnom, computed in set_defaults_and_derive()
+        let t0_jbjt = temp_ratio.powf(self.xbjt / self.ndiode);
+        let t1_jdif = temp_ratio.powf(self.xdif / self.ndiode);
+        let t2_jrec = temp_ratio.powf(self.xrec / self.ndiode / 2.0);
+        let t4 = -eg0 / self.ndiode / vtm * (1.0 - temp_ratio);
+        let t5 = t4.exp();
+        let t6 = t5.sqrt();
+        let jbjt = self.isbjt * t0_jbjt * t5;
+        let jdif = self.isdif * t1_jdif * t5;
+        let jrec = self.isrec * t2_jrec * t6;
+        let t0_jtun = temp_ratio.powf(self.xtun / self.ntun);
+        let jtun = self.istun * t0_jtun;
 
         // ngspice DD uses weff directly for IGIDL (b3soiddld.c line 2222/2248),
         // not wdios/wdiod. The DD model has no separate wdios/wdiod variables.
@@ -1407,6 +1410,116 @@ pub fn bsim3soi_dd_companion(
     let dvbseff_dvg = dvbseff_dvbsmos * dvbsmos_dvg;
     let dvbseff_dvd = dvbseff_dvbsmos * dvbsmos_dvd;
 
+    // --- Cross-derivatives: dVbseff/dVe (back-gate transconductance chain) ---
+    // Ve affects Ids through the back-gate coupling chain:
+    //   Ve → Vbs0 → Vbs0mos → Vthfd → Vbs0teff → Vbs0eff → Vbsdio → Vbsmos → Vbseff
+    // ngspice b3soiddld.c lines 939-1191.
+
+    // dT6/dVe = kb1/(1+csieff/Cbox) (ngspice line 939)
+    let dt6_dve = t1_kb;
+
+    // dVbs0/dVe (ngspice line 951): smoothing factor from Vbs0 limit
+    let s_vbs0 = 0.5 * (1.0 + t2_lim / t3_lim);
+    let dvbs0_dve = s_vbs0 * dt6_dve;
+
+    // dVbs0mos/dVe (ngspice lines 960-961)
+    // T5 in ngspice = 0.5 * T4_mos * (1 + T1_mos/T2_mos)
+    let s_vbs0mos = 0.5 * t4_mos * (1.0 + t1_mos / t2_mos);
+    let dvbs0mos_dve = dvbs0_dve * (1.0 + s_vbs0mos);
+
+    // dVthfd/dVbs0mos (ngspice lines 1075-1077: T7)
+    // Replicate the Vthfd sensitivity using the FD-region intermediates
+    let dsqrt_phis_fd_dvbs0mos = -0.5 / sqrt_phis_fd.max(1e-20);
+    let dxdep_fd_dvbs0mos = (sp.xdep0 / sqrt_phi) * dsqrt_phis_fd_dvbs0mos;
+
+    // SCE derivative: dTheta0_fd/dVbs0mos through lt1_fd
+    let dt1_dvt_dvbs0mos = if sp.dvt2 * vbs0mos >= -0.5 {
+        sp.dvt2
+    } else {
+        let t4 = 1.0 / (3.0 + 8.0 * sp.dvt2 * vbs0mos);
+        sp.dvt2 * t4 * t4
+    };
+    let sqrt_xdep_fd = xdep_fd.sqrt();
+    let dlt1_fd_dvbs0mos = model.factor1
+        * (0.5 / sqrt_xdep_fd.max(1e-20) * t1_dvt * dxdep_fd_dvbs0mos
+            + sqrt_xdep_fd * dt1_dvt_dvbs0mos);
+    let t0_sce_val = -0.5 * sp.dvt1 * leff / lt1_fd;
+    let ddelt_vth_fd_dvbs0mos = if t0_sce_val > -EXP_THRESHOLD {
+        let t1_exp = t0_sce_val.exp();
+        let dtheta0_fd_dvbs0mos =
+            (-t0_sce_val / lt1_fd * t1_exp * dlt1_fd_dvbs0mos) * (1.0 + 4.0 * t1_exp);
+        sp.dvt0 * dtheta0_fd_dvbs0mos * v0
+    } else {
+        0.0
+    };
+
+    // Width SCE derivative: dDeltVthw_fd/dVbs0mos
+    let dt1_dvtw_dvbs0mos = if sp.dvt2w * vbs0mos >= -0.5 {
+        sp.dvt2w
+    } else {
+        let t4 = 1.0 / (3.0 + 8.0 * sp.dvt2w * vbs0mos);
+        sp.dvt2w * t4 * t4
+    };
+    let dltw_fd_dvbs0mos = model.factor1
+        * (0.5 / sqrt_xdep_fd.max(1e-20) * t1_dvtw * dxdep_fd_dvbs0mos
+            + sqrt_xdep_fd * dt1_dvtw_dvbs0mos);
+    let t0_w_fd_val = -0.5 * sp.dvt1w * weff * leff / ltw_fd;
+    let ddelt_vthw_fd_dvbs0mos = if t0_w_fd_val > -EXP_THRESHOLD {
+        let t1_exp = t0_w_fd_val.exp();
+        let dt2_w_fd_dvbs0mos =
+            (-t0_w_fd_val / ltw_fd * t1_exp * dltw_fd_dvbs0mos) * (1.0 + 4.0 * t1_exp);
+        sp.dvt0w * dt2_w_fd_dvbs0mos * v0
+    } else {
+        0.0
+    };
+
+    // DIBL derivative in Vthfd
+    let dt3_eta_fd_dvbs0mos = if t3_eta_fd < 1e-4 {
+        let t9 = 1.0 / (3.0 - 2e4 * t3_eta_fd);
+        t9 * t9 * sp.etab
+    } else {
+        sp.etab
+    };
+    let ddibl_sft_fd_dvbs0mos = sp.theta0vb0 * vds_i * dt3_eta_fd_dvbs0mos;
+
+    // T6 + K3b*tmp2 - K2 + KT2*TempRatio (ngspice line 1072-1073)
+    let t6_vthfd = sp.k3b * tmp2_fd - sp.k2 + sp.kt2 * temp_ratio_minus1;
+
+    // Full dVthfd/dVbs0mos (ngspice line 1075-1077: T7)
+    let dvthfd_dvbs0mos = sp.k1 * dsqrt_phis_fd_dvbs0mos - ddelt_vth_fd_dvbs0mos
+        - ddelt_vthw_fd_dvbs0mos
+        + t6_vthfd
+        - ddibl_sft_fd_dvbs0mos;
+
+    // dVthfd/dVe (ngspice line 1078)
+    let dvthfd_dve = dvthfd_dvbs0mos * dvbs0mos_dve;
+
+    // dVbs0teff/dVe (ngspice line 1092)
+    let dvbs0teff_dve = -s_teff * dvthfd_dve;
+
+    // dVbs0eff/dVe (ngspice lines 1109-1110)
+    // T7 from ngspice line 1105 is the Nfb derivative factor
+    let t8_nfb_val = (phi - vbs0mos).abs().sqrt();
+    let t5_nfb_val = (1.0 + 4.0 * t3_nfb * (phi + k1 * t8_nfb_val - vbs0mos))
+        .abs()
+        .sqrt();
+    let t7_nfb = 2.0 * t3_nfb * t4_nfb * nfb * nfb / t5_nfb_val * (0.5 * k1 / t8_nfb_val + 1.0);
+    let dvbs0eff_dve =
+        dvbs0_dve - nfb * s_teff * dvthfd_dve - t7_nfb * 0.5 * (t1_eff + t2_eff) * dvbs0mos_dve;
+
+    // dVbsdio/dVe (ngspice line 1126)
+    let dvbsdio_dve = (1.0 - dvbsdio_dvb) * dvbs0eff_dve;
+
+    // dVbsmos/dVe (ngspice lines 1139, 1148)
+    let dt1_bsmos_dve = dvbs0teff_dve - dvbsdio_dve;
+    let dvbsmos_dve = dvbsdio_dve - t4_bsmos * t5_bsmos * dt1_bsmos_dve;
+
+    // dVcs/dVe (ngspice line 1157)
+    let dvcs_dve = dvbsdio_dve - dvbs0eff_dve;
+
+    // dVbseff/dVe (ngspice line 1191)
+    let dvbseff_dve = dvbseff_dvbsmos * dvbsmos_dve;
+
     // ========== Main MOSFET equations ==========
     let phis = phi - vbseff;
     let sqrt_phis = phis.abs().sqrt();
@@ -1521,52 +1634,56 @@ pub fn bsim3soi_dd_companion(
     // dvbseff_dvb: full derivative chain vbs → vbsdio → vbsmos → vbseff
     let dvbseff_dvb = dvbseff_dvbsmos * dvbsmos_dvbsdio * dvbsdio_dvb;
 
-    let (vgsteff, dvgsteff_dvg, dvgsteff_dvd, dvgsteff_dvb) = if vgst_nvt > EXPL_THRESHOLD {
-        // Strong inversion: Vgsteff = Vgst, chain-rule through Vbseff
-        (
-            vgst,
-            dvgs_eff_dvg - dvth_dvb * dvbseff_dvg,
-            -dvth_dvd - dvth_dvb * dvbseff_dvd,
-            -dvth_dvb * dvbseff_dvb,
-        )
-    } else if exp_arg > EXPL_THRESHOLD {
-        // Weak inversion
-        let t0 = (vgst - sp.voff) / (n * vtm);
-        let exp_vgst = t0.exp();
-        let vgsteff_val = vtm * sp.cdep0 / cox * exp_vgst;
-        let t3 = vgsteff_val / (n * vtm);
-        let t1 = -t3 * (dvth_dvb + t0 * vtm * dn_dvb);
-        (
-            vgsteff_val,
-            t3 * dvgs_eff_dvg + t1 * dvbseff_dvg,
-            -t3 * (dvth_dvd + t0 * vtm * dn_dvd) + t1 * dvbseff_dvd,
-            t1 * dvbseff_dvb,
-        )
-    } else {
-        // Moderate inversion (smooth transition)
-        let exp_vgst = vgst_nvt.exp();
-        let t1 = t10 * (1.0 + exp_vgst).ln();
-        let dt1_dvg = exp_vgst / (1.0 + exp_vgst);
-        let dt1_dvb = -dt1_dvg * (dvth_dvb + vgst / n * dn_dvb) + t1 / n * dn_dvb;
-        let dt1_dvd = -dt1_dvg * (dvth_dvd + vgst / n * dn_dvd) + t1 / n * dn_dvd;
+    let (vgsteff, dvgsteff_dvg, dvgsteff_dvd, dvgsteff_dvb, dvgsteff_dve) =
+        if vgst_nvt > EXPL_THRESHOLD {
+            // Strong inversion: Vgsteff = Vgst, chain-rule through Vbseff
+            (
+                vgst,
+                dvgs_eff_dvg - dvth_dvb * dvbseff_dvg,
+                -dvth_dvd - dvth_dvb * dvbseff_dvd,
+                -dvth_dvb * dvbseff_dvb,
+                -dvth_dvb * dvbseff_dve,
+            )
+        } else if exp_arg > EXPL_THRESHOLD {
+            // Weak inversion
+            let t0 = (vgst - sp.voff) / (n * vtm);
+            let exp_vgst = t0.exp();
+            let vgsteff_val = vtm * sp.cdep0 / cox * exp_vgst;
+            let t3 = vgsteff_val / (n * vtm);
+            let t1 = -t3 * (dvth_dvb + t0 * vtm * dn_dvb);
+            (
+                vgsteff_val,
+                t3 * dvgs_eff_dvg + t1 * dvbseff_dvg,
+                -t3 * (dvth_dvd + t0 * vtm * dn_dvd) + t1 * dvbseff_dvd,
+                t1 * dvbseff_dvb,
+                t1 * dvbseff_dve,
+            )
+        } else {
+            // Moderate inversion (smooth transition)
+            let exp_vgst = vgst_nvt.exp();
+            let t1 = t10 * (1.0 + exp_vgst).ln();
+            let dt1_dvg = exp_vgst / (1.0 + exp_vgst);
+            let dt1_dvb = -dt1_dvg * (dvth_dvb + vgst / n * dn_dvb) + t1 / n * dn_dvb;
+            let dt1_dvd = -dt1_dvg * (dvth_dvd + vgst / n * dn_dvd) + t1 / n * dn_dvd;
 
-        let dt2_dvg = -cox / (vtm * sp.cdep0) * exp_arg.exp();
-        let t2_val = 1.0 - t10 * dt2_dvg;
-        let dt2_dvd =
-            -dt2_dvg * (dvth_dvd - 2.0 * vtm * exp_arg * dn_dvd) + (t2_val - 1.0) / n * dn_dvd;
-        let dt2_dvb =
-            -dt2_dvg * (dvth_dvb - 2.0 * vtm * exp_arg * dn_dvb) + (t2_val - 1.0) / n * dn_dvb;
+            let dt2_dvg = -cox / (vtm * sp.cdep0) * exp_arg.exp();
+            let t2_val = 1.0 - t10 * dt2_dvg;
+            let dt2_dvd = -dt2_dvg * (dvth_dvd - 2.0 * vtm * exp_arg * dn_dvd)
+                + (t2_val - 1.0) / n * dn_dvd;
+            let dt2_dvb = -dt2_dvg * (dvth_dvb - 2.0 * vtm * exp_arg * dn_dvb)
+                + (t2_val - 1.0) / n * dn_dvb;
 
-        let vgsteff_val = t1 / t2_val;
-        let t3 = t2_val * t2_val;
-        let t4 = (t2_val * dt1_dvb - t1 * dt2_dvb) / t3;
-        (
-            vgsteff_val,
-            (t2_val * dt1_dvg - t1 * dt2_dvg) / t3 * dvgs_eff_dvg + t4 * dvbseff_dvg,
-            (t2_val * dt1_dvd - t1 * dt2_dvd) / t3 + t4 * dvbseff_dvd,
-            t4 * dvbseff_dvb,
-        )
-    };
+            let vgsteff_val = t1 / t2_val;
+            let t3 = t2_val * t2_val;
+            let t4 = (t2_val * dt1_dvb - t1 * dt2_dvb) / t3;
+            (
+                vgsteff_val,
+                (t2_val * dt1_dvg - t1 * dt2_dvg) / t3 * dvgs_eff_dvg + t4 * dvbseff_dvg,
+                (t2_val * dt1_dvd - t1 * dt2_dvd) / t3 + t4 * dvbseff_dvd,
+                t4 * dvbseff_dvb,
+                t4 * dvbseff_dve,
+            )
+        };
 
     let vgst2vtm = vgsteff + 2.0 * vtm;
 
@@ -2065,12 +2182,13 @@ pub fn bsim3soi_dd_companion(
     let dvcs_dvd = dvbsdio_dvd - dvbs0eff_dvd;
     let dvcs_dvb = dvbsdio_dvb; // Vbs0eff has no direct dVb in DD
 
-    // Final Gm, Gds, Gmbs (ngspice lines 2148-2150)
-    // Includes Gmb0 cross-coupling through dVbseff_dVg/dVd chain
+    // Final Gm, Gds, Gmbs, Gme (ngspice lines 2148-2151)
+    // Includes Gmb0 cross-coupling through dVbseff_dVg/dVd/dVe chain
     // and Gmc cross-coupling through dVcs_dV* chain
     let gm = gm0 * dvgsteff_dvg + gmbs0 * dvbseff_dvg + gmc * dvcs_dvg;
     let gds = gm0 * dvgsteff_dvd + gmbs0 * dvbseff_dvd + gmc * dvcs_dvd + gds0;
     let gmbs = gm0 * dvgsteff_dvb + gmbs0 * dvbseff_dvb + gmc * dvcs_dvb;
+    let gme = gm0 * dvgsteff_dve + gmbs0 * dvbseff_dve + gmc * dvcs_dve;
 
     // GIDL current (drain side)
     let (igidl, ggidl_d, ggidl_g) = {
@@ -2381,7 +2499,7 @@ pub fn bsim3soi_dd_companion(
     let gmbs = gmbs + gcb;
 
     // Equivalent current sources for NR companion model
-    let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i);
+    let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i - gme * ves_i);
     let ceq_bs = ibs - gbs_jct * vbs_i - gjsd * vds_i;
     let ceq_bd = ibd - gbd_jct * vbd - gjdd_extra * vds_i;
     let ceq_iii = iii - gii_d * vds_i - gii_g * vgs_i - gii_b * vbs_i;
@@ -2414,6 +2532,7 @@ pub fn bsim3soi_dd_companion(
         gm: gm / sp.nseg,
         gds: gds / sp.nseg,
         gmbs: gmbs / sp.nseg,
+        gme: gme / sp.nseg,
         mode,
         vdsat,
         ibs,
@@ -2472,6 +2591,8 @@ pub fn stamp_bsim3soi_dd(
     let sign = inst.model.mos_type.sign();
     let m = inst.m;
 
+    let e = inst.e_idx;
+
     let (xnrm, xrev) = if comp.mode > 0 {
         (1.0, 0.0)
     } else {
@@ -2482,11 +2603,15 @@ pub fn stamp_bsim3soi_dd(
     let gm_eff = m * (comp.gm * xnrm + comp.gds * xrev);
     let gds_eff = m * (comp.gds * xnrm + comp.gm * xrev);
     let gmbs_eff = m * comp.gmbs;
+    let gme_eff = m * comp.gme;
     let gbd = m * comp.gbd_jct;
     let gbs = m * comp.gbs_jct;
 
+    // FwdSum includes Gme (ngspice line 3895: FwdSum = Gm + Gmbs + Gme)
+    let fwd_sum = gm_eff + gds_eff + gmbs_eff + gme_eff;
+
     // --- Channel current (asymmetric VCCS stamps) ---
-    // Ids = gm_eff*(Vg-Vsp) + gds_eff*(Vdp-Vsp) + gmbs_eff*(Vb-Vsp)
+    // Ids = gm_eff*(Vg-Vsp) + gds_eff*(Vdp-Vsp) + gmbs_eff*(Vb-Vsp) + gme_eff*(Ve-Vsp)
     // D' row: dIds/d* contributions
     if let Some(d) = dp {
         matrix.add(d, d, gds_eff);
@@ -2494,10 +2619,13 @@ pub fn stamp_bsim3soi_dd(
             matrix.add(d, gate, gm_eff);
         }
         if let Some(s) = sp {
-            matrix.add(d, s, -(gm_eff + gds_eff + gmbs_eff));
+            matrix.add(d, s, -fwd_sum);
         }
         if let Some(bulk) = b {
             matrix.add(d, bulk, gmbs_eff);
+        }
+        if let Some(ei) = e {
+            matrix.add(d, ei, gme_eff);
         }
     }
     // S' row: -dIds/d* contributions
@@ -2506,12 +2634,14 @@ pub fn stamp_bsim3soi_dd(
             matrix.add(s, d, -gds_eff);
         }
         if let Some(gate) = g {
-            // Forward: -gm_eff; Reverse: handled by gm_eff sign flip via xnrm/xrev
             matrix.add(s, gate, -gm_eff);
         }
-        matrix.add(s, s, gm_eff + gds_eff + gmbs_eff);
+        matrix.add(s, s, fwd_sum);
         if let Some(bulk) = b {
             matrix.add(s, bulk, -gmbs_eff);
+        }
+        if let Some(ei) = e {
+            matrix.add(s, ei, -gme_eff);
         }
     }
 
