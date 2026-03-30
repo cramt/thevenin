@@ -1486,10 +1486,9 @@ pub fn bsim3soi_dd_companion(
     let t6_vthfd = sp.k3b * tmp2_fd - sp.k2 + sp.kt2 * temp_ratio_minus1;
 
     // Full dVthfd/dVbs0mos (ngspice line 1075-1077: T7)
-    let dvthfd_dvbs0mos = sp.k1 * dsqrt_phis_fd_dvbs0mos - ddelt_vth_fd_dvbs0mos
-        - ddelt_vthw_fd_dvbs0mos
-        + t6_vthfd
-        - ddibl_sft_fd_dvbs0mos;
+    let dvthfd_dvbs0mos =
+        sp.k1 * dsqrt_phis_fd_dvbs0mos - ddelt_vth_fd_dvbs0mos - ddelt_vthw_fd_dvbs0mos + t6_vthfd
+            - ddibl_sft_fd_dvbs0mos;
 
     // dVthfd/dVe (ngspice line 1078)
     let dvthfd_dve = dvthfd_dvbs0mos * dvbs0mos_dve;
@@ -1668,10 +1667,10 @@ pub fn bsim3soi_dd_companion(
 
             let dt2_dvg = -cox / (vtm * sp.cdep0) * exp_arg.exp();
             let t2_val = 1.0 - t10 * dt2_dvg;
-            let dt2_dvd = -dt2_dvg * (dvth_dvd - 2.0 * vtm * exp_arg * dn_dvd)
-                + (t2_val - 1.0) / n * dn_dvd;
-            let dt2_dvb = -dt2_dvg * (dvth_dvb - 2.0 * vtm * exp_arg * dn_dvb)
-                + (t2_val - 1.0) / n * dn_dvb;
+            let dt2_dvd =
+                -dt2_dvg * (dvth_dvd - 2.0 * vtm * exp_arg * dn_dvd) + (t2_val - 1.0) / n * dn_dvd;
+            let dt2_dvb =
+                -dt2_dvg * (dvth_dvb - 2.0 * vtm * exp_arg * dn_dvb) + (t2_val - 1.0) / n * dn_dvb;
 
             let vgsteff_val = t1 / t2_val;
             let t3 = t2_val * t2_val;
@@ -2397,7 +2396,10 @@ pub fn bsim3soi_dd_companion(
             let e = t0.exp();
             (e, e)
         } else {
-            (DD_JCT_EXP30 * (1.0 + t0 - DD_JCT_EXP_THRESHOLD), DD_JCT_EXP30)
+            (
+                DD_JCT_EXP30 * (1.0 + t0 - DD_JCT_EXP_THRESHOLD),
+                DD_JCT_EXP30,
+            )
         };
         // ngspice b3soiddld.c line 2449: T5 = WTsi * jtun
         let wtsi_jtun = weff * model.tsi * sp.jtun;
@@ -2409,7 +2411,10 @@ pub fn bsim3soi_dd_companion(
             let e = t0.exp();
             (e, e)
         } else {
-            (DD_JCT_EXP30 * (1.0 + t0 - DD_JCT_EXP_THRESHOLD), DD_JCT_EXP30)
+            (
+                DD_JCT_EXP30 * (1.0 + t0 - DD_JCT_EXP_THRESHOLD),
+                DD_JCT_EXP30,
+            )
         };
         let ibd4 = -wtsi_jtun * (exp_val - 1.0);
         let dibd4_dvb = wtsi_jtun * dexp_val / nvtm_tun;
