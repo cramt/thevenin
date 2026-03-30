@@ -22,7 +22,7 @@ run_bench() {
     local label="$1"
     shift
     # Run and capture stderr (where BENCH lines go)
-    cargo test -p thevenin --test bench "$@" -- --nocapture 2>&1 | grep '^BENCH ' || true
+    cargo test --workspace --test bench "$@" -- --nocapture 2>&1 | grep '^BENCH ' || true
 }
 
 parse_results() {
@@ -52,9 +52,9 @@ echo ""
 
 # --- Pre-build both targets so compilation doesn't count ---
 echo -e "${CYAN}Building native...${RESET}"
-cargo test -p thevenin --test bench --no-run 2>&1 | tail -1
+cargo test --workspace --test bench --no-run 2>&1 | tail -1
 echo -e "${CYAN}Building wasm32...${RESET}"
-cargo test -p thevenin --test bench --target wasm32-unknown-unknown --no-run 2>&1 | tail -1
+cargo test --workspace --test bench --target wasm32-unknown-unknown --no-run 2>&1 | tail -1
 echo ""
 
 # --- Run benchmarks ---

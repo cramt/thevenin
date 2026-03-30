@@ -106,7 +106,7 @@
             git
             jq
             wasmtime
-            wasm-bindgen-cli
+            wasm-bindgen-cli_0_2_108
             nodejs
             chromium
             chromedriver

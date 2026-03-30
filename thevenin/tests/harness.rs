@@ -97,11 +97,6 @@ fn fail_test(path: &str, phase: Phase, error: &str) -> ! {
 /// Requires `cargo nextest` (each test gets its own process for timeout handling).
 /// Under plain `cargo test`, skips gracefully with a warning.
 fn run_embedded_test(path: &str, cir: &str, out: &str, aux_files: &[(&str, &str)]) {
-    if std::env::var_os("NEXTEST").is_none() {
-        eprintln!("skipping {path}: harness tests require `cargo nextest run`");
-        return;
-    }
-
     // Parse the netlist (includes already resolved at compile time)
     let mut netlist = match Netlist::parse(cir) {
         Ok(n) => n,
