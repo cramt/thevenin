@@ -2342,7 +2342,7 @@ fn lerp_at(x: f64, xs: &[f64], ys: &[f64]) -> f64 {
         return ys[ys.len() - 1];
     }
     // Binary search for the interval.
-    let i = match xs.binary_search_by(|v| v.partial_cmp(&x).unwrap()) {
+    let i = match xs.binary_search_by(|v| v.total_cmp(&x)) {
         Ok(i) => return ys[i], // Exact match.
         Err(i) => i,
     };

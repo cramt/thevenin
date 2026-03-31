@@ -661,12 +661,8 @@ fn execute_alter(spec: &str, value: &AlterValue, _ctx: &mut SimContext) -> Resul
     let _device = &inner[..bracket_start];
     let _param = &inner[bracket_start + 1..bracket_end];
 
-    // TODO: Actually modify device parameters in the netlist.
-    // For now, store the alter value so test circuits can at least run
-    // without error. Full implementation requires re-running device setup.
     let _ = value;
-
-    Ok(())
+    Err(format!("alter: not yet implemented (device={_device}, param={_param})"))
 }
 
 /// Resolve echo fragments into a string.

@@ -95,7 +95,7 @@ fn fail_test(path: &str, phase: Phase, error: &str) -> ! {
 /// as string literals (resolved at compile time by the proc macro).
 ///
 /// Requires `cargo nextest` (each test gets its own process for timeout handling).
-/// Under plain `cargo test`, skips gracefully with a warning.
+/// Under plain `cargo test`, long simulations may hang (no per-test timeout).
 fn run_embedded_test(path: &str, cir: &str, out: &str, aux_files: &[(&str, &str)]) {
     // Parse the netlist (includes already resolved at compile time)
     let mut netlist = match Netlist::parse(cir) {
