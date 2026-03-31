@@ -699,3 +699,53 @@ either solver damping, adaptive coupling, or a continuation strategy.
 does NOT help cpl3_4_line (new failure points appear at adjacent timesteps) or any
 other ignored test. The errors are genuine simulation discrepancies, not tolerance
 calibration issues.
+
+### Session 89 findings (2026-03-31)
+
+**Reverted broken uncommitted work**: Found uncommitted changes from a previous
+session (excess phase implementation for VBIC, AC/MNA changes, BSIM3SOI-DD changes)
+that caused 4 test regressions (singular matrix errors in `test_vbic_noise_scale`,
+`test_vbic_ceamp_ac`, `test_vbic_fg_gummel_pnp`, and `harness_vbic_noise_scale_test`).
+Reverted all uncommitted changes to restore clean baseline (602 tests pass, 37 skip).
+
+**VBIC FO reciprocal matching**: Tested matching ngspice's evaluation order for
+Early voltage computation (precompute `IVEF = 1.0/VEF` then multiply, instead of
+direct division). For VEF=10, `1.0/10.0` is inexact in IEEE 754, so
+`qdbc * (1.0/10.0)` differs from `qdbc / 10.0` by up to 1 ULP. However, changing
+this had ZERO effect on the result (diff remained exactly 2.123200e-7). The ULP
+difference (~5e-17) is too small to propagate to a 2.12e-7 error through the
+q1z → q1 → qb → Itzf chain. Similarly tested matching the `qlo` depletion charge
+decomposition (`pow(-1-m) * (1-FC)^2` vs single `powf(1-m)`) — also no effect.
+
+**NR solver architecture**: Identified a structural difference between Rust and
+ngspice NR solvers: ngspice has device-level convergence checks (vbicconv.c,
+bjtconv.c, etc.) that test whether individual device currents have converged
+between iterations, in addition to the global voltage/current convergence check.
+The Rust solver only has the global check. However, analysis shows this shouldn't
+affect the converged solution: if voltages converge (within vntol), exponential
+device currents change by at most `I/Vt * vntol ≈ 2e-3 * I`, which is well within
+the device-level tolerance (`reltol * I + abstol`). The device checks may force
+1-2 extra iterations but shouldn't change the final converged point.
+
+**BSIM3SOI-DD t3 combined body current stamping**: Confirmed the root cause is
+different FP accumulation order in body current linearization. ngspice combines
+body currents before linearization (`cjd = Ibd - Iii - Igidl`, with merged
+conductances `gjdb = Gjdb - Giib`), while Rust stamps each current separately.
+For floating body devices, the body voltage is determined by a balance of many
+small currents; different FP rounding in this balance shifts the equilibrium by
+~1.5mV, propagating to 0.63% Ids error. This requires ~300 LOC rewrite of the
+body current stamping to match ngspice exactly. Previous session confirmed
+Jacobian-only changes and 100x tighter NR tolerance produce identical results,
+meaning the issue is in the companion evaluation chain, not convergence.
+
+**Remaining test status (all 34 tests re-verified)**:
+| Test | Error | Root cause | Tractability |
+|------|-------|------------|--------------|
+| vbic/FO | 0.385% at Vc=3.75 | FP eval order in companion | diff exceeds tol by 0.76% |
+| bsim3soidd/t3 | 0.63% at Vd=0.24 | FP body current aggregation | diff exceeds tol by 1.4% |
+| vbic/FG | 3.3% at Vb=0.89 | same companion FP issue + PNP self-heating | far from tol |
+| vbic/temp | 2.3% at Vb=0.76 | same issue at 150°C | far from tol |
+| vbic/CEamp | 0.9% at 1.5GHz | DC OP FP → AC linearization | far from tol |
+| All .control tests | N/A | .control interpreter not implemented | intractable |
+| All inv2 tests | singular matrix | NR non-convergence | needs solver changes |
+| All others | 2-35% | deep model/missing feature | see individual ignore reasons |
