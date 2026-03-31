@@ -22,7 +22,7 @@ run_bench() {
     local label="$1"
     shift
     # Run and capture stderr (where BENCH lines go)
-    cargo test --workspace --test bench "$@" -- --nocapture 2>&1 | grep '^BENCH ' || true
+    cargo test --workspace "$@" -- --nocapture 2>&1 | grep '^BENCH ' || true
 }
 
 parse_results() {

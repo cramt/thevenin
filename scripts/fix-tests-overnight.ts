@@ -90,13 +90,17 @@ function timestamp(): string {
 function log(msg: string) {
   const line = `[${timestamp()}] ${msg}`;
   console.log(line);
-  try { appendFileSync(LOG_FILE, line + "\n"); } catch {}
+  try { appendFileSync(LOG_FILE, line + "\n"); } catch (e) {
+    process.stderr.write(`[log write failed: ${e}]\n`);
+  }
 }
 
 function logError(msg: string) {
   const line = `[${timestamp()}] ERROR: ${msg}`;
   console.error(line);
-  try { appendFileSync(LOG_FILE, line + "\n"); } catch {}
+  try { appendFileSync(LOG_FILE, line + "\n"); } catch (e) {
+    process.stderr.write(`[log write failed: ${e}]\n`);
+  }
 }
 
 async function sleep(seconds: number): Promise<void> {
@@ -110,7 +114,8 @@ async function sleep(seconds: number): Promise<void> {
 function shell(cmd: string): string {
   try {
     return execSync(cmd, { cwd: PROJECT_DIR, encoding: "utf-8", timeout: 30_000 }).trim();
-  } catch {
+  } catch (e) {
+    logError(`shell command failed: ${cmd} — ${e instanceof Error ? e.message : e}`);
     return "";
   }
 }
@@ -146,7 +151,9 @@ function loadAttemptedTests(): string[] {
 }
 
 function logAttemptedTest(testInfo: string) {
-  try { appendFileSync(ATTEMPTS_FILE, `${timestamp()} | ${testInfo}\n`); } catch {}
+  try { appendFileSync(ATTEMPTS_FILE, `${timestamp()} | ${testInfo}\n`); } catch (e) {
+    process.stderr.write(`[attempted-tests log write failed: ${e}]\n`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +309,7 @@ type IterationResult =
 
 async function runIteration(iteration: number): Promise<IterationResult> {
   inIteration = true;
+  try {
   log(`\n${"=".repeat(60)}`);
   log(`--- Iteration ${iteration}/${MAX_ITERATIONS} ---`);
 
@@ -366,7 +374,7 @@ async function runIteration(iteration: number): Promise<IterationResult> {
           }
         }
       } else if (msg.type === "tool_progress") {
-        if (msg.elapsed_time_seconds && msg.elapsed_time_seconds % 10 === 0) {
+        if (msg.elapsed_time_seconds && Math.floor(msg.elapsed_time_seconds) % 10 === 0) {
           log(`  .. ${msg.tool_name} running (${msg.elapsed_time_seconds}s)`);
         }
       } else if (msg.type === "rate_limit_event") {
@@ -427,6 +435,68 @@ async function runIteration(iteration: number): Promise<IterationResult> {
 
     return { status: "error", message: errMsg };
   }
+  } finally {
+    inIteration = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Peak-hours pause — Anthropic Max subscriptions get reduced capacity during
+// US work hours: 05:00–11:00 PT (Pacific Time).
+// See: https://www.ghacks.net/2026/03/27/anthropic-reduces-claude-session-limits-during-peak-hours-for-free-pro-and-max-users/
+// ---------------------------------------------------------------------------
+
+function getPacificHour(): number {
+  return parseInt(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      hour: "numeric",
+      hour12: false,
+    }).format(new Date()),
+    10,
+  );
+}
+
+function getPacificMinute(): number {
+  return parseInt(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      minute: "numeric",
+    }).format(new Date()),
+    10,
+  );
+}
+
+function isPeakHours(): boolean {
+  const hour = getPacificHour();
+  return hour >= 5 && hour < 11; // 05:00–11:00 PT
+}
+
+function msUntilPeakEnds(): number {
+  const hour = getPacificHour();
+  const minute = getPacificMinute();
+  // Minutes remaining: from current HH:MM to 11:00
+  const minutesLeft = (11 - hour) * 60 - minute;
+  return Math.max(0, minutesLeft * 60_000);
+}
+
+async function waitOutPeakHours(): Promise<void> {
+  if (!isPeakHours()) return;
+
+  const ms = msUntilPeakEnds();
+  const minutes = Math.ceil(ms / 60_000);
+  log(`Peak hours (05:00–11:00 PT) — pausing for ~${minutes} minutes until peak ends...`);
+
+  // Sleep in 60s chunks so we can still respond to stop requests
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (checkStopRequested()) return;
+    const remaining = Math.ceil((end - Date.now()) / 60_000);
+    process.stdout.write(`\r[${timestamp()}] Peak hours — resuming in ~${remaining} min   `);
+    await new Promise((r) => setTimeout(r, Math.min(60_000, end - Date.now())));
+  }
+  process.stdout.write("\r" + " ".repeat(70) + "\r");
+  log("Peak hours ended — resuming.");
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +514,7 @@ async function main() {
   log(`Stop after ${MAX_NO_PROGRESS} consecutive no-progress iterations`);
   log(`Log file: ${LOG_FILE}`);
   log(`Initial ignored tests: ${countIgnoredTests()}`);
-  console.log("=".repeat(60));
+  log("=".repeat(60));
 
   let consecutiveRateLimits = 0;
   let consecutiveNoProgress = 0;
@@ -456,8 +526,11 @@ async function main() {
       break;
     }
 
+    // Pause during Anthropic peak hours (05:00–11:00 PT) when Max gets reduced capacity
+    await waitOutPeakHours();
+    if (checkStopRequested()) break;
+
     const result = await runIteration(i);
-    inIteration = false;
 
     // Check again after iteration completes
     if (checkStopRequested()) {
@@ -466,13 +539,14 @@ async function main() {
     }
 
     switch (result.status) {
-      case "rate_limited":
+      case "rate_limited": {
         consecutiveRateLimits++;
         const backoff = Math.min(60 * Math.pow(2, consecutiveRateLimits - 1), 600);
         log(`Rate limited (${consecutiveRateLimits}x consecutive). Backing off ${backoff}s...`);
         await sleep(backoff);
         i--; // Don't count rate-limited iterations
         continue;
+      }
 
       case "success":
         consecutiveRateLimits = 0;
