@@ -764,6 +764,12 @@ impl VbicModel {
         vcrit(self.nci * self.vt, self.ibci_t)
     }
 
+    /// Critical voltage matching ngspice VBICtVcrit (uses IS_T, bare Vt).
+    /// All 6 VBIC junction pnjlim calls use this in ngspice vbicload.c.
+    fn vcrit_is(&self) -> f64 {
+        vcrit(self.vt, self.is_t)
+    }
+
     /// Limit B-E internal junction voltage.
     pub fn limit_vbei(&self, v_new: f64, v_old: f64) -> f64 {
         pnjlim(v_new, v_old, self.nei * self.vt, self.vcrit_bei())
@@ -772,6 +778,13 @@ impl VbicModel {
     /// Limit B-C internal junction voltage.
     pub fn limit_vbci(&self, v_new: f64, v_old: f64) -> f64 {
         pnjlim(v_new, v_old, self.nci * self.vt, self.vcrit_bci())
+    }
+
+    /// Limit a generic VBIC junction voltage using IS_T-based vcrit.
+    /// Matches ngspice vbicload.c where all secondary junctions (vbex, vbcx,
+    /// vbep, vbcp) are limited with `DEVpnjlim(V, Vold, vt, VBICtVcrit, ...)`.
+    pub fn limit_junction(&self, v_new: f64, v_old: f64) -> f64 {
+        pnjlim(v_new, v_old, self.vt, self.vcrit_is())
     }
 
     /// Compute the VBIC operating point and NR companion model.

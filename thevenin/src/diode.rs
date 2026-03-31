@@ -183,20 +183,30 @@ impl DiodeModel {
 
 /// Limit voltage change between NR iterations to aid convergence.
 ///
-/// Matches ngspice `DEVpnjlim` — limits the voltage step to prevent
-/// the exponential from exploding.
+/// Matches ngspice `DEVpnjlim` (devsup.c) — limits the voltage step to
+/// prevent the exponential from exploding.
 pub fn pnjlim(v_new: f64, v_old: f64, vt: f64, vcrit: f64) -> f64 {
     if v_new > vcrit && (v_new - v_old).abs() > 2.0 * vt {
         if v_old > 0.0 {
             let arg = (v_new - v_old) / vt;
             if arg > 0.0 {
-                v_old + vt * (2.0 + arg.ln())
+                // ngspice: vold + vt * (2 + log(arg - 2))
+                v_old + vt * (2.0 + (arg - 2.0).ln())
             } else {
-                v_old - vt * (2.0 + (-arg).ln())
+                // ngspice: vold - vt * (2 + log(2 - arg))
+                v_old - vt * (2.0 + (2.0 - arg).ln())
             }
         } else {
             vt * (v_new / vt).ln()
         }
+    } else if v_new < 0.0 {
+        // Negative voltage clamping (ngspice DEVpnjlim lines 67-81)
+        let arg = if v_old > 0.0 {
+            -v_old - 1.0
+        } else {
+            2.0 * v_old - 1.0
+        };
+        if v_new < arg { arg } else { v_new }
     } else {
         v_new
     }

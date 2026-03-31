@@ -41,70 +41,78 @@ pub(crate) fn stamp_current_source(
     }
 }
 
-/// FET voltage limiting (ngspice `DEVfetlim`).
+/// FET voltage limiting (ngspice `DEVfetlim` from devsup.c).
 ///
 /// Prevents large voltage jumps during NR iteration that could cause
 /// divergence in FET device models. Used by BSIM3, BSIM4, and SOI variants.
 pub(crate) fn fetlim(vnew: f64, vold: f64, vto: f64) -> f64 {
-    let vtsthi = (2.0 * vold.abs()).max(1.0);
-    let vtstlo = vtsthi / 2.0 + 0.1;
+    let vtsthi = (2.0 * (vold - vto)).abs() + 2.0;
+    let vtstlo = (vold - vto).abs() + 1.0;
     let vtox = vto + 3.5;
     let delv = vnew - vold;
 
-    if vold >= vtox {
-        if delv.abs() >= vtsthi {
-            if vold < vnew {
-                vold + vtsthi
+    if vold >= vto {
+        if vold >= vtox {
+            if delv <= 0.0 {
+                // going off
+                if vnew >= vtox {
+                    if -delv > vtstlo {
+                        vold - vtstlo
+                    } else {
+                        vnew
+                    }
+                } else {
+                    vnew.max(vto + 2.0)
+                }
             } else {
-                vold - vtsthi
+                // staying on
+                if delv >= vtsthi {
+                    vold + vtsthi
+                } else {
+                    vnew
+                }
             }
         } else {
-            vnew
-        }
-    } else if vold >= 0.0 {
-        if delv.abs() >= vtstlo {
-            if vold < vnew {
-                vold + vtstlo
+            // middle region
+            if delv <= 0.0 {
+                vnew.max(vto - 0.5)
             } else {
-                vold - vtstlo
+                vnew.min(vto + 4.0)
             }
-        } else {
-            vnew
-        }
-    } else if delv.abs() >= vtsthi {
-        if vold < vnew {
-            vold + vtsthi
-        } else {
-            vold - vtsthi
         }
     } else {
-        vnew
+        // off
+        if delv <= 0.0 {
+            if -delv > vtsthi {
+                vold - vtsthi
+            } else {
+                vnew
+            }
+        } else {
+            let vtemp = vto + 0.5;
+            if vnew <= vtemp {
+                if delv > vtstlo {
+                    vold + vtstlo
+                } else {
+                    vnew
+                }
+            } else {
+                vtemp
+            }
+        }
     }
 }
 
-/// Simplified PN junction voltage limiting for BSIM models.
+/// PN junction voltage limiting for BSIM models.
 ///
-/// Unlike `diode::pnjlim` which takes explicit `vt` and `vcrit` parameters,
-/// this version uses hardcoded defaults (IS=1e-14, Vt at 300.15K) matching
-/// ngspice's BSIM3/BSIM4 implementations.
+/// Uses `DEVpnjlim` formula (same as `diode::pnjlim`) with hardcoded
+/// defaults (IS=1e-14, Vt at 300.15K) matching ngspice BSIM3/BSIM4
+/// which call `DEVpnjlim(vbs, ..., CONSTvt0, model->vcrit, ...)`.
 pub(crate) fn bsim_pnjlim(vnew: f64, vold: f64) -> f64 {
     const TEMP_DEFAULT: f64 = 300.15;
     let vt = crate::physics::KBOQ * TEMP_DEFAULT;
     let vcrit_val = vt * (vt / (std::f64::consts::SQRT_2 * 1e-14)).ln();
-    if vnew > vcrit_val && (vnew - vold).abs() > 2.0 * vt {
-        if vold > 0.0 {
-            let arg = (vnew - vold) / vt;
-            if arg > 0.0 {
-                vold + vt * (1.0 + arg.ln())
-            } else {
-                vold - vt * (1.0 + (-arg).ln())
-            }
-        } else {
-            vt * (vnew / vt).ln()
-        }
-    } else {
-        vnew
-    }
+    crate::diode::pnjlim(vnew, vold, vt, vcrit_val)
 }
 
 /// Tracks previous junction/terminal voltages for NR voltage limiting.
@@ -125,7 +133,7 @@ pub(crate) struct DeviceVoltageState {
     prev_bsim3soi_fd: RefCell<Vec<(f64, f64, f64, f64)>>,
     prev_bsim3soi_dd: RefCell<Vec<(f64, f64, f64, f64)>>,
     prev_bsim4: RefCell<Vec<(f64, f64, f64)>>,
-    prev_vbic: RefCell<Vec<(f64, f64)>>,
+    prev_vbic: RefCell<Vec<[f64; 6]>>,
     prev_mesa: RefCell<Vec<(f64, f64)>>,
     mesa_vcrits: Vec<f64>,
     mesa_vcritd: Vec<f64>,
@@ -161,7 +169,7 @@ impl DeviceVoltageState {
             prev_bsim3soi_fd: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.bsim3soi_fds.len()]),
             prev_bsim3soi_dd: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.bsim3soi_dds.len()]),
             prev_bsim4: RefCell::new(vec![(0.0, 0.0, 0.0); mna.bsim4s.len()]),
-            prev_vbic: RefCell::new(vec![(0.0, 0.0); mna.vbics.len()]),
+            prev_vbic: RefCell::new(vec![[0.0; 6]; mna.vbics.len()]),
             prev_mesa: RefCell::new(vec![(0.0, 0.0); mna.mesas.len()]),
             mesa_vcrits: mna.mesas.iter().map(|m| m.precomp.vcrits).collect(),
             mesa_vcritd: mna.mesas.iter().map(|m| m.precomp.vcritd).collect(),
@@ -269,8 +277,9 @@ impl DeviceVoltageState {
                 mna.vbics
                     .iter()
                     .map(|v| {
-                        let (vbei, _, vbci, ..) = v.junction_voltages(prev_solution);
-                        (vbei, vbci)
+                        let (vbei, vbex, vbci, vbcx, vbep, _, _, _, vbcp) =
+                            v.junction_voltages(prev_solution);
+                        [vbei, vbex, vbci, vbcx, vbep, vbcp]
                     })
                     .collect(),
             ),
@@ -307,8 +316,9 @@ impl DeviceVoltageState {
         {
             let mut prev = self.prev_vbic.borrow_mut();
             for (vi, vbic) in mna.vbics.iter().enumerate() {
-                let (vbei, _, vbci, ..) = vbic.junction_voltages(solution);
-                prev[vi] = (vbei, vbci);
+                let (vbei, vbex, vbci, vbcx, vbep, _, _, _, vbcp) =
+                    vbic.junction_voltages(solution);
+                prev[vi] = [vbei, vbex, vbci, vbcx, vbep, vbcp];
             }
         }
         // Reset BJT prev voltages
@@ -745,7 +755,7 @@ impl DeviceVoltageState {
                     // All resistance and parasitic junction voltages start at 0.
                     let sign = vbic.model.vbic_type.sign();
                     let vcrit_bei = sign * model.vcrit_bei();
-                    prev[vi] = (vcrit_bei, 0.0);
+                    prev[vi] = [vcrit_bei, 0.0, 0.0, 0.0, 0.0, 0.0];
                     (vcrit_bei, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
                 } else {
                     let (
@@ -760,27 +770,25 @@ impl DeviceVoltageState {
                         raw_vbcp,
                     ) = vbic.junction_voltages(solution);
 
-                    let vbex = clamp_jct(raw_vbex);
-                    let vbcx = clamp_jct(raw_vbcx);
-                    let vbep = clamp_jct(raw_vbep);
                     let vrci = clamp_res(raw_vrci);
                     let vrbi = clamp_res(raw_vrbi);
                     let vrbp = clamp_res(raw_vrbp);
-                    let vbcp = clamp_jct(raw_vbcp);
 
                     // If prev voltages are corrupted (NaN/Inf from a prior failed NR
                     // attempt), reset them to zero so that pnjlim works correctly.
-                    if prev[vi].0.is_nan()
-                        || prev[vi].0.is_infinite()
-                        || prev[vi].1.is_nan()
-                        || prev[vi].1.is_infinite()
-                    {
-                        prev[vi] = (0.0, 0.0);
+                    if prev[vi].iter().any(|v| v.is_nan() || v.is_infinite()) {
+                        prev[vi] = [0.0; 6];
                     }
 
-                    let vbei = model.limit_vbei(clamp_jct(raw_vbei), prev[vi].0);
-                    let vbci = model.limit_vbci(clamp_jct(raw_vbci), prev[vi].1);
-                    prev[vi] = (vbei, vbci);
+                    // Apply pnjlim to all 6 junction voltages matching ngspice
+                    // vbicload.c lines 656-665 where all use DEVpnjlim.
+                    let vbei = model.limit_vbei(clamp_jct(raw_vbei), prev[vi][0]);
+                    let vbex = model.limit_junction(clamp_jct(raw_vbex), prev[vi][1]);
+                    let vbci = model.limit_vbci(clamp_jct(raw_vbci), prev[vi][2]);
+                    let vbcx = model.limit_junction(clamp_jct(raw_vbcx), prev[vi][3]);
+                    let vbep = model.limit_junction(clamp_jct(raw_vbep), prev[vi][4]);
+                    let vbcp = model.limit_junction(clamp_jct(raw_vbcp), prev[vi][5]);
+                    prev[vi] = [vbei, vbex, vbci, vbcx, vbep, vbcp];
                     (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp)
                 };
 
