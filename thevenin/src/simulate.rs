@@ -7,7 +7,7 @@ use crate::LinearSystem;
 use crate::device_stamp::DeviceVoltageState;
 use crate::expr_val;
 use crate::mna::{MnaError, MnaSystem, assemble_mna, assemble_mna_with_xspice};
-use crate::newton::{NrMode, NrOptions, newton_raphson_solve, source_stepping_solve};
+use crate::newton::{NrMode, NrOptions, newton_raphson_solve_with_mode, source_stepping_solve};
 
 /// Extract Newton-Raphson options from netlist `.OPTIONS` directives.
 pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
@@ -370,6 +370,9 @@ fn solve_nonlinear_op_with_guess(
         || !mna.bjts.is_empty()
         || !mna.vbics.is_empty()
         || !mna.hfets.is_empty()
+        || !mna.bsim3soi_fds.is_empty()
+        || !mna.bsim3soi_dds.is_empty()
+        || !mna.bsim3soi_pds.is_empty()
     {
         jct_initial_guess(mna, dim, num_nodes, options, base_matrix, base_rhs)
     } else {
@@ -438,10 +441,21 @@ fn solve_nonlinear_op_with_guess(
     let has_tlines = !mna.ltras.is_empty() || !mna.txls.is_empty() || !mna.cpls.is_empty();
     let many_nonlinear = mna.bjts.len() + mna.vbics.len() >= 10;
     let force_source_stepping = (has_tlines && !mna.mosfets.is_empty()) || many_nonlinear;
+    // When called with a valid initial guess from a previous DC sweep point,
+    // use Float mode for the first NR iteration.  InitJct mode resets device
+    // terminal voltages to built-in potentials (~0.1V for FETs), which causes
+    // voltage limiting (fetlim) to clamp subsequent iterations far from the
+    // true operating point.  For voltage-source-pinned circuits, NR can
+    // converge before the device model reaches the correct operating point.
+    let first_mode = if initial_guess.is_some() {
+        crate::newton::NrMode::Float
+    } else {
+        crate::newton::NrMode::InitJct
+    };
     let result = if force_source_stepping {
         source_stepping_solve(options, dim, num_nodes, load, &initial)
     } else {
-        newton_raphson_solve(options, dim, num_nodes, load, &initial)
+        newton_raphson_solve_with_mode(options, dim, num_nodes, load, &initial, first_mode)
     }
     .map_err(|e| MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string())))?;
 
@@ -517,22 +531,17 @@ fn resolve_sweep_source(
 }
 
 /// Generate sweep points from start to stop with given step.
+///
+/// Uses `start + i * step` instead of accumulation (`v += step`) to avoid
+/// floating-point drift that can skip sweep points after many steps.
 fn generate_sweep_points(start: f64, stop: f64, step: f64) -> Vec<f64> {
     if step == 0.0 || (stop - start).signum() != step.signum() {
         return vec![start];
     }
-    let mut points = Vec::new();
-    let mut v = start;
-    if step > 0.0 {
-        while v <= stop + step * 1e-9 {
-            points.push(v);
-            v += step;
-        }
-    } else {
-        while v >= stop + step * 1e-9 {
-            points.push(v);
-            v += step;
-        }
+    let n = ((stop - start) / step).round() as usize;
+    let mut points = Vec::with_capacity(n + 1);
+    for i in 0..=n {
+        points.push(start + (i as f64) * step);
     }
     points
 }

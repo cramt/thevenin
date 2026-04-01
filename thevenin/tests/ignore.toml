@@ -12,7 +12,6 @@
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
-"bsim3soifd/t3.cir" = "~5.3% Ids error at Vg=1.58V,col1 (kb3/dvbd0/dvbd1 binning fixed; remaining error from body coupling chain)"
 
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"

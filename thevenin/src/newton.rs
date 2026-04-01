@@ -457,6 +457,33 @@ pub fn newton_raphson_solve<F>(
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
+    newton_raphson_solve_with_mode(
+        options,
+        dim,
+        num_nodes,
+        load_system,
+        initial_guess,
+        NrMode::InitJct,
+    )
+}
+
+/// Newton-Raphson solve with explicit first-iteration mode.
+///
+/// Same as `newton_raphson_solve` but allows the caller to choose whether
+/// the first NR iteration uses `InitJct` (for fresh DC OP) or `Float`
+/// (for DC sweep continuation where the initial guess is already near the
+/// solution and MODEINITJCT would corrupt device voltage limiting state).
+pub fn newton_raphson_solve_with_mode<F>(
+    options: &NrOptions,
+    dim: usize,
+    num_nodes: usize,
+    load_system: F,
+    initial_guess: &[f64],
+    first_mode: NrMode,
+) -> Result<NrResult, NrError>
+where
+    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
+{
     // Try direct NR first.
     // Use options.diag_gmin for the diagonal Gmin.  For DC OP this is 0
     // (matching ngspice CKTdiagGmin initial value); for transient timesteps
@@ -466,8 +493,6 @@ where
         source_factor: 1.0,
         max_iters: options.itl1,
     };
-    // Use InitJct for the very first NR iteration, matching ngspice's
-    // MODEINITJCT → MODEINITFLOAT transition in CKTdcOp.
     if let Ok(result) = try_nr(
         options,
         dim,
@@ -475,7 +500,7 @@ where
         &load_system,
         initial_guess,
         &attempt,
-        NrMode::InitJct,
+        first_mode,
     ) {
         return Ok(result);
     }

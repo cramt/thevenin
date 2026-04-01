@@ -336,6 +336,26 @@ impl DeviceVoltageState {
                 prev[i] = (vgs, vds, vbs, 0.0);
             }
         }
+        // Reset BSIM3SOI-FD/DD/PD prev voltages to prevent stale values from
+        // a failed NR attempt poisoning the next one (same issue as MOSFET/BJT).
+        {
+            let mut prev = self.prev_bsim3soi_fd.borrow_mut();
+            for (i, bsim) in mna.bsim3soi_fds.iter().enumerate() {
+                prev[i] = bsim.terminal_voltages(solution);
+            }
+        }
+        {
+            let mut prev = self.prev_bsim3soi_dd.borrow_mut();
+            for (i, bsim) in mna.bsim3soi_dds.iter().enumerate() {
+                prev[i] = bsim.terminal_voltages(solution);
+            }
+        }
+        {
+            let mut prev = self.prev_bsim3soi_pd.borrow_mut();
+            for (i, bsim) in mna.bsim3soi_pds.iter().enumerate() {
+                prev[i] = bsim.terminal_voltages(solution);
+            }
+        }
     }
 
     /// Stamp all nonlinear device companion models into the MNA system.
