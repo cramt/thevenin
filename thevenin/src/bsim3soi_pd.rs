@@ -125,6 +125,11 @@ pub struct Bsim3SoiPdModel {
     pub beta2: f64,
     pub vdsatii0: f64,
     pub esatii: f64,
+    pub sii0: f64,
+    pub sii1: f64,
+    pub sii2: f64,
+    pub siid: f64,
+    pub lii: f64,
 
     // Temperature
     pub tnom: f64,
@@ -153,6 +158,7 @@ pub struct Bsim3SoiPdModel {
     pub ln: f64,
     pub nbjt: f64,
     pub ndif: f64,
+    pub ldif0: f64,
     pub aely: f64,
     pub vabjt: f64,
 
@@ -470,6 +476,11 @@ impl Bsim3SoiPdModel {
             beta2: 0.1,
             vdsatii0: 0.9,
             esatii: 1e7,
+            sii0: 0.5,
+            sii1: 0.1,
+            sii2: 0.0,
+            siid: 0.0,
+            lii: 0.0,
             tnom: 27.0,
             kt1: -0.11,
             kt1l: 0.0,
@@ -494,6 +505,7 @@ impl Bsim3SoiPdModel {
             ln: 2e-6,
             nbjt: 1.0,
             ndif: -1.0,
+            ldif0: 1.0,
             aely: 0.0,
             vabjt: 10.0,
             agidl: 0.0,
@@ -651,6 +663,11 @@ impl Bsim3SoiPdModel {
         set!(beta1, "BETA1");
         set!(beta2, "BETA2");
         set!(vdsatii0, "VDSATII0");
+        set!(sii0, "SII0");
+        set!(sii1, "SII1");
+        set!(sii2, "SII2");
+        set!(siid, "SIID");
+        set!(lii, "LII");
         set!(esatii, "ESATII");
         set!(tnom, "TNOM");
         set!(kt1, "KT1");
@@ -676,6 +693,7 @@ impl Bsim3SoiPdModel {
         set!(ln, "LN");
         set!(nbjt, "NBJT");
         set!(ndif, "NDIF");
+        set!(ldif0, "LDIF0");
         set!(aely, "AELY");
         set!(vabjt, "VABJT");
         set!(agidl, "AGIDL");
@@ -873,15 +891,20 @@ impl Bsim3SoiPdModel {
         let wdios = weff;
         let wdiod = weff;
 
-        // BJT-related ratios
-        let lratio = if self.lbjt0 > 0.0 {
-            (1.0 - leff / (leff + self.lbjt0)) / (1.0 + (self.ndif * leff / (leff + self.lbjt0)))
-        } else {
-            0.0
+        // BJT-related ratios (ngspice b3soipdtemp.c lines 932-942)
+        let ln_clamped = self.ln.max(1e-15);
+        // arfabjt = exp(-0.5 * Leff^2 / LN^2) — BJT transport fraction
+        let arfabjt = {
+            let t0 = -0.5 * leff * leff / (ln_clamped * ln_clamped);
+            soi_dexp(t0).0
         };
-        let lratiodif = lratio;
-        let vearly = if self.vabjt > 0.0 { self.vabjt } else { 10.0 };
-        let arfabjt = self.xbjt;
+        // lratio = (lbjt0 * (1/Leff + 1/LN))^nbjt
+        let t0_bjt = self.lbjt0 * (1.0 / leff + 1.0 / ln_clamped);
+        let lratio = t0_bjt.powf(self.nbjt);
+        // lratiodif = 1 + ldif0 * (lbjt0 * (1/Leff + 1/LN))^ndif
+        let lratiodif = 1.0 + self.ldif0 * t0_bjt.powf(self.ndif);
+        // vearly = vabjt + aely * Leff, clamped to >= 1
+        let vearly = (self.vabjt + self.aely * leff).max(1.0);
 
         // Overlap caps
         let cgso_eff = if self.cgso > 0.0 {
@@ -1848,28 +1871,124 @@ pub fn bsim3soi_pd_companion(
         (ibs2, dibs2_dvb, ibd2, dibd2_dvb, -dibd2_dvb)
     };
 
-    // Ibs3/Ibd3: BJT current (recombination in neutral body)
-    let (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd) = if sp.jbjt == 0.0 || sp.lratio == 0.0 {
-        (0.0, 0.0, 0.0, 0.0, 0.0)
-    } else {
-        let t0_bs = vbs_i / nvtm1;
-        let (exp_vbs, dexp_bs) = soi_dexp(t0_bs);
-        let t0_bd = vbd / nvtm1;
-        let (exp_vbd, dexp_bd) = soi_dexp(t0_bd);
-
-        let ien = weff / sp.nseg * model.tsi * sp.jbjt * sp.lratio;
-        let t0 = 1.0 - sp.arfabjt;
-        if t0 < 1e-2 {
-            (0.0, 0.0, 0.0, 0.0, 0.0)
+    // Ibs3/Ibd3: BJT recombination current + Ic: BJT collector transport current
+    // (ngspice b3soipdld.c lines 2007-2192)
+    //
+    // The total BJT current splits into:
+    //   - Recombination fraction (1-arfabjt): flows as Ibs3/Ibd3 body junction currents
+    //   - Transport fraction (arfabjt): flows as Ic collector current added to drain
+    //
+    // Both include high-level injection factors (EhlisFactor/EhlidFactor) and
+    // Ic includes a second-order Early effect factor (E2ndFactor).
+    let (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb) =
+        if sp.jbjt == 0.0 || sp.lratio == 0.0 {
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         } else {
-            let t1 = t0 * ien;
-            let ibs3 = t1 * (exp_vbs - 1.0);
-            let dibs3_dvb = t1 * dexp_bs / nvtm1;
-            let ibd3 = t1 * (exp_vbd - 1.0);
-            let dibd3_dvb = t1 * dexp_bd / nvtm1;
-            (ibs3, dibs3_dvb, ibd3, dibd3_dvb, -dibd3_dvb)
-        }
-    };
+            let t0_bs = vbs_i / nvtm1;
+            let (exp_vbs, dexp_bs) = soi_dexp(t0_bs);
+            let t0_bd = vbd / nvtm1;
+            let (exp_vbd, dexp_bd) = soi_dexp(t0_bd);
+
+            let ien = weff / sp.nseg * model.tsi * sp.jbjt * sp.lratio;
+            let ahli = model.ahli;
+
+            // High-level injection factor — source side (ngspice lines 2014-2033)
+            let ehlis = ahli * (exp_vbs - 1.0);
+            let (ehlis_factor, dehlis_dvb) = if ehlis < 1e-5 {
+                (1.0, 0.0)
+            } else {
+                let f = 1.0 / (1.0 + ehlis).sqrt();
+                let t = -0.5 * f / (1.0 + ehlis);
+                (f, t * ahli * dexp_bs / nvtm1)
+            };
+
+            // High-level injection factor — drain side (ngspice lines 2035-2056)
+            let ehlid = ahli * (exp_vbd - 1.0);
+            let (ehlid_factor, dehlid_dvb, dehlid_dvd) = if ehlid < 1e-5 {
+                (1.0, 0.0, 0.0)
+            } else {
+                let f = 1.0 / (1.0 + ehlid).sqrt();
+                let t = -0.5 * f / (1.0 + ehlid);
+                let dehlid_dvb = t * ahli * dexp_bd / nvtm1;
+                (f, dehlid_dvb, -dehlid_dvb)
+            };
+
+            // Ibs3/Ibd3: recombination (1-arfabjt fraction) with EhlisFactor
+            // (ngspice lines 2058-2093)
+            let t0_recomb = 1.0 - sp.arfabjt;
+            let (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd) = if t0_recomb < 1e-2 {
+                (0.0, 0.0, 0.0, 0.0, 0.0)
+            } else {
+                let t1 = t0_recomb * ien;
+                let ibs3 = t1 * (exp_vbs - 1.0) * ehlis_factor;
+                let dibs3_dvb = t1
+                    * (dexp_bs / nvtm1 * ehlis_factor + (exp_vbs - 1.0) * dehlis_dvb);
+                let ibd3 = t1 * (exp_vbd - 1.0) * ehlid_factor;
+                let dibd3_dvb = t1
+                    * (dexp_bd / nvtm1 * ehlid_factor + (exp_vbd - 1.0) * dehlid_dvb);
+                (ibs3, dibs3_dvb, ibd3, dibd3_dvb, -dibd3_dvb)
+            };
+
+            // Ic: BJT collector current (arfabjt fraction) with E2ndFactor
+            // (ngspice lines 2123-2192)
+            let (ic, gcd, gcb) = if sp.arfabjt < 1e-2 || vds_i == 0.0 {
+                (0.0, 0.0, 0.0)
+            } else {
+                // Second-order Early effect (ngspice lines 2128-2171)
+                let t0_e = 1.0 + (vbs_i + vbd) / sp.vearly;
+                let dt0_e_dvb = 2.0 / sp.vearly;
+                let dt0_e_dvd = -1.0 / sp.vearly;
+
+                let ehlis_raw = if ehlis < 1e-5 { 0.0 } else { ehlis };
+                let ehlid_raw = if ehlid < 1e-5 { 0.0 } else { ehlid };
+                let t1_e = ehlis_raw + ehlid_raw;
+                let dt1_e_dvb = if ehlis >= 1e-5 {
+                    ahli * dexp_bs / nvtm1
+                } else {
+                    0.0
+                } + if ehlid >= 1e-5 {
+                    ahli * dexp_bd / nvtm1
+                } else {
+                    0.0
+                };
+                let dt1_e_dvd = if ehlid >= 1e-5 {
+                    -(ahli * dexp_bd / nvtm1)
+                } else {
+                    0.0
+                };
+
+                let t3_e = (t0_e * t0_e + 4.0 * t1_e).sqrt();
+                let dt3_e_dvb =
+                    0.5 / t3_e * (2.0 * t0_e * dt0_e_dvb + 4.0 * dt1_e_dvb);
+                let dt3_e_dvd =
+                    0.5 / t3_e * (2.0 * t0_e * dt0_e_dvd + 4.0 * dt1_e_dvd);
+
+                let t2_e = (t0_e + t3_e) / 2.0;
+                let dt2_e_dvb = (dt0_e_dvb + dt3_e_dvb) / 2.0;
+                let dt2_e_dvd = (dt0_e_dvd + dt3_e_dvd) / 2.0;
+
+                let (e2nd, de2nd_dvb, de2nd_dvd) = if t2_e < 0.1 {
+                    (10.0, 0.0, 0.0)
+                } else {
+                    let e = 1.0 / t2_e;
+                    (e, -e / t2_e * dt2_e_dvb, -e / t2_e * dt2_e_dvd)
+                };
+
+                let t0_ic = sp.arfabjt * ien;
+                let dexp_bs_dvb = dexp_bs / nvtm1;
+                let dexp_bd_dvb = dexp_bd / nvtm1;
+                let ic = t0_ic * (exp_vbs - exp_vbd) * e2nd;
+                let gcb = t0_ic
+                    * ((dexp_bs_dvb - dexp_bd_dvb) * e2nd
+                        + (exp_vbs - exp_vbd) * de2nd_dvb);
+                let gcd = t0_ic
+                    * ((-dexp_bd_dvb) * e2nd + (exp_vbs - exp_vbd) * de2nd_dvd);
+
+                (ic, gcd, gcb)
+            };
+
+            (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb)
+        };
 
     // Ibs4/Ibd4: Tunneling current
     let (ibs4, dibs4_dvb, ibd4, dibd4_dvb, dibd4_dvd) = if sp.jtun == 0.0 {
@@ -1896,18 +2015,86 @@ pub fn bsim3soi_pd_companion(
     let gbs_jct = dibs1_dvb + dibs2_dvb + dibs3_dvb + dibs4_dvb;
     let gbd_jct = dibd1_dvb + dibd2_dvb + dibd3_dvb + dibd4_dvb;
 
-    // Impact ionization current (Iii)
-    let (iii, gii_d, gii_g, gii_b) = if sp.alpha0 <= 0.0 || vds_i <= sp.beta0.max(0.0) {
+    // Impact ionization current (Iii) — PD Vdsatii-based model
+    // (ngspice b3soipdld.c lines 2536-2642)
+    let (iii, gii_d, gii_g, gii_b) = if sp.alpha0 <= 0.0 {
         (0.0, 0.0, 0.0, 0.0)
     } else {
-        let t0 = vds_i - sp.beta0;
-        let t1 = (-model.beta1 / t0).exp();
-        let iii = sp.alpha0 * ids * t1;
-        let gii_d = sp.alpha0 * (gds * t1 + ids * t1 * model.beta1 / (t0 * t0));
-        let gii_g = sp.alpha0 * gm * t1;
-        let gii_b = sp.alpha0 * gmbs * t1;
+        // Vdsatii0: saturation voltage for impact ionization (at T=Tnom)
+        let vdsatii0 = model.vdsatii0 - model.lii / leff;
+
+        // VgsStep: gate-voltage-dependent shift (ngspice lines 2549-2570)
+        let t0_esat = model.esatii * leff;
+        let t1_sii = model.sii0 * t0_esat / (1.0 + t0_esat);
+        let t0_sii1 = 1.0 / (1.0 + model.sii1 * vgsteff);
+        let t3_sii = t0_sii1 + model.sii2;
+        let t4_sii = vgst * model.sii1 * t0_sii1 * t0_sii1; // -dT3/dVgsteff * Vgst
+        let t2_vgst = vgst * t3_sii;
+        let dt2_dvg = t3_sii * dvgst_dvg - t4_sii * dvgsteff_dvg;
+        let dt2_dvb = t3_sii * dvgst_dvb * dvbseff_dvb - t4_sii * dvgsteff_dvb;
+        let dt2_dvd = t3_sii * dvgst_dvd - t4_sii * dvgsteff_dvd;
+
+        let t3_siid = 1.0 / (1.0 + model.siid * vds_i);
+        let dt3_siid_dvd = -model.siid * t3_siid * t3_siid;
+
+        let vgs_step = t1_sii * t2_vgst * t3_siid;
+        let _vdsatii = vdsatii0 + vgs_step;
+        let vdiff = vds_i - vdsatii0 - vgs_step;
+        let dvdiff_dvg = -t1_sii * t3_siid * dt2_dvg;
+        let dvdiff_dvb = -t1_sii * t3_siid * dt2_dvb;
+        let dvdiff_dvd =
+            1.0 - t1_sii * (t3_siid * dt2_dvd + t2_vgst * dt3_siid_dvd);
+
+        // Polynomial denominator (ngspice lines 2583-2600)
+        let t0_poly = model.beta2 + model.beta1 * vdiff + sp.beta0 * vdiff * vdiff;
+        let (t0_poly, dt0_poly_dvg, dt0_poly_dvb, dt0_poly_dvd) = if t0_poly < 1e-5 {
+            (1e-5, 0.0, 0.0, 0.0)
+        } else {
+            let t1_coeff = model.beta1 + 2.0 * sp.beta0 * vdiff;
+            (
+                t0_poly,
+                t1_coeff * dvdiff_dvg,
+                t1_coeff * dvdiff_dvb,
+                t1_coeff * dvdiff_dvd,
+            )
+        };
+
+        // Ratio = alpha0 * exp(Vdiff/T0_poly) with clamping (ngspice lines 2602-2624)
+        let (ratio, dratio_dvg, dratio_dvb, dratio_dvd) =
+            if t0_poly < vdiff / EXPL_THRESHOLD && vdiff > 0.0 {
+                (sp.alpha0 * MAX_EXP, 0.0, 0.0, 0.0)
+            } else if t0_poly < -vdiff / EXPL_THRESHOLD && vdiff < 0.0 {
+                (sp.alpha0 * MIN_EXP, 0.0, 0.0, 0.0)
+            } else {
+                let ratio = sp.alpha0 * (vdiff / t0_poly).exp();
+                if ratio > 10.0 {
+                    (10.0, 0.0, 0.0, 0.0)
+                } else {
+                    let t1_deriv = ratio / (t0_poly * t0_poly);
+                    (
+                        ratio,
+                        t1_deriv * (t0_poly * dvdiff_dvg - vdiff * dt0_poly_dvg),
+                        t1_deriv * (t0_poly * dvdiff_dvb - vdiff * dt0_poly_dvb),
+                        t1_deriv * (t0_poly * dvdiff_dvd - vdiff * dt0_poly_dvd),
+                    )
+                }
+            };
+
+        let iii = ratio * ids;
+        let gii_g = ratio * gm + ids * dratio_dvg;
+        let gii_b = ratio * gmbs + ids * dratio_dvb;
+        let gii_d = ratio * gds + ids * dratio_dvd;
         (iii, gii_d, gii_g, gii_b)
     };
+
+    // Add BJT collector current to drain current and its derivatives to
+    // output conductance / body transconductance (ngspice b3soipdld.c lines 2679-2685):
+    //   cdrain = Ids + Ic
+    //   gds    = Gds + Gcd
+    //   gmbs   = Gmb + Gcb
+    let ids = ids + ic;
+    let gds = gds + gcd;
+    let gmbs = gmbs + gcb;
 
     // Equivalent current sources for NR companion model
     let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i);

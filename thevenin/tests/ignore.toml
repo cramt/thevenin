@@ -15,8 +15,6 @@
 
 # === BSIM3SOI-PD ===
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
-"bsim3soipd/t3.cir" = "~3.2% Ids error at Vd=0.11V (recomb reverse bias T11 fix reduced from 134%; remaining error from missing Gmc/Gme cross-coupling and unused ves back-gate)"
-"bsim3soipd/t5.cir" = "~2.1% Ids error at Vg=0.65V (recomb reverse bias T11 fix reduced from 513%; remaining error from missing ves back-gate coupling — VE swept -4→+4V)"
 
 # === General circuits ===
 "general/rtlinv.cir" = "~4.6% transient error at t=9ns: BJT transition timing shift (qb-normalized diffusion charge correct per ngspice but worsened from 4.1% due to compensating error)"
