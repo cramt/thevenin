@@ -2593,7 +2593,6 @@ pub fn stamp_bsim3soi_dd(
     let sp = inst.source_eff_idx();
     let b = inst.body_int_idx;
 
-    let sign = inst.model.mos_type.sign();
     let m = inst.m;
 
     let e = inst.e_idx;
@@ -2757,12 +2756,15 @@ pub fn stamp_bsim3soi_dd(
     }
 
     // --- RHS current source stamps ---
-    let ceq_d = sign * m * comp.ceq_d;
-    let ceq_bs = sign * m * comp.ceq_bs;
-    let ceq_bd = sign * m * comp.ceq_bd;
-    let ceq_iii = sign * m * comp.ceq_iii;
-    let ceq_gidl = sign * m * comp.ceq_gidl;
-    let ceq_sgidl = sign * m * comp.ceq_sgidl;
+    // comp.ceq_d already has `sign` inside (ngspice: cdreq = type * (...)),
+    // so we multiply by `m` only. Junction, impact ionization, and GIDL ceqs
+    // are NOT type-signed in ngspice BSIM3SOI-DD (b3soiddld.c lines 2602-2630).
+    let ceq_d = m * comp.ceq_d;
+    let ceq_bs = m * comp.ceq_bs;
+    let ceq_bd = m * comp.ceq_bd;
+    let ceq_iii = m * comp.ceq_iii;
+    let ceq_gidl = m * comp.ceq_gidl;
+    let ceq_sgidl = m * comp.ceq_sgidl;
 
     if let Some(d) = dp {
         rhs[d] -= ceq_d - ceq_bd + ceq_iii + ceq_gidl;

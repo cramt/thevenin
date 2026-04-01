@@ -2186,7 +2186,6 @@ pub fn stamp_bsim3soi_pd(
     let sp = inst.source_eff_idx();
     let b = inst.body_int_idx;
 
-    let sign = inst.model.mos_type.sign();
     let m = inst.m;
 
     let (xnrm, xrev) = if comp.mode > 0 {
@@ -2311,12 +2310,15 @@ pub fn stamp_bsim3soi_pd(
 
     // RHS: equivalent current sources for NR companion linearization.
     // Convention: rhs[node] -= ceq for current OUT, rhs[node] += ceq for current IN.
-    let ceq_d = sign * m * comp.ceq_d;
-    let ceq_bs = sign * m * comp.ceq_bs;
-    let ceq_bd = sign * m * comp.ceq_bd;
-    let ceq_iii = sign * m * comp.ceq_iii;
-    let ceq_gidl = sign * m * comp.ceq_gidl;
-    let ceq_sgidl = sign * m * comp.ceq_sgidl;
+    // comp.ceq_d already has `sign` inside (ngspice: cdreq = type * (...)),
+    // so we multiply by `m` only. Junction, impact ionization, and GIDL ceqs
+    // are NOT type-signed in ngspice BSIM3SOI-PD (b3soipdld.c lines 2665-2696).
+    let ceq_d = m * comp.ceq_d;
+    let ceq_bs = m * comp.ceq_bs;
+    let ceq_bd = m * comp.ceq_bd;
+    let ceq_iii = m * comp.ceq_iii;
+    let ceq_gidl = m * comp.ceq_gidl;
+    let ceq_sgidl = m * comp.ceq_sgidl;
 
     if let Some(d) = dp {
         // Channel (out) + BD junction (out) + Iii (out) + GIDL drain (out)
