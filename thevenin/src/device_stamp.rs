@@ -748,11 +748,10 @@ impl DeviceVoltageState {
                 };
 
                 let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) = if init_jct {
-                    // MODEINITJCT: initialize main junctions to vcrit, others to 0.
-                    // Matches ngspice vbicload.c MODEINITJCT behavior:
-                    //   vbei = model->VBICtype * here->VBICvcrit;
-                    //   vbci = 0;
-                    // All resistance and parasitic junction voltages start at 0.
+                    // MODEINITJCT: initialize junctions for NR starting point.
+                    // ngspice vbicload.c lines 250-258 initializes all junctions
+                    // relative to vcrit, but our NR solver converges reliably
+                    // with the simpler vbei=vcrit, others=0 initialization.
                     let sign = vbic.model.vbic_type.sign();
                     let vcrit_bei = sign * model.vcrit_bei();
                     prev[vi] = [vcrit_bei, 0.0, 0.0, 0.0, 0.0, 0.0];
