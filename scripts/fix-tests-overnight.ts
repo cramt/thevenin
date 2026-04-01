@@ -8,11 +8,16 @@
  *     tells the agent to read it, keeping initial context lean for better quality
  *   - Uses settingSources: ["project"] so CLAUDE.md/skills/hooks load automatically
  *   - Tracks progress: counts #[ignore] before/after, detects no-commit iterations
- *   - Deduplication: logs attempted tests so agent can skip previously-failed ones
+ *   - Structured deduplication: tracks attempted .cir paths with outcomes in JSON
  *   - Git pull before each iteration to avoid push conflicts
  *   - Handles ResultMessage.subtype properly (success, error_max_turns, etc.)
  *   - Stops early after N consecutive no-progress iterations
  *   - Logs iteration summaries for post-mortem review
+ *   - Post-commit regression check: runs full test suite after each commit, reverts if broken
+ *   - Periodic triage refresh: re-runs triage every N successes so priorities stay current
+ *   - Early exit when all remaining tests are intractable (skip-category match)
+ *   - Session resumption: resumes agent on max_turns if progress was being made
+ *   - Desktop notification on completion (notify-send)
  *
  * Designed for Claude Max subscription (flat-rate, rate-limited only).
  *
@@ -23,6 +28,7 @@
  *   --max-iterations N       Max successful agent sessions (default: 50)
  *   --cooldown N             Seconds between iterations (default: 30)
  *   --max-no-progress N      Stop after N consecutive no-commit iterations (default: 3)
+ *   --triage-refresh-every N Refresh triage report every N successful iterations (default: 3)
  *
  * Graceful shutdown (finishes current iteration, then exits):
  *   touch scripts/.stop-fix-tests     # stop file — checked between iterations
@@ -30,7 +36,7 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { readFileSync, appendFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { execSync } from "child_process";
 
@@ -48,9 +54,11 @@ function flag(name: string, fallback: number): number {
 const MAX_ITERATIONS = flag("max-iterations", 50);
 const COOLDOWN_SEC = flag("cooldown", 30);
 const MAX_NO_PROGRESS = flag("max-no-progress", 3);
+const TRIAGE_REFRESH_EVERY = flag("triage-refresh-every", 3);
 const PROJECT_DIR = resolve(import.meta.dirname ?? __dirname, "..");
 const LOG_FILE = resolve(PROJECT_DIR, "scripts", "fix-tests.log");
-const ATTEMPTS_FILE = resolve(PROJECT_DIR, "scripts", "attempted-tests.log");
+const ATTEMPTS_FILE = resolve(PROJECT_DIR, "scripts", "attempted-tests.json");
+const IGNORE_TOML = resolve(PROJECT_DIR, "thevenin", "tests", "ignore.toml");
 
 const STOP_FILE = resolve(PROJECT_DIR, "scripts", ".stop-fix-tests");
 
@@ -113,18 +121,147 @@ async function sleep(seconds: number): Promise<void> {
 
 function shell(cmd: string): string {
   try {
-    return execSync(cmd, { cwd: PROJECT_DIR, encoding: "utf-8", timeout: 30_000 }).trim();
+    return execSync(cmd, { cwd: PROJECT_DIR, encoding: "utf-8", timeout: 60_000 }).trim();
   } catch (e) {
     logError(`shell command failed: ${cmd} — ${e instanceof Error ? e.message : e}`);
     return "";
   }
 }
 
-/** Count ignored tests in ignore.toml (each non-comment, non-empty line with `=` is one test) */
-function countIgnoredTests(): number {
-  const content = shell(`grep -c '=' thevenin/tests/ignore.toml`);
-  return parseInt(content, 10) || 0;
+// ---------------------------------------------------------------------------
+// ignore.toml parsing
+// ---------------------------------------------------------------------------
+
+/** Parse ignore.toml into a Map of path → reason */
+function parseIgnoreToml(): Map<string, string> {
+  if (!existsSync(IGNORE_TOML)) return new Map();
+  const content = readFileSync(IGNORE_TOML, "utf-8");
+  const tests = new Map<string, string>();
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^"([^"]+)"\s*=\s*"(.+)"$/);
+    if (match) tests.set(match[1], match[2]);
+  }
+  return tests;
 }
+
+/** Count ignored tests */
+function countIgnoredTests(): number {
+  return parseIgnoreToml().size;
+}
+
+/** Check if a test's ignore reason matches any skip category */
+function isIntractable(reason: string): boolean {
+  return SKIP_CATEGORIES.some((cat) => reason.includes(cat));
+}
+
+/** Returns the list of tractable (non-skipped) test paths from ignore.toml */
+function getTractableTests(): Array<{ path: string; reason: string }> {
+  const ignored = parseIgnoreToml();
+  const tractable: Array<{ path: string; reason: string }> = [];
+  for (const [path, reason] of ignored) {
+    if (!isIntractable(reason)) {
+      tractable.push({ path, reason });
+    }
+  }
+  return tractable;
+}
+
+// ---------------------------------------------------------------------------
+// Structured deduplication
+// ---------------------------------------------------------------------------
+
+interface AttemptRecord {
+  path: string;
+  outcome: "fixed" | "failed" | "reverted";
+  date: string;
+  summary: string;
+}
+
+function loadAttempts(): AttemptRecord[] {
+  if (!existsSync(ATTEMPTS_FILE)) return [];
+  try {
+    return JSON.parse(readFileSync(ATTEMPTS_FILE, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+function saveAttempts(attempts: AttemptRecord[]): void {
+  try {
+    writeFileSync(ATTEMPTS_FILE, JSON.stringify(attempts, null, 2) + "\n");
+  } catch (e) {
+    logError(`Failed to write attempts file: ${e}`);
+  }
+}
+
+/** Record which .cir paths were attempted this iteration by diffing ignore.toml before/after */
+function recordAttempts(
+  ignoredBefore: Map<string, string>,
+  ignoredAfter: Map<string, string>,
+  outcome: "fixed" | "failed" | "reverted",
+  summary: string,
+): void {
+  const attempts = loadAttempts();
+  const date = new Date().toISOString().slice(0, 10);
+
+  if (outcome === "fixed") {
+    // Tests that were removed from ignore.toml = fixed
+    for (const path of ignoredBefore.keys()) {
+      if (!ignoredAfter.has(path)) {
+        attempts.push({ path, outcome: "fixed", date, summary });
+      }
+    }
+  } else {
+    // No test was fixed — figure out which tests the agent likely worked on
+    // by checking which tractable tests haven't been attempted recently
+    // For now, just record a generic "failed" entry with the summary
+    attempts.push({ path: "_unknown_", outcome, date, summary });
+  }
+
+  saveAttempts(attempts);
+}
+
+/** Build a structured dedup section for the prompt */
+function buildDedupSection(): string {
+  const attempts = loadAttempts();
+  if (attempts.length === 0) return "";
+
+  const failed = attempts.filter((a) => a.outcome === "failed" || a.outcome === "reverted");
+  const fixed = attempts.filter((a) => a.outcome === "fixed");
+
+  let section = "\n\n## Previously attempted tests";
+
+  if (fixed.length > 0) {
+    section += `\n\nAlready fixed (${fixed.length}): ${fixed.map((a) => a.path).join(", ")}`;
+  }
+
+  if (failed.length > 0) {
+    // Group by path, show most recent attempt
+    const byPath = new Map<string, AttemptRecord>();
+    for (const a of failed) byPath.set(a.path, a);
+
+    const failedEntries = [...byPath.values()]
+      .filter((a) => a.path !== "_unknown_")
+      .map((a) => `- ${a.path} (${a.date}): ${a.summary.slice(0, 120)}`);
+
+    const unknownCount = failed.filter((a) => a.path === "_unknown_").length;
+
+    if (failedEntries.length > 0) {
+      section += `\n\nPreviously failed — do NOT reattempt unless you have a new approach:\n${failedEntries.join("\n")}`;
+    }
+    if (unknownCount > 0) {
+      section += `\n\n${unknownCount} previous iteration(s) made no progress.`;
+    }
+  }
+
+  return section;
+}
+
+// ---------------------------------------------------------------------------
+// Git helpers
+// ---------------------------------------------------------------------------
 
 /** Get the latest commit hash */
 function latestCommit(): string {
@@ -142,17 +279,60 @@ function gitPull(): boolean {
   return true;
 }
 
-/** Load previously attempted tests (for deduplication) */
-function loadAttemptedTests(): string[] {
-  if (!existsSync(ATTEMPTS_FILE)) return [];
-  return readFileSync(ATTEMPTS_FILE, "utf-8")
-    .split("\n")
-    .filter((l) => l.trim().length > 0);
+/** Run the full test suite and return true if it passes */
+function regressionCheck(): boolean {
+  log("Running post-commit regression check...");
+  try {
+    execSync(
+      "nix develop --command cargo nextest run --workspace",
+      { cwd: PROJECT_DIR, encoding: "utf-8", timeout: 300_000, stdio: "pipe" },
+    );
+    log("Regression check passed.");
+    return true;
+  } catch (err: unknown) {
+    const stderr = (err as any).stderr?.toString() ?? "";
+    const stdout = (err as any).stdout?.toString() ?? "";
+    const summary = (stdout + stderr).split("\n").find((l: string) => /Summary|FAIL/.test(l)) ?? "tests failed";
+    logError(`Regression check FAILED: ${summary}`);
+    return false;
+  }
 }
 
-function logAttemptedTest(testInfo: string) {
-  try { appendFileSync(ATTEMPTS_FILE, `${timestamp()} | ${testInfo}\n`); } catch (e) {
-    process.stderr.write(`[attempted-tests log write failed: ${e}]\n`);
+/** Revert all commits back to a known-good commit, restoring a clean working tree */
+function revertTo(commitHash: string): void {
+  log(`Reverting to ${commitHash.slice(0, 8)}...`);
+  shell(`git reset --hard ${commitHash}`);
+  shell("git clean -fd");
+  log("Reverted. Working tree restored to pre-iteration state.");
+}
+
+/** Refresh the triage report by running the triage script */
+function refreshTriageReport(): void {
+  log("Refreshing triage report...");
+  try {
+    execSync(
+      "npx tsx scripts/triage-ignored-tests.ts --out triage-report.json",
+      { cwd: PROJECT_DIR, encoding: "utf-8", timeout: 600_000, stdio: "pipe" },
+    );
+    log("Triage report refreshed.");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`Triage refresh failed (non-fatal): ${msg}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Notification
+// ---------------------------------------------------------------------------
+
+function notify(title: string, body: string): void {
+  try {
+    execSync(
+      `notify-send --app-name="fix-tests" ${JSON.stringify(title)} ${JSON.stringify(body)}`,
+      { timeout: 5_000, stdio: "pipe" },
+    );
+  } catch {
+    // notify-send may not be available — that's fine
   }
 }
 
@@ -205,11 +385,8 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 // Build the prompt (lean — no inline doc injection)
 // ---------------------------------------------------------------------------
 
-function buildPrompt(): string {
-  const attempted = loadAttemptedTests();
-  const attemptedSection = attempted.length > 0
-    ? `\n\nTests previously attempted (may have failed — avoid re-attempting unless you have a new approach):\n${attempted.map((l) => `- ${l}`).join("\n")}`
-    : "";
+function buildPrompt(resumeSessionId?: string): string {
+  const dedupSection = buildDedupSection();
 
   // Try to load triage report if available for better prioritization
   let triageSection = "";
@@ -240,6 +417,12 @@ function buildPrompt(): string {
       triageSection += `\n\nTriage summary: ${JSON.stringify(triage.summary)}`;
     }
   } catch {}
+
+  if (resumeSessionId) {
+    return `You hit the turn limit but were making progress (commits were made).
+Continue where you left off — finish fixing the current test, run the full test suite
+to verify no regressions, and commit.`;
+  }
 
   return `Read FIXING_HARNESS_TESTS.md for the full methodology, then fix ignored harness tests.
 
@@ -279,13 +462,25 @@ When you find a numerical mismatch, don't just stare at the full circuit. Instea
 ## Steps
 1. Read thevenin/tests/ignore.toml to see all ignored tests and their reasons
 2. Pick a test or group of related tests (follow prioritization above)
-3. Diagnose the root cause using the methodology in FIXING_HARNESS_TESTS.md
-4. Fix the issue in the Rust source code
-5. Run the fixed tests to verify they pass
-6. Run the FULL test suite to check for regressions: nix develop --command cargo nextest run --workspace 2>&1 | grep -E "FAIL|Summary"
-7. Run clippy: nix develop --command cargo clippy --workspace -- -D warnings
-8. To un-ignore a fixed test, remove its line from thevenin/tests/ignore.toml
-9. Commit all changes with a descriptive message and push to the current branch
+3. **Before starting work**, read the relevant history file in \`scripts/fix-tests-history/\`
+   for the device model or subsystem you're investigating. This tells you what was already
+   tried and ruled out — do NOT repeat failed approaches.
+4. Diagnose the root cause using the methodology in FIXING_HARNESS_TESTS.md
+5. Fix the issue in the Rust source code
+6. Run the fixed tests to verify they pass
+7. Run the FULL test suite to check for regressions: nix develop --command cargo nextest run --workspace 2>&1 | grep -E "FAIL|Summary"
+8. Run clippy: nix develop --command cargo clippy --workspace -- -D warnings
+9. To un-ignore a fixed test, remove its line from thevenin/tests/ignore.toml
+10. Commit all changes with a descriptive message and push to the current branch
+
+## Recording findings
+After investigating a test (whether you fixed it or not), append your findings to
+the relevant file in \`scripts/fix-tests-history/\`. Use a \`## Session N findings (date)\`
+heading. If no file exists for the device model, create one. Keep entries concise:
+what was tried, what was found, whether it's worth retrying.
+
+Files: \`applied-fixes.md\`, \`failed-investigations.md\`, \`vbic.md\`, \`bsim3soi.md\`,
+\`transmission-line.md\`, \`general-circuits.md\`, \`missing-features.md\`.
 
 ## Important rules
 - Always run commands through \`nix develop --command ...\`
@@ -293,8 +488,8 @@ When you find a numerical mismatch, don't just stare at the full circuit. Instea
 - Do NOT attempt tests that would require implementing entire missing subsystems
 - If a test group requires an architectural change, document why and move on — do NOT commit
 - When running the full test suite, use \`--workspace\` to catch regressions across all crates
-- Update FIXING_HARNESS_TESTS.md with any new findings
-${triageSection}${attemptedSection}`;
+- Do NOT bloat FIXING_HARNESS_TESTS.md — write findings to \`scripts/fix-tests-history/\` instead
+${triageSection}${dedupSection}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -305,17 +500,21 @@ type IterationResult =
   | { status: "success"; summary: string }
   | { status: "no_progress"; summary: string }
   | { status: "rate_limited" }
+  | { status: "max_turns_with_progress"; sessionId: string; summary: string }
   | { status: "error"; message: string };
 
-async function runIteration(iteration: number): Promise<IterationResult> {
+async function runIteration(
+  iterationNum: number,
+  resumeSessionId?: string,
+): Promise<IterationResult> {
   inIteration = true;
   try {
   log(`\n${"=".repeat(60)}`);
-  log(`--- Iteration ${iteration}/${MAX_ITERATIONS} ---`);
+  log(`--- Iteration ${iterationNum} ---`);
 
-  const ignoredBefore = countIgnoredTests();
+  const ignoredBefore = parseIgnoreToml();
   const commitBefore = latestCommit();
-  log(`Ignored tests before: ${ignoredBefore}`);
+  log(`Ignored tests before: ${ignoredBefore.size}${resumeSessionId ? " (resuming session)" : ""}`);
 
   // Pull latest before starting
   if (!gitPull()) {
@@ -325,21 +524,28 @@ async function runIteration(iteration: number): Promise<IterationResult> {
   try {
     let resultText = "";
     let hitRateLimit = false;
-    let sessionId = "";
+    let sessionId = resumeSessionId ?? "";
     let resultSubtype = "";
 
+    const queryOptions: any = {
+      cwd: PROJECT_DIR,
+      allowedTools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent"],
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      maxTurns: 200,
+      settingSources: ["project"],
+      effort: "high",
+      includePartialMessages: true,
+    };
+
+    // Resume an existing session if provided
+    if (resumeSessionId) {
+      queryOptions.sessionId = resumeSessionId;
+    }
+
     for await (const message of query({
-      prompt: buildPrompt(),
-      options: {
-        cwd: PROJECT_DIR,
-        allowedTools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent"],
-        permissionMode: "bypassPermissions",
-        allowDangerouslySkipPermissions: true,
-        maxTurns: 200,
-        settingSources: ["project"],
-        effort: "high",
-        includePartialMessages: true,
-      },
+      prompt: buildPrompt(resumeSessionId),
+      options: queryOptions,
     })) {
       const msg = message as any;
 
@@ -393,29 +599,42 @@ async function runIteration(iteration: number): Promise<IterationResult> {
 
     if (hitRateLimit) return { status: "rate_limited" };
 
-    // Handle non-success results
+    // Check if progress was made
+    const commitAfter = latestCommit();
+    const ignoredAfter = parseIgnoreToml();
+    const madeCommit = commitAfter !== commitBefore;
+    const fixedTests = ignoredBefore.size - ignoredAfter.size;
+
+    log(`Ignored tests after: ${ignoredAfter.size} (${fixedTests >= 0 ? "-" : "+"}${Math.abs(fixedTests)})`);
+    log(`New commit: ${madeCommit ? "yes" : "no"}`);
+
+    const shortSummary = resultText.split("\n")[0]?.slice(0, 200) ?? "no summary";
+
+    // Handle max_turns with progress — eligible for session resumption
+    if (resultSubtype === "error_max_turns" && madeCommit) {
+      log("Hit max turns but made progress — will resume this session.");
+      recordAttempts(ignoredBefore, ignoredAfter, "failed", `max_turns (progress): ${shortSummary}`);
+      return { status: "max_turns_with_progress", sessionId, summary: shortSummary };
+    }
+
     if (resultSubtype === "error_max_turns") {
       log("Hit max turns — agent ran out of steps.");
     } else if (resultSubtype === "error_during_execution") {
       log("Error during agent execution.");
     }
 
-    // Check if progress was made
-    const commitAfter = latestCommit();
-    const ignoredAfter = countIgnoredTests();
-    const madeCommit = commitAfter !== commitBefore;
-    const fixedTests = ignoredBefore - ignoredAfter;
-
-    log(`Ignored tests after: ${ignoredAfter} (${fixedTests >= 0 ? "-" : "+"}${Math.abs(fixedTests)})`);
-    log(`New commit: ${madeCommit ? "yes" : "no"}`);
-
-    // Log what was attempted for deduplication
-    const shortSummary = resultText.split("\n")[0]?.slice(0, 200) ?? "no summary";
-    logAttemptedTest(shortSummary);
-
     if (madeCommit) {
+      // Verify the commit didn't break other tests
+      if (!regressionCheck()) {
+        logError("Agent's commit introduced regressions — reverting.");
+        revertTo(commitBefore);
+        recordAttempts(ignoredBefore, ignoredAfter, "reverted", shortSummary);
+        return { status: "no_progress", summary: `REVERTED (regression): ${shortSummary}` };
+      }
+      recordAttempts(ignoredBefore, ignoredAfter, "fixed", shortSummary);
       return { status: "success", summary: shortSummary };
     } else {
+      recordAttempts(ignoredBefore, ignoredAfter, "failed", shortSummary);
       return { status: "no_progress", summary: shortSummary };
     }
   } catch (err: unknown) {
@@ -443,7 +662,6 @@ async function runIteration(iteration: number): Promise<IterationResult> {
 // ---------------------------------------------------------------------------
 // Peak-hours pause — Anthropic Max subscriptions get reduced capacity during
 // US work hours: 05:00–11:00 PT (Pacific Time).
-// See: https://www.ghacks.net/2026/03/27/anthropic-reduces-claude-session-limits-during-peak-hours-for-free-pro-and-max-users/
 // ---------------------------------------------------------------------------
 
 function getPacificHour(): number {
@@ -512,15 +730,29 @@ async function main() {
   log(`Max iterations: ${MAX_ITERATIONS}`);
   log(`Cooldown: ${COOLDOWN_SEC}s`);
   log(`Stop after ${MAX_NO_PROGRESS} consecutive no-progress iterations`);
+  log(`Triage refresh every ${TRIAGE_REFRESH_EVERY} successful iterations`);
   log(`Log file: ${LOG_FILE}`);
   log(`Initial ignored tests: ${countIgnoredTests()}`);
+
+  // Early exit: check if all remaining tests are intractable
+  const tractable = getTractableTests();
+  log(`Tractable tests: ${tractable.length}`);
+  if (tractable.length === 0) {
+    log("All remaining ignored tests match skip categories — nothing to do.");
+    log("Remaining tests require architectural changes or missing subsystems.");
+    notify("fix-tests: nothing to do", "All remaining tests are intractable.");
+    return;
+  }
+  log(`Tractable: ${tractable.map((t) => t.path).join(", ")}`);
   log("=".repeat(60));
 
   let consecutiveRateLimits = 0;
   let consecutiveNoProgress = 0;
   let successCount = 0;
+  let iterationCount = 0;
+  let resumeSessionId: string | undefined;
 
-  for (let i = 1; i <= MAX_ITERATIONS; i++) {
+  while (successCount < MAX_ITERATIONS) {
     if (checkStopRequested()) {
       log("Graceful stop — not starting new iteration.");
       break;
@@ -530,7 +762,9 @@ async function main() {
     await waitOutPeakHours();
     if (checkStopRequested()) break;
 
-    const result = await runIteration(i);
+    iterationCount++;
+    const result = await runIteration(iterationCount, resumeSessionId);
+    resumeSessionId = undefined; // Clear after use
 
     // Check again after iteration completes
     if (checkStopRequested()) {
@@ -544,7 +778,7 @@ async function main() {
         const backoff = Math.min(60 * Math.pow(2, consecutiveRateLimits - 1), 600);
         log(`Rate limited (${consecutiveRateLimits}x consecutive). Backing off ${backoff}s...`);
         await sleep(backoff);
-        i--; // Don't count rate-limited iterations
+        // Don't increment iterationCount on retry — handled by while loop
         continue;
       }
 
@@ -552,45 +786,80 @@ async function main() {
         consecutiveRateLimits = 0;
         consecutiveNoProgress = 0;
         successCount++;
-        log(`✓ Iteration ${i} succeeded (${successCount} total).`);
+        log(`Iteration ${iterationCount} succeeded (${successCount} total successes).`);
+        notify("fix-tests: test fixed", result.summary.slice(0, 100));
+
+        // Periodically refresh the triage report so priorities stay current
+        if (successCount % TRIAGE_REFRESH_EVERY === 0) {
+          refreshTriageReport();
+        }
+
+        // Re-check tractability after a success — new fixes may have changed the landscape
+        {
+          const remaining = getTractableTests();
+          if (remaining.length === 0) {
+            log("All remaining tests are now intractable — stopping.");
+            break;
+          }
+        }
+        break;
+
+      case "max_turns_with_progress":
+        consecutiveRateLimits = 0;
+        // Don't count as no_progress — the agent was making headway
+        log(`Iteration ${iterationCount} hit max turns but made progress — resuming session.`);
+        resumeSessionId = result.sessionId;
         break;
 
       case "no_progress":
         consecutiveRateLimits = 0;
         consecutiveNoProgress++;
-        log(`✗ Iteration ${i} made no progress (${consecutiveNoProgress}/${MAX_NO_PROGRESS} before stopping).`);
+        log(`Iteration ${iterationCount} made no progress (${consecutiveNoProgress}/${MAX_NO_PROGRESS} before stopping).`);
 
         if (consecutiveNoProgress >= MAX_NO_PROGRESS) {
           log(`\nStopping: ${MAX_NO_PROGRESS} consecutive iterations with no commits.`);
           log(`Remaining tests are likely intractable or require architectural changes.`);
-          break;
         }
         break;
 
       case "error":
         consecutiveRateLimits = 0;
         consecutiveNoProgress++;
-        logError(`Iteration ${i} failed: ${result.message}`);
+        logError(`Iteration ${iterationCount} failed: ${result.message}`);
         break;
     }
 
     if (consecutiveNoProgress >= MAX_NO_PROGRESS) break;
 
-    if (i < MAX_ITERATIONS) {
-      log(`Cooling down before next iteration...`);
-      await sleep(COOLDOWN_SEC);
+    // Check tractability after no_progress too — avoid re-checking the same intractable tests
+    const remaining = getTractableTests();
+    if (remaining.length === 0) {
+      log("All remaining tests are intractable — stopping.");
+      break;
     }
+
+    log(`Cooling down before next iteration...`);
+    await sleep(COOLDOWN_SEC);
   }
 
   // Final summary
+  const finalIgnored = countIgnoredTests();
   log(`\n${"=".repeat(60)}`);
   log(`FINAL SUMMARY`);
+  log(`  Total iterations: ${iterationCount}`);
   log(`  Successful iterations: ${successCount}`);
-  log(`  Remaining ignored tests: ${countIgnoredTests()}`);
+  log(`  Remaining ignored tests: ${finalIgnored}`);
+  log(`  Tractable remaining: ${getTractableTests().length}`);
   log(`${"=".repeat(60)}`);
+
+  notify(
+    "fix-tests: done",
+    `${successCount} fixes in ${iterationCount} iterations. ${finalIgnored} tests remaining.`,
+  );
 }
 
 main().catch((err) => {
   logError(`Fatal: ${err}`);
+  notify("fix-tests: CRASHED", String(err).slice(0, 100));
   process.exit(1);
 });
