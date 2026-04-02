@@ -48,3 +48,22 @@ Off-diagonal entries ~100× larger than thermal diagonal at high bias.
 Line-by-line comparison of ALL VBIC formulas confirmed complete: avalanche, quasi-saturation,
 transport, base currents, parasitic, ALL cross-term derivatives, ALL stamps — everything
 matches ngspice exactly. NR convergence settings also match.
+
+## Session 99 findings (2026-04-02)
+
+**Hypothesis tested:** "Reference data generated without self-heating; disabling RTH gives exact match."
+
+**Result:** WRONG. Disabling self-heating (skipping Vrth temperature adjustment) made the
+error WORSE:
+- With self-heating: first failure at Vc=3.75V, diff=2.123e-7
+- Without self-heating: first failure at Vc=3.80V, diff=2.148e-7
+Self-heating actually HELPS by ~25e-9 at the critical point. The error is in the base model
+computation, confirmed once more.
+
+**Also verified:** temp_potential function (psiio formula) is algebraically equivalent
+between Rust and ngspice — the rT/Vtv terms cancel to vt_nom identically. Not a bug.
+
+**Also verified:** ph() function correctly returns radians (matching ngspice batch mode).
+CEamp test fails on db() column first (VBIC DC OP precision), not phase.
+
+**What NOT to retry:** Disabling self-heating, restructuring temp_potential evaluation order.
