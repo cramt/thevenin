@@ -99,3 +99,5 @@
 | 94 | BSIM3SOI-PD BJT collector current (Ic) + EhlisFactor | bsim3soi_pd.rs | Added missing Ic and high-level injection factor. |
 | 95 | BSIM3SOI-PD impact ionization Vdsatii model | bsim3soi_pd.rs | Fixes PD t3 (3.2%→pass) and t5 (2.1%→pass). |
 | 96 | BSIM3SOI DD/FD/PD ceq type sign convention | bsim3soi_dd.rs, bsim3soi_fd.rs, bsim3soi_pd.rs | Fixed incorrect type sign on junction/Iii/GIDL ceqs. |
+| 97 | Propagate circuit .OPTIONS to transient/OP analysis | simulate.rs, transient.rs | simulate_tran/simulate_op now respect GMIN, ABSTOL, RELTOL, VNTOL, ITL1, ITL2 from netlist. No test behavior change (no current tests have custom options that affect results). |
+| 98 | BJT geqcb (BE charge cross-coupling from Vbc) in transient | transient.rs | Added dQbe/dVbc cross-coupling matrix stamps and charge increment. rtlinv 4.56%→4.33%. |
