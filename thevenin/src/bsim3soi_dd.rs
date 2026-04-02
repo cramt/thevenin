@@ -2700,10 +2700,14 @@ pub fn stamp_bsim3soi_dd(
     }
 
     // Impact ionization: Iii flows drain→body (OUT of drain, INTO body).
+    // Iii depends on Vds, Vgs, Vbs — all relative to source-prime.
+    // Each row must sum to zero (KCL), requiring SP-column balancing entries
+    // (ngspice: gddpsp/gbbsp include these via combined derivative sums).
     if comp.iii != 0.0 {
         let gii_d = m * comp.gii_d;
         let gii_g = m * comp.gii_g;
         let gii_b = m * comp.gii_b;
+        let gii_sum = gii_d + gii_g + gii_b;
         if let (Some(d), Some(bi)) = (dp, b) {
             matrix.add(d, d, gii_d);
             matrix.add(bi, d, -gii_d);
@@ -2722,12 +2726,23 @@ pub fn stamp_bsim3soi_dd(
                 matrix.add(d, bi, gii_b);
             }
         }
+        // KCL-balancing SP column entries (row sums must be zero).
+        if let Some(s) = sp {
+            if let Some(d) = dp {
+                matrix.add(d, s, -gii_sum);
+            }
+            if let Some(bi) = b {
+                matrix.add(bi, s, gii_sum);
+            }
+        }
     }
 
     // GIDL drain-side: Igidl flows drain→body.
+    // Igidl depends on Vds, Vgs — relative to source-prime.
     if comp.igidl != 0.0 {
         let ggidl_d = m * comp.ggidl_d;
         let ggidl_g = m * comp.ggidl_g;
+        let ggidl_sum = ggidl_d + ggidl_g;
         if let (Some(d), Some(bi)) = (dp, b) {
             matrix.add(d, d, ggidl_d);
             matrix.add(bi, d, -ggidl_d);
@@ -2740,9 +2755,19 @@ pub fn stamp_bsim3soi_dd(
                 matrix.add(bi, gate, -ggidl_g);
             }
         }
+        // KCL-balancing SP column entries.
+        if let Some(s) = sp {
+            if let Some(d) = dp {
+                matrix.add(d, s, -ggidl_sum);
+            }
+            if let Some(bi) = b {
+                matrix.add(bi, s, ggidl_sum);
+            }
+        }
     }
 
     // GIDL source-side: Isgidl flows source→body.
+    // Isgidl depends on Vgs — relative to source-prime.
     if comp.isgidl != 0.0 {
         let gsgidl_g = m * comp.gsgidl_g;
         if let Some(gate) = g {
@@ -2751,6 +2776,13 @@ pub fn stamp_bsim3soi_dd(
             }
             if let Some(bi) = b {
                 matrix.add(bi, gate, -gsgidl_g);
+            }
+        }
+        // KCL-balancing SP column entries.
+        if let Some(s) = sp {
+            matrix.add(s, s, -gsgidl_g);
+            if let Some(bi) = b {
+                matrix.add(bi, s, gsgidl_g);
             }
         }
     }
