@@ -76,3 +76,31 @@ rel_tol(4.77e-8) + abs_tol(1.0e-7) = 1.477e-7. Exceeds by only 1.4%.
 **What was NOT tried:** Adding debug prints during NR iterations for RampVg2 to trace the
 body node equation residual at each step. Worth trying in a future session to understand
 why NR converges to Vbs≈0 despite correct junction currents.
+
+## Session 99 findings (2026-04-02)
+
+**Goal:** Fix DD t3 (0.6% error, 1.4% over tolerance) by matching ngspice's combined body
+current stamping structure.
+
+**Attempted:**
+1. Added missing gii_e (impact ionization back-gate derivative, ngspice Giie) to companion
+   and matrix stamps. Correctness improvement, no numerical effect at Vd=0.24V (Iii≈0).
+2. Restructured body stamping from separate component stamps (stamp_conductance + cross-coupling
+   + Iii + GIDL) to combined per-node derivative blocks (gddp*/gssp*/gbb*) matching ngspice
+   b3soiddld.c lines 2596-2630 and 3908-3928. Removed duplicate stamp_conductance calls.
+3. Added gate-drain CKTgmin conductance (ngspice lines 4103-4110).
+
+**Result:** All three changes produce EXACTLY the same converged Ids value (2.383699e-5).
+The restructured stamping and combined body CEQ computation (cbody) generate the same FP
+result as the old separate approach. The Rust compiler likely optimizes both to equivalent
+FP operations.
+
+**Conclusion:** The 0.6% error is NOT from stamp structure or FP accumulation order in the
+RHS assembly. It's inherent in the model computation — the floating body voltage equilibrium
+converges to a Vbs ~1.5mV different from ngspice, regardless of how the NR equations are
+structured. The combined stamps are a valid correctness improvement (committed) but don't
+reduce the error. The remaining fix options are:
+- Full body-current chain linearization matching ngspice's combined computation (~300 LOC)
+- Or accepting this as a precision limitation for floating-body DD circuits
+
+**What NOT to retry:** Combined body stamping restructure — confirmed no effect.
