@@ -39,7 +39,8 @@ pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
 /// Uses Newton-Raphson iteration when nonlinear elements (diodes) are present.
 pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
-    let solution_vec = solve_op_raw(&mna)?;
+    let opts = nr_options_from_netlist(netlist);
+    let solution_vec = solve_op_raw_with_opts(&mna, &opts)?;
 
     let mut vecs = Vec::new();
 
@@ -135,6 +136,17 @@ pub fn simulate_op_with_xspice(
 /// Solve the DC operating point and return the raw solution vector.
 /// Layout: [node_voltages..., internal_nodes..., branch_currents...].
 pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
+    solve_op_raw_with_opts(mna, &NrOptions::default())
+}
+
+/// Like [`solve_op_raw`] but accepts circuit-level NR options (GMIN, ABSTOL,
+/// etc.) so that `.OPTIONS` from the netlist are respected.  `diag_gmin` is
+/// always forced to 0 for the DC operating point, matching ngspice's
+/// `CKTdiagGmin = 0` convention.
+pub(crate) fn solve_op_raw_with_opts(
+    mna: &MnaSystem,
+    base_opts: &NrOptions,
+) -> Result<Vec<f64>, MnaError> {
     if !mna.has_nonlinear() {
         if mna.ltras.is_empty() && mna.txls.is_empty() && mna.cpls.is_empty() {
             mna.system.solve().map_err(MnaError::from)
@@ -153,7 +165,7 @@ pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     } else {
         let opts = NrOptions {
             diag_gmin: 0.0,
-            ..NrOptions::default()
+            ..*base_opts
         };
         solve_nonlinear_op(mna, &opts)
     }

@@ -45,3 +45,34 @@ Session 92 discovered a critical DC sweep infrastructure bug: `newton_raphson_so
 used `NrMode::InitJct` for the first NR iteration, even for DC sweep continuations. This
 was the actual root cause of FD t3 (previously attributed to "body coupling chain" for 90+
 sessions).
+
+## Session 97 findings (2026-04-02)
+
+### DD RampVg2 investigation
+Investigated the RampVg2 floating body voltage issue (Vbs=3.28e-5 vs expected 91.7mV).
+
+**Finding 1: Transient .OPTIONS not propagated (FIXED)**
+Discovered that `simulate_tran` used `NrOptions::default()` instead of parsing circuit
+`.OPTIONS` — GMIN, ABSTOL, RELTOL, VNTOL, ITL1, ITL2 were all ignored for transient
+analysis. Fixed by calling `nr_options_from_netlist(netlist)` and using those options for
+both the initial DC OP (`solve_op_raw_with_opts`) and transient NR iterations. Also fixed
+`simulate_op` for consistency. No regression (603 tests pass).
+
+However, this fix alone does NOT resolve the RampVg2 body voltage issue. With the correct
+gmin=1e-20, the body stability conductance (gmin*1e-6 = 1e-26) is negligible compared to
+junction currents (~1e-17 S conductance). The NR solver still converges to Vbs≈0 instead
+of ~92mV.
+
+**Finding 2: DD t3 bodyMod=0 rules out Ibp**
+Confirmed that the DD model card has `RBODY = 0.0` and no explicit `BODYMOD` parameter,
+so bodyMod defaults to 0. With bodyMod=0, `Ibp = 0` (body punch-through current is zero).
+The ignore.toml reason claiming "missing Ibp" is incorrect for this operating point — the
+0.6% error must have a different root cause.
+
+**Finding 3: DD t3 error margin is only 1.4% above tolerance**
+At x=0.24, expected=2.3687e-5, got=2.3837e-5, diff=1.498e-7. Combined tolerance =
+rel_tol(4.77e-8) + abs_tol(1.0e-7) = 1.477e-7. Exceeds by only 1.4%.
+
+**What was NOT tried:** Adding debug prints during NR iterations for RampVg2 to trace the
+body node equation residual at each step. Worth trying in a future session to understand
+why NR converges to Vbs≈0 despite correct junction currents.

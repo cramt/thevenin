@@ -16,7 +16,7 @@ use crate::expr_val;
 use crate::ltra::{LtraCoeffs, LtraState};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::newton::{NrMode, NrOptions, transient_nr_solve};
-use crate::simulate::solve_op_raw;
+use crate::simulate::{nr_options_from_netlist, solve_op_raw_with_opts};
 use crate::txl::TxlTransientStamp;
 use crate::waveform::{self, TranParams};
 
@@ -478,12 +478,19 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // Assemble MNA system.
     let mut mna = assemble_mna(netlist)?;
 
+    // Parse circuit .OPTIONS (GMIN, ABSTOL, RELTOL, VNTOL, ITL1, ITL2) so
+    // that transient analysis respects the same settings as DC sweep analysis.
+    // Previously, transient always used NrOptions::default() which ignores
+    // circuit-specified GMIN — critical for floating-body SOI circuits where
+    // the default GMIN (1e-12) overwhelms picoampere-range junction leakage.
+    let circuit_nr_opts = nr_options_from_netlist(netlist);
+
     // Compute DC operating point for initial conditions.
-    // Use solve_op_raw directly to get the full solution vector including
-    // internal device node voltages (e.g. BJT internal base/collector).
-    // Going through simulate_op() loses internal node voltages, causing
-    // transient disturbances at the first timestep.
-    let mut solution = solve_op_raw(&mna)?;
+    // Use solve_op_raw_with_opts to propagate circuit GMIN/tolerance options.
+    // The full solution vector including internal device node voltages
+    // (e.g. BJT internal base/collector) prevents transient disturbances
+    // at the first timestep.
+    let mut solution = solve_op_raw_with_opts(&mna, &circuit_nr_opts)?;
     let dim = mna.system.dim();
     let num_nodes = mna.total_num_nodes();
     solution.resize(dim, 0.0);
@@ -839,7 +846,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
     let has_nonlinear = mna.has_nonlinear();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
-    let nr_options = NrOptions::default();
+    let nr_options = circuit_nr_opts;
     let tran_params = TranParams {
         tstep: h_print,
         tstop: t_stop,
