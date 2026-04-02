@@ -17,7 +17,7 @@
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
 
 # === General circuits ===
-"general/rtlinv.cir" = "~4.6% transient error at t=9ns: BJT transition timing shift (qb-normalized diffusion charge correct per ngspice but worsened from 4.1% due to compensating error)"
+"general/rtlinv.cir" = "~4.3% transient error at t=9ns: BJT transition timing shift (geqcb cross-coupling improved from 4.6%; remaining error from other BJT transient dynamics)"
 "general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET not implemented (uses Level 1 fallback; missing velocity saturation/mobility degradation/short-channel effects)"
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag; timing shift in BJT voltage-dependent cap model)"
 

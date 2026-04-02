@@ -1785,11 +1785,30 @@ fn solve_timestep(
                 let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * gbe_mod;
                 let capbc = bjt.model.cap_bc(vbc) + bjt.model.tr * comp.gbc_raw;
 
+                // geqcb: BE charge cross-coupling from Vbc (ngspice bjtload.c line 674).
+                // The BE diffusion charge Qbe = TF * cbe/qb depends on Vbc through qb
+                // (Early effect). geqcb = dQbe/dVbc = TF * (-cbe_mod * dqbdvc) / qb.
+                // For xtf != 0 this would include arg3 = cbe*argtf*ovtf, but xtf defaults
+                // to 0 so arg3 = 0 in the common case.
+                let geqcb_unscaled =
+                    bjt.model.tf * (0.0 /* arg3, zero when xtf=0 */ - cbe_mod * comp.dqbdvc)
+                        / comp.qb;
+
                 let hist = &bjt_charge_histories[bi];
 
-                // Incremental charge: Q = Q_prev + C(v) * (v - v_prev)
-                let qbe = hist.qbe + capbe * (vbe - hist.vbe);
+                // Incremental charge: Q = Q_prev + dQ/dVbe * ΔVbe + dQ/dVbc * ΔVbc
+                // The geqcb_unscaled term accounts for Vbc's effect on the BE charge
+                // (ngspice computes qbe = tf*cbe_norm which implicitly includes this).
+                let qbe = hist.qbe
+                    + capbe * (vbe - hist.vbe)
+                    + geqcb_unscaled * (vbc - hist.vbc);
                 let qbc = hist.qbc + capbc * (vbc - hist.vbc);
+
+                // Integration coefficient: ag[0] = 1/h (BE) or 2/h (trap).
+                let ag0 = match method {
+                    IntegrationMethod::BackwardEuler => 1.0 / h,
+                    IntegrationMethod::Trapezoidal => 2.0 / h,
+                };
 
                 // Integrate B-E charge.
                 let (geq_be, cqbe) = match method {
@@ -1819,6 +1838,9 @@ fn solve_timestep(
                     }
                 };
 
+                // Scale geqcb by integration coefficient (ngspice bjtload.c line 802).
+                let geqcb = geqcb_unscaled * ag0;
+
                 // Stamp B-E charge: conductance + Norton current source.
                 let bp = bjt.base_prime_idx;
                 let cp = bjt.col_prime_idx;
@@ -1832,6 +1854,34 @@ fn solve_timestep(
                 stamp_conductance(&mut system.matrix, bp, cp, m * geq_bc);
                 let ieq_bc = sign * m * (cqbc - geq_bc * vbc);
                 stamp_current_source(&mut system.rhs, bp, cp, ieq_bc);
+
+                // Stamp geqcb: BE charge cross-coupling from Vbc (ngspice bjtload.c
+                // lines 914, 923, 926, 927). This is a VCCS: current I = geqcb * Vbc
+                // flows into B' and out of E', providing the Jacobian entry for dQbe/dVbc.
+                // Matrix stamps:  B',B' += geqcb;  B',C' -= geqcb;
+                //                 E',C' += geqcb;  E',B' -= geqcb
+                // Norton RHS:     ceqbe modified by -vbc*geqcb (ngspice line 893)
+                if geqcb.abs() > 0.0 {
+                    let mg = m * geqcb;
+                    if let Some(b) = bp {
+                        system.matrix.add(b, b, mg);
+                        if let Some(c) = cp {
+                            system.matrix.add(b, c, -mg);
+                        }
+                    }
+                    if let Some(e) = ep {
+                        if let Some(c) = cp {
+                            system.matrix.add(e, c, mg);
+                        }
+                        if let Some(b) = bp {
+                            system.matrix.add(e, b, -mg);
+                        }
+                    }
+                    // Norton current for geqcb VCCS: matches ngspice ceqbe formula
+                    // where vbc*(go - geqcb) replaces vbc*go, adding -geqcb*vbc.
+                    let ieq_cb = -sign * m * geqcb * vbc;
+                    stamp_current_source(&mut system.rhs, bp, ep, ieq_cb);
+                }
             }
         }
 
