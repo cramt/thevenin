@@ -401,6 +401,8 @@ pub struct Bsim3SoiDdCompanion {
     pub gii_d: f64,
     pub gii_g: f64,
     pub gii_b: f64,
+    /// dIii/dVe — back-gate coupling of impact ionization (ngspice Giie).
+    pub gii_e: f64,
 
     // GIDL
     pub igidl: f64,
@@ -411,11 +413,20 @@ pub struct Bsim3SoiDdCompanion {
 
     // Equivalent current sources for NR companion
     pub ceq_d: f64,
-    pub ceq_bs: f64,
-    pub ceq_bd: f64,
-    pub ceq_iii: f64,
-    pub ceq_gidl: f64,
-    pub ceq_sgidl: f64,
+    /// Combined drain-junction CEQ matching ngspice cjd:
+    /// Ibd - Iii - Igidl - (gjdb*Vbs + gjdd*Vds + gjdg*Vgs + gjde*Ves)
+    pub ceq_jd: f64,
+    /// Combined source-junction CEQ matching ngspice cjs:
+    /// Ibs - Isgidl - (gjsb*Vbs + gjsd*Vds + gjsg*Vgs)
+    pub ceq_js: f64,
+    /// Combined body CEQ matching ngspice cbody (pre-computed cancellation):
+    /// Iii + Igidl + Isgidl - Ibs - Ibd - (gbbs*Vbs + gbgs*Vgs + gbds*Vds + gbes*Ves)
+    pub ceq_body: f64,
+    /// Combined body derivatives (for matrix stamps, ngspice gbbs/gbgs/gbds/gbes)
+    pub gbbs: f64,
+    pub gbgs: f64,
+    pub gbds: f64,
+    pub gbes: f64,
 
     // Capacitances (intrinsic)
     pub cggb: f64,
@@ -2471,8 +2482,8 @@ pub fn bsim3soi_dd_companion(
     // Uses diffVdsii = Vds - Vdseffii (excess drain voltage beyond saturation)
     // as the electric field driving impact ionization, not Vds - beta0.
     let t2_alpha = model.alpha1 + sp.alpha0 / sp.leff;
-    let (iii, gii_d, gii_g, gii_b) = if t2_alpha <= 0.0 || sp.beta0 <= 0.0 {
-        (0.0, 0.0, 0.0, 0.0)
+    let (iii, gii_d, gii_g, gii_b, gii_e) = if t2_alpha <= 0.0 || sp.beta0 <= 0.0 {
+        (0.0, 0.0, 0.0, 0.0, 0.0)
     } else if diff_vdsii > sp.beta0 / EXP_THRESHOLD {
         let t0 = -sp.beta0 / diff_vdsii;
         let t1 = t2_alpha * diff_vdsii * t0.exp();
@@ -2483,7 +2494,9 @@ pub fn bsim3soi_dd_companion(
         let gii_d = t1 * gds - t3 * ids;
         let gii_g = t1 * gm;
         let gii_b = t1 * gmbs;
-        (iii, gii_d, gii_g, gii_b)
+        // gii_e: back-gate coupling (ngspice b3soiddld.c line 2201: Giie = T2*dVgsteff_dVe + T4*dVbseff_dVe + T5*dVcs_dVe)
+        let gii_e = t1 * gme;
+        (iii, gii_d, gii_g, gii_b, gii_e)
     } else if diff_vdsii > 0.0 {
         let t3_min = t2_alpha * MIN_EXP;
         let t1 = t3_min * diff_vdsii;
@@ -2491,9 +2504,10 @@ pub fn bsim3soi_dd_companion(
         let gii_d = t3_min * ids + t1 * gds;
         let gii_g = t1 * gm;
         let gii_b = t1 * gmbs;
-        (iii, gii_d, gii_g, gii_b)
+        let gii_e = t1 * gme;
+        (iii, gii_d, gii_g, gii_b, gii_e)
     } else {
-        (0.0, 0.0, 0.0, 0.0)
+        (0.0, 0.0, 0.0, 0.0, 0.0)
     };
 
     // Add BJT collector current to drain current and its derivatives to
@@ -2505,11 +2519,38 @@ pub fn bsim3soi_dd_companion(
 
     // Equivalent current sources for NR companion model
     let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i - gme * ves_i);
-    let ceq_bs = ibs - gbs_jct * vbs_i - gjsd * vds_i;
-    let ceq_bd = ibd - gbd_jct * vbd - gjdd_extra * vds_i;
-    let ceq_iii = iii - gii_d * vds_i - gii_g * vgs_i - gii_b * vbs_i;
-    let ceq_gidl = igidl - ggidl_d * vds_i - ggidl_g * vgs_i;
-    let ceq_sgidl = isgidl - gsgidl_g * vgs_i;
+
+    // Combined drain-junction CEQ (ngspice b3soiddld.c lines 2596-2605: cjd)
+    // gjdb = Gjdb - Giib (junction body derivative minus impact ionization)
+    // gjdd = Gjdd - (Giid + Gdgidld) where Gjdd = -Gbd + gjdd_extra (chain rule: dVbd/dVds = -1)
+    // gjdg = -(Giig + Gdgidlg) (minus Iii and GIDL gate derivs)
+    // gjde = -Giie (minus impact ionization back-gate derivative)
+    let gjdb = gbd_jct - gii_b;
+    let gjdd = -gbd_jct + gjdd_extra - gii_d - ggidl_d;
+    let gjdg = -(gii_g + ggidl_g);
+    let gjde = -gii_e;
+    let ceq_jd = ibd - iii - igidl
+        - (gjdb * vbs_i + gjdd * vds_i + gjdg * vgs_i + gjde * ves_i);
+
+    // Combined source-junction CEQ (ngspice b3soiddld.c lines 2609-2616: cjs)
+    let gjsb = gbs_jct;
+    let gjsd_c = gjsd;
+    let gjsg = -gsgidl_g;
+    let ceq_js = ibs - isgidl
+        - (gjsb * vbs_i + gjsd_c * vds_i + gjsg * vgs_i);
+
+    // Combined body derivatives (ngspice b3soiddld.c lines 2620-2624)
+    // These are the sensitivity of the NET body current to each terminal voltage.
+    // Gjdd = -Gbd + gjdd_extra (chain rule from Vbd = Vbs - Vds)
+    let gbbs = gii_b - gbs_jct - gbd_jct; // Giib - Gjsb - Gjdb (Gbpbs=0 for bodyMod≠1)
+    let gbgs = gii_g + ggidl_g + gsgidl_g; // Giig + Gdgidlg + Gsgidlg (Gbpgs=0)
+    let gbds = gii_d + ggidl_d - gjsd + gbd_jct - gjdd_extra; // Giid + Gdgidld - Gjsd - Gjdd = ... + Gbd - gjdd_extra (Gbpds=0)
+    let gbes = gii_e; // Giie (Gbpes=0 for bodyMod≠1)
+
+    // Combined body current CEQ (ngspice b3soiddld.c lines 2627-2630: cbody)
+    // This is the net current flowing into the body, with linearization subtracted.
+    let ceq_body = iii + igidl + isgidl - ibs - ibd
+        - (gbbs * vbs_i + gbgs * vgs_i + gbds * vds_i + gbes * ves_i);
 
     // Capacitances
     let cox_wl = cox * weff_ch * leff;
@@ -2550,17 +2591,20 @@ pub fn bsim3soi_dd_companion(
         gii_d,
         gii_g,
         gii_b,
+        gii_e,
         igidl,
         ggidl_d,
         ggidl_g,
         isgidl,
         gsgidl_g,
         ceq_d,
-        ceq_bs,
-        ceq_bd,
-        ceq_iii,
-        ceq_gidl,
-        ceq_sgidl,
+        ceq_jd,
+        ceq_js,
+        ceq_body,
+        gbbs,
+        gbgs,
+        gbds,
+        gbes,
         cggb: cggb + sp.cgso_eff * weff + sp.cgdo_eff * weff,
         cgdb: cgdb - sp.cgdo_eff * weff,
         cgsb: cgsb - sp.cgso_eff * weff,
@@ -2608,9 +2652,6 @@ pub fn stamp_bsim3soi_dd(
     let gds_eff = m * (comp.gds * xnrm + comp.gm * xrev);
     let gmbs_eff = m * comp.gmbs;
     let gme_eff = m * comp.gme;
-    let gbd = m * comp.gbd_jct;
-    let gbs = m * comp.gbs_jct;
-
     // FwdSum includes Gme (ngspice line 3895: FwdSum = Gm + Gmbs + Gme)
     let fwd_sum = gm_eff + gds_eff + gmbs_eff + gme_eff;
 
@@ -2649,47 +2690,11 @@ pub fn stamp_bsim3soi_dd(
         }
     }
 
-    // --- Junction conductances (symmetric two-terminal stamps) ---
-    // BD junction: gbd between body and drain-prime
-    crate::stamp_conductance(matrix, b, dp, gbd);
-    // BS junction: gbs between body and source-prime
-    crate::stamp_conductance(matrix, b, sp, gbs);
+    // Junction conductances and cross-coupling are now included in the combined
+    // gddp*/gssp*/gbb* stamps below (matching ngspice's combined derivative approach).
 
-    // --- Junction Vds cross-coupling (ngspice Gjsd/Gjdd) ---
-    // The BJT base transport factor BjtA depends on Vds, creating cross-coupling
-    // derivatives that go beyond the two-terminal Vbd/Vbs junction model.
-    // ngspice b3soiddld.c lines 2472, 2477: Gjsd = dIbs3/dVd, Gjdd includes dIbd/dVd.
-    // The stamp_conductance above handles the Vbd chain rule part; these stamps add
-    // the extra BjtA-dependent terms.
-    let gjsd = m * comp.gjsd;
-    let gjdd_extra = m * comp.gjdd_extra;
-    if gjsd != 0.0 || gjdd_extra != 0.0 {
-        // Source junction cross-coupling: dIbs/dVd = gjsd
-        // Ibs flows sp→b, so at sp: outgoing, at b: incoming
-        if let Some(s) = sp {
-            if let Some(d) = dp {
-                matrix.add(s, d, -gjsd);
-            }
-            matrix.add(s, s, gjsd);
-        }
-        // Drain junction extra cross-coupling: dIbd/dVd extra = gjdd_extra
-        // Ibd flows dp→b, so at dp: outgoing, at b: incoming
-        if let Some(d) = dp {
-            matrix.add(d, d, -gjdd_extra);
-            if let Some(s) = sp {
-                matrix.add(d, s, gjdd_extra);
-            }
-        }
-        // Body node: junction current enters body, Vds coupling
-        if let Some(bi) = b {
-            if let Some(d) = dp {
-                matrix.add(bi, d, gjsd + gjdd_extra);
-            }
-            if let Some(s) = sp {
-                matrix.add(bi, s, -(gjsd + gjdd_extra));
-            }
-        }
-    }
+    // Gate-drain gmin (ngspice b3soiddld.c lines 4103-4110: CKTgmin between G and DP)
+    crate::stamp_conductance(matrix, g, dp, m * gmin);
 
     // Floating-body stability: add Gmin body-to-source coupling (matching ngspice
     // b3soiddld.c line 4090: Gmin = CKTgmin * 1e-6).  ngspice uses a much smaller
@@ -2699,113 +2704,110 @@ pub fn stamp_bsim3soi_dd(
         crate::stamp_conductance(matrix, b, sp, gmin * 1e-6);
     }
 
-    // Impact ionization: Iii flows drain→body (OUT of drain, INTO body).
-    // Iii depends on Vds, Vgs, Vbs — all relative to source-prime.
-    // Each row must sum to zero (KCL), requiring SP-column balancing entries
-    // (ngspice: gddpsp/gbbsp include these via combined derivative sums).
-    if comp.iii != 0.0 {
-        let gii_d = m * comp.gii_d;
-        let gii_g = m * comp.gii_g;
-        let gii_b = m * comp.gii_b;
-        let gii_sum = gii_d + gii_g + gii_b;
-        if let (Some(d), Some(bi)) = (dp, b) {
-            matrix.add(d, d, gii_d);
-            matrix.add(bi, d, -gii_d);
-        }
-        if let Some(gate) = g {
-            if let Some(d) = dp {
-                matrix.add(d, gate, gii_g);
-            }
-            if let Some(bi) = b {
-                matrix.add(bi, gate, -gii_g);
-            }
-        }
-        if let Some(bi) = b {
-            matrix.add(bi, bi, -gii_b);
-            if let Some(d) = dp {
-                matrix.add(d, bi, gii_b);
-            }
-        }
-        // KCL-balancing SP column entries (row sums must be zero).
-        if let Some(s) = sp {
-            if let Some(d) = dp {
-                matrix.add(d, s, -gii_sum);
-            }
-            if let Some(bi) = b {
-                matrix.add(bi, s, gii_sum);
-            }
-        }
-    }
+    // --- Body current Jacobian stamps ---
+    // Use combined derivatives matching ngspice b3soiddld.c lines 3908-3914,
+    // 3916-3921, 3923-3928. This structure computes combined gbbs/gbgs/gbds/gbes
+    // and gjd*/gjs* derivatives, ensuring the body node equation has the same
+    // FP evaluation order as ngspice (critical for floating-body convergence).
 
-    // GIDL drain-side: Igidl flows drain→body.
-    // Igidl depends on Vds, Vgs — relative to source-prime.
-    if comp.igidl != 0.0 {
-        let ggidl_d = m * comp.ggidl_d;
-        let ggidl_g = m * comp.ggidl_g;
-        let ggidl_sum = ggidl_d + ggidl_g;
-        if let (Some(d), Some(bi)) = (dp, b) {
-            matrix.add(d, d, ggidl_d);
-            matrix.add(bi, d, -ggidl_d);
-        }
-        if let Some(gate) = g {
-            if let Some(d) = dp {
-                matrix.add(d, gate, ggidl_g);
-            }
-            if let Some(bi) = b {
-                matrix.add(bi, gate, -ggidl_g);
-            }
-        }
-        // KCL-balancing SP column entries.
-        if let Some(s) = sp {
-            if let Some(d) = dp {
-                matrix.add(d, s, -ggidl_sum);
-            }
-            if let Some(bi) = b {
-                matrix.add(bi, s, ggidl_sum);
-            }
-        }
-    }
+    // Drain-junction combined derivatives (ngspice gjd*: lines 2596-2599)
+    // gddp* = negated gjd* stamps.  Gjdd = dIbd/dVds = -Gbd + gjdd_extra
+    // (chain rule: Vbd = Vbs - Vds → dVbd/dVds = -1)
+    {
+        let gddpg = m * (comp.gii_g + comp.ggidl_g); // -gjdg = Giig + Gdgidlg
+        let gddpdp = m * (comp.gii_d + comp.ggidl_d + comp.gbd_jct - comp.gjdd_extra); // -gjdd = Gbd - gjdd_extra + Giid + Gdgidld
+        let gddpb = m * (comp.gii_b - comp.gbd_jct); // -gjdb = Giib - Gjdb
+        let gddpe = m * comp.gii_e; // -gjde = Giie
+        let gddpsp = -(gddpg + gddpdp + gddpb + gddpe); // KCL balance
 
-    // GIDL source-side: Isgidl flows source→body.
-    // Isgidl depends on Vgs — relative to source-prime.
-    if comp.isgidl != 0.0 {
-        let gsgidl_g = m * comp.gsgidl_g;
-        if let Some(gate) = g {
+        if let Some(d) = dp {
+            matrix.add(d, d, gddpdp);
+            if let Some(gate) = g {
+                matrix.add(d, gate, gddpg);
+            }
+            if let Some(bi) = b {
+                matrix.add(d, bi, gddpb);
+            }
+            if let Some(ei) = e {
+                matrix.add(d, ei, gddpe);
+            }
             if let Some(s) = sp {
-                matrix.add(s, gate, gsgidl_g);
-            }
-            if let Some(bi) = b {
-                matrix.add(bi, gate, -gsgidl_g);
+                matrix.add(d, s, gddpsp);
             }
         }
-        // KCL-balancing SP column entries.
+    }
+
+    // Source-junction combined derivatives (ngspice gjs*: lines 2609-2611)
+    // gssp* stamps: current flowing into source-prime from body junction paths
+    {
+        let gsspg = m * comp.gsgidl_g; // -gjsg = Gsgidlg
+        let gsspdp = m * (-comp.gjsd); // -gjsd (negative because Gjsd is positive)
+        let gsspb = m * (-comp.gbs_jct); // -gjsb
+        let gsspe = 0.0_f64; // no back-gate coupling in source junction
+        let gsspsp = -(gsspg + gsspdp + gsspb + gsspe); // KCL balance
+
         if let Some(s) = sp {
-            matrix.add(s, s, -gsgidl_g);
+            if let Some(gate) = g {
+                matrix.add(s, gate, gsspg);
+            }
+            if let Some(d) = dp {
+                matrix.add(s, d, gsspdp);
+            }
             if let Some(bi) = b {
-                matrix.add(bi, s, gsgidl_g);
+                matrix.add(s, bi, gsspb);
+            }
+            matrix.add(s, s, gsspsp);
+        }
+    }
+
+    // Body node combined derivatives (ngspice gbb*: lines 3908-3914)
+    // These are the NEGATED body current derivatives (since rhs -= ceqbody)
+    {
+        let gbbg = m * (-comp.gbgs);
+        let gbbdp = m * (-comp.gbds);
+        let gbbb = m * (-comp.gbbs);
+        let gbbe = m * (-comp.gbes);
+        let gbbsp = -(gbbg + gbbdp + gbbb + gbbe); // KCL balance
+
+        if let Some(bi) = b {
+            if let Some(gate) = g {
+                matrix.add(bi, gate, gbbg);
+            }
+            if let Some(d) = dp {
+                matrix.add(bi, d, gbbdp);
+            }
+            matrix.add(bi, bi, gbbb);
+            if let Some(ei) = e {
+                matrix.add(bi, ei, gbbe);
+            }
+            if let Some(s) = sp {
+                matrix.add(bi, s, gbbsp);
             }
         }
     }
 
     // --- RHS current source stamps ---
-    // comp.ceq_d already has `sign` inside (ngspice: cdreq = type * (...)),
-    // so we multiply by `m` only. Junction, impact ionization, and GIDL ceqs
-    // are NOT type-signed in ngspice BSIM3SOI-DD (b3soiddld.c lines 2602-2630).
+    // Matches ngspice b3soiddld.c lines 4011-4016 structure.
+    // ceq_d (cdreq) has `sign` (model type) inside.
+    // Junction and body CEQs are NOT type-signed for forward mode.
     let ceq_d = m * comp.ceq_d;
-    let ceq_bs = m * comp.ceq_bs;
-    let ceq_bd = m * comp.ceq_bd;
-    let ceq_iii = m * comp.ceq_iii;
-    let ceq_gidl = m * comp.ceq_gidl;
-    let ceq_sgidl = m * comp.ceq_sgidl;
+    let ceq_jd = m * comp.ceq_jd;
+    let ceq_js = m * comp.ceq_js;
+    let ceq_body = m * comp.ceq_body;
 
+    // ngspice: rhs[dNodePrime] += ceqbd - cdreq
     if let Some(d) = dp {
-        rhs[d] -= ceq_d - ceq_bd + ceq_iii + ceq_gidl;
+        rhs[d] += ceq_jd - ceq_d;
     }
+    // ngspice: rhs[sNodePrime] += cdreq + ceqbs
     if let Some(s) = sp {
-        rhs[s] += ceq_d + ceq_bs - ceq_sgidl;
+        rhs[s] += ceq_d + ceq_js;
     }
+    // ngspice: rhs[bNode] -= ceqbody (where ceqbody = -cbody)
+    // Our ceq_body = cbody, so rhs[b] -= -ceq_body = rhs[b] += ceq_body
+    // But ngspice uses ceqbody = -cbody and then rhs -= ceqbody = rhs += cbody
     if let Some(bulk) = b {
-        rhs[bulk] -= ceq_bs + ceq_bd - ceq_iii - ceq_gidl - ceq_sgidl;
+        rhs[bulk] -= -ceq_body;
     }
 
     // --- Body resistance to external body contact (if present) ---
