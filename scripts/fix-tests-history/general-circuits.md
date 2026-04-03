@@ -70,3 +70,31 @@ many steps of the switching waveform.
 
 **What NOT to retry:** Analytical charge integration (confirmed worse), PTF/XTF
 implementation (parameters are zero in test model), CJS node connectivity changes.
+
+## Session 102 findings (2026-04-03)
+
+### rtlinv: Transient timestep control comparison
+
+**Investigated:** Compared thevenin's `estimate_new_timestep()` against ngspice's
+`CKTterr()` function (old formula, default with `CKTnewtrunc=0`).
+
+**Findings:**
+1. **TRTOL=7.0 is correct** — both thevenin and ngspice default to CKTtrtol=7.0. The
+   CKTlteTrtol=500.0 is for the NEW truncation formula (`newtrunc=1`), not the default.
+2. **LTE formula matches** — divided difference of charge, TRAP_COEFF=1/12, sqrt(del)
+   for order 2. Tolerance formula (volttol, chargetol) is identical.
+3. **Step acceptance at 0.9× threshold matches** both implementations.
+4. **Breakpoint handling matches** — BE at breakpoints, 0.1× step reduction.
+5. **One difference found:** ngspice has an ORDER UPGRADE check after each accepted step:
+   - After a BE step, ngspice tries upgrading to Trap; if LTE at order 2 needs < 1.05×
+     step, it stays at BE for additional steps.
+   - Thevenin always uses exactly 1 BE step at breakpoints then switches to Trap.
+   - This means ngspice might use 2-5 BE steps after breakpoints before switching to Trap.
+   - Impact unknown but could affect switching edge timing.
+
+**Conclusion:** The 4.3% timing error is likely from accumulated differences in the
+BE→Trap transition and step sequencing during switching edges, not from any single
+formula bug. The order upgrade logic difference could contribute.
+
+**What NOT to retry:** TRTOL value changes (both are 7.0), LTE formula changes
+(verified identical), breakpoint handling (matches).

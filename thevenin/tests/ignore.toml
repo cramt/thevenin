@@ -6,9 +6,8 @@
 "bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
 
 # === BSIM3SOI-DD ===
+"bsim3soidd/RampVg2.cir" = "floating body Vbs collapses from 92mV to ~0 at first transient step (DC OP correct; transient initialization loses body voltage)"
 "bsim3soidd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-DD inverter)"
-"bsim3soidd/RampVg2.cir" = "floating body Vbs ~0 vs expected ~92mV: @m1[Vbs] query works, junction ceq signs fixed, but DD body voltage equilibrium still wrong"
-"bsim3soidd/t3.cir" = "~3.15% Ids error at Vd=1.51V (DD analytical body voltage chain; formulas verified but peak error too high for tolerance override)"
 
 # === BSIM3SOI-FD ===
 "bsim3soifd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-FD inverter)"
