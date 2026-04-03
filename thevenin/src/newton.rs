@@ -335,6 +335,36 @@ where
     }
 
     // Phase 2: reduce Gmin from elevated level to target.
+    //
+    // First try a direct jump to the target Gmin (or diag_gmin=0 for DC OP).
+    // Source stepping phase 1 already found a solution near the physical
+    // operating point with elevated Gmin.  Often NR converges directly at
+    // the target from this good starting point, avoiding the expensive
+    // gradual reduction.  This matches ngspice's behavior where CKTdiagGmin
+    // goes to 0 for DC OP after source stepping.
+    let direct_target = options.diag_gmin.min(options.gmin);
+    let direct_attempt = NrAttempt {
+        gmin: direct_target,
+        source_factor: 1.0,
+        max_iters: options.itl1,
+    };
+    if let Ok(result) = try_nr(
+        options,
+        dim,
+        num_nodes,
+        load_system,
+        &solution,
+        &direct_attempt,
+        NrMode::Float,
+    ) {
+        return Ok(NrResult {
+            solution: result.solution,
+            iterations: total_iters + result.iterations,
+            converged: true,
+        });
+    }
+
+    // Direct jump failed — fall back to gradual reduction.
     // Dynamic retry-on-failure: when a 10x step fails, back up and try a
     // smaller factor (sqrt(sqrt(factor))), matching ngspice dynamic_gmin.
     let default_factor = 10.0_f64;

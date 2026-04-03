@@ -248,6 +248,9 @@ fn jct_initial_guess(
     base_matrix: &crate::SparseMatrix,
     base_rhs: &[f64],
 ) -> Vec<f64> {
+    use crate::bsim3soi_dd::{bsim3soi_dd_companion, stamp_bsim3soi_dd};
+    use crate::bsim3soi_fd::{bsim3soi_fd_companion, stamp_bsim3soi_fd};
+    use crate::bsim3soi_pd::{bsim3soi_pd_companion, stamp_bsim3soi_pd};
     use crate::hfet::{hfet_companion_full, stamp_hfet_with_voltages};
     use crate::mosfet::stamp_mosfet;
 
@@ -289,6 +292,41 @@ fn jct_initial_guess(
     for hfet in &mna.hfets {
         let comp = hfet_companion_full(hfet, 0.0, 0.0, options.gmin);
         stamp_hfet_with_voltages(&comp, hfet, 0.0, 0.0, &mut system.matrix, &mut system.rhs);
+    }
+
+    // Stamp each BSIM3SOI-DD at InitJct voltages.
+    // Provides channel conductances in the initial Jacobian so that
+    // floating output nodes (e.g. CMOS inverter "out") have a non-zero
+    // conductance path, preventing singular matrices during JCT init.
+    for bsim in &mna.bsim3soi_dds {
+        let sign = bsim.model.mos_type.sign();
+        let vgs = sign * (bsim.vth0_inst + 0.1);
+        let vds = sign * 0.1;
+        let comp =
+            bsim3soi_dd_companion(vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model);
+        stamp_bsim3soi_dd(&mut system.matrix, &mut system.rhs, bsim, &comp, options.gmin);
+    }
+
+    // Stamp each BSIM3SOI-FD at InitJct voltages.
+    for bsim in &mna.bsim3soi_fds {
+        let sign = bsim.model.mos_type.sign();
+        let vgs = sign * (bsim.vth0_inst + 0.1);
+        let vds = sign * 0.1;
+        let floating_body = bsim.body_idx.is_none();
+        let comp = bsim3soi_fd_companion(
+            vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model, floating_body,
+        );
+        stamp_bsim3soi_fd(&mut system.matrix, &mut system.rhs, bsim, &comp, options.gmin);
+    }
+
+    // Stamp each BSIM3SOI-PD at InitJct voltages.
+    for bsim in &mna.bsim3soi_pds {
+        let sign = bsim.model.mos_type.sign();
+        let vgs = sign * (bsim.vth0_inst + 0.1);
+        let vds = sign * 0.1;
+        let comp =
+            bsim3soi_pd_companion(vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model);
+        stamp_bsim3soi_pd(&mut system.matrix, &mut system.rhs, bsim, &comp, options.gmin);
     }
 
     // Diagonal gmin for numerical stability.

@@ -293,8 +293,49 @@ differences in NR iteration ordering, initial conditions, or the full `new_gmin`
 Simple body node conductance additions (FD has no body row stamps even in ngspice).
 
 **What to try next (future sessions):**
-- Add BSIM3SOI devices to `jct_initial_guess()` for better initial V(out)
+- ~~Add BSIM3SOI devices to `jct_initial_guess()` for better initial V(out)~~ DONE (session 106)
 - Implement ngspice's `new_gmin` as a separate fallback step (between gmin_stepping and
   source_stepping) with its own backtracking algorithm
-- Force source stepping for circuits with SOI MOSFETs (lowering threshold from ≥10 BJTs)
+- ~~Force source stepping for circuits with SOI MOSFETs~~ TRIED, no effect (session 106)
 - Compare NR iteration traces between ngspice and thevenin for first 10 iterations
+
+## Session 106 findings (2026-04-04)
+
+### DD/FD/PD inv2: jct_initial_guess + source stepping investigation
+
+**Implemented:** Added BSIM3SOI-DD/FD/PD device stamps to `jct_initial_guess()`. SOI
+devices at InitJct voltages (vgs=sign*(vth0+0.1), vds=sign*0.1, vbs=0, ves=0) now provide
+channel conductance in the initial Jacobian. This gives floating output nodes a conductance
+path during the initial guess solve. No regressions (612 tests pass).
+
+**Also implemented:** Direct jump optimization in `source_stepping()`. After phase 1
+(source ramp with gmin=1e-2), the solver now tries a direct NR at the target gmin
+(diag_gmin=0 for DC OP) before falling back to the gradual gmin reduction. This avoids
+the expensive stepping for circuits that converge directly from the source-stepped solution.
+
+**Tried and reverted:**
+1. **Force source stepping for SOI multi-device circuits (≥2 SOI devices):** No effect —
+   source stepping as fallback already tried and fails at gmin reduction phase.
+2. **Separate device gmin from diagonal gmin** (`dev_gmin = options.gmin` always, matching
+   ngspice `dynamic_gmin`): Gets stuck at gmin≈1.15e-3 instead of ≈3.89e-4. The combined
+   approach (`dev_gmin = gmin.max(options.gmin)`) gets further but still can't cross.
+   Reverted to combined approach since it performs better and has no regressions.
+
+**Key finding: convergence cliff at gmin≈4e-4.** Debug tracing shows source stepping phase 1
+succeeds easily (37 iterations total, gmin=1e-2). But phase 2 (gmin reduction) gets stuck:
+- Combined dev_gmin: converges at gmin≈3.89e-4, fails at any smaller value
+- Separated dev_gmin: converges at gmin≈1.15e-3, fails at any smaller value
+- Direct jump to gmin=0 from source-stepped solution: fails
+
+The circuit cannot maintain NR convergence when diagonal gmin drops below ~4e-4. The body
+node conductance (gmin*1e-6 = ~4e-10 at the cliff edge) becomes too small to stabilize the
+Jacobian. This is a fundamental SOI body-node conditioning issue that requires either:
+- Implementing ngspice's full `new_gmin` as a separate fallback (elevated CKTgmin for devices)
+- Or implementing body charge model (cbgb/cbdb/cbsb) to provide reactive coupling
+- Or matching ngspice's exact NR iteration behavior at the cliff edge
+
+**What NOT to retry:**
+- Adding SOI devices to jct_initial_guess alone (done, insufficient)
+- Forcing source stepping for SOI circuits (tried, no effect)
+- Separating device gmin from diagonal gmin (tried, gets stuck earlier)
+- Direct jump to target gmin after source stepping (tried, fails at gmin=0)
