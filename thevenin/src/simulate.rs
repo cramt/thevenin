@@ -429,12 +429,17 @@ fn solve_nonlinear_op_with_guess(
         mna.stamp_txl_dc_all(system);
         mna.stamp_cpl_dc_all(system);
 
-        // 3. Stamp all nonlinear device companions. Device stamps always use the
-        //    nominal gmin (not the elevated gmin from gmin stepping), matching
-        //    ngspice where CKTgmin stays at its nominal value during stepping and
-        //    only CKTdiagGmin (solver diagonal) is elevated.
-        let _ = gmin; // elevated gmin used only by solver diagonal, not device stamps
-        dev_state.stamp_devices(solution, system, mna, options.gmin, mode);
+        // 3. Stamp all nonlinear device companions.
+        //    When gmin stepping elevates the diagonal gmin above the nominal
+        //    device-level gmin, also use the elevated value for device stamps.
+        //    This matches ngspice's `new_gmin` fallback (cktop.c) where CKTgmin
+        //    is elevated alongside CKTdiagGmin, providing regularization for
+        //    internal floating nodes (e.g. SOI body nodes) that only couple to
+        //    the circuit through gmin-scaled conductances.  During normal NR
+        //    (gmin = diag_gmin = 0 for DC OP), max(0, options.gmin) = options.gmin,
+        //    so device stamps see the nominal value as before.
+        let dev_gmin = gmin.max(options.gmin);
+        dev_state.stamp_devices(solution, system, mna, dev_gmin, mode);
     };
 
     // Choose DC OP convergence strategy based on circuit topology.

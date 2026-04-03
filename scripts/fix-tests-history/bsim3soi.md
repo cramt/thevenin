@@ -249,3 +249,52 @@ This is a substantial feature addition (~300-500 LOC), not a simple bug fix.
 **What NOT to retry:** Any body node current/stamp modifications (confirmed sessions
 99-101 that the NR body node is secondary to the analytical chain). The fix must
 implement the body CHARGE model, not modify body current paths.
+
+## Session 105 findings (2026-04-04)
+
+### DD/FD/PD inv2: Root cause analysis — NR non-convergence
+
+**Investigated:** All three inv2 tests (DD, FD, PD) fail with "NR failed to converge after
+200 iterations" (NOT a literal singular matrix — the "singular matrix" prefix in the error
+message is a misleading wrapper from simulate.rs line 472).
+
+**Key findings:**
+
+1. **FD body node NOT in matrix (correct):** For floating-body FD devices, `body_int_idx` is
+   already `None` (mna.rs line 2040-2046), matching ngspice `b3soifdset.c` where
+   `bNode = 0` (ground) for floating body. The FD body node is NOT the cause of singularity.
+
+2. **ngspice FD has NO body row matrix stamps:** Exhaustive search of `b3soifdld.c` confirmed
+   zero `BbPtr+=`, `BgPtr+=`, `BdpPtr+=`, `BspPtr+=`, `BePtr+=` stamps. Body row only gets
+   entries from bodyMod==1 (body contact) and selfheat — neither applies to inv2.
+
+3. **Missing `new_gmin` fallback (PARTIALLY FIXED):** ngspice has a 3-step fallback:
+   (1) direct NR, (2) `dynamic_gmin` (diagonal-only), (3) `new_gmin` (device-model gmin
+   elevated). Our code only had (1) and (2). Implemented partial fix: load closure now uses
+   `gmin.max(options.gmin)` for device stamps, effectively combining `dynamic_gmin` and
+   `new_gmin`. No regressions (612 tests pass), but inv2 still fails.
+
+4. **Missing jct_initial_guess for SOI devices:** `jct_initial_guess()` only stamps Level-1
+   MOSFETs and HFETs. BSIM3SOI devices are NOT stamped. For inv2, the "out" node has no
+   conductance path during initial guess (only gmin=1e-25 leakage to ground). V(out) starts
+   at ~0V, which is incorrect when Vin=0 (correct V(out)≈2.5V for PMOS-on state).
+
+5. **Source stepping NOT triggered:** inv2 has 2 MOSFETs, no transmission lines, 0 BJTs/VBICs.
+   The `force_source_stepping` condition is false. Circuit goes through direct NR → gmin
+   stepping → source stepping fallback chain, but convergence fails at all stages.
+
+**Root cause:** Combination of (a) extremely low gmin=1e-25 amplifying floating-node issues,
+(b) no SOI device stamps in initial guess, (c) CMOS inverter being a 2-device coupled system
+that's harder to converge than single-device tests. ngspice likely succeeds through subtle
+differences in NR iteration ordering, initial conditions, or the full `new_gmin` algorithm
+(which runs as a separate step with its own backtracking).
+
+**What NOT to retry:** The `gmin.max(options.gmin)` fix alone (confirmed insufficient).
+Simple body node conductance additions (FD has no body row stamps even in ngspice).
+
+**What to try next (future sessions):**
+- Add BSIM3SOI devices to `jct_initial_guess()` for better initial V(out)
+- Implement ngspice's `new_gmin` as a separate fallback step (between gmin_stepping and
+  source_stepping) with its own backtracking algorithm
+- Force source stepping for circuits with SOI MOSFETs (lowering threshold from ≥10 BJTs)
+- Compare NR iteration traces between ngspice and thevenin for first 10 iterations
