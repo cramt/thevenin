@@ -207,3 +207,45 @@ voltage equilibrium. The NR body node (which could maintain state) is secondary 
 
 **What NOT to retry:** Tolerance overrides for RampVg2 (error is ~100% after first step).
 DC OP Vbs is now correct — the issue is purely transient state preservation.
+
+## Session 103 findings (2026-04-03)
+
+### DD RampVg2: ROOT CAUSE IDENTIFIED — missing body charge model
+
+**Found:** The BSIM3SOI-DD body capacitances (cbgb, cbdb, cbsb) are hardcoded to 0.0
+at bsim3soi_dd.rs lines 2573-2575. In ngspice (b3soiddld.c lines 3407-3411, 3492-3494),
+these come from the body charge model:
+
+```
+qbody = Qbf - Qe1 + Qex
+cbgb = Cbg - Ce1g + dQex/dVg
+cbdb = Cbd - Ce1d + dQex/dVd + gcjdds
+cbsb = -(Cbg + Cbd + Cbb + Cbe) - (Ce1g+Ce1d+Ce1b+Ce1e)
+       + (dQex/dVg+dQex/dVd+dQex/dVb+dQex/dVe) - gcjdds - gcjdbs - gcjsbs
+```
+
+Without body capacitances, the body node has NO reactive coupling during transient.
+At the first transient step, the body voltage collapses because there's no charge
+history (Q = C*V from DC OP) to maintain it through the companion model.
+
+Additionally, the body charge components (Qbf, Qe1, Qex, Cbg, Cbd, Cbb, Cbe, Ce1g,
+Ce1d, Ce1b, Ce1e) are entirely unimplemented in our DD model. Implementing them requires
+porting ~200-300 lines of surface potential model charge partitioning code from ngspice.
+
+The transient.rs also has no BSIM3SOI-DD charge history tracking — only gate charges
+(cggb, cgdb, cgsb, cdgb, cddb, cdsb) are integrated via MosfetChargeHistory.
+
+**To fix:** Implement the full body charge model for BSIM3SOI-DD, including:
+1. Qbf (body-floating charge) computation and derivatives
+2. Qe1 (first E-node charge) computation and derivatives
+3. Qex (external charge) computation and derivatives
+4. Body charge history fields in MosfetChargeHistory (or new struct)
+5. Body charge initialization from DC OP
+6. Body charge integration (companion model: geq + ceq)
+7. Body companion model stamping in matrix/RHS
+
+This is a substantial feature addition (~300-500 LOC), not a simple bug fix.
+
+**What NOT to retry:** Any body node current/stamp modifications (confirmed sessions
+99-101 that the NR body node is secondary to the analytical chain). The fix must
+implement the body CHARGE model, not modify body current paths.
