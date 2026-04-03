@@ -121,3 +121,63 @@ transition, not at the breakpoint.
 **What NOT to retry:** Order upgrade check for rtlinv (confirmed no effect). The 4.3%
 error is from accumulated numerical differences during the continuous switching transition,
 not from BE→Trap transition timing at breakpoints.
+
+## Session 104 findings (2026-04-03)
+
+### rtlinv: Error growth discovered — NOT a tolerance override candidate
+
+**Investigated:** Attempted tolerance override for rtlinv. Temporarily removed from
+ignore.toml and added to tolerances.toml with rel_tol=1e-1 (10%).
+
+**Result:** FAILED even at 10% tolerance. The error at the first switching edge (t=9ns)
+is 4.3%, but the error CASCADES through subsequent switching edges. By t=118ns (second
+or third edge), the error reaches 89%:
+
+- First failure (default tol): x=9.06e-9, diff=0.164V (4.3%)
+- At rel_tol=1e-1: x=1.184e-7, expected=2.347V, got=0.265V, diff=2.083V (88.7%)
+
+The 4.3% timing shift at the first edge causes the circuit state to be slightly different
+entering the second edge, which produces a larger timing shift, which cascades further.
+This is fundamentally different from the FP eval order errors in VBIC/BSIM3SOI tolerance
+overrides (which are bounded and monotonic).
+
+**Conclusion:** rtlinv is NOT a tolerance override candidate due to unbounded error growth.
+Updated ignore.toml reason to reflect the 89% peak error.
+
+**What NOT to retry:** Tolerance overrides for rtlinv at any level (error cascades to
+89%+). Only fixing the transient timestep/integration behavior would help.
+
+### HFET inverter: InitJct fix (IMPLEMENTED, no effect on inverter)
+
+**Fixed:** Changed HFET InitJct initialization from `sign * t_vto` to `-1.0`, matching
+ngspice's hfetload.c lines 114-119. The previous code used the threshold voltage as the
+initial guess; ngspice uses -1V (reverse bias).
+
+**Result:** No effect on HFET inverter test — still converges to V(3)=1.96V. The -1V
+initialization is correct and causes no regressions (612 tests pass), but the bistable
+DCFL inverter's convergence to the wrong operating point is a deeper NR iteration path
+issue, not an initial guess issue.
+
+**Analysis:** The circuit has two complementary NHFET models (adrv Vt0=0.3, aload Vt0=-0.3)
+forming cascaded DCFL inverters x1 and x2. With Vin=0V, z2 (enhancement, Vt0=0.3) is
+below threshold and z1 (depletion, Vt0=-0.3, diode-connected G=S) pulls output toward
+Vdd. Both gmin stepping and source stepping converge to V(3)≈Vdd.
+
+ngspice's V(3)=-0.275V result suggests a different NR iteration path that finds a
+stable equilibrium where gate junction leakage and subthreshold currents balance.
+Our NR path always ends in the Vdd basin of attraction.
+
+**What NOT to retry:** InitJct changes (-1V already matches ngspice). Source stepping
+(already tried, always converges to Vdd). The fix likely requires matching ngspice's
+exact NR iteration order or implementing a circuit-specific convergence heuristic.
+
+### schmitt: All BJT features confirmed implemented
+
+**Investigated:** Checked schmitt.cir model card parameters (IS, BF, BR, RB, RC, TF, TR,
+CJE, VJE, MJE, CJC, VJC, MJC, CCS, VA) against Thevenin's BJT implementation. ALL
+parameters are fully implemented. No missing features.
+
+The ~31% error at t=293ns is from transient dynamics (same class as rtlinv). Not a
+missing feature issue.
+
+**What NOT to retry:** BJT feature audits for schmitt (all present).

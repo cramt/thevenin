@@ -1110,13 +1110,12 @@ impl DeviceVoltageState {
             let mut prev = self.prev_hfet.borrow_mut();
             for (hi, hfet) in mna.hfets.iter().enumerate() {
                 let (vgs, vgd) = if init_jct {
-                    // MODEINITJCT: initialize to Vto.
-                    // Matches ngspice hfetload.c MODEINITJCT:
-                    //   vgs = model->HFETAtype * here->HFETAvt0;
-                    //   vgd = vgs;
-                    let sign = hfet.model.device_type as i32 as f64;
-                    let vto = sign * hfet.precomp.t_vto;
-                    (vto, vto)
+                    // MODEINITJCT with device ON (HFETAoff==0):
+                    // ngspice hfetload.c lines 114-119 uses vgs=vgd=-1
+                    // (reverse bias) — NOT vt0. This is critical for
+                    // bistable circuits like the DCFL inverter where the
+                    // initial guess determines which OP the NR solver finds.
+                    (-1.0, -1.0)
                 } else {
                     let (raw_vgs, raw_vgd) = hfet.junction_voltages(solution);
                     let vgs = fetlim(raw_vgs, prev[hi].0, hfet.precomp.t_vto);

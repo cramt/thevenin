@@ -16,12 +16,13 @@
 "bsim3soipd/inv2.cir" = "DC OP: singular matrix (NR non-convergence in BSIM3SOI-PD inverter)"
 
 # === General circuits ===
-"general/rtlinv.cir" = "~4.3% transient error at t=9ns: BJT transition timing shift (geqcb cross-coupling improved from 4.6%; remaining error from other BJT transient dynamics)"
+
+"general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
 "general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET not implemented (uses Level 1 fallback; missing velocity saturation/mobility degradation/short-channel effects)"
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag; timing shift in BJT voltage-dependent cap model)"
 
 # === HFET ===
-"hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter: source stepping also converges to Vdd; depletion-mode load pulls output high at every source ramp step)"
+"hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter; InitJct fixed to -1V matching ngspice but NR still converges to Vdd state)"
 
 # === Regression: misc ===
 "regression/misc/asrc-tc-1.cir" = ".control: B-source tc1 AC test err=1.5e-6 (tc1 DC works; AC numerical Jacobian precision at tight 1e-9 threshold)"

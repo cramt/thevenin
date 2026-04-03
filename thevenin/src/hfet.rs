@@ -246,7 +246,7 @@ impl HfetModel {
                 "FGDS" => m.fgds = val,
                 "TF" => m.tf = val,
                 "CDS" => m.cds = val,
-                "PHIB" => m.phib = val,
+                "PHIB" => m.phib = val * CHARGE, // ngspice hfetmpar.c: phib stored in J (user specifies eV)
                 "TALPHA" => m.talpha = val,
                 "MT1" => m.mt1 = val,
                 "MT2" => m.mt2 = val,
