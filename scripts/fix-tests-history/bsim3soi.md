@@ -144,3 +144,36 @@ junction paths). The body node doesn't control Ids in DD model — the analytica
 **Next steps (for future sessions):** Compare Vbs0t, Vbs0eff, Nfb, Vbsdio, Vbsmos, Vbseff
 intermediate values between Rust and ngspice at the failing operating point (Vg=0.5V,
 Vd=0.24V). The 1.5mV discrepancy in the analytical body voltage chain is the root cause.
+
+## Session 101 findings (2026-04-03)
+
+### DD t3: Exhaustive formula verification
+
+**Investigated:** Line-by-line comparison of the FULL analytical body voltage chain
+(Vbs0t→Vbs0→Vbs0mos→Vthfd→Vbs0teff→Vbs0eff→Vbsdio→Vbsmos→Vbseff) between Rust
+(bsim3soi_dd.rs lines 1243-1391) and ngspice (b3soiddld.c lines 920-1193).
+
+**Result:** ALL 8 stages of the chain match EXACTLY term-by-term:
+- Part 1 (Vbs0t): v0 = vbi - phi ✓, dvbd0/dvbd1/litl parameters ✓
+- Part 2 (Vbs0): kb1 coupling, phi-delp limiter with DELT_Vbseff=0.005 ✓
+- Part 3 (Vbs0mos): csieff/qsieff correction ✓
+- Part 4 (Vbs0teff): Vthfd gate-threshold coupling ✓
+- Part 5 (Nfb): k1, kb3*Cbox/Cox feedback factor ✓
+- Part 6 (Vbsdio): smooth_max with OFF_Vbsdio=0.02 ✓
+- Part 7 (Vbsmos): second capacitive coupling ✓
+- Part 8 (Vbseff): final phi-delp limiter ✓
+
+Also verified:
+- Physical constants: EPSOX=3.453133e-11, EPSSI=1.03594e-10, KBOQ=8.617087e-5, CHARGE_Q=1.60219e-19 — all match
+- Cbox = EPSOX/tbox (both model-level, matching)
+- Vthfd formula matches (K1, K2, DVT0/1/2, ETAB, NLX, KT1/2)
+- Abulk formula matches (k1eff = k1, A0, AGS, KETA)
+- Temperature-dependent phi: both use precomputed phi at TNOM (test runs at default 27°C = TNOM)
+
+**Conclusion:** The 0.6% error is NOT from any formula difference. The analytical chain,
+Vthfd, Abulk, and Ids computations all match exactly. The error is from the NR-converged
+body voltage being 1.5mV different (likely from FP evaluation order or NR convergence
+tolerance), propagating through the analytical chain to shift Ids.
+
+**What NOT to retry:** Formula comparison of the analytical chain (confirmed identical).
+Temperature-dependent phi (irrelevant at TEMP=TNOM).
