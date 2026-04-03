@@ -254,8 +254,23 @@ pub struct BehavioralSourceInstance {
     pub pos_idx: Option<usize>,
     /// Negative terminal node index (None = ground).
     pub neg_idx: Option<usize>,
-    /// Expression string after `I=` (only I= supported currently).
+    /// Expression string after `I=`.
     pub expr: String,
+}
+
+/// A resolved behavioral voltage source (B-element with V=expr) instance.
+#[derive(Debug, Clone)]
+pub struct BehavioralVoltageSourceInstance {
+    /// Element name.
+    pub name: String,
+    /// Positive terminal node index (None = ground).
+    pub pos_idx: Option<usize>,
+    /// Negative terminal node index (None = ground).
+    pub neg_idx: Option<usize>,
+    /// Expression string after `V=`.
+    pub expr: String,
+    /// Branch current variable index in the solution vector.
+    pub branch_idx: usize,
 }
 
 /// The assembled MNA system ready for solving.
@@ -322,8 +337,10 @@ pub struct MnaSystem {
     pub cccs_sources: Vec<CccsInstance>,
     /// Resolved CCVS (H) instances.
     pub ccvs_sources: Vec<CcvsInstance>,
-    /// Resolved behavioral source (B-element) instances for NR iteration.
+    /// Resolved behavioral current source (B-element with I=) instances for NR iteration.
     pub behavioral_sources: Vec<BehavioralSourceInstance>,
+    /// Resolved behavioral voltage source (B-element with V=) instances for NR iteration.
+    pub behavioral_voltage_sources: Vec<BehavioralVoltageSourceInstance>,
     /// Resolved XSPICE code model instances.
     pub xspice_instances: Vec<XspiceInstance>,
     /// XSPICE code model registry (shared across instances).
@@ -361,6 +378,7 @@ impl MnaSystem {
             || !self.mesfets.is_empty()
             || !self.hfets.is_empty()
             || !self.behavioral_sources.is_empty()
+            || !self.behavioral_voltage_sources.is_empty()
             || !self.xspice_instances.is_empty()
     }
 
@@ -1411,6 +1429,20 @@ fn assemble_mna_flat(
                     // If model not found, we'll error in pass 2
                 }
             }
+            ElementKind::BehavioralSource { pos, neg, spec } => {
+                node_map.index(pos);
+                node_map.index(neg);
+                // V= behavioral sources need a branch current variable (like voltage sources).
+                // I= behavioral sources inject current directly (no branch needed).
+                let spec_trimmed = spec.trim();
+                let is_voltage = spec_trimmed.starts_with("V=")
+                    || spec_trimmed.starts_with("v=")
+                    || spec_trimmed.starts_with("V =")
+                    || spec_trimmed.starts_with("v =");
+                if is_voltage {
+                    vsource_count += 1;
+                }
+            }
             _ => {}
         }
     }
@@ -1448,6 +1480,7 @@ fn assemble_mna_flat(
     let mut cccs_sources = Vec::new();
     let mut ccvs_sources = Vec::new();
     let mut behavioral_sources = Vec::new();
+    let mut behavioral_voltage_sources = Vec::new();
     let mut xspice_instances = Vec::new();
     let mut internal_idx = node_map.len(); // internal nodes start after external nodes
 
@@ -2811,38 +2844,72 @@ fn assemble_mna_flat(
                 cpls.push(inst);
             }
             ElementKind::BehavioralSource { pos, neg, spec } => {
-                // Parse spec: "I=expr" or "i=expr"
                 let spec_trimmed = spec.trim();
-                let expr_str = if let Some(rest) = spec_trimmed
+                // Determine if this is I= or V= and extract the expression.
+                let (is_current, raw_expr) = if let Some(rest) = spec_trimmed
                     .strip_prefix("I=")
                     .or_else(|| spec_trimmed.strip_prefix("i="))
                     .or_else(|| spec_trimmed.strip_prefix("I ="))
                     .or_else(|| spec_trimmed.strip_prefix("i ="))
                 {
-                    rest.trim()
+                    (true, rest.trim())
+                } else if let Some(rest) = spec_trimmed
+                    .strip_prefix("V=")
+                    .or_else(|| spec_trimmed.strip_prefix("v="))
+                    .or_else(|| spec_trimmed.strip_prefix("V ="))
+                    .or_else(|| spec_trimmed.strip_prefix("v ="))
+                {
+                    (false, rest.trim())
                 } else {
-                    // V= behavioral sources not yet supported; skip
                     continue;
                 };
-                // Strip braces/quotes
+                // Strip braces/quotes from expression
                 let expr_clean = if let Some(inner) =
-                    expr_str.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
+                    raw_expr.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
                 {
                     inner.trim()
-                } else if let Some(inner) = expr_str
+                } else if let Some(inner) = raw_expr
                     .strip_prefix('\'')
                     .and_then(|s| s.strip_suffix('\''))
                 {
                     inner.trim()
                 } else {
-                    expr_str
+                    raw_expr
                 };
-                behavioral_sources.push(BehavioralSourceInstance {
-                    name: element.name.clone(),
-                    pos_idx: node_map.get(pos),
-                    neg_idx: node_map.get(neg),
-                    expr: expr_clean.to_string(),
-                });
+                if is_current {
+                    behavioral_sources.push(BehavioralSourceInstance {
+                        name: element.name.clone(),
+                        pos_idx: node_map.get(pos),
+                        neg_idx: node_map.get(neg),
+                        expr: expr_clean.to_string(),
+                    });
+                } else {
+                    // V= behavioral voltage source: stamp KCL topology into base matrix
+                    let ni = node_map.get(pos);
+                    let nj = node_map.get(neg);
+                    let branch = n + vsource_idx;
+
+                    // KCL stamps: branch current enters pos, exits neg
+                    if let Some(i) = ni {
+                        system.matrix.add(i, branch, 1.0);
+                        system.matrix.add(branch, i, 1.0);
+                    }
+                    if let Some(j) = nj {
+                        system.matrix.add(j, branch, -1.0);
+                        system.matrix.add(branch, j, -1.0);
+                    }
+
+                    behavioral_voltage_sources.push(BehavioralVoltageSourceInstance {
+                        name: element.name.clone(),
+                        pos_idx: ni,
+                        neg_idx: nj,
+                        expr: expr_clean.to_string(),
+                        branch_idx: branch,
+                    });
+
+                    vsource_names.push(element.name.clone());
+                    vsource_idx += 1;
+                }
             }
             ElementKind::Xspice {
                 connections,
@@ -2996,6 +3063,7 @@ fn assemble_mna_flat(
         txls,
         cpls,
         behavioral_sources,
+        behavioral_voltage_sources,
         xspice_instances,
         xspice_registry,
     })

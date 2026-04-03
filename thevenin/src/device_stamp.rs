@@ -1174,6 +1174,48 @@ impl DeviceVoltageState {
             stamp_current_source(&mut system.rhs, bsrc.pos_idx, bsrc.neg_idx, i_eq);
         }
 
+        // Behavioral voltage sources (B-elements with V=...)
+        for bvsrc in &mna.behavioral_voltage_sources {
+            // Build node voltage map from current solution
+            let mut node_voltages: std::collections::BTreeMap<String, f64> =
+                std::collections::BTreeMap::new();
+            node_voltages.insert("0".to_string(), 0.0);
+            for (name, idx) in mna.node_map.iter() {
+                node_voltages.insert(name.to_string(), solution[idx]);
+            }
+
+            let f0_raw =
+                crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &node_voltages).unwrap_or(0.0);
+            // Guard against NaN/Inf from expressions like ln(0) at initial guess
+            let f0 = if f0_raw.is_finite() { f0_raw } else { 0.0 };
+
+            // Numerical Jacobian: perturb each node by DV and measure df/dV
+            const DV: f64 = 1e-8;
+            let branch = bvsrc.branch_idx;
+            let mut rhs_adjust = 0.0;
+
+            for (name, idx) in mna.node_map.iter() {
+                let v_old = node_voltages[name];
+                let mut perturbed = node_voltages.clone();
+                *perturbed.get_mut(name).unwrap() = v_old + DV;
+                let f1_raw =
+                    crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &perturbed).unwrap_or(0.0);
+                let f1 = if f1_raw.is_finite() { f1_raw } else { f0 };
+                let dfdv = (f1 - f0) / DV;
+
+                if dfdv.is_finite() && dfdv.abs() > 1e-30 {
+                    // Branch equation: V(pos) - V(neg) - f(V*) = 0
+                    // Jacobian contribution: -df/dVi
+                    system.matrix.add(branch, idx, -dfdv);
+                    rhs_adjust -= dfdv * v_old;
+                }
+            }
+
+            // RHS: f(V*) - sum(df/dVi * Vi*) is the linearized constant term.
+            // The base matrix already has +1/-1 for V(pos)-V(neg).
+            system.rhs[branch] += f0 + rhs_adjust;
+        }
+
         // XSPICE code model instances
         if let Some(ref registry) = mna.xspice_registry {
             for inst in &mna.xspice_instances {

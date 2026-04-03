@@ -26,17 +26,14 @@
 
 # === Regression: misc ===
 "regression/misc/alter-vec.cir" = ".control: @v1[pulse] waveform param query + alter command execution not implemented"
-"regression/misc/asrc-tc-1.cir" = ".control: undefined vector v(3) — behavioral source (ASRC) nodes not in OP result"
+"regression/misc/asrc-tc-1.cir" = ".control: B-source temperature coefficients (tc1/tc2) not implemented"
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
-"regression/misc/log-functions-1.cir" = ".control: undefined vector v(b1) — behavioral source (B-source) nodes not in OP result"
 "regression/misc/resume-1.cir" = ".control: stop when + resume commands not implemented (requires transient state preservation)"
 
 # === Regression: model ===
 "regression/model/binning-1.cir" = ".control: BSIM4 model binning (nmos_tst.1/.2 bin selection by L/W) not implemented"
 
 # === Regression: parser ===
-"regression/parser/bxpressn-1.cir" = ".control: undefined vector v(n1155_t) — B-source internal node naming not implemented"
-"regression/parser/xpressn-3.cir" = ".control: undefined vector v(n1112_b) — subcircuit internal node lookup not implemented (ceil/floor/nint now supported)"
 
 # === Regression: pz ===
 "regression/pz/ac-resistance.cir" = ".control: undefined variable 'i' — complex imaginary unit not implemented in expression evaluator"
