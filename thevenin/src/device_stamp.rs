@@ -1147,7 +1147,9 @@ impl DeviceVoltageState {
                 node_voltages.insert(name.to_string(), solution[idx]);
             }
 
-            let i0 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &node_voltages).unwrap_or(0.0);
+            let i0_raw = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &node_voltages).unwrap_or(0.0);
+            // Apply temperature coefficient scaling
+            let i0 = i0_raw * bsrc.tc_factor;
 
             // Numerical Jacobian: perturb each node by DV and measure dI/dV
             const DV: f64 = 1e-8;
@@ -1157,8 +1159,8 @@ impl DeviceVoltageState {
                 let v_old = node_voltages[name];
                 let mut perturbed = node_voltages.clone();
                 *perturbed.get_mut(name).unwrap() = v_old + DV;
-                let i1 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &perturbed).unwrap_or(0.0);
-                let g = (i1 - i0) / DV;
+                let i1_raw = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &perturbed).unwrap_or(0.0);
+                let g = (i1_raw * bsrc.tc_factor - i0) / DV;
 
                 if g.abs() > 1e-30 {
                     if let Some(ni) = bsrc.pos_idx {
@@ -1186,8 +1188,13 @@ impl DeviceVoltageState {
 
             let f0_raw =
                 crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &node_voltages).unwrap_or(0.0);
-            // Guard against NaN/Inf from expressions like ln(0) at initial guess
-            let f0 = if f0_raw.is_finite() { f0_raw } else { 0.0 };
+            // Guard against NaN/Inf from expressions like ln(0) at initial guess,
+            // then apply temperature coefficient scaling
+            let f0 = if f0_raw.is_finite() {
+                f0_raw * bvsrc.tc_factor
+            } else {
+                0.0
+            };
 
             // Numerical Jacobian: perturb each node by DV and measure df/dV
             const DV: f64 = 1e-8;
@@ -1200,7 +1207,11 @@ impl DeviceVoltageState {
                 *perturbed.get_mut(name).unwrap() = v_old + DV;
                 let f1_raw =
                     crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &perturbed).unwrap_or(0.0);
-                let f1 = if f1_raw.is_finite() { f1_raw } else { f0 };
+                let f1 = if f1_raw.is_finite() {
+                    f1_raw * bvsrc.tc_factor
+                } else {
+                    f0
+                };
                 let dfdv = (f1 - f0) / DV;
 
                 if dfdv.is_finite() && dfdv.abs() > 1e-30 {

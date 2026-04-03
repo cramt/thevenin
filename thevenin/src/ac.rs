@@ -1407,6 +1407,66 @@ pub fn stamp_ac_devices(
             stamp_imag_conductance(&mut sys.imag, gp, dpp, xgd);
         }
     }
+
+    // 5k. Stamp behavioral current source (I=) small-signal conductances.
+    for bsrc in &mna.behavioral_sources {
+        let mut node_voltages: std::collections::BTreeMap<String, f64> =
+            std::collections::BTreeMap::new();
+        node_voltages.insert("0".to_string(), 0.0);
+        for (name, idx) in mna.node_map.iter() {
+            node_voltages.insert(name.to_string(), op_solution[idx]);
+        }
+        let i0 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &node_voltages).unwrap_or(0.0)
+            * bsrc.tc_factor;
+
+        const DV: f64 = 1e-8;
+        for (name, idx) in mna.node_map.iter() {
+            let v_old = node_voltages[name];
+            let mut perturbed = node_voltages.clone();
+            *perturbed.get_mut(name).unwrap() = v_old + DV;
+            let i1 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &perturbed).unwrap_or(0.0)
+                * bsrc.tc_factor;
+            let g = (i1 - i0) / DV;
+            if g.abs() > 1e-30 {
+                if let Some(ni) = bsrc.pos_idx {
+                    sys.real.add(ni, idx, g);
+                }
+                if let Some(nj) = bsrc.neg_idx {
+                    sys.real.add(nj, idx, -g);
+                }
+            }
+        }
+    }
+
+    // 5l. Stamp behavioral voltage source (V=) small-signal Jacobian.
+    for bvsrc in &mna.behavioral_voltage_sources {
+        let mut node_voltages: std::collections::BTreeMap<String, f64> =
+            std::collections::BTreeMap::new();
+        node_voltages.insert("0".to_string(), 0.0);
+        for (name, idx) in mna.node_map.iter() {
+            node_voltages.insert(name.to_string(), op_solution[idx]);
+        }
+        let f0 = crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &node_voltages).unwrap_or(0.0)
+            * bvsrc.tc_factor;
+
+        const DV: f64 = 1e-8;
+        let branch = bvsrc.branch_idx;
+        for (name, idx) in mna.node_map.iter() {
+            let v_old = node_voltages[name];
+            let mut perturbed = node_voltages.clone();
+            *perturbed.get_mut(name).unwrap() = v_old + DV;
+            let f1_raw = crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &perturbed).unwrap_or(0.0);
+            let f1 = if f1_raw.is_finite() {
+                f1_raw * bvsrc.tc_factor
+            } else {
+                f0
+            };
+            let dfdv = (f1 - f0) / DV;
+            if dfdv.is_finite() && dfdv.abs() > 1e-30 {
+                sys.real.add(branch, idx, -dfdv);
+            }
+        }
+    }
 }
 
 /// Apply AC source excitation to the complex RHS.

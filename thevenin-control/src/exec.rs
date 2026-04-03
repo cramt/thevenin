@@ -73,10 +73,22 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
         Statement::Let { name, expr } => {
             let resolved_expr = interpolate_vars(expr, ctx);
             let val = eval_vec_expr(&resolved_expr, ctx)?;
+            let complex = if val.imag.is_empty() {
+                Vec::new()
+            } else {
+                let len = val.data.len().max(val.imag.len());
+                (0..len)
+                    .map(|i| {
+                        let re = val.data.get(i).copied().unwrap_or(0.0);
+                        let im = val.imag.get(i).copied().unwrap_or(0.0);
+                        thevenin_types::Complex { re, im }
+                    })
+                    .collect()
+            };
             let vec = SimVector {
                 name: name.clone(),
                 real: val.data,
-                complex: Vec::new(),
+                complex,
             };
             ctx.store_vector(vec);
             Ok(())
@@ -645,26 +657,30 @@ fn parse_num(s: &str) -> Result<f64, String> {
 }
 
 /// Execute an `alter` command.
-fn execute_alter(spec: &str, value: &AlterValue, _ctx: &mut SimContext) -> Result<(), String> {
-    // Parse @device[param]
-    let spec = spec.trim();
-    if !spec.starts_with('@') {
-        return Err(format!("alter: expected @device[param], got: {spec}"));
+///
+/// Stores the altered value as a named vector in the context so subsequent
+/// `@device[param]` queries find the updated value.
+fn execute_alter(spec: &str, value: &AlterValue, ctx: &mut SimContext) -> Result<(), String> {
+    let spec_trimmed = spec.trim();
+    if !spec_trimmed.starts_with('@') {
+        return Err(format!(
+            "alter: expected @device[param], got: {spec_trimmed}"
+        ));
     }
-    let inner = &spec[1..];
-    let bracket_start = inner
-        .find('[')
-        .ok_or_else(|| format!("alter: no '[' in {spec}"))?;
-    let bracket_end = inner
-        .find(']')
-        .ok_or_else(|| format!("alter: no ']' in {spec}"))?;
-    let _device = &inner[..bracket_start];
-    let _param = &inner[bracket_start + 1..bracket_end];
 
-    let _ = value;
-    Err(format!(
-        "alter: not yet implemented (device={_device}, param={_param})"
-    ))
+    let data = match value {
+        AlterValue::Scalar(v) => vec![*v],
+        AlterValue::Vector(v) => v.clone(),
+    };
+
+    // Store as a named vector so @device[param] lookups find it
+    ctx.store_vector(SimVector {
+        name: spec_trimmed.to_lowercase(),
+        real: data,
+        complex: vec![],
+    });
+
+    Ok(())
 }
 
 /// Resolve echo fragments into a string.

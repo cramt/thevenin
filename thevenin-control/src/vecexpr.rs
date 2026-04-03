@@ -6,14 +6,32 @@
 use crate::context::SimContext;
 
 /// A vector value — the result of evaluating an expression.
+///
+/// When `imag` is non-empty, the vector is complex-valued (real + j*imag).
+/// When `imag` is empty, the vector is real-valued.
 #[derive(Debug, Clone)]
 pub struct VecVal {
     pub data: Vec<f64>,
+    pub imag: Vec<f64>,
 }
 
 impl VecVal {
     pub fn scalar(v: f64) -> Self {
-        Self { data: vec![v] }
+        Self {
+            data: vec![v],
+            imag: vec![],
+        }
+    }
+
+    pub fn complex_scalar(re: f64, im: f64) -> Self {
+        Self {
+            data: vec![re],
+            imag: vec![im],
+        }
+    }
+
+    pub fn is_complex(&self) -> bool {
+        !self.imag.is_empty()
     }
 
     pub fn is_scalar(&self) -> bool {
@@ -30,6 +48,47 @@ impl VecVal {
 
     pub fn is_truthy(&self) -> bool {
         self.as_scalar() != 0.0
+    }
+
+    /// Get imaginary part at index, or 0.0 if real-only.
+    fn im(&self, i: usize) -> f64 {
+        if i < self.imag.len() {
+            self.imag[i]
+        } else {
+            0.0
+        }
+    }
+
+    /// Length of the vector (max of real and imag lengths).
+    fn len(&self) -> usize {
+        self.data.len().max(self.imag.len())
+    }
+
+    /// Get real part at index, broadcasting scalars.
+    fn re(&self, i: usize) -> f64 {
+        if self.data.len() == 1 {
+            self.data[0]
+        } else if i < self.data.len() {
+            self.data[i]
+        } else {
+            0.0
+        }
+    }
+
+    /// Get imaginary part at index, broadcasting scalars.
+    fn im_broadcast(&self, i: usize) -> f64 {
+        if self.imag.len() == 1 {
+            self.imag[0]
+        } else if i < self.imag.len() {
+            self.imag[i]
+        } else {
+            0.0
+        }
+    }
+
+    /// Create a real-only vector.
+    fn real(data: Vec<f64>) -> Self {
+        Self { data, imag: vec![] }
     }
 }
 
@@ -438,12 +497,12 @@ fn parse_add(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecV
             Token::Plus => {
                 *pos += 1;
                 let right = parse_mul(tokens, pos, ctx)?;
-                left = vec_binop(&left, &right, |a, b| a + b);
+                left = vec_complex_binop(&left, &right, |ar, ai, br, bi| (ar + br, ai + bi));
             }
             Token::Minus => {
                 *pos += 1;
                 let right = parse_mul(tokens, pos, ctx)?;
-                left = vec_binop(&left, &right, |a, b| a - b);
+                left = vec_complex_binop(&left, &right, |ar, ai, br, bi| (ar - br, ai - bi));
             }
             _ => break,
         }
@@ -458,16 +517,21 @@ fn parse_mul(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecV
             Token::Star => {
                 *pos += 1;
                 let right = parse_unary(tokens, pos, ctx)?;
-                left = vec_binop(&left, &right, |a, b| a * b);
+                left = vec_complex_binop(&left, &right, |ar, ai, br, bi| {
+                    (ar * br - ai * bi, ar * bi + ai * br)
+                });
             }
             Token::Slash => {
                 *pos += 1;
                 let right = parse_unary(tokens, pos, ctx)?;
-                left = vec_binop(
-                    &left,
-                    &right,
-                    |a, b| if b != 0.0 { a / b } else { f64::INFINITY },
-                );
+                left = vec_complex_binop(&left, &right, |ar, ai, br, bi| {
+                    let denom = br * br + bi * bi;
+                    if denom != 0.0 {
+                        ((ar * br + ai * bi) / denom, (ai * br - ar * bi) / denom)
+                    } else {
+                        (f64::INFINITY, 0.0)
+                    }
+                });
             }
             Token::Caret => {
                 *pos += 1;
@@ -488,20 +552,23 @@ fn parse_unary(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<Ve
         Token::Minus => {
             *pos += 1;
             let val = parse_primary(tokens, pos, ctx)?;
-            Ok(VecVal {
-                data: val.data.iter().map(|v| -v).collect(),
-            })
+            let data = val.data.iter().map(|v| -v).collect();
+            let imag = if val.is_complex() {
+                val.imag.iter().map(|v| -v).collect()
+            } else {
+                vec![]
+            };
+            Ok(VecVal { data, imag })
         }
         Token::Ident(s) if s.eq_ignore_ascii_case("not") => {
             *pos += 1;
             let val = parse_primary(tokens, pos, ctx)?;
-            Ok(VecVal {
-                data: val
-                    .data
+            Ok(VecVal::real(
+                val.data
                     .iter()
                     .map(|v| if *v == 0.0 { 1.0 } else { 0.0 })
                     .collect(),
-            })
+            ))
         }
         _ => parse_primary(tokens, pos, ctx),
     }
@@ -559,9 +626,7 @@ fn parse_primary_base(
                 let plot = &s[..dot_pos];
                 let vec = &s[dot_pos + 1..];
                 if let Some(v) = ctx.find_vector_in_plot(plot, vec) {
-                    return Ok(VecVal {
-                        data: vec_to_real(v),
-                    });
+                    return Ok(simvec_to_vecval(v));
                 }
             }
             // Try as a plot name — return the sweep (first) vector
@@ -570,16 +635,12 @@ fn parse_primary_base(
                 if plot.name.to_lowercase() == lower
                     && let Some(v) = plot.vecs.first()
                 {
-                    return Ok(VecVal {
-                        data: vec_to_real(v),
-                    });
+                    return Ok(simvec_to_vecval(v));
                 }
             }
             // Try as a regular vector name
             if let Some(v) = ctx.find_vector(&s) {
-                return Ok(VecVal {
-                    data: vec_to_real(v),
-                });
+                return Ok(simvec_to_vecval(v));
             }
             // Try resolving as plot name matching plot type (e.g., "temp-sweep" → the DC temp sweep vector)
             // ngspice names DC temp sweep plot as "temp-sweep"
@@ -588,9 +649,7 @@ fn parse_primary_base(
                     || plot.name.to_lowercase().contains(&lower))
                     && let Some(v) = plot.vecs.first()
                 {
-                    return Ok(VecVal {
-                        data: vec_to_real(v),
-                    });
+                    return Ok(simvec_to_vecval(v));
                 }
             }
             Err(format!("cannot resolve \"{s}\""))
@@ -598,11 +657,13 @@ fn parse_primary_base(
         Token::DeviceParam(s) => {
             let s = s.clone();
             *pos += 1;
-            // First try as a named vector (e.g., after DC sweep, @v1[dc] may be a vector)
+            // First try as a named vector (e.g., after alter or DC sweep)
             if let Some(v) = ctx.find_vector(&s) {
-                return Ok(VecVal {
-                    data: vec_to_real(v),
-                });
+                return Ok(simvec_to_vecval(v));
+            }
+            // Try vector-valued device parameter (e.g., @v1[pulse])
+            if let Some(vec) = resolve_device_param_vec(&s, ctx) {
+                return Ok(vec);
             }
             // Fall back to scalar device/instance parameter from netlist
             if let Some(val) = resolve_device_param(&s, ctx) {
@@ -656,16 +717,12 @@ fn parse_primary_base(
                     }
                     let vec_name = format!("{name}({inner})");
                     if let Some(v) = ctx.find_vector(&vec_name) {
-                        return Ok(VecVal {
-                            data: vec_to_real(v),
-                        });
+                        return Ok(simvec_to_vecval(v));
                     }
                     // Also try without lowercase normalization
                     let vec_name_lower = vec_name.to_lowercase();
                     if let Some(v) = ctx.find_vector(&vec_name_lower) {
-                        return Ok(VecVal {
-                            data: vec_to_real(v),
-                        });
+                        return Ok(simvec_to_vecval(v));
                     }
                     return Err(format!("undefined vector: {vec_name}"));
                 }
@@ -690,6 +747,7 @@ fn parse_primary_base(
             match name.to_lowercase().as_str() {
                 "pi" => return Ok(VecVal::scalar(std::f64::consts::PI)),
                 "e" => return Ok(VecVal::scalar(std::f64::consts::E)),
+                "i" => return Ok(VecVal::complex_scalar(0.0, 1.0)),
                 "true" | "yes" => return Ok(VecVal::scalar(1.0)),
                 "false" | "no" => return Ok(VecVal::scalar(0.0)),
                 _ => {}
@@ -697,9 +755,7 @@ fn parse_primary_base(
 
             // Try as vector name
             if let Some(v) = ctx.find_vector(&name) {
-                return Ok(VecVal {
-                    data: vec_to_real(v),
-                });
+                return Ok(simvec_to_vecval(v));
             }
 
             // Try as plot-qualified name: "plotname.vecname"
@@ -707,9 +763,7 @@ fn parse_primary_base(
                 let plot = &name[..dot_pos];
                 let vec_name = &name[dot_pos + 1..];
                 if let Some(v) = ctx.find_vector_in_plot(plot, vec_name) {
-                    return Ok(VecVal {
-                        data: vec_to_real(v),
-                    });
+                    return Ok(simvec_to_vecval(v));
                 }
             }
 
@@ -751,45 +805,43 @@ fn eval_function(name: &str, args: &[VecVal], ctx: &SimContext) -> Result<VecVal
     match lower.as_str() {
         "abs" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.abs()).collect(),
-            })
+            let a = &args[0];
+            if a.is_complex() {
+                let data: Vec<f64> = (0..a.len())
+                    .map(|i| (a.re(i) * a.re(i) + a.im(i) * a.im(i)).sqrt())
+                    .collect();
+                Ok(VecVal::real(data))
+            } else {
+                Ok(VecVal::real(a.data.iter().map(|v| v.abs()).collect()))
+            }
         }
         "sqrt" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.sqrt()).collect(),
-            })
+            Ok(VecVal::real(
+                args[0].data.iter().map(|v| v.sqrt()).collect(),
+            ))
         }
         "exp" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.exp()).collect(),
-            })
+            Ok(VecVal::real(args[0].data.iter().map(|v| v.exp()).collect()))
         }
         "log" | "ln" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.ln()).collect(),
-            })
+            Ok(VecVal::real(args[0].data.iter().map(|v| v.ln()).collect()))
         }
         "log10" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.log10()).collect(),
-            })
+            Ok(VecVal::real(
+                args[0].data.iter().map(|v| v.log10()).collect(),
+            ))
         }
         "sin" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.sin()).collect(),
-            })
+            Ok(VecVal::real(args[0].data.iter().map(|v| v.sin()).collect()))
         }
         "cos" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.cos()).collect(),
-            })
+            Ok(VecVal::real(args[0].data.iter().map(|v| v.cos()).collect()))
         }
         "vecmax" => {
             require_args(name, args, 1)?;
@@ -827,14 +879,12 @@ fn eval_function(name: &str, args: &[VecVal], ctx: &SimContext) -> Result<VecVal
             // vector(n) — create a vector [0, 1, ..., n-1]
             require_args(name, args, 1)?;
             let n = args[0].as_scalar() as usize;
-            Ok(VecVal {
-                data: (0..n).map(|i| i as f64).collect(),
-            })
+            Ok(VecVal::real((0..n).map(|i| i as f64).collect()))
         }
         "unitvec" => {
             require_args(name, args, 1)?;
             let n = args[0].as_scalar() as usize;
-            Ok(VecVal { data: vec![1.0; n] })
+            Ok(VecVal::real(vec![1.0; n]))
         }
         "mean" | "avg" => {
             require_args(name, args, 1)?;
@@ -844,33 +894,42 @@ fn eval_function(name: &str, args: &[VecVal], ctx: &SimContext) -> Result<VecVal
         }
         "ceil" | "ceiling" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.ceil()).collect(),
-            })
+            Ok(VecVal::real(
+                args[0].data.iter().map(|v| v.ceil()).collect(),
+            ))
         }
         "floor" | "int" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.floor()).collect(),
-            })
+            Ok(VecVal::real(
+                args[0].data.iter().map(|v| v.floor()).collect(),
+            ))
         }
         "nint" | "round" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.round()).collect(),
-            })
+            Ok(VecVal::real(
+                args[0].data.iter().map(|v| v.round()).collect(),
+            ))
         }
         "tan" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.tan()).collect(),
-            })
+            Ok(VecVal::real(args[0].data.iter().map(|v| v.tan()).collect()))
         }
         "atan" => {
             require_args(name, args, 1)?;
-            Ok(VecVal {
-                data: args[0].data.iter().map(|v| v.atan()).collect(),
-            })
+            Ok(VecVal::real(
+                args[0].data.iter().map(|v| v.atan()).collect(),
+            ))
+        }
+        // pole(n) / zero(n) — look up PZ analysis result vectors
+        "pole" | "zero" => {
+            require_args(name, args, 1)?;
+            let idx = args[0].as_scalar() as usize;
+            let vec_name = format!("{}({})", lower, idx);
+            if let Some(v) = ctx.find_vector(&vec_name) {
+                Ok(simvec_to_vecval(v))
+            } else {
+                Err(format!("undefined vector: {vec_name}"))
+            }
         }
         _ => Err(format!("unknown function: {name}")),
     }
@@ -938,6 +997,59 @@ fn resolve_device_param(spec: &str, ctx: &SimContext) -> Option<f64> {
     }
 
     None
+}
+
+/// Resolve a vector-valued `@device[param]` query (e.g., `@v1[pulse]`).
+fn resolve_device_param_vec(spec: &str, ctx: &SimContext) -> Option<VecVal> {
+    let spec = spec.strip_prefix('@')?;
+    let bracket = spec.find('[')?;
+    let end = spec.find(']')?;
+    let device = &spec[..bracket];
+    let param = &spec[bracket + 1..end];
+
+    for item in &ctx.netlist.items {
+        if let thevenin_types::Item::Element(el) = item
+            && el.name.eq_ignore_ascii_case(device)
+        {
+            return resolve_element_param_vec(&el.kind, param);
+        }
+    }
+    None
+}
+
+/// Resolve a vector-valued parameter from an element's kind (e.g., pulse waveform).
+fn resolve_element_param_vec(kind: &thevenin_types::ElementKind, param: &str) -> Option<VecVal> {
+    use thevenin_types::{ElementKind, Expr, Waveform};
+    let param_lower = param.to_lowercase();
+    match kind {
+        ElementKind::VoltageSource { source, .. } | ElementKind::CurrentSource { source, .. } => {
+            if param_lower == "pulse"
+                && let Some(Waveform::Pulse {
+                    v1,
+                    v2,
+                    td,
+                    tr,
+                    tf,
+                    pw,
+                    per,
+                }) = &source.waveform
+            {
+                let expr_val = |e: &Expr| -> f64 { if let Expr::Num(v) = e { *v } else { 0.0 } };
+                let vals = vec![
+                    expr_val(v1),
+                    expr_val(v2),
+                    td.as_ref().map_or(0.0, expr_val),
+                    tr.as_ref().map_or(0.0, expr_val),
+                    tf.as_ref().map_or(0.0, expr_val),
+                    pw.as_ref().map_or(0.0, expr_val),
+                    per.as_ref().map_or(0.0, expr_val),
+                ];
+                return Some(VecVal::real(vals));
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Resolve a parameter from an element's kind.
@@ -1027,22 +1139,34 @@ fn is_ident_char(b: u8) -> bool {
 /// V²/Hz (power spectral density) for batch output compatibility, but `.control`
 /// scripts expect V/√Hz (amplitude spectral density) — matching ngspice's
 /// interactive convention.  This function applies the sqrt conversion automatically.
+#[allow(dead_code)]
 fn vec_to_real(v: &thevenin_types::SimVector) -> Vec<f64> {
-    let data = if !v.real.is_empty() {
-        v.real.clone()
+    simvec_to_vecval(v).data
+}
+
+/// Convert a SimVector to a VecVal, preserving complex data when present.
+fn simvec_to_vecval(v: &thevenin_types::SimVector) -> VecVal {
+    let (data, imag) = if !v.real.is_empty() && !v.complex.is_empty() {
+        // Both real and complex: real part from real, imag from complex
+        (v.real.clone(), v.complex.iter().map(|c| c.im).collect())
     } else if !v.complex.is_empty() {
-        // For complex vectors, return real part (matching ngspice default behavior)
-        v.complex.iter().map(|c| c.re).collect()
+        (
+            v.complex.iter().map(|c| c.re).collect(),
+            v.complex.iter().map(|c| c.im).collect(),
+        )
+    } else if !v.real.is_empty() {
+        (v.real.clone(), vec![])
     } else {
-        vec![0.0]
+        (vec![0.0], vec![])
     };
     // Noise spectrum vectors: convert V²/Hz → V/√Hz for .control access.
     let name_lower = v.name.to_lowercase();
-    if name_lower.ends_with("noise_spectrum") {
+    let data = if name_lower.ends_with("noise_spectrum") {
         data.iter().map(|x| x.sqrt()).collect()
     } else {
         data
-    }
+    };
+    VecVal { data, imag }
 }
 
 /// Format a number for inclusion in a vector name (e.g., node number).
@@ -1054,7 +1178,37 @@ fn format_num_for_vecname(v: f64) -> String {
     }
 }
 
-/// Element-wise binary operation with broadcasting.
+/// Complex-aware element-wise binary operation with broadcasting.
+///
+/// The callback receives (a_re, a_im, b_re, b_im) and returns (re, im).
+/// When neither operand is complex, imaginary parts are zero and the result
+/// is real-only (no imag allocation).
+fn vec_complex_binop(
+    a: &VecVal,
+    b: &VecVal,
+    f: impl Fn(f64, f64, f64, f64) -> (f64, f64),
+) -> VecVal {
+    let either_complex = a.is_complex() || b.is_complex();
+    let len = a.len().max(b.len());
+    let mut data = Vec::with_capacity(len);
+    let mut imag = if either_complex {
+        Vec::with_capacity(len)
+    } else {
+        vec![]
+    };
+    for i in 0..len {
+        let (ar, ai) = (a.re(i), a.im_broadcast(i));
+        let (br, bi) = (b.re(i), b.im_broadcast(i));
+        let (re, im) = f(ar, ai, br, bi);
+        data.push(re);
+        if either_complex {
+            imag.push(im);
+        }
+    }
+    VecVal { data, imag }
+}
+
+/// Element-wise binary operation with broadcasting (real-only).
 fn vec_binop(a: &VecVal, b: &VecVal, f: impl Fn(f64, f64) -> f64) -> VecVal {
     if a.is_scalar() && b.is_scalar() {
         return VecVal::scalar(f(a.data[0], b.data[0]));
@@ -1075,7 +1229,7 @@ fn vec_binop(a: &VecVal, b: &VecVal, f: impl Fn(f64, f64) -> f64) -> VecVal {
             f(av, bv)
         })
         .collect();
-    VecVal { data }
+    VecVal::real(data)
 }
 
 #[cfg(test)]

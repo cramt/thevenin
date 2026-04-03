@@ -129,15 +129,24 @@ impl SimContext {
     pub fn store_vector(&mut self, vec: SimVector) {
         let lower = vec.name.to_lowercase();
         if let Some(idx) = self.current_plot {
-            // Replace existing or append
+            // Replace existing or append in current plot
             if let Some(existing) = self.plots[idx]
                 .vecs
                 .iter_mut()
                 .find(|v| v.name.to_lowercase() == lower)
             {
-                *existing = vec;
+                *existing = vec.clone();
             } else {
-                self.plots[idx].vecs.push(vec);
+                self.plots[idx].vecs.push(vec.clone());
+            }
+            // Also update user_vectors if the name exists there, to prevent
+            // stale shadow copies from hiding cross-plot accumulation.
+            if let Some(existing) = self
+                .user_vectors
+                .iter_mut()
+                .find(|v| v.name.to_lowercase() == lower)
+            {
+                *existing = vec;
             }
         } else {
             // No current plot — store in user vectors

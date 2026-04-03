@@ -25,8 +25,7 @@
 "hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter: source stepping also converges to Vdd; depletion-mode load pulls output high at every source ramp step)"
 
 # === Regression: misc ===
-"regression/misc/alter-vec.cir" = ".control: @v1[pulse] waveform param query + alter command execution not implemented"
-"regression/misc/asrc-tc-1.cir" = ".control: B-source temperature coefficients (tc1/tc2) not implemented"
+"regression/misc/asrc-tc-1.cir" = ".control: B-source tc1 AC test err=1.5e-6 (tc1 DC works; AC numerical Jacobian precision at tight 1e-9 threshold)"
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
 "regression/misc/resume-1.cir" = ".control: stop when + resume commands not implemented (requires transient state preservation)"
 
@@ -36,7 +35,6 @@
 # === Regression: parser ===
 
 # === Regression: pz ===
-"regression/pz/ac-resistance.cir" = ".control: undefined variable 'i' — complex imaginary unit not implemented in expression evaluator"
 
 # === Regression: sens ===
 "regression/sens/sens-ac-1.cir" = ".control: AC sensitivity s[r1]=1.27 vs expected 0.001764 (simulator accuracy issue)"

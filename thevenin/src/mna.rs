@@ -256,6 +256,8 @@ pub struct BehavioralSourceInstance {
     pub neg_idx: Option<usize>,
     /// Expression string after `I=`.
     pub expr: String,
+    /// Temperature coefficient scaling factor: (1 + tc1*dT + tc2*dT²).
+    pub tc_factor: f64,
 }
 
 /// A resolved behavioral voltage source (B-element with V=expr) instance.
@@ -271,6 +273,8 @@ pub struct BehavioralVoltageSourceInstance {
     pub expr: String,
     /// Branch current variable index in the solution vector.
     pub branch_idx: usize,
+    /// Temperature coefficient scaling factor: (1 + tc1*dT + tc2*dT²).
+    pub tc_factor: f64,
 }
 
 /// The assembled MNA system ready for solving.
@@ -2863,25 +2867,33 @@ fn assemble_mna_flat(
                 } else {
                     continue;
                 };
+                // Separate expression from tc1=/tc2= parameters.
+                // The raw_expr may look like "v(1) tc1=0.001 tc2=1e-6".
+                let (expr_part, tc1, tc2) = parse_bsrc_expr_and_tc(raw_expr);
                 // Strip braces/quotes from expression
-                let expr_clean = if let Some(inner) =
-                    raw_expr.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
+                let expr_clean = if let Some(inner) = expr_part
+                    .strip_prefix('{')
+                    .and_then(|s| s.strip_suffix('}'))
                 {
                     inner.trim()
-                } else if let Some(inner) = raw_expr
+                } else if let Some(inner) = expr_part
                     .strip_prefix('\'')
                     .and_then(|s| s.strip_suffix('\''))
                 {
                     inner.trim()
                 } else {
-                    raw_expr
+                    expr_part.trim()
                 };
+                // Compute temperature coefficient factor
+                let dt = crate::netlist_temp(netlist) - 27.0;
+                let tc_factor = 1.0 + tc1 * dt + tc2 * dt * dt;
                 if is_current {
                     behavioral_sources.push(BehavioralSourceInstance {
                         name: element.name.clone(),
                         pos_idx: node_map.get(pos),
                         neg_idx: node_map.get(neg),
                         expr: expr_clean.to_string(),
+                        tc_factor,
                     });
                 } else {
                     // V= behavioral voltage source: stamp KCL topology into base matrix
@@ -2905,6 +2917,7 @@ fn assemble_mna_flat(
                         neg_idx: nj,
                         expr: expr_clean.to_string(),
                         branch_idx: branch,
+                        tc_factor,
                     });
 
                     vsource_names.push(element.name.clone());
@@ -3067,6 +3080,36 @@ fn assemble_mna_flat(
         xspice_instances,
         xspice_registry,
     })
+}
+
+/// Parse a B-source expression string, extracting tc1/tc2 parameters.
+///
+/// Input like `"v(1) tc1=0.001 tc2=1e-6"` returns `("v(1)", 0.001, 1e-6)`.
+/// Parameters not present default to 0.0.
+fn parse_bsrc_expr_and_tc(raw: &str) -> (&str, f64, f64) {
+    let mut tc1 = 0.0;
+    let mut tc2 = 0.0;
+    // Find the earliest tc1= or tc2= (case-insensitive) to split off the expression.
+    let lower = raw.to_lowercase();
+    let tc_start = lower
+        .find("tc1=")
+        .into_iter()
+        .chain(lower.find("tc2="))
+        .min();
+    let expr_end = tc_start.unwrap_or(raw.len());
+    // Parse tc parameters from the remainder
+    if let Some(start) = tc_start {
+        let remainder = &raw[start..];
+        for part in remainder.split_whitespace() {
+            let part_lower = part.to_lowercase();
+            if let Some(val_str) = part_lower.strip_prefix("tc1=") {
+                tc1 = val_str.parse().unwrap_or(0.0);
+            } else if let Some(val_str) = part_lower.strip_prefix("tc2=") {
+                tc2 = val_str.parse().unwrap_or(0.0);
+            }
+        }
+    }
+    (&raw[..expr_end], tc1, tc2)
 }
 
 /// Stamp a single element into the MNA system.

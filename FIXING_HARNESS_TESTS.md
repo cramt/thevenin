@@ -376,7 +376,7 @@ Append your findings when done.
 
 ## Remaining test summary
 
-**Test counts:** 609 passing (3 with tolerance overrides), 30 ignored, 3 unit tests ignored.
+**Test counts:** 614 passing (3 with tolerance overrides), 25 ignored, 3 unit tests ignored.
 
 | Category | Tests | Status |
 |---|---|---|
@@ -386,4 +386,4 @@ Append your findings when done.
 | Transmission line FP / dynamics | 3 | Ignored — CPL/LTRA cascading errors |
 | General circuit dynamics | 3 | Ignored — rtlinv/schmitt/mosamp timing/model gaps |
 | NR convergence | 3 | Ignored — needs gmin/source stepping |
-| Missing infrastructure | 11 | Ignored — .control, BSIM1/2, XSPICE |
+| Missing infrastructure | 6 | Ignored — .control (tc1 precision, resume, binning), BSIM1/2 |
