@@ -96,7 +96,13 @@ fn fail_test(path: &str, phase: Phase, error: &str) -> ! {
 ///
 /// Requires `cargo nextest` (each test gets its own process for timeout handling).
 /// Under plain `cargo test`, long simulations may hang (no per-test timeout).
-fn run_embedded_test(path: &str, cir: &str, out: &str, aux_files: &[(&str, &str)]) {
+fn run_embedded_test(
+    path: &str,
+    cir: &str,
+    out: &str,
+    aux_files: &[(&str, &str)],
+    rel_tol_override: Option<f64>,
+) {
     // Parse the netlist (includes already resolved at compile time)
     let mut netlist = match Netlist::parse(cir) {
         Ok(n) => n,
@@ -149,7 +155,7 @@ fn run_embedded_test(path: &str, cir: &str, out: &str, aux_files: &[(&str, &str)
 
         // Format output in ngspice batch mode and compare
         let actual_output = format_batch_output(&netlist, &result);
-        if let Err(e) = compare_filtered(out, &actual_output) {
+        if let Err(e) = compare_filtered(out, &actual_output, rel_tol_override) {
             fail_test(path, Phase::Compare, &e);
         }
     }

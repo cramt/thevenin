@@ -180,13 +180,17 @@ where
     })
 }
 
-/// Gmin stepping fallback.
+/// Dynamic Gmin stepping fallback.
 ///
-/// Start with an elevated Gmin (1e-2), converge, then reduce Gmin by 10x
-/// each step until reaching the target Gmin. Uses the previous step's
-/// solution as initial guess for the next step.
+/// Start with an elevated diagonal Gmin (1e-2), converge, then progressively
+/// reduce toward the target Gmin. Uses adaptive factor sizing and backtracking
+/// on failure, matching ngspice's `dynamic_gmin()` algorithm from `cktop.c`.
 ///
-/// Matches ngspice SPICE3-style Gmin stepping from `cktop.c`.
+/// Key differences from the simpler SPICE3-style stepping:
+/// - **Adaptive factor**: shrinks/grows based on NR iteration count per step
+/// - **Backtracking**: on failure, restores last good solution and tries a
+///   smaller step size (factor = sqrt(sqrt(factor)))
+/// - **Minimum factor**: stops when factor drops below 1.00005 (step too small)
 fn gmin_stepping<F>(
     options: &NrOptions,
     dim: usize,
@@ -197,18 +201,22 @@ fn gmin_stepping<F>(
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
-    let mut gmin = 1e-2;
-    let gmin_factor = 10.0; // matches ngspice SPICE3-style gmin stepping
+    let gmin_factor_max = 10.0_f64;
+    let mut factor = gmin_factor_max;
+    let mut gmin = 1e-2_f64;
+    let gmin_target = options.gmin.max(0.0);
     let mut solution = initial_guess.to_vec();
+    let mut last_good_solution = solution.clone();
+    let mut last_good_gmin = gmin;
     let mut total_iters = 0;
 
-    while gmin >= options.gmin * 0.9 {
+    while gmin >= gmin_target * 0.9 {
         let attempt = NrAttempt {
             gmin,
             source_factor: 1.0,
             max_iters: options.itl2,
         };
-        let result = try_nr(
+        match try_nr(
             options,
             dim,
             num_nodes,
@@ -216,15 +224,45 @@ where
             &solution,
             &attempt,
             NrMode::Float,
-        )?;
-        total_iters += result.iterations;
-        solution = result.solution;
-        gmin /= gmin_factor;
+        ) {
+            Ok(result) => {
+                total_iters += result.iterations;
+
+                // Adapt factor based on convergence speed
+                // (matches ngspice cktop.c dynamic_gmin lines 216-223)
+                let quarter = options.itl2 / 4;
+                if result.iterations <= quarter {
+                    // Easy convergence — try bigger steps
+                    factor = (factor * factor.sqrt()).min(gmin_factor_max);
+                } else if result.iterations > 3 * quarter {
+                    // Slow convergence — use smaller steps
+                    factor = factor.sqrt().max(1.00005);
+                }
+
+                last_good_solution.clone_from(&result.solution);
+                last_good_gmin = gmin;
+                solution = result.solution;
+                gmin /= factor;
+            }
+            Err(_) => {
+                // Backtracking: restore last good state and try smaller step
+                // (matches ngspice cktop.c dynamic_gmin lines 233-248)
+                if factor < 1.00005 {
+                    // Can't step any smaller — give up on gmin stepping
+                    return Err(NrError::NoConvergence {
+                        iterations: total_iters,
+                    });
+                }
+                factor = factor.sqrt().sqrt();
+                gmin = last_good_gmin / factor;
+                solution.clone_from(&last_good_solution);
+            }
+        }
     }
 
     // Final solve with target Gmin.
     let attempt = NrAttempt {
-        gmin: options.gmin,
+        gmin: gmin_target,
         source_factor: 1.0,
         max_iters: options.itl2,
     };

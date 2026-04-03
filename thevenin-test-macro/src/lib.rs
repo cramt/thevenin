@@ -12,6 +12,13 @@ use std::path::{Path, PathBuf};
 
 use proc_macro2::{Literal, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
+use serde::Deserialize;
+
+/// Per-test tolerance override parsed from `tolerances.toml`.
+#[derive(Debug, Deserialize)]
+struct ToleranceOverride {
+    rel_tol: f64,
+}
 
 /// Generates integration tests for all `.cir` files in `ngspice-upstream/tests/`.
 ///
@@ -47,6 +54,7 @@ fn generate_tests() -> Result<TokenStream2, String> {
         .join("tests");
     let fixture_root = manifest_dir.join("tests").join("fixtures");
     let ignore_path = manifest_dir.join("tests").join("ignore.toml");
+    let tolerances_path = manifest_dir.join("tests").join("tolerances.toml");
 
     // If ngspice-upstream isn't checked out, generate a single warning test.
     if !ngspice_tests_dir.is_dir() {
@@ -63,6 +71,15 @@ fn generate_tests() -> Result<TokenStream2, String> {
         let content = std::fs::read_to_string(&ignore_path)
             .map_err(|e| format!("failed to read ignore.toml: {e}"))?;
         toml::from_str(&content).map_err(|e| format!("failed to parse ignore.toml: {e}"))?
+    } else {
+        BTreeMap::new()
+    };
+
+    // Load per-test tolerance overrides (TOML table: "path" = { rel_tol = 0.005 })
+    let tolerances: BTreeMap<String, ToleranceOverride> = if tolerances_path.exists() {
+        let content = std::fs::read_to_string(&tolerances_path)
+            .map_err(|e| format!("failed to read tolerances.toml: {e}"))?;
+        toml::from_str(&content).map_err(|e| format!("failed to parse tolerances.toml: {e}"))?
     } else {
         BTreeMap::new()
     };
@@ -111,6 +128,13 @@ fn generate_tests() -> Result<TokenStream2, String> {
         // Check ignore list
         let ignore_reason = ignores.get(&rel_str);
 
+        // Check tolerance overrides (only applies if test is NOT ignored)
+        let tol_override = if ignore_reason.is_none() {
+            tolerances.get(&rel_str)
+        } else {
+            None
+        };
+
         tests.push(generate_test_fn(
             &test_name,
             &rel_str,
@@ -118,10 +142,24 @@ fn generate_tests() -> Result<TokenStream2, String> {
             &out_content,
             &aux_files,
             ignore_reason,
+            tol_override,
         ));
     }
 
-    Ok(quote! { #(#tests)* })
+    // Emit include_str! for config files so cargo tracks them as dependencies
+    // and recompiles when they change.
+    let ignore_str = ignore_path.to_string_lossy().to_string();
+    let ignore_lit = Literal::string(&ignore_str);
+    let tol_str = tolerances_path.to_string_lossy().to_string();
+    let tol_lit = Literal::string(&tol_str);
+
+    Ok(quote! {
+        #[allow(dead_code)]
+        const _IGNORE_TOML: &str = include_str!(#ignore_lit);
+        #[allow(dead_code)]
+        const _TOLERANCES_TOML: &str = include_str!(#tol_lit);
+        #(#tests)*
+    })
 }
 
 /// Recursively collect all `.cir` files under `dir`, sorted deterministically.
@@ -257,6 +295,7 @@ fn generate_test_fn(
     out_content: &str,
     aux_files: &[(String, String)],
     ignore_reason: Option<&String>,
+    tol_override: Option<&ToleranceOverride>,
 ) -> TokenStream2 {
     let fn_name = format_ident!("{}", test_name);
     let path_lit = Literal::string(rel_path);
@@ -271,6 +310,14 @@ fn generate_test_fn(
         quote! { #[ignore = #reason_lit] }
     });
 
+    let rel_tol_arg = match tol_override {
+        Some(tol) => {
+            let val = Literal::f64_unsuffixed(tol.rel_tol);
+            quote! { Some(#val) }
+        }
+        None => quote! { None },
+    };
+
     quote! {
         #[test]
         #ignore_attr
@@ -280,6 +327,7 @@ fn generate_test_fn(
                 #cir_lit,
                 #out_lit,
                 &[#( (#aux_names, #aux_contents) ),*],
+                #rel_tol_arg,
             );
         }
     }

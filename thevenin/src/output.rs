@@ -2240,9 +2240,15 @@ const HARNESS_ABS_TOL: f64 = 1e-7;
 /// and settled-state voltages can differ by that amount between implementations.
 const COLUMN_ABS_SCALE: f64 = 2e-6;
 
-pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
+pub fn compare_filtered(
+    expected: &str,
+    actual: &str,
+    rel_tol_override: Option<f64>,
+) -> Result<(), String> {
     let expected_filtered = filter_output(expected);
     let actual_filtered = filter_output(actual);
+
+    let rel_tol = rel_tol_override.unwrap_or(HARNESS_REL_TOL);
 
     let norm_expected = normalize_for_diff(&expected_filtered);
     let norm_actual = normalize_for_diff(&actual_filtered);
@@ -2280,14 +2286,14 @@ pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
         let all_match = norm_expected
             .iter()
             .zip(norm_actual.iter())
-            .all(|(e, a)| lines_match_approx(e, a));
+            .all(|(e, a)| lines_match_approx(e, a, rel_tol));
         if all_match {
             return Ok(());
         }
     }
 
     // Fall back to interpolation-aware comparison.
-    compare_with_interpolation(&norm_expected, &norm_actual)
+    compare_with_interpolation(&norm_expected, &norm_actual, rel_tol)
 }
 
 /// Check if a normalized line looks like a data row: starts with an integer index
@@ -2359,6 +2365,7 @@ fn lerp_at(x: f64, xs: &[f64], ys: &[f64]) -> f64 {
 fn compare_with_interpolation(
     norm_expected: &[String],
     norm_actual: &[String],
+    harness_rel_tol: f64,
 ) -> Result<(), String> {
     // Extract text lines that appear BETWEEN data rows (skip header/footer text like
     // "Initial Transient Solution", circuit listings, and .plot ASCII art).
@@ -2383,7 +2390,7 @@ fn compare_with_interpolation(
         return Err(format_diff(norm_expected, norm_actual));
     }
     for (e, a) in exp_text.iter().zip(act_text.iter()) {
-        if !lines_match_approx(e, a) {
+        if !lines_match_approx(e, a, harness_rel_tol) {
             return Err(format_diff(norm_expected, norm_actual));
         }
     }
@@ -2463,14 +2470,14 @@ fn compare_with_interpolation(
             } else {
                 0.0
             };
-            let dt_tol = HARNESS_REL_TOL * x_range;
+            let dt_tol = harness_rel_tol * x_range;
 
             for (col, &abs_tol) in col_abs_tol.iter().enumerate() {
                 for (i, (exp_row, act_row)) in exp_grp.iter().zip(act_grp.iter()).enumerate() {
                     let exp_val = exp_row.2[col];
                     let act_val = act_row.2[col];
                     let abs_diff = (exp_val - act_val).abs();
-                    let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(act_val.abs());
+                    let rel_tol = harness_rel_tol * exp_val.abs().max(act_val.abs());
 
                     // Slope-aware tolerance: estimate local slope using the
                     // maximum secant slope in a neighborhood of ±5 points.
@@ -2508,7 +2515,7 @@ fn compare_with_interpolation(
             } else {
                 0.0
             };
-            let dt_tol = HARNESS_REL_TOL * x_range;
+            let dt_tol = harness_rel_tol * x_range;
 
             // For each dependent column, build actual arrays and interpolate at expected points.
             for (col, &abs_tol) in col_abs_tol.iter().enumerate() {
@@ -2519,7 +2526,7 @@ fn compare_with_interpolation(
                     let interp_val = lerp_at(exp_x[i], &act_x, &act_y);
 
                     let abs_diff = (exp_val - interp_val).abs();
-                    let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(interp_val.abs());
+                    let rel_tol = harness_rel_tol * exp_val.abs().max(interp_val.abs());
 
                     // Slope-aware tolerance for interpolation comparison.
                     // Uses max-slope over a ±5 point window, same as row-by-row.
@@ -2622,7 +2629,7 @@ fn parse_token_f64(s: &str) -> Option<f64> {
         .or_else(|| s.strip_suffix(',').and_then(|s| s.parse::<f64>().ok()))
 }
 
-fn lines_match_approx(expected: &str, actual: &str) -> bool {
+fn lines_match_approx(expected: &str, actual: &str, harness_rel_tol: f64) -> bool {
     let exp_tokens: Vec<&str> = expected.split_whitespace().collect();
     let act_tokens: Vec<&str> = actual.split_whitespace().collect();
 
@@ -2637,7 +2644,7 @@ fn lines_match_approx(expected: &str, actual: &str) -> bool {
         match (parse_token_f64(e), parse_token_f64(a)) {
             (Some(ev), Some(av)) => {
                 let abs_diff = (ev - av).abs();
-                let rel_tol = HARNESS_REL_TOL * ev.abs().max(av.abs());
+                let rel_tol = harness_rel_tol * ev.abs().max(av.abs());
                 if abs_diff > rel_tol + HARNESS_ABS_TOL {
                     return false;
                 }
@@ -2700,14 +2707,14 @@ mod tests {
     fn test_compare_filtered_matching() {
         let a = "Circuit: test\n0\t1.000000e+00\t";
         let b = "Circuit: test\n0\t1.000000e+00\t";
-        assert!(compare_filtered(a, b).is_ok());
+        assert!(compare_filtered(a, b, None).is_ok());
     }
 
     #[test]
     fn test_compare_filtered_ignores_blanks_and_whitespace() {
         let a = "0\t1.000000e+00\n\n";
         let b = "0  1.000000e+00\n";
-        assert!(compare_filtered(a, b).is_ok());
+        assert!(compare_filtered(a, b, None).is_ok());
     }
 
     #[test]
