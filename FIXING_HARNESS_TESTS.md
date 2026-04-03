@@ -370,7 +370,7 @@ Append your findings when done.
 |---|---|---|
 | VBIC companion FP eval order | 4 | No — ~0.2% base error, confirmed 80+ sessions |
 | VBIC AC (CEamp) | 1 | No — DC OP FP precision -> AC gain |
-| BSIM3SOI missing body currents | 4 | No — needs ~300+ LOC body coupling chain |
+| BSIM3SOI analytical body voltage chain | 4 | No — DD model computes Vbs analytically (Vbs0t→Vbseff chain), NR body node is secondary; error is in the analytical chain, not NR body equation |
 | Transmission line FP | 4 | No — eigendecomposition + convolution rounding |
 | Deep transient dynamics | 2 | No — model accuracy limitation |
 | NR convergence / wrong OP | 2 | No — needs solver architectural changes |

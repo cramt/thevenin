@@ -104,3 +104,43 @@ reduce the error. The remaining fix options are:
 - Or accepting this as a precision limitation for floating-body DD circuits
 
 **What NOT to retry:** Combined body stamping restructure — confirmed no effect.
+
+## Session 100 findings (2026-04-03)
+
+### DD t3: minIsub investigation
+
+**Discovered:** ngspice adds `minIsub` to body current CEQs (b3soiddld.c lines 2602, 2614,
+2627) and b3soiddtemp.c line 744. This is a convergence aid:
+- `ceq_jd -= minIsub/2`
+- `ceq_js -= minIsub/2`
+- `ceq_body += minIsub`
+
+Where `minIsub = 5e-2 * weff * tsi * max(isdif, isrec)`.
+
+For the t3 model card: `minIsub = 5e-2 * 10e-6 * 5e-8 * 1e-5 = 2.5e-19 A`.
+
+**Implemented:** Added `min_isub` field to `Bsim3SoiDdSizeParam` and included it in the
+three CEQ terms matching ngspice exactly. No regressions (603 tests pass).
+
+**Result:** Virtually no effect on DD t3 error (diff changed from 1.497600e-7 to 1.497900e-7,
+a 3e-11 change = 1.3 ppm). The minIsub is correct but too small to affect the converged
+solution at this operating point.
+
+**Key insight discovered:** The DD model computes body voltage ANALYTICALLY through the
+Vbs0t→Vbs0eff→Vbsdio→Vbsmos→Vbseff chain (ngspice lines 940-1185). The NR body node
+voltage `vbs_i` feeds into `Vbsdio` via `smooth_max(vbs_i, Vbs0eff + 0.02)`, but when
+`vbs_i` is near or below the analytical floor, `Vbsdio ≈ Vbs0eff + 0.02` regardless of NR
+body voltage. This means:
+
+1. The NR body node equation is SECONDARY to the analytical computation
+2. All previous body node fixes (combined stamps, minIsub, junction restructure) cannot
+   affect Ids because the Ids computation depends on the analytical Vbseff, not NR Vbs
+3. The 0.6% error is in the analytical body voltage chain itself (Vbs0t computation,
+   Nfb feedback factor, or some intermediate) — not in the NR body node balance
+
+**What NOT to retry:** ANY body node current/conductance modification (minIsub, stamps, gmin,
+junction paths). The body node doesn't control Ids in DD model — the analytical chain does.
+
+**Next steps (for future sessions):** Compare Vbs0t, Vbs0eff, Nfb, Vbsdio, Vbsmos, Vbseff
+intermediate values between Rust and ngspice at the failing operating point (Vg=0.5V,
+Vd=0.24V). The 1.5mV discrepancy in the analytical body voltage chain is the root cause.

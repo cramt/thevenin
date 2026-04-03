@@ -344,6 +344,10 @@ pub struct Bsim3SoiDdSizeParam {
     pub dvbd0: f64,
     pub dvbd1: f64,
 
+    /// Minimum substrate current (convergence aid for body node).
+    /// ngspice b3soiddtemp.c line 744: 5e-2 * weff * tsi * max(isdif, isrec)
+    pub min_isub: f64,
+
     pub nseg: f64,
 }
 
@@ -1139,6 +1143,8 @@ impl Bsim3SoiDdModel {
             kb3: kb3_binned,
             dvbd0: dvbd0_binned,
             dvbd1: dvbd1_binned,
+            // ngspice b3soiddtemp.c line 744: minimum substrate current for body node stability
+            min_isub: 5.0e-2 * weff * self.tsi * self.isdif.max(self.isrec),
             nseg: 1.0,
         }
     }
@@ -2529,14 +2535,14 @@ pub fn bsim3soi_dd_companion(
     let gjdd = -gbd_jct + gjdd_extra - gii_d - ggidl_d;
     let gjdg = -(gii_g + ggidl_g);
     let gjde = -gii_e;
-    let ceq_jd = ibd - iii - igidl
+    let ceq_jd = ibd - iii - igidl - sp.min_isub * 0.5
         - (gjdb * vbs_i + gjdd * vds_i + gjdg * vgs_i + gjde * ves_i);
 
     // Combined source-junction CEQ (ngspice b3soiddld.c lines 2609-2616: cjs)
     let gjsb = gbs_jct;
     let gjsd_c = gjsd;
     let gjsg = -gsgidl_g;
-    let ceq_js = ibs - isgidl
+    let ceq_js = ibs - isgidl - sp.min_isub * 0.5
         - (gjsb * vbs_i + gjsd_c * vds_i + gjsg * vgs_i);
 
     // Combined body derivatives (ngspice b3soiddld.c lines 2620-2624)
@@ -2549,7 +2555,9 @@ pub fn bsim3soi_dd_companion(
 
     // Combined body current CEQ (ngspice b3soiddld.c lines 2627-2630: cbody)
     // This is the net current flowing into the body, with linearization subtracted.
-    let ceq_body = iii + igidl + isgidl - ibs - ibd
+    // minIsub is a convergence aid that adds a small minimum current to the body node,
+    // split equally between drain and source junctions (KCL balanced).
+    let ceq_body = iii + igidl + isgidl - ibs - ibd + sp.min_isub
         - (gbbs * vbs_i + gbgs * vgs_i + gbds * vds_i + gbes * ves_i);
 
     // Capacitances

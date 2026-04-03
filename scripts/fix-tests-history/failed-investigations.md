@@ -31,3 +31,4 @@
 | VBIC FO reciprocal matching (session 89) | Matching eval order for Early voltage had ZERO effect. ULP difference too small to propagate. |
 | NR solver architecture analysis (session 89) | Device-level convergence checks may force 1-2 extra iterations but shouldn't change converged point. |
 | BSIM3SOI-DD t3 combined body current stamping (session 89) | Different FP accumulation order in body current linearization shifts equilibrium by ~1.5mV. Requires ~300 LOC rewrite. |
+| BSIM3SOI-DD t3 minIsub convergence aid (session 100) | Added minIsub matching ngspice (5e-2*weff*tsi*max(isdif,isrec)). Correct but negligible effect (2.5e-19 A). Key finding: DD model computes body voltage ANALYTICALLY through Vbs0t→Vbseff chain — NR body node is secondary and doesn't control Ids. All body node modifications are ineffective for DD t3. |
