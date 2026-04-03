@@ -44,7 +44,7 @@
 # === Transient ===
 
 # === Transmission lines ===
-"transmission/cpl3_4_line.cir" = "~13.8% peak error at switching transition: CPL 4-line CMOS timing shift (formulas verified; transient dynamics issue)"
+"transmission/cpl3_4_line.cir" = "~13.8% peak error at t=38.8ns: CPL 4-line CMOS switching timing shift (all setup + convolution code verified identical to ngspice; FP accumulation)"
 "transmission/cpl_ibm2.cir" = "~6.4% error at t=9.65ns: CPL 2-line coupling error (polint Neville fix correct but exposed compensating setup bug; no MOSFETs)"
 "transmission/ltra2_2_line.cir" = "~5.8% V(3) error at t=29.3ns: cascaded 2-line circuit accumulates CMOS inverter switching errors through second stage"
 

@@ -98,3 +98,26 @@ formula bug. The order upgrade logic difference could contribute.
 
 **What NOT to retry:** TRTOL value changes (both are 7.0), LTE formula changes
 (verified identical), breakpoint handling (matches).
+
+## Session 103 findings (2026-04-03)
+
+### rtlinv: Order upgrade check (IMPLEMENTED, no effect)
+
+**Implemented:** ngspice's order upgrade check (dctran.c lines 820-831) for BE→Trap
+transition. After a successful BE step at a breakpoint, the code now tentatively computes
+the Trap LTE. If the Trap LTE suggests a timestep ≤ 1.05× the current step, it stays at
+BE for the next step too. This means ngspice may use 2-5 BE steps after breakpoints before
+upgrading to Trap, matching the default algorithm.
+
+Added `force_be` flag to the transient loop, integrated with method selection and LTE
+section. Also computes LTE for BE steps to control next step size (matching ngspice line
+833: CKTdelta = newdelta regardless of order decision).
+
+**Result:** Zero effect on rtlinv — error remains at 4.33%. The order upgrade check is
+correct ngspice behavior and doesn't cause regressions (612 tests pass), but the rtlinv
+switching edge doesn't benefit because the timing difference is in the middle of the
+transition, not at the breakpoint.
+
+**What NOT to retry:** Order upgrade check for rtlinv (confirmed no effect). The 4.3%
+error is from accumulated numerical differences during the continuous switching transition,
+not from BE→Trap transition timing at breakpoints.

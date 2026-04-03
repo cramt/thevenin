@@ -918,6 +918,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mut h = (h_max / 400.0).max(h_min);
     let mut h_prev = h; // No previous step yet; use h as initial estimate.
     let mut is_first_step = true;
+    let mut force_be = false; // Order upgrade check: stay at BE until Trap LTE allows upgrade.
 
     // Adaptive time-stepping loop.
     while t < t_stop - h_min {
@@ -944,8 +945,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             step_h = step_h.min(h * 0.1).max(h_min);
         }
 
-        // Use Backward Euler for the first step and at breakpoints.
-        let method = if is_first_step || at_breakpoint {
+        // Use Backward Euler for the first step, at breakpoints, and when the
+        // order upgrade check says Trap would need a similar step (ngspice
+        // dctran.c lines 820-831: stay at BE until Trap LTE allows upgrade).
+        let method = if is_first_step || at_breakpoint || force_be {
             IntegrationMethod::BackwardEuler
         } else {
             IntegrationMethod::Trapezoidal
@@ -1077,7 +1080,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             }
         };
 
-        // LTE-based timestep control (only for Trap with reactive elements or BJTs).
+        // LTE-based timestep control.
         let has_bjt_charges = !mna.bjts.is_empty();
         if method == IntegrationMethod::Trapezoidal && (has_reactive || has_bjt_charges) {
             let new_h = estimate_new_timestep(
@@ -1111,16 +1114,39 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
             // Accept: schedule next h from LTE estimate.
             h = new_h.min(step_h * MAX_GROW).min(h_max).max(h_min);
-        } else if at_breakpoint
-            && (has_reactive || has_bjt_charges || has_ltra || has_txl || has_cpl)
+            force_be = false;
+        } else if method == IntegrationMethod::BackwardEuler
+            && (has_reactive || has_bjt_charges)
         {
-            // For Backward Euler steps at breakpoints in reactive circuits,
-            // we can't compute Trapezoidal LTE but must still limit step
-            // growth.  Without this, h retains its pre-breakpoint value and
-            // the step jumps back to h_max immediately after leaving the
-            // breakpoint zone, missing fast transitions (e.g., PULSE edges
-            // driving CMOS inverters through transmission lines).
+            // Order upgrade check (ngspice dctran.c lines 820-831):
+            // After a successful BE step, try computing the order-2 (Trap) LTE.
+            // If the Trap LTE suggests a timestep <= 1.05× the current step,
+            // stay at BE for the next step too — Trap can't take larger steps so
+            // BE's extra stability is preferable during fast transitions.
+            // ngspice may use 2-5 BE steps after breakpoints before upgrading.
+            let trap_h = estimate_new_timestep(
+                step_h,
+                h_prev,
+                &new_solution,
+                &mna,
+                &cap_histories,
+                &ind_histories,
+                &bjt_charge_histories,
+                nr_options.reltol,
+                nr_options.abstol,
+            );
+            force_be = trap_h <= 1.05 * step_h;
+            // Use Trap LTE estimate to control next step size, matching ngspice
+            // (line 833: CKTdelta = newdelta regardless of order decision).
+            h = trap_h.min(step_h * MAX_GROW).min(h_max).max(h_min);
+        } else if (at_breakpoint || force_be)
+            && (has_ltra || has_txl || has_cpl)
+        {
+            // For BE steps in transmission-line-only circuits (no caps/inductors/
+            // BJTs to compute LTE), limit step growth and clear force_be since we
+            // can't determine if Trap would be appropriate.
             h = (step_h * MAX_GROW).min(h_max).max(h_min);
+            force_be = false;
         } else {
             // No LTE control and not at a breakpoint — grow toward h_max,
             // but cap at h_print so output points stay dense enough for
@@ -1128,6 +1154,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // transmission lines (no caps/inductors/BJTs) stay stuck at
             // the initial tiny h and never make progress.
             h = (step_h * MAX_GROW).min(h_max).min(h_print).max(h_min);
+            force_be = false;
         }
 
         // Accept this timestep: advance time and update state.
