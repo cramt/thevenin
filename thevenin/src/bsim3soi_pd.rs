@@ -1880,115 +1880,110 @@ pub fn bsim3soi_pd_companion(
     //
     // Both include high-level injection factors (EhlisFactor/EhlidFactor) and
     // Ic includes a second-order Early effect factor (E2ndFactor).
-    let (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb) =
-        if sp.jbjt == 0.0 || sp.lratio == 0.0 {
-            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    let (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb) = if sp.jbjt == 0.0
+        || sp.lratio == 0.0
+    {
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    } else {
+        let t0_bs = vbs_i / nvtm1;
+        let (exp_vbs, dexp_bs) = soi_dexp(t0_bs);
+        let t0_bd = vbd / nvtm1;
+        let (exp_vbd, dexp_bd) = soi_dexp(t0_bd);
+
+        let ien = weff / sp.nseg * model.tsi * sp.jbjt * sp.lratio;
+        let ahli = model.ahli;
+
+        // High-level injection factor — source side (ngspice lines 2014-2033)
+        let ehlis = ahli * (exp_vbs - 1.0);
+        let (ehlis_factor, dehlis_dvb) = if ehlis < 1e-5 {
+            (1.0, 0.0)
         } else {
-            let t0_bs = vbs_i / nvtm1;
-            let (exp_vbs, dexp_bs) = soi_dexp(t0_bs);
-            let t0_bd = vbd / nvtm1;
-            let (exp_vbd, dexp_bd) = soi_dexp(t0_bd);
-
-            let ien = weff / sp.nseg * model.tsi * sp.jbjt * sp.lratio;
-            let ahli = model.ahli;
-
-            // High-level injection factor — source side (ngspice lines 2014-2033)
-            let ehlis = ahli * (exp_vbs - 1.0);
-            let (ehlis_factor, dehlis_dvb) = if ehlis < 1e-5 {
-                (1.0, 0.0)
-            } else {
-                let f = 1.0 / (1.0 + ehlis).sqrt();
-                let t = -0.5 * f / (1.0 + ehlis);
-                (f, t * ahli * dexp_bs / nvtm1)
-            };
-
-            // High-level injection factor — drain side (ngspice lines 2035-2056)
-            let ehlid = ahli * (exp_vbd - 1.0);
-            let (ehlid_factor, dehlid_dvb, dehlid_dvd) = if ehlid < 1e-5 {
-                (1.0, 0.0, 0.0)
-            } else {
-                let f = 1.0 / (1.0 + ehlid).sqrt();
-                let t = -0.5 * f / (1.0 + ehlid);
-                let dehlid_dvb = t * ahli * dexp_bd / nvtm1;
-                (f, dehlid_dvb, -dehlid_dvb)
-            };
-
-            // Ibs3/Ibd3: recombination (1-arfabjt fraction) with EhlisFactor
-            // (ngspice lines 2058-2093)
-            let t0_recomb = 1.0 - sp.arfabjt;
-            let (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd) = if t0_recomb < 1e-2 {
-                (0.0, 0.0, 0.0, 0.0, 0.0)
-            } else {
-                let t1 = t0_recomb * ien;
-                let ibs3 = t1 * (exp_vbs - 1.0) * ehlis_factor;
-                let dibs3_dvb = t1
-                    * (dexp_bs / nvtm1 * ehlis_factor + (exp_vbs - 1.0) * dehlis_dvb);
-                let ibd3 = t1 * (exp_vbd - 1.0) * ehlid_factor;
-                let dibd3_dvb = t1
-                    * (dexp_bd / nvtm1 * ehlid_factor + (exp_vbd - 1.0) * dehlid_dvb);
-                (ibs3, dibs3_dvb, ibd3, dibd3_dvb, -dibd3_dvb)
-            };
-
-            // Ic: BJT collector current (arfabjt fraction) with E2ndFactor
-            // (ngspice lines 2123-2192)
-            let (ic, gcd, gcb) = if sp.arfabjt < 1e-2 || vds_i == 0.0 {
-                (0.0, 0.0, 0.0)
-            } else {
-                // Second-order Early effect (ngspice lines 2128-2171)
-                let t0_e = 1.0 + (vbs_i + vbd) / sp.vearly;
-                let dt0_e_dvb = 2.0 / sp.vearly;
-                let dt0_e_dvd = -1.0 / sp.vearly;
-
-                let ehlis_raw = if ehlis < 1e-5 { 0.0 } else { ehlis };
-                let ehlid_raw = if ehlid < 1e-5 { 0.0 } else { ehlid };
-                let t1_e = ehlis_raw + ehlid_raw;
-                let dt1_e_dvb = if ehlis >= 1e-5 {
-                    ahli * dexp_bs / nvtm1
-                } else {
-                    0.0
-                } + if ehlid >= 1e-5 {
-                    ahli * dexp_bd / nvtm1
-                } else {
-                    0.0
-                };
-                let dt1_e_dvd = if ehlid >= 1e-5 {
-                    -(ahli * dexp_bd / nvtm1)
-                } else {
-                    0.0
-                };
-
-                let t3_e = (t0_e * t0_e + 4.0 * t1_e).sqrt();
-                let dt3_e_dvb =
-                    0.5 / t3_e * (2.0 * t0_e * dt0_e_dvb + 4.0 * dt1_e_dvb);
-                let dt3_e_dvd =
-                    0.5 / t3_e * (2.0 * t0_e * dt0_e_dvd + 4.0 * dt1_e_dvd);
-
-                let t2_e = (t0_e + t3_e) / 2.0;
-                let dt2_e_dvb = (dt0_e_dvb + dt3_e_dvb) / 2.0;
-                let dt2_e_dvd = (dt0_e_dvd + dt3_e_dvd) / 2.0;
-
-                let (e2nd, de2nd_dvb, de2nd_dvd) = if t2_e < 0.1 {
-                    (10.0, 0.0, 0.0)
-                } else {
-                    let e = 1.0 / t2_e;
-                    (e, -e / t2_e * dt2_e_dvb, -e / t2_e * dt2_e_dvd)
-                };
-
-                let t0_ic = sp.arfabjt * ien;
-                let dexp_bs_dvb = dexp_bs / nvtm1;
-                let dexp_bd_dvb = dexp_bd / nvtm1;
-                let ic = t0_ic * (exp_vbs - exp_vbd) * e2nd;
-                let gcb = t0_ic
-                    * ((dexp_bs_dvb - dexp_bd_dvb) * e2nd
-                        + (exp_vbs - exp_vbd) * de2nd_dvb);
-                let gcd = t0_ic
-                    * ((-dexp_bd_dvb) * e2nd + (exp_vbs - exp_vbd) * de2nd_dvd);
-
-                (ic, gcd, gcb)
-            };
-
-            (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb)
+            let f = 1.0 / (1.0 + ehlis).sqrt();
+            let t = -0.5 * f / (1.0 + ehlis);
+            (f, t * ahli * dexp_bs / nvtm1)
         };
+
+        // High-level injection factor — drain side (ngspice lines 2035-2056)
+        let ehlid = ahli * (exp_vbd - 1.0);
+        let (ehlid_factor, dehlid_dvb, dehlid_dvd) = if ehlid < 1e-5 {
+            (1.0, 0.0, 0.0)
+        } else {
+            let f = 1.0 / (1.0 + ehlid).sqrt();
+            let t = -0.5 * f / (1.0 + ehlid);
+            let dehlid_dvb = t * ahli * dexp_bd / nvtm1;
+            (f, dehlid_dvb, -dehlid_dvb)
+        };
+
+        // Ibs3/Ibd3: recombination (1-arfabjt fraction) with EhlisFactor
+        // (ngspice lines 2058-2093)
+        let t0_recomb = 1.0 - sp.arfabjt;
+        let (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd) = if t0_recomb < 1e-2 {
+            (0.0, 0.0, 0.0, 0.0, 0.0)
+        } else {
+            let t1 = t0_recomb * ien;
+            let ibs3 = t1 * (exp_vbs - 1.0) * ehlis_factor;
+            let dibs3_dvb = t1 * (dexp_bs / nvtm1 * ehlis_factor + (exp_vbs - 1.0) * dehlis_dvb);
+            let ibd3 = t1 * (exp_vbd - 1.0) * ehlid_factor;
+            let dibd3_dvb = t1 * (dexp_bd / nvtm1 * ehlid_factor + (exp_vbd - 1.0) * dehlid_dvb);
+            (ibs3, dibs3_dvb, ibd3, dibd3_dvb, -dibd3_dvb)
+        };
+
+        // Ic: BJT collector current (arfabjt fraction) with E2ndFactor
+        // (ngspice lines 2123-2192)
+        let (ic, gcd, gcb) = if sp.arfabjt < 1e-2 || vds_i == 0.0 {
+            (0.0, 0.0, 0.0)
+        } else {
+            // Second-order Early effect (ngspice lines 2128-2171)
+            let t0_e = 1.0 + (vbs_i + vbd) / sp.vearly;
+            let dt0_e_dvb = 2.0 / sp.vearly;
+            let dt0_e_dvd = -1.0 / sp.vearly;
+
+            let ehlis_raw = if ehlis < 1e-5 { 0.0 } else { ehlis };
+            let ehlid_raw = if ehlid < 1e-5 { 0.0 } else { ehlid };
+            let t1_e = ehlis_raw + ehlid_raw;
+            let dt1_e_dvb = if ehlis >= 1e-5 {
+                ahli * dexp_bs / nvtm1
+            } else {
+                0.0
+            } + if ehlid >= 1e-5 {
+                ahli * dexp_bd / nvtm1
+            } else {
+                0.0
+            };
+            let dt1_e_dvd = if ehlid >= 1e-5 {
+                -(ahli * dexp_bd / nvtm1)
+            } else {
+                0.0
+            };
+
+            let t3_e = (t0_e * t0_e + 4.0 * t1_e).sqrt();
+            let dt3_e_dvb = 0.5 / t3_e * (2.0 * t0_e * dt0_e_dvb + 4.0 * dt1_e_dvb);
+            let dt3_e_dvd = 0.5 / t3_e * (2.0 * t0_e * dt0_e_dvd + 4.0 * dt1_e_dvd);
+
+            let t2_e = (t0_e + t3_e) / 2.0;
+            let dt2_e_dvb = (dt0_e_dvb + dt3_e_dvb) / 2.0;
+            let dt2_e_dvd = (dt0_e_dvd + dt3_e_dvd) / 2.0;
+
+            let (e2nd, de2nd_dvb, de2nd_dvd) = if t2_e < 0.1 {
+                (10.0, 0.0, 0.0)
+            } else {
+                let e = 1.0 / t2_e;
+                (e, -e / t2_e * dt2_e_dvb, -e / t2_e * dt2_e_dvd)
+            };
+
+            let t0_ic = sp.arfabjt * ien;
+            let dexp_bs_dvb = dexp_bs / nvtm1;
+            let dexp_bd_dvb = dexp_bd / nvtm1;
+            let ic = t0_ic * (exp_vbs - exp_vbd) * e2nd;
+            let gcb =
+                t0_ic * ((dexp_bs_dvb - dexp_bd_dvb) * e2nd + (exp_vbs - exp_vbd) * de2nd_dvb);
+            let gcd = t0_ic * ((-dexp_bd_dvb) * e2nd + (exp_vbs - exp_vbd) * de2nd_dvd);
+
+            (ic, gcd, gcb)
+        };
+
+        (ibs3, dibs3_dvb, ibd3, dibd3_dvb, dibd3_dvd, ic, gcd, gcb)
+    };
 
     // Ibs4/Ibd4: Tunneling current
     let (ibs4, dibs4_dvb, ibd4, dibd4_dvb, dibd4_dvd) = if sp.jtun == 0.0 {
@@ -2042,8 +2037,7 @@ pub fn bsim3soi_pd_companion(
         let vdiff = vds_i - vdsatii0 - vgs_step;
         let dvdiff_dvg = -t1_sii * t3_siid * dt2_dvg;
         let dvdiff_dvb = -t1_sii * t3_siid * dt2_dvb;
-        let dvdiff_dvd =
-            1.0 - t1_sii * (t3_siid * dt2_dvd + t2_vgst * dt3_siid_dvd);
+        let dvdiff_dvd = 1.0 - t1_sii * (t3_siid * dt2_dvd + t2_vgst * dt3_siid_dvd);
 
         // Polynomial denominator (ngspice lines 2583-2600)
         let t0_poly = model.beta2 + model.beta1 * vdiff + sp.beta0 * vdiff * vdiff;

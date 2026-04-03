@@ -1790,18 +1790,16 @@ fn solve_timestep(
                 // (Early effect). geqcb = dQbe/dVbc = TF * (-cbe_mod * dqbdvc) / qb.
                 // For xtf != 0 this would include arg3 = cbe*argtf*ovtf, but xtf defaults
                 // to 0 so arg3 = 0 in the common case.
-                let geqcb_unscaled =
-                    bjt.model.tf * (0.0 /* arg3, zero when xtf=0 */ - cbe_mod * comp.dqbdvc)
-                        / comp.qb;
+                let geqcb_unscaled = bjt.model.tf
+                    * (0.0 /* arg3, zero when xtf=0 */ - cbe_mod * comp.dqbdvc)
+                    / comp.qb;
 
                 let hist = &bjt_charge_histories[bi];
 
                 // Incremental charge: Q = Q_prev + dQ/dVbe * ΔVbe + dQ/dVbc * ΔVbc
                 // The geqcb_unscaled term accounts for Vbc's effect on the BE charge
                 // (ngspice computes qbe = tf*cbe_norm which implicitly includes this).
-                let qbe = hist.qbe
-                    + capbe * (vbe - hist.vbe)
-                    + geqcb_unscaled * (vbc - hist.vbc);
+                let qbe = hist.qbe + capbe * (vbe - hist.vbe) + geqcb_unscaled * (vbc - hist.vbc);
                 let qbc = hist.qbc + capbc * (vbc - hist.vbc);
 
                 // Integration coefficient: ag[0] = 1/h (BE) or 2/h (trap).

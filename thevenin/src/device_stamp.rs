@@ -56,21 +56,13 @@ pub(crate) fn fetlim(vnew: f64, vold: f64, vto: f64) -> f64 {
             if delv <= 0.0 {
                 // going off
                 if vnew >= vtox {
-                    if -delv > vtstlo {
-                        vold - vtstlo
-                    } else {
-                        vnew
-                    }
+                    if -delv > vtstlo { vold - vtstlo } else { vnew }
                 } else {
                     vnew.max(vto + 2.0)
                 }
             } else {
                 // staying on
-                if delv >= vtsthi {
-                    vold + vtsthi
-                } else {
-                    vnew
-                }
+                if delv >= vtsthi { vold + vtsthi } else { vnew }
             }
         } else {
             // middle region
@@ -83,19 +75,11 @@ pub(crate) fn fetlim(vnew: f64, vold: f64, vto: f64) -> f64 {
     } else {
         // off
         if delv <= 0.0 {
-            if -delv > vtsthi {
-                vold - vtsthi
-            } else {
-                vnew
-            }
+            if -delv > vtsthi { vold - vtsthi } else { vnew }
         } else {
             let vtemp = vto + 0.5;
             if vnew <= vtemp {
-                if delv > vtstlo {
-                    vold + vtstlo
-                } else {
-                    vnew
-                }
+                if delv > vtstlo { vold + vtstlo } else { vnew }
             } else {
                 vtemp
             }

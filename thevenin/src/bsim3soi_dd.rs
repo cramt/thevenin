@@ -2535,15 +2535,17 @@ pub fn bsim3soi_dd_companion(
     let gjdd = -gbd_jct + gjdd_extra - gii_d - ggidl_d;
     let gjdg = -(gii_g + ggidl_g);
     let gjde = -gii_e;
-    let ceq_jd = ibd - iii - igidl - sp.min_isub * 0.5
+    let ceq_jd = ibd
+        - iii
+        - igidl
+        - sp.min_isub * 0.5
         - (gjdb * vbs_i + gjdd * vds_i + gjdg * vgs_i + gjde * ves_i);
 
     // Combined source-junction CEQ (ngspice b3soiddld.c lines 2609-2616: cjs)
     let gjsb = gbs_jct;
     let gjsd_c = gjsd;
     let gjsg = -gsgidl_g;
-    let ceq_js = ibs - isgidl - sp.min_isub * 0.5
-        - (gjsb * vbs_i + gjsd_c * vds_i + gjsg * vgs_i);
+    let ceq_js = ibs - isgidl - sp.min_isub * 0.5 - (gjsb * vbs_i + gjsd_c * vds_i + gjsg * vgs_i);
 
     // Combined body derivatives (ngspice b3soiddld.c lines 2620-2624)
     // These are the sensitivity of the NET body current to each terminal voltage.

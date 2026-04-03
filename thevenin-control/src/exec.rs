@@ -662,7 +662,9 @@ fn execute_alter(spec: &str, value: &AlterValue, _ctx: &mut SimContext) -> Resul
     let _param = &inner[bracket_start + 1..bracket_end];
 
     let _ = value;
-    Err(format!("alter: not yet implemented (device={_device}, param={_param})"))
+    Err(format!(
+        "alter: not yet implemented (device={_device}, param={_param})"
+    ))
 }
 
 /// Resolve echo fragments into a string.
