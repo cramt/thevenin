@@ -1131,18 +1131,25 @@ impl DeviceVoltageState {
                     // initial guess determines which OP the NR solver finds.
                     (-1.0, -1.0)
                 } else {
-                    // HFET2 (hfet2load.c lines 179-185) applies both
-                    // DEVpnjlim and DEVfetlim voltage limiting.
                     let (raw_vgs, raw_vgd) = hfet.junction_voltages(solution);
-                    let vgs_lim = pnjlim(raw_vgs, prev[hi].0, VT_NOM, hfet.precomp.vcrit);
-                    let vgd_lim = pnjlim(raw_vgd, prev[hi].1, VT_NOM, hfet.precomp.vcrit);
-                    let vgs = fetlim(vgs_lim, prev[hi].0, hfet.precomp.t_vto);
-                    let vgd = fetlim(vgd_lim, prev[hi].1, hfet.precomp.t_vto);
-                    (vgs, vgd)
+                    if hfet.model.level == 6 {
+                        // HFET2 (hfet2load.c lines 179-185) applies both
+                        // DEVpnjlim and DEVfetlim voltage limiting.
+                        let vgs_lim = pnjlim(raw_vgs, prev[hi].0, VT_NOM, hfet.precomp.vcrit);
+                        let vgd_lim = pnjlim(raw_vgd, prev[hi].1, VT_NOM, hfet.precomp.vcrit);
+                        let vgs = fetlim(vgs_lim, prev[hi].0, hfet.precomp.t_vto);
+                        let vgd = fetlim(vgd_lim, prev[hi].1, hfet.precomp.t_vto);
+                        (vgs, vgd)
+                    } else {
+                        // HFET1 (hfetload.c line 268-269) applies only DEVfetlim.
+                        let vgs = fetlim(raw_vgs, prev[hi].0, hfet.precomp.t_vto);
+                        let vgd = fetlim(raw_vgd, prev[hi].1, hfet.precomp.t_vto);
+                        (vgs, vgd)
+                    }
                 };
                 prev[hi] = (vgs, vgd);
 
-                let comp = hfet_companion_full(hfet, vgs, vgd, 1e-12);
+                let comp = hfet_companion_full(hfet, vgs, vgd, gmin);
                 crate::hfet::stamp_hfet_with_voltages(
                     &comp,
                     hfet,

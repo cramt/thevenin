@@ -286,12 +286,13 @@ fn jct_initial_guess(
         stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
     }
 
-    // Stamp each HFET at zero bias (vgs=0, vgd=0), matching ngspice's
-    // MODEINITJCT (hfetload.c:200-209).  This provides non-zero channel
-    // conductances in the initial Jacobian for depletion-mode devices.
+    // Stamp each HFET at MODEINITJCT initial bias.
+    // HFET1 (hfetload.c:116-117): vgs=vgd=-1 (reverse-biased gate junctions)
+    // This provides non-zero junction conductances via the leak() function
+    // and channel conductances for the initial Jacobian.
     for hfet in &mna.hfets {
-        let comp = hfet_companion_full(hfet, 0.0, 0.0, options.gmin);
-        stamp_hfet_with_voltages(&comp, hfet, 0.0, 0.0, &mut system.matrix, &mut system.rhs);
+        let comp = hfet_companion_full(hfet, -1.0, -1.0, options.gmin);
+        stamp_hfet_with_voltages(&comp, hfet, -1.0, -1.0, &mut system.matrix, &mut system.rhs);
     }
 
     // Stamp each BSIM3SOI-DD at InitJct voltages.

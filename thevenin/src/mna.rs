@@ -1292,7 +1292,7 @@ fn assemble_mna_flat(
                         internal_node_count += mm.internal_node_count();
                     }
                     Some("NHFET" | "PHFET") => {
-                        let mm = crate::hfet::HfetModel::from_model_def(mdef_opt.unwrap());
+                        let mm = crate::hfet::HfetModel::from_model_def_with_level(mdef_opt.unwrap(), level);
                         internal_node_count += mm.internal_node_count();
                     }
                     _ => {
@@ -2333,7 +2333,7 @@ fn assemble_mna_flat(
                         });
                     }
                     Some("NHFET" | "PHFET") => {
-                        let mm = crate::hfet::HfetModel::from_model_def(mdef_opt.unwrap());
+                        let mm = crate::hfet::HfetModel::from_model_def_with_level(mdef_opt.unwrap(), level);
 
                         let mut w = 10e-6;
                         let mut l = 1e-6;

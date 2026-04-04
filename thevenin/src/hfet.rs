@@ -1,9 +1,11 @@
 //! HFET (Heterojunction FET) device model.
 //!
-//! Implements the HFET2 (level=5) model from ngspice,
-//! used with `.model name NHFET/PHFET level=5` syntax.
+//! Implements both HFET1 (level=5) and HFET2 (level=6) models from ngspice.
+//! Used with `.model name NHFET/PHFET level=5|6` syntax.
 //!
-//! Reference: ngspice hfet2/ device directory (hfet2load.c, hfet2defs.h, hfet2temp.c).
+//! Reference:
+//! - HFET1: ngspice hfet1/ directory (hfetload.c, hfetdefs.h, hfetsetup.c)
+//! - HFET2: ngspice hfet2/ directory (hfet2load.c, hfet2defs.h, hfet2setup.c)
 
 use thevenin_types::{Expr, ModelDef};
 
@@ -32,6 +34,9 @@ pub enum HfetType {
 #[derive(Debug, Clone)]
 pub struct HfetModel {
     pub device_type: HfetType,
+    /// Model level: 5 = HFET1 (hfetload.c), 6 = HFET2 (hfet2load.c).
+    /// Default is 5 (HFET1).
+    pub level: i32,
     pub vt0: f64,     // Threshold voltage
     pub lambda: f64,  // Output conductance parameter
     pub eta: f64,     // Subthreshold ideality factor
@@ -122,9 +127,14 @@ impl Default for HfetModel {
 
 impl HfetModel {
     pub fn new(device_type: HfetType) -> Self {
+        Self::new_with_level(device_type, 5)
+    }
+
+    pub fn new_with_level(device_type: HfetType, level: i32) -> Self {
         let sign = device_type as i32 as f64;
         Self {
             device_type,
+            level,
             vt0: if sign > 0.0 { 0.15 } else { -0.15 },
             lambda: 0.15,
             eta: if sign > 0.0 { 1.28 } else { 1.4 },
@@ -175,7 +185,7 @@ impl HfetModel {
             eta2: 2.0,
             d2: 0.2e-6,
             vt2: f64::MAX,
-            ggr: 0.0,  // ngspice HFET2 default (hfet2setup.c)
+            ggr: if level == 6 { 0.0 } else { 40.0 }, // HFET1: 40.0 (hfetsetup.c), HFET2: 0.0
             del: 0.04,
             js: 0.0,   // ngspice HFET2 default (hfet2setup.c)
             n: 5.0,    // ngspice HFET2 default (hfet2setup.c)
@@ -205,13 +215,17 @@ impl HfetModel {
     }
 
     pub fn from_model_def(model_def: &ModelDef) -> Self {
+        Self::from_model_def_with_level(model_def, 5)
+    }
+
+    pub fn from_model_def_with_level(model_def: &ModelDef, level: i32) -> Self {
         let kind = model_def.kind.to_uppercase();
         let device_type = if kind == "PHFET" {
             HfetType::Phfet
         } else {
             HfetType::Nhfet
         };
-        let mut m = Self::new(device_type);
+        let mut m = Self::new_with_level(device_type, level);
 
         for p in &model_def.params {
             let val = expr_val(&p.value);
@@ -480,8 +494,8 @@ pub struct HfetCompanion {
 }
 
 /// Gate leakage current model (from hfetload.c `leak` function).
-/// Used by HFET1 (level=1) gate model; kept for future HFET1 support.
-#[expect(dead_code, clippy::too_many_arguments)]
+/// Used by HFET1 (level=5) gate model for Schottky junction leakage.
+#[allow(clippy::too_many_arguments)]
 fn leak(gmin: f64, vt: f64, v: f64, rs: f64, is1: f64, is2: f64, m1: f64, m2: f64) -> (f64, f64) {
     let vt1 = vt * m1;
     let vt2 = vt * m2;
@@ -783,11 +797,36 @@ pub fn hfet_companion_full(inst: &HfetInstance, vgs: f64, vgd: f64, gmin: f64) -
     let mut gmg = 0.0;
     let mut gmd = 0.0;
 
-    // Gate leakage — HFET2 model (hfet2load.c lines 192-205)
-    // Uses JS (junction saturation current), N (ideality factor),
-    // GGR (gate recombination conductance), DEL (recombination parameter).
-    // JSLW = JS*L*W/2, GGRLW = GGR*L*W/2, vtn = N*vt.
-    if model.gatemod == 0 {
+    // Gate leakage — model depends on level:
+    // HFET1 (level=5): uses leak() function with js1s/js2s/js1d/js2d (hfetload.c:275-297)
+    // HFET2 (level=6): uses JSLW formula with JS/N (hfet2load.c:192-205)
+    if model.gatemod == 0 && model.level != 6 {
+        // HFET1 gate leakage (hfetload.c lines 275-297)
+        // Gate-source: call leak() if both IS1S and IS2S are non-zero
+        if pre.is1s != 0.0 && pre.is2s != 0.0 {
+            let (il, gl) = leak(gmin, vt, vgs, model.rgs, pre.is1s, pre.is2s, model.m1s, model.m2s);
+            cgs_current = il;
+            ggs = gl;
+        }
+        // Add GGR recombination terms (always applied, hfetload.c:283-286)
+        let arg_s = -vgs * model.del / vt;
+        let earg_s = arg_s.exp();
+        cgs_current += pre.ggrwl * vgs * earg_s;
+        ggs += pre.ggrwl * earg_s * (1.0 - arg_s);
+
+        // Gate-drain: call leak() if both IS1D and IS2D are non-zero
+        if pre.is1d != 0.0 && pre.is2d != 0.0 {
+            let (il, gl) = leak(gmin, vt, vgd, model.rgd, pre.is1d, pre.is2d, model.m1d, model.m2d);
+            cgd_current = il;
+            ggd = gl;
+        }
+        // Add GGR recombination terms (hfetload.c:293-296)
+        let arg_d = -vgd * model.del / vt;
+        let earg_d = arg_d.exp();
+        cgd_current += pre.ggrwl * vgd * earg_d;
+        ggd += pre.ggrwl * earg_d * (1.0 - arg_d);
+    } else if model.gatemod == 0 {
+        // HFET2 gate leakage (hfet2load.c lines 192-205)
         let vtn = model.n * vt;
 
         // Gate-source

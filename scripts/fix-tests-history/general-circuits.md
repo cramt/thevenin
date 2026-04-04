@@ -225,3 +225,48 @@ mode (ngspice does InitJct → InitFloat → normal NR; we do InitJct → normal
 **What NOT to retry:** Gate leakage model changes (now matches ngspice exactly), GGR
 default changes, JS/N parameter additions. The HFET inverter requires matching ngspice's
 MODEINITJCT → MODEINITFLOAT → normal NR three-phase initialization sequence.
+
+## Session 110 findings (2026-04-04)
+
+### HFET inverter: CRITICAL — wrong model type! level=5 is HFET1, not HFET2
+
+**Discovered:** ngspice maps `nhfet level=5` → HFET1 (hfetload.c), NOT HFET2 (hfet2load.c)!
+See ngspice inpdomod.c:161-166: `case 5: type = INPtypelook("HFET1")`. Session 107's
+"fix" was BACKWARDS — it changed FROM HFET1-style gate leakage TO HFET2, when it should
+have been the other way around.
+
+**Key differences between HFET1 and HFET2:**
+1. **Gate leakage (gatemod=0):** HFET1 uses `leak()` function with js1s/js2s/rgs + GGR
+   recombination (hfetload.c:275-296). HFET2 uses JSLW formula (hfet2load.c:192-205).
+2. **GGR default:** HFET1=40.0 (hfetsetup.c:219), HFET2=0.0 (hfet2setup.c).
+3. **Voltage limiting:** HFET1 uses only DEVfetlim (hfetload.c:268). HFET2 uses
+   DEVpnjlim + DEVfetlim (hfet2load.c:179-185).
+4. **Channel current (hfeta):** Same shared function, no difference.
+
+**Implemented:**
+1. Added `level: i32` field to HfetModel (default 5)
+2. Level-dependent GGR default: 40.0 for HFET1, 0.0 for HFET2
+3. For level=5 (HFET1) + gatemod=0: use `leak()` function for gate junction leakage
+4. For level=5: only DEVfetlim voltage limiting (no pnjlim)
+5. Pass gmin from NR solver to companion (was hardcoded 1e-12)
+6. Updated jct_initial_guess to stamp HFETs at (-1, -1) matching InitJct
+7. Updated mna.rs to pass level parameter to HfetModel construction
+
+**Result:** V(3) changed from 2.0V to 1.955V — the HFET1 gate leakage adds some
+conductance that pulls the output slightly below Vdd. But still converges to Vdd basin.
+615 tests pass, 0 regressions. Clippy clean. id_vgs test still passes.
+
+**Analysis of why convergence basin unchanged:**
+- At InitJct point (-1, -1): leak() returns gl=gmin (1e-12 S), negligible.
+  Area-scaled is1d = js1d*W*L/2 = 1e-12 * 10e-6 * 1e-6 / 2 = 5e-24 — tiny.
+- GGR=40 adds GGRWL=2e-10 S recombination, but at vgs=-1V it's NEGATIVE
+  (derivative of recombination current is negative in deep reverse bias).
+- Net effect: model correct but junction conductances too small to change NR path.
+- Also tested: starting from all-zeros (like ngspice) instead of jct_initial_guess —
+  no effect, V(3) still 1.955V. Reverted.
+
+**What NOT to retry:** Different initial guess values (all zeros, jct_initial_guess,
+both give same result). HFET1 model is now correct — the convergence basin issue is
+purely an NR iteration path difference requiring MODEINITFIX phase implementation
+(ngspice niiter.c lines 336-342: InitJct→InitFix→Float with matrix reorder at
+each transition).

@@ -22,7 +22,7 @@
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag; timing shift in BJT voltage-dependent cap model)"
 
 # === HFET ===
-"hfet/inverter.cir" = "wrong DC OP: V(3)=2.0V vs expected -0.275V (bistable DCFL inverter; gate leakage model + GGR default + pnjlim all fixed to match ngspice HFET2; NR converges to Vdd basin — needs MODEINITFLOAT phase)"
+"hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter; model corrected to HFET1 level=5 with leak()+GGR=40+fetlim-only; NR converges to Vdd basin — needs MODEINITFIX phase)"
 
 # === Regression: misc ===
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
