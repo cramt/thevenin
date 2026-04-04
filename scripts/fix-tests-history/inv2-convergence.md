@@ -195,37 +195,88 @@ reduction from 1e-2 to 1e-25) hits the same bifurcation. Accepting the
 Phase 1 solution (at elevated gmin) fixes the initial OP but later DC sweep
 points still fail when they hit the body instability region.
 
-## Recommended next steps
+## Key breakthrough: ngspice's gillespie_src has NO gmin reduction
 
-### Option A: Match ngspice's gillespie_src post-stepping
+Reading ngspice's `gillespie_src` (cktop.c lines 481-658) revealed the
+fundamental difference: **ngspice never reduces gmin after source stepping**.
 
-Study `ngspice-upstream/src/spicelib/analysis/cktop.c` function `gillespie_src`
-(≈ line 430) to understand how ngspice transitions from elevated gmin back to
-the circuit gmin after source ramping. There may be a different gmin reduction
-schedule or a technique we're missing.
+```c
+// ngspice cktop.c line 643 — after source ramp completes:
+ckt->CKTdiagGmin = ckt->CKTgmin = gminstart;  // just restore, no reduction!
+```
 
-### Option B: Adaptive body voltage limit
+ngspice ramps sources 0→100% at the **target gmin** (1e-25 for inv2), with
+adaptive step sizing (starting at 0.1%, backing off on failure). Since gmin
+is never elevated, there's no Phase 2 reduction and no bifurcation.
 
-During gmin stepping (where elevated gmin regularizes the body), relax the 0.2V
-body voltage limit to allow larger NR steps. At gmin=1e-2, body_gmin = 1e-8
-easily overwhelms |gbbb| = 8.4e-14, so wider body voltage steps are safe. As
-gmin decreases toward the bifurcation point, tighten the limit.
+This was implemented and works for the initial DC OP. Source stepping reaches
+src=1.0 successfully with ~45 steps, each converging in 2-5 iterations.
 
-### Option C: Body-specific diagonal regularization
+### Current status after gillespie rewrite
 
-Instead of a uniform diagonal gmin, add extra diagonal conductance specifically
-to the body nodes of floating-body SOI devices during gmin stepping. This targets
-the exact nodes that have the instability without affecting other nodes. The body-
-specific shunt can be larger than the general diagonal gmin and can be reduced
-independently.
+**Works**: Initial DC OP converges via gillespie source stepping.
 
-### Option D: Two-pass DC sweep
+**Still fails**: DC sweep points near the inverter threshold (Vin ≈ 0.86V)
+fail when the NR fallback chain reaches source stepping. The second gillespie
+attempt gets stuck at src ≈ 0.34 (Vdd=0.85V) where the inverter is in the
+transition region and body instability is strongest.
 
-For the first pass, solve with elevated gmin (1e-2) to get the voltage trajectory.
-Then do a refinement pass where each sweep point starts from the elevated-gmin
-solution and does a direct NR at the target gmin. Since the starting point is
-very close to the true answer, the NR may converge even through the unstable
-region because the initial state is already past the bifurcation.
+**Root cause of sweep failure**: DC sweep continuation points that fail NR go
+through `newton_raphson_solve_with_mode` → gmin_stepping → new_gmin → source
+stepping. Source stepping starts from scratch (zeros the solution), losing the
+previous sweep point's solution. At partial source levels near the threshold,
+the body instability prevents convergence.
+
+## Remaining work to un-ignore inv2
+
+### Step 1: Force gillespie for first DC sweep point (HIGH PRIORITY)
+
+In `simulate.rs` `solve_nonlinear_op_with_guess`, when `initial_guess.is_none()`
+and the circuit has floating-body SOI devices, use `source_stepping_solve` instead
+of `newton_raphson_solve_with_mode`. This ensures the initial OP uses gillespie.
+
+```rust
+// simulate.rs around line 566
+let has_floating_soi = mna.bsim3soi_dds.iter().any(|b| b.body_idx.is_none())
+    || mna.bsim3soi_fds.iter().any(|b| b.body_idx.is_none())
+    || mna.bsim3soi_pds.iter().any(|b| b.body_idx.is_none());
+let force_source_stepping =
+    (has_tlines && !mna.mosfets.is_empty()) || many_nonlinear
+    || (has_floating_soi && initial_guess.is_none());
+```
+
+### Step 2: Fix DC sweep continuation convergence (MAIN CHALLENGE)
+
+DC sweep continuation points use `newton_raphson_solve_with_mode` with the
+previous solution as initial guess. When a point fails, the fallback chain
+(gmin → new_gmin → source stepping) all fail because of the body bifurcation.
+
+**Approach A — Skip failing sweep points**: ngspice's `dctrcurv.c` has logic
+to skip non-converging sweep points and continue from the last good solution.
+Study `ngspice-upstream/src/spicelib/analysis/dctrcurv.c` and implement similar
+skip-and-continue logic in `simulate.rs`'s DC sweep loop.
+
+**Approach B — Use elevated gmin for sweep continuation**: For sweep points
+that fail direct NR, retry with a slightly elevated gmin (e.g. 1e-6) just for
+that point. The elevated gmin regularizes the body without significantly
+affecting voltage accuracy. This is a pragmatic approach that avoids the full
+bifurcation.
+
+**Approach C — Continuation method**: Instead of independent NR at each sweep
+point, use a continuation/arc-length method that tracks the solution path
+through the bifurcation region. This is the most robust but most complex
+approach.
+
+### Step 3: Performance optimization (LOW PRIORITY)
+
+The gillespie rewrite caused fourbitadder to slow from 12s to 21s because
+the adaptive stepping starts at 0.1% instead of 10% fixed steps. Options:
+
+- Use the old elevated-gmin source stepping as primary, gillespie as fallback
+  (only when the old approach fails)
+- Start gillespie with a larger initial raise (e.g. 0.01 = 1%) for circuits
+  where gmin is not pathologically small
+- Add a fast path: if gmin >= 1e-15, use the old 10-step approach
 
 ## Key code locations
 
@@ -236,14 +287,9 @@ region because the initial state is already past the bifurcation.
 | `thevenin/src/bsim3soi_dd.rs` | 3070-3074 | Body gmin coupling stamp |
 | `thevenin/src/bsim3soi_dd.rs` | 3086-3110 | Body node Jacobian matrix stamps |
 | `thevenin/src/bsim3soi_dd.rs` | 3260-3298 | Voltage limiting (0.2V body, SmartVbs) |
-| `thevenin/src/newton.rs` | 202-295 | gmin_stepping (dynamic_gmin) |
 | `thevenin/src/newton.rs` | 310-400 | new_gmin_stepping |
-| `thevenin/src/newton.rs` | 430-595 | source_stepping (Phase 1 + Phase 2) |
-| `thevenin/src/simulate.rs` | 467-590 | solve_nonlinear_op_with_guess (force_source_stepping) |
-| `ngspice b3soiddld.c` | 2156-2206 | Impact ionization (reference) |
-| `ngspice b3soiddld.c` | 2618-2631 | Body current derivatives (reference) |
-| `ngspice b3soiddld.c` | 3908-3928 | Body Jacobian stamps (reference) |
-| `ngspice b3soiddld.c` | 674-688 | Voltage limiting (reference) |
-| `ngspice cktop.c` | 296-322 | NIiter node damping (reference) |
-| `ngspice cktop.c` | 336-358 | INITJCT → INITFIX → FLOAT transitions (reference) |
-| `ngspice cktop.c` | ~430 | gillespie_src source stepping (reference) |
+| `thevenin/src/newton.rs` | 427-585 | source_stepping (gillespie algorithm) |
+| `thevenin/src/simulate.rs` | 467-590 | solve_nonlinear_op_with_guess |
+| `thevenin/src/simulate.rs` | ~860-920 | DC sweep loop (sweep continuation) |
+| `ngspice cktop.c` | 481-658 | gillespie_src (reference implementation) |
+| `ngspice dctrcurv.c` | — | DC sweep with convergence failure handling |
