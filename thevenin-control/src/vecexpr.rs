@@ -1146,16 +1146,21 @@ fn vec_to_real(v: &thevenin_types::SimVector) -> Vec<f64> {
 
 /// Convert a SimVector to a VecVal, preserving complex data when present.
 fn simvec_to_vecval(v: &thevenin_types::SimVector) -> VecVal {
-    let (data, imag) = if !v.real.is_empty() && !v.complex.is_empty() {
-        // Both real and complex: real part from real, imag from complex
-        (v.real.clone(), v.complex.iter().map(|c| c.im).collect())
-    } else if !v.complex.is_empty() {
-        (
-            v.complex.iter().map(|c| c.re).collect(),
-            v.complex.iter().map(|c| c.im).collect(),
-        )
-    } else if !v.real.is_empty() {
-        (v.real.clone(), vec![])
+    let (data, imag): (Vec<f64>, Vec<f64>) = if let Some(complex) = v.data.try_complex() {
+        if !complex.is_empty() {
+            (
+                complex.iter().map(|c| c.re).collect(),
+                complex.iter().map(|c| c.im).collect(),
+            )
+        } else {
+            (vec![0.0], vec![])
+        }
+    } else if let Some(real) = v.data.try_real() {
+        if !real.is_empty() {
+            (real.to_vec(), vec![])
+        } else {
+            (vec![0.0], vec![])
+        }
     } else {
         (vec![0.0], vec![])
     };

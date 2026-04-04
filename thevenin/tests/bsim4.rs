@@ -121,10 +121,10 @@ fn test_bsim4_dc_sweep_vg1p0() {
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
 
-    assert_eq!(i_vds.real.len(), 12, "Expected 12 sweep points");
+    assert_eq!(i_vds.data.as_real().len(), 12, "Expected 12 sweep points");
 
     // Current should be negative (flowing into drain)
-    for (i, &current) in i_vds.real.iter().enumerate() {
+    for (i, &current) in i_vds.data.as_real().iter().enumerate() {
         assert!(
             current < 0.0,
             "Drain current at point {} should be negative (NMOS): {}",
@@ -134,8 +134,8 @@ fn test_bsim4_dc_sweep_vg1p0() {
     }
 
     // Current magnitude should increase with Vds then saturate
-    let i_first = i_vds.real[0].abs();
-    let i_last = i_vds.real[11].abs();
+    let i_first = i_vds.data.as_real()[0].abs();
+    let i_last = i_vds.data.as_real()[11].abs();
     assert!(
         i_last > i_first,
         "Current should increase with Vds: first={}, last={}",
@@ -170,8 +170,8 @@ fn test_bsim4_dc_sweep_vg0p6() {
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
 
-    assert_eq!(i_vds.real.len(), 12);
-    let i_sat = i_vds.real[11].abs();
+    assert_eq!(i_vds.data.as_real().len(), 12);
+    let i_sat = i_vds.data.as_real()[11].abs();
     assert!(
         i_sat < 1e-3,
         "Near-threshold current should be < 1mA: {}",
@@ -194,7 +194,10 @@ fn test_bsim4_dc_sweep_saturation_plateau() {
         .expect("no vds#branch");
 
     // In saturation, current should plateau — last 4 points within 20%
-    let last_4: Vec<f64> = i_vds.real[8..12].iter().map(|x| x.abs()).collect();
+    let last_4: Vec<f64> = i_vds.data.as_real()[8..12]
+        .iter()
+        .map(|x| x.abs())
+        .collect();
     let max = last_4.iter().cloned().fold(f64::MIN, f64::max);
     let min = last_4.iter().cloned().fold(f64::MAX, f64::min);
     assert!(
@@ -235,7 +238,7 @@ Vds d 0 0.2
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
 
-    let ids = vds_branch.real[0];
+    let ids = vds_branch.data.as_real()[0];
     assert!(
         ids.abs() > 1e-6,
         "PMOS should have significant current: {}",
@@ -269,7 +272,7 @@ Vds d 0 1.2
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
 
-    let ids = vds_branch.real[0];
+    let ids = vds_branch.data.as_real()[0];
     assert!(
         ids.abs() < 1e-6,
         "PMOS in cutoff should have very small current: {}",
@@ -306,7 +309,7 @@ Vds d 0 1.0
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
 
-    let ids = vds_branch.real[0];
+    let ids = vds_branch.data.as_real()[0];
     assert!(ids < 0.0, "NMOS drain current should be negative: {}", ids);
     assert!(
         ids.abs() > 1e-5 && ids.abs() < 0.1,
@@ -345,7 +348,7 @@ Vds d 0 1.2
         .find(|v| v.name == "frequency")
         .expect("no frequency vector");
     assert_eq!(
-        freq_vec.real.len(),
+        freq_vec.data.as_real().len(),
         51,
         "Expected 51 frequency points (dec 10 1e3 1e8)"
     );
@@ -360,13 +363,13 @@ Vds d 0 1.2
     // Gate voltage should have non-zero imaginary part due to capacitances
     // At low frequencies, real part dominates; at high frequencies, imaginary grows
     assert!(
-        !vg.complex.is_empty(),
+        !vg.data.as_complex().is_empty(),
         "AC results should have complex data"
     );
 
     // The gate is driven by Vgs AC source, so v(g) should be approximately 1.0 + j*0
     // at all frequencies (it's the source node)
-    let c = &vg.complex[0];
+    let c = &vg.data.as_complex()[0];
     let mag = (c.re * c.re + c.im * c.im).sqrt();
     assert!(
         (mag - 1.0).abs() < 0.1,
@@ -401,7 +404,7 @@ Vds d 0 1.2
         .iter()
         .find(|v| v.name == "frequency")
         .expect("no frequency vector");
-    assert_eq!(freq_vec.real.len(), 51);
+    assert_eq!(freq_vec.data.as_real().len(), 51);
 
     // With xpart=1 (0/100 partition), all inversion charge to source.
     // This changes the drain/source capacitance partitioning but total gate cap stays same.
@@ -410,7 +413,7 @@ Vds d 0 1.2
         .iter()
         .find(|v| v.name == "v(g)")
         .expect("no v(g)");
-    assert!(!vg.complex.is_empty());
+    assert!(!vg.data.as_complex().is_empty());
 }
 
 /// BSIM4 NMOS AC frequency with mobmod=1 — tests mobility model variation.
@@ -438,7 +441,8 @@ Vds d 0 1.2
             .iter()
             .find(|v| v.name == "frequency")
             .unwrap()
-            .real
+            .data
+            .as_real()
             .len(),
         51
     );
@@ -488,7 +492,11 @@ fn test_bsim4_noise1_fnoi0_tnoi0() {
         .iter()
         .find(|v| v.name == "frequency")
         .expect("no frequency vector");
-    assert_eq!(freq_vec.real.len(), 51, "Expected 51 frequency points");
+    assert_eq!(
+        freq_vec.data.as_real().len(),
+        51,
+        "Expected 51 frequency points"
+    );
 
     // Get output noise spectrum
     let onoise = plot
@@ -498,13 +506,13 @@ fn test_bsim4_noise1_fnoi0_tnoi0() {
         .expect("no onoise_spectrum vector");
 
     // Noise values should be positive and reasonable
-    for &val in &onoise.real {
+    for &val in onoise.data.as_real() {
         assert!(val >= 0.0, "Noise should be non-negative: {}", val);
     }
 
     // With fnoimod=0 (KF flicker), noise should decrease with frequency (1/f behavior)
-    let low_freq_noise = onoise.real[0]; // 1kHz
-    let high_freq_noise = onoise.real[50]; // 100MHz
+    let low_freq_noise = onoise.data.as_real()[0]; // 1kHz
+    let high_freq_noise = onoise.data.as_real()[50]; // 100MHz
     assert!(
         low_freq_noise > high_freq_noise || (low_freq_noise < 1.0e-30 && high_freq_noise < 1.0e-30),
         "Flicker noise should decrease with frequency: low={}, high={}",
@@ -532,8 +540,8 @@ fn test_bsim4_noise2_fnoi1_tnoi1() {
         .expect("no onoise_spectrum");
 
     // With both flicker and thermal, noise at low freq should be higher than high freq
-    let low_freq_noise = onoise.real[0];
-    let high_freq_noise = onoise.real[50];
+    let low_freq_noise = onoise.data.as_real()[0];
+    let high_freq_noise = onoise.data.as_real()[50];
 
     assert!(
         low_freq_noise > 0.0,
@@ -573,9 +581,9 @@ fn test_bsim4_noise3_fnoi1_tnoi0() {
 
     // NOIA flicker noise should be significant
     assert!(
-        onoise.real[0] > 0.0,
+        onoise.data.as_real()[0] > 0.0,
         "NOIA noise should be non-zero: {}",
-        onoise.real[0]
+        onoise.data.as_real()[0]
     );
 }
 
@@ -595,7 +603,7 @@ fn test_bsim4_noise4_fnoi0_tnoi1() {
 
     // With tnoimod=1 and very small kf, thermal noise should dominate at high freq
     // (roughly flat), and tiny flicker at low freq
-    let mid_noise = onoise.real[25];
+    let mid_noise = onoise.data.as_real()[25];
     assert!(
         mid_noise > 0.0,
         "Should have some noise at mid-freq: {}",
@@ -634,10 +642,10 @@ Vds d 0 0.0
         .expect("no vds#branch");
 
     // Should have 12 DC sweep points
-    assert_eq!(i_vds.real.len(), 12);
+    assert_eq!(i_vds.data.as_real().len(), 12);
 
     // Current should be negative (NMOS, conventional Vds source)
-    for val in &i_vds.real {
+    for val in i_vds.data.as_real() {
         assert!(*val < 0.0, "Drain current should be negative: {}", val);
     }
 }

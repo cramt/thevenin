@@ -63,16 +63,16 @@ A1 in out amp1
 
     // V(in) should be 1.0V (set by voltage source)
     assert!(
-        (v_in.real[0] - 1.0).abs() < 1e-6,
+        (v_in.data.as_real()[0] - 1.0).abs() < 1e-6,
         "V(in) = {} (expected 1.0)",
-        v_in.real[0]
+        v_in.data.as_real()[0]
     );
 
     // V(out) = gain * V(in) * R_load = 0.01 * 1.0 * 100 = 1.0V
     assert!(
-        (v_out.real[0] - 1.0).abs() < 1e-6,
+        (v_out.data.as_real()[0] - 1.0).abs() < 1e-6,
         "V(out) = {} (expected 1.0)",
-        v_out.real[0]
+        v_out.data.as_real()[0]
     );
 }
 
@@ -138,9 +138,9 @@ A1 [mid 0] nlc1
     // Analytical: V = (-0.02 + sqrt(0.0006)) / 0.002
     let expected = (-0.02_f64 + (0.0006_f64).sqrt()) / 0.002;
     assert!(
-        (v_mid.real[0] - expected).abs() < 1e-4,
+        (v_mid.data.as_real()[0] - expected).abs() < 1e-4,
         "V(mid) = {} (expected {expected})",
-        v_mid.real[0]
+        v_mid.data.as_real()[0]
     );
 }
 
@@ -168,8 +168,8 @@ R2 out 0 1k
 
     // Voltage divider: 5.0 * 1k / (1k + 1k) = 2.5V
     assert!(
-        (v_out.real[0] - 2.5).abs() < 1e-6,
+        (v_out.data.as_real()[0] - 2.5).abs() < 1e-6,
         "V(out) = {} (expected 2.5)",
-        v_out.real[0]
+        v_out.data.as_real()[0]
     );
 }

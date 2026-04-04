@@ -135,37 +135,17 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let spectrum_plot = SimPlot {
         name: "noise1".to_string(),
         vecs: vec![
-            SimVector {
-                name: "frequency".to_string(),
-                real: freq_data,
-                complex: vec![],
-            },
-            SimVector {
-                name: "onoise_spectrum".to_string(),
-                real: onoise_data,
-                complex: vec![],
-            },
-            SimVector {
-                name: "inoise_spectrum".to_string(),
-                real: inoise_data,
-                complex: vec![],
-            },
+            SimVector::real("frequency", freq_data),
+            SimVector::real("onoise_spectrum", onoise_data),
+            SimVector::real("inoise_spectrum", inoise_data),
         ],
     };
 
     let integrated_plot = SimPlot {
         name: "noise2".to_string(),
         vecs: vec![
-            SimVector {
-                name: "onoise_total".to_string(),
-                real: vec![onoise_total],
-                complex: vec![],
-            },
-            SimVector {
-                name: "inoise_total".to_string(),
-                real: vec![inoise_total],
-                complex: vec![],
-            },
+            SimVector::real("onoise_total", vec![onoise_total]),
+            SimVector::real("inoise_total", vec![inoise_total]),
         ],
     };
 
@@ -1055,7 +1035,7 @@ R2 2 0 1k
         // Expected output noise V²/Hz = 4kT * R_parallel where R_parallel = R1||R2 = 500Ω
         let r_parallel = 500.0;
         let expected = 4.0 * K_BOLTZ * T_NOM * r_parallel;
-        for &val in &onoise.real {
+        for &val in onoise.data.as_real() {
             // Thermal noise is flat (frequency-independent).
             assert_abs_diff_eq!(val, expected, epsilon = expected * 0.02);
         }
@@ -1090,7 +1070,7 @@ R1 1 2 1k
         // Output noise at v(2) = 0 (R1 noise is shorted by V1 on one side and open on the other).
         // Actually, node 2 has nothing connected besides R1, so it's floating.
         // Let's use a proper circuit instead.
-        assert!(!onoise.real.is_empty());
+        assert!(!onoise.data.as_real().is_empty());
     }
 
     #[test]
@@ -1140,14 +1120,15 @@ R2 2 0 1k
             .unwrap();
 
         // Output noise should be flat (only thermal) and > 0.
-        assert!(!onoise.real.is_empty());
-        for &val in &onoise.real {
+        let onoise_real = onoise.data.as_real();
+        assert!(!onoise_real.is_empty());
+        for &val in onoise_real {
             assert!(val > 0.0, "noise must be positive, got {val}");
         }
 
         // Flatness check: first and last should be similar (within 1%).
-        let first = onoise.real[0];
-        let last = *onoise.real.last().unwrap();
+        let first = onoise_real[0];
+        let last = *onoise_real.last().unwrap();
         assert!(
             (first - last).abs() / first < 0.01,
             "thermal noise should be flat: first={first}, last={last}"
@@ -1155,7 +1136,7 @@ R2 2 0 1k
 
         // Input-referred noise (V²/Hz) = output noise / |H|².
         // |H| = 0.5, so |H|² = 0.25, inoise = 4 * onoise.
-        let inoise_first = inoise.real[0];
+        let inoise_first = inoise.data.as_real()[0];
         assert_abs_diff_eq!(inoise_first, first * 4.0, epsilon = first * 0.2);
     }
 

@@ -5,7 +5,7 @@
 //!
 //! Expected: V(mid) = 1V * 2k/(1k+2k) ≈ 0.667V
 
-use thevenin::simulate_op;
+use thevenin::simulate;
 use thevenin_types::Netlist;
 
 fn main() {
@@ -21,14 +21,14 @@ R2 mid 0 2k
     )
     .expect("failed to parse netlist");
 
-    let result = simulate_op(&netlist).expect("simulation failed");
+    let result = simulate(&netlist).expect("simulation failed");
 
     println!("=== DC Operating Point ===");
-    for plot in &result.plots {
-        for vec in &plot.vecs {
-            if let Some(&val) = vec.real.first() {
-                println!("  {:>20} = {:>12.6} ", vec.name, val);
-            }
-        }
+    let plot = result.plot().expect("no plot");
+    for vec in plot.voltages() {
+        println!("  {:>20} = {:>12.6} ", vec.name, vec.data.as_real()[0]);
+    }
+    for vec in plot.currents() {
+        println!("  {:>20} = {:>12.6e}", vec.name, vec.data.as_real()[0]);
     }
 }

@@ -15,7 +15,8 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
             let names: Vec<_> = plot.vecs.iter().map(|v| &v.name).collect();
             panic!("node {key} not found in results, available: {names:?}")
         })
-        .real[0]
+        .data
+        .as_real()[0]
 }
 
 /// global-1: Treatment of multiple .global cards (accumulative behavior).

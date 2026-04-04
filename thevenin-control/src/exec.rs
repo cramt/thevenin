@@ -85,10 +85,10 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
                     })
                     .collect()
             };
-            let vec = SimVector {
-                name: name.clone(),
-                real: val.data,
-                complex,
+            let vec = if complex.is_empty() {
+                SimVector::real(name.clone(), val.data)
+            } else {
+                SimVector::complex(name.clone(), complex)
             };
             ctx.store_vector(vec);
             Ok(())
@@ -102,11 +102,7 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
                 // compose creates a vector from scalar values
                 values.push(val.as_scalar());
             }
-            let vec = SimVector {
-                name: name.clone(),
-                real: values,
-                complex: Vec::new(),
-            };
+            let vec = SimVector::real(name.clone(), values);
             ctx.store_vector(vec);
             Ok(())
         }
@@ -145,11 +141,7 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
             // Store as a variable (ngspice uses set, not let, for strcmp result)
             ctx.variables.insert(result.clone(), cmp.to_string());
             // Also store as a vector for expression access
-            let vec = SimVector {
-                name: format!("__{result}"),
-                real: vec![cmp],
-                complex: Vec::new(),
-            };
+            let vec = SimVector::real(format!("__{result}"), vec![cmp]);
             ctx.store_vector(vec);
             Ok(())
         }
@@ -306,28 +298,20 @@ fn run_temp_sweep(
         if let Some(plot) = result.plots.first() {
             if first {
                 // Initialize result vectors
-                vecs.push(SimVector {
-                    name: "temp-sweep".to_string(),
-                    real: Vec::new(),
-                    complex: vec![],
-                });
+                vecs.push(SimVector::real("temp-sweep", Vec::new()));
                 for v in &plot.vecs {
-                    vecs.push(SimVector {
-                        name: v.name.clone(),
-                        real: Vec::new(),
-                        complex: vec![],
-                    });
+                    vecs.push(SimVector::real(v.name.clone(), Vec::new()));
                 }
                 first = false;
             }
 
             // Record temperature
-            vecs[0].real.push(temp_c);
+            vecs[0].data.as_real_mut().push(temp_c);
             // Record all node voltages and branch currents
             for (i, v) in plot.vecs.iter().enumerate() {
                 if i + 1 < vecs.len() {
-                    let val = v.real.first().copied().unwrap_or(0.0);
-                    vecs[i + 1].real.push(val);
+                    let val = v.data.as_real().first().copied().unwrap_or(0.0);
+                    vecs[i + 1].data.as_real_mut().push(val);
                 }
             }
         }
@@ -674,11 +658,7 @@ fn execute_alter(spec: &str, value: &AlterValue, ctx: &mut SimContext) -> Result
     };
 
     // Store as a named vector so @device[param] lookups find it
-    ctx.store_vector(SimVector {
-        name: spec_trimmed.to_lowercase(),
-        real: data,
-        complex: vec![],
-    });
+    ctx.store_vector(SimVector::real(spec_trimmed.to_lowercase(), data));
 
     Ok(())
 }

@@ -68,11 +68,6 @@ impl NodeMap {
         self.map.len()
     }
 
-    /// Returns true if there are no non-ground nodes.
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
-
     /// Look up a node's index (returns None for ground or unknown nodes).
     /// SPICE is case-insensitive, so this does a case-insensitive lookup.
     pub fn get(&self, node: &str) -> Option<usize> {
@@ -119,8 +114,6 @@ pub struct ResistorInstance {
 /// A resolved diode instance with matrix indices and model parameters.
 #[derive(Debug, Clone)]
 pub struct DiodeInstance {
-    /// Diode element name.
-    pub name: String,
     /// Anode node matrix index (None = ground).
     pub anode_idx: Option<usize>,
     /// Cathode node matrix index (None = ground).
@@ -164,8 +157,6 @@ pub struct InductorInstance {
 pub struct VoltageSourceInstance {
     /// Index of this source's branch equation in the RHS vector.
     pub branch_idx: usize,
-    /// DC value.
-    pub dc_value: f64,
     /// Transient waveform, if any.
     pub waveform: Option<thevenin_types::Waveform>,
 }
@@ -185,71 +176,9 @@ pub struct CurrentSourceInstance {
     pub waveform: Option<thevenin_types::Waveform>,
 }
 
-/// A resolved VCVS (E) instance with matrix indices.
-#[derive(Debug, Clone)]
-pub struct VcvsInstance {
-    /// Branch equation index in the solution vector.
-    pub branch_idx: usize,
-    /// Output positive node index (None = ground).
-    pub out_pos_idx: Option<usize>,
-    /// Output negative node index (None = ground).
-    pub out_neg_idx: Option<usize>,
-    /// Control positive node index (None = ground).
-    pub ctrl_pos_idx: Option<usize>,
-    /// Control negative node index (None = ground).
-    pub ctrl_neg_idx: Option<usize>,
-    /// Voltage gain.
-    pub gain: f64,
-}
-
-/// A resolved VCCS (G) instance with matrix indices.
-#[derive(Debug, Clone)]
-pub struct VccsInstance {
-    /// Output positive node index (None = ground).
-    pub out_pos_idx: Option<usize>,
-    /// Output negative node index (None = ground).
-    pub out_neg_idx: Option<usize>,
-    /// Control positive node index (None = ground).
-    pub ctrl_pos_idx: Option<usize>,
-    /// Control negative node index (None = ground).
-    pub ctrl_neg_idx: Option<usize>,
-    /// Transconductance.
-    pub gm: f64,
-}
-
-/// A resolved CCCS (F) instance with matrix indices.
-#[derive(Debug, Clone)]
-pub struct CccsInstance {
-    /// Output positive node index (None = ground).
-    pub out_pos_idx: Option<usize>,
-    /// Output negative node index (None = ground).
-    pub out_neg_idx: Option<usize>,
-    /// Branch index of the controlling voltage source.
-    pub ctrl_branch_idx: usize,
-    /// Current gain.
-    pub gain: f64,
-}
-
-/// A resolved CCVS (H) instance with matrix indices.
-#[derive(Debug, Clone)]
-pub struct CcvsInstance {
-    /// Branch equation index in the solution vector.
-    pub branch_idx: usize,
-    /// Output positive node index (None = ground).
-    pub out_pos_idx: Option<usize>,
-    /// Output negative node index (None = ground).
-    pub out_neg_idx: Option<usize>,
-    /// Branch index of the controlling voltage source.
-    pub ctrl_branch_idx: usize,
-    /// Transresistance.
-    pub rm: f64,
-}
-
 /// A resolved behavioral source (B-element) instance.
 #[derive(Debug, Clone)]
 pub struct BehavioralSourceInstance {
-    /// Element name.
-    pub name: String,
     /// Positive terminal node index (None = ground).
     pub pos_idx: Option<usize>,
     /// Negative terminal node index (None = ground).
@@ -263,12 +192,6 @@ pub struct BehavioralSourceInstance {
 /// A resolved behavioral voltage source (B-element with V=expr) instance.
 #[derive(Debug, Clone)]
 pub struct BehavioralVoltageSourceInstance {
-    /// Element name.
-    pub name: String,
-    /// Positive terminal node index (None = ground).
-    pub pos_idx: Option<usize>,
-    /// Negative terminal node index (None = ground).
-    pub neg_idx: Option<usize>,
     /// Expression string after `V=`.
     pub expr: String,
     /// Branch current variable index in the solution vector.
@@ -333,14 +256,6 @@ pub struct MnaSystem {
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
     pub current_sources: Vec<CurrentSourceInstance>,
-    /// Resolved VCVS (E) instances.
-    pub vcvs_sources: Vec<VcvsInstance>,
-    /// Resolved VCCS (G) instances.
-    pub vccs_sources: Vec<VccsInstance>,
-    /// Resolved CCCS (F) instances.
-    pub cccs_sources: Vec<CccsInstance>,
-    /// Resolved CCVS (H) instances.
-    pub ccvs_sources: Vec<CcvsInstance>,
     /// Resolved behavioral current source (B-element with I=) instances for NR iteration.
     pub behavioral_sources: Vec<BehavioralSourceInstance>,
     /// Resolved behavioral voltage source (B-element with V=) instances for NR iteration.
@@ -1040,20 +955,6 @@ pub fn assemble_mna_with_xspice(
     assemble_mna_inner(netlist, false, Some(registry))
 }
 
-/// Assemble MNA using MODEDC behavior: waveform sources are evaluated at t=0,
-/// ignoring any explicit DC value. This matches ngspice's initial transient solution.
-pub fn assemble_mna_modedc(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
-    assemble_mna_inner(netlist, true, None)
-}
-
-/// Assemble MNA using MODEDC behavior with XSPICE registry.
-pub fn assemble_mna_modedc_with_xspice(
-    netlist: &Netlist,
-    registry: Arc<CodeModelRegistry>,
-) -> Result<MnaSystem, MnaError> {
-    assemble_mna_inner(netlist, true, Some(registry))
-}
-
 fn assemble_mna_inner(
     netlist: &Netlist,
     modedc: bool,
@@ -1482,10 +1383,6 @@ fn assemble_mna_flat(
     let mut inductors = Vec::new();
     let mut voltage_sources = Vec::new();
     let mut current_sources = Vec::new();
-    let mut vcvs_sources = Vec::new();
-    let mut vccs_sources = Vec::new();
-    let mut cccs_sources = Vec::new();
-    let mut ccvs_sources = Vec::new();
     let mut behavioral_sources = Vec::new();
     let mut behavioral_voltage_sources = Vec::new();
     let mut xspice_instances = Vec::new();
@@ -1519,7 +1416,6 @@ fn assemble_mna_flat(
                 };
 
                 diodes.push(DiodeInstance {
-                    name: element.name.clone(),
                     anode_idx,
                     cathode_idx,
                     internal_idx: int_idx,
@@ -2559,15 +2455,6 @@ fn assemble_mna_flat(
                     gain_val,
                 );
 
-                vcvs_sources.push(VcvsInstance {
-                    branch_idx: branch,
-                    out_pos_idx,
-                    out_neg_idx,
-                    ctrl_pos_idx,
-                    ctrl_neg_idx,
-                    gain: gain_val,
-                });
-
                 vsource_names.push(element.name.clone());
                 vsource_idx += 1;
             }
@@ -2592,14 +2479,6 @@ fn assemble_mna_flat(
                     ctrl_neg_idx,
                     gm_val,
                 );
-
-                vccs_sources.push(VccsInstance {
-                    out_pos_idx,
-                    out_neg_idx,
-                    ctrl_pos_idx,
-                    ctrl_neg_idx,
-                    gm: gm_val,
-                });
             }
             ElementKind::Cccs {
                 out_pos,
@@ -2628,13 +2507,6 @@ fn assemble_mna_flat(
                     ctrl_branch_idx,
                     gain_val,
                 );
-
-                cccs_sources.push(CccsInstance {
-                    out_pos_idx,
-                    out_neg_idx,
-                    ctrl_branch_idx,
-                    gain: gain_val,
-                });
             }
             ElementKind::Ccvs {
                 out_pos,
@@ -2665,14 +2537,6 @@ fn assemble_mna_flat(
                     branch,
                     rm_val,
                 );
-
-                ccvs_sources.push(CcvsInstance {
-                    branch_idx: branch,
-                    out_pos_idx,
-                    out_neg_idx,
-                    ctrl_branch_idx,
-                    rm: rm_val,
-                });
 
                 vsource_names.push(element.name.clone());
                 vsource_idx += 1;
@@ -2895,7 +2759,6 @@ fn assemble_mna_flat(
                 let tc_factor = 1.0 + tc1 * dt + tc2 * dt * dt;
                 if is_current {
                     behavioral_sources.push(BehavioralSourceInstance {
-                        name: element.name.clone(),
                         pos_idx: node_map.get(pos),
                         neg_idx: node_map.get(neg),
                         expr: expr_clean.to_string(),
@@ -2918,9 +2781,6 @@ fn assemble_mna_flat(
                     }
 
                     behavioral_voltage_sources.push(BehavioralVoltageSourceInstance {
-                        name: element.name.clone(),
-                        pos_idx: ni,
-                        neg_idx: nj,
                         expr: expr_clean.to_string(),
                         branch_idx: branch,
                         tc_factor,
@@ -3068,10 +2928,6 @@ fn assemble_mna_flat(
         inductors,
         voltage_sources,
         current_sources,
-        vcvs_sources,
-        vccs_sources,
-        cccs_sources,
-        ccvs_sources,
         bsim3s,
         bsim3soi_dds,
         bsim3soi_pds,
@@ -3237,7 +3093,6 @@ fn stamp_element(
 
             voltage_sources.push(VoltageSourceInstance {
                 branch_idx: branch,
-                dc_value: v,
                 waveform: source.waveform.clone(),
             });
 
@@ -3841,7 +3696,7 @@ R1 1 0 1k
         assert_abs_diff_eq!(sol_dc.voltage("1").unwrap(), 1.0, epsilon = 1e-9);
 
         // MODEDC: should use waveform at t=0 = 0
-        let mna_modedc = assemble_mna_modedc(&netlist).unwrap();
+        let mna_modedc = assemble_mna_inner(&netlist, true, None).unwrap();
         let sol_modedc = mna_modedc.solve().unwrap();
         assert_abs_diff_eq!(sol_modedc.voltage("1").unwrap(), 0.0, epsilon = 1e-9);
     }

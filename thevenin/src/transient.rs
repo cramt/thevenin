@@ -935,40 +935,29 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mut cpl_stamps: Vec<crate::cpl::CplTransientStamp> = Vec::new();
 
     // Prepare output vectors.
-    let mut time_vec = SimVector {
-        name: "time".to_string(),
-        real: Vec::new(),
-        complex: vec![],
-    };
+    let mut time_vec = SimVector::real("time", Vec::new());
 
     let mut node_vecs: Vec<SimVector> = mna
         .node_map
         .iter()
-        .map(|(name, _)| SimVector {
-            name: format!("v({})", name),
-            real: Vec::new(),
-            complex: vec![],
-        })
+        .map(|(name, _)| SimVector::real(format!("v({})", name), Vec::new()))
         .collect();
 
     let mut branch_vecs: Vec<SimVector> = mna
         .vsource_names
         .iter()
-        .map(|vsrc| SimVector {
-            name: format!("{}#branch", vsrc.to_lowercase()),
-            real: Vec::new(),
-            complex: vec![],
-        })
+        .map(|vsrc| SimVector::real(format!("{}#branch", vsrc.to_lowercase()), Vec::new()))
         .collect();
 
     // Scan .print directives for @device[param] queries and create output vectors.
     let device_param_queries = collect_device_param_queries(netlist, &mna);
     let mut device_param_vecs: Vec<SimVector> = device_param_queries
         .iter()
-        .map(|(device, param)| SimVector {
-            name: format!("@{}[{}]", device.to_lowercase(), param.to_lowercase()),
-            real: Vec::new(),
-            complex: vec![],
+        .map(|(device, param)| {
+            SimVector::real(
+                format!("@{}[{}]", device.to_lowercase(), param.to_lowercase()),
+                Vec::new(),
+            )
         })
         .collect();
 
@@ -1839,14 +1828,17 @@ fn record_point(
     device_param_queries: &[(String, String)],
     device_param_vecs: &mut [SimVector],
 ) {
-    time_vec.real.push(t);
+    time_vec.data.as_real_mut().push(t);
 
     for (idx, (_name, node_idx)) in mna.node_map.iter().enumerate() {
-        node_vecs[idx].real.push(solution[node_idx]);
+        node_vecs[idx].data.as_real_mut().push(solution[node_idx]);
     }
 
     for (i, _vsrc) in mna.vsource_names.iter().enumerate() {
-        branch_vecs[i].real.push(solution[num_nodes + i]);
+        branch_vecs[i]
+            .data
+            .as_real_mut()
+            .push(solution[num_nodes + i]);
     }
 
     // Record device parameter queries.
@@ -1854,7 +1846,7 @@ fn record_point(
         let val = mna
             .query_device_param(device, param, solution)
             .unwrap_or(0.0);
-        device_param_vecs[i].real.push(val);
+        device_param_vecs[i].data.as_real_mut().push(val);
     }
 }
 
@@ -2698,14 +2690,14 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test as test;
 
     /// Helper to get a vector from a transient result.
-    fn tran_vector<'a>(result: &'a SimResult, name: &str) -> &'a Vec<f64> {
+    fn tran_vector<'a>(result: &'a SimResult, name: &str) -> &'a [f64] {
         let plot = &result.plots[0];
-        &plot
-            .vecs
+        plot.vecs
             .iter()
             .find(|v| v.name == name)
             .unwrap_or_else(|| panic!("no vector '{name}'"))
-            .real
+            .data
+            .as_real()
     }
 
     #[test]

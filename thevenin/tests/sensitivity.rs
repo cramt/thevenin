@@ -10,7 +10,8 @@ fn tf_value(result: &thevenin_types::SimResult, plot_idx: usize, name: &str) -> 
         .iter()
         .find(|v| v.name == name)
         .unwrap_or_else(|| panic!("no vector '{name}'"))
-        .real[0]
+        .data
+        .as_real()[0]
 }
 
 fn sens_value(result: &thevenin_types::SimResult, name: &str) -> f64 {
@@ -22,7 +23,8 @@ fn sens_value(result: &thevenin_types::SimResult, name: &str) -> f64 {
             let names: Vec<_> = result.plots[0].vecs.iter().map(|v| &v.name).collect();
             panic!("no vector '{name}', available: {names:?}")
         })
-        .real[0]
+        .data
+        .as_real()[0]
 }
 
 /// Port of ngspice-upstream/tests/sensitivity/diffpair.cir — .tf analysis

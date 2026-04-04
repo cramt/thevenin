@@ -79,11 +79,11 @@ Q1 Q1_C Q1_B Q1_E P1
         .expect("no vc#branch");
 
     // Should have 101 sweep points (0.2 to 1.2 in 10mV steps)
-    assert_eq!(i_vc.real.len(), 101);
+    assert_eq!(i_vc.data.as_real().len(), 101);
 
     // Compare first 11 data points with ngspice reference (abs values)
     for (i, &ref_ic) in FG_REF_IC.iter().enumerate() {
-        let sim_ic = i_vc.real[i].abs();
+        let sim_ic = i_vc.data.as_real()[i].abs();
         let rel_err = (sim_ic - ref_ic).abs() / ref_ic.max(1e-30);
         assert!(
             rel_err < 0.15,
@@ -126,13 +126,13 @@ Q1 Q1_C V1_P 0 N1
         .expect("no vc#branch");
 
     // Double sweep: 101 points for VC (0 to 5V, 50mV) × 7 points for VB (0.7 to 1.0, 50mV) = 707
-    assert_eq!(i_vc.real.len(), 707);
+    assert_eq!(i_vc.data.as_real().len(), 707);
 
     // Compare first 7 points (first inner sweep at VB=0.7V)
     // ngspice outputs -i(vc), our sim gives i(vc) directly
     // Using 30% tolerance: model has known missing cross-terms (diccp_dvbci, etc.)
     for (i, &ref_ic) in FO_REF_IC.iter().enumerate() {
-        let sim_ic = -i_vc.real[i]; // negate to match -i(vc)
+        let sim_ic = -i_vc.data.as_real()[i]; // negate to match -i(vc)
         let tol = ref_ic.abs() * 0.30 + 1e-6; // 30% relative + 1uA absolute
         assert!(
             (sim_ic - ref_ic).abs() < tol,
@@ -178,7 +178,10 @@ Q1 2 1 0 0 N1
         .iter()
         .find(|v| v.name == "frequency")
         .expect("no frequency");
-    assert!(freq.real.len() > 100, "Expected >100 frequency points");
+    assert!(
+        freq.data.as_real().len() > 100,
+        "Expected >100 frequency points"
+    );
 
     // Find Vmeas branch current
     let i_vmeas = plot
@@ -189,8 +192,8 @@ Q1 2 1 0 0 N1
 
     // At low frequencies, the gain should be around 32-33 dB (from reference)
     // db(i(vmeas)) at 100kHz ≈ 32.68 dB
-    let first_mag = (i_vmeas.complex[0].re * i_vmeas.complex[0].re
-        + i_vmeas.complex[0].im * i_vmeas.complex[0].im)
+    let first_mag = (i_vmeas.data.as_complex()[0].re * i_vmeas.data.as_complex()[0].re
+        + i_vmeas.data.as_complex()[0].im * i_vmeas.data.as_complex()[0].im)
         .sqrt();
     let first_db = 20.0 * first_mag.log10();
     assert!(
@@ -200,8 +203,12 @@ Q1 2 1 0 0 N1
     );
 
     // At high frequencies, gain should roll off significantly
-    let last_mag = (i_vmeas.complex[i_vmeas.complex.len() - 1].re.powi(2)
-        + i_vmeas.complex[i_vmeas.complex.len() - 1].im.powi(2))
+    let last_mag = (i_vmeas.data.as_complex()[i_vmeas.data.as_complex().len() - 1]
+        .re
+        .powi(2)
+        + i_vmeas.data.as_complex()[i_vmeas.data.as_complex().len() - 1]
+            .im
+            .powi(2))
     .sqrt();
     let last_db = 20.0 * last_mag.log10();
     assert!(
@@ -240,7 +247,7 @@ R3 R3_P R3_N 500k
 
     // Noise result has two plots: noise1 (spectrum) and noise2 (integrated)
     assert!(
-        result.plots.len() >= 1,
+        !result.plots.is_empty(),
         "Expected at least 1 noise plot, got {}",
         result.plots.len()
     );
@@ -254,10 +261,10 @@ R3 R3_P R3_N 500k
 
     // Should have 126 frequency points (DEC 25, 1k to 100Meg = 5 decades * 25 + 1)
     assert_eq!(
-        freq.real.len(),
+        freq.data.as_real().len(),
         126,
         "Expected 126 noise frequency points, got {}",
-        freq.real.len()
+        freq.data.as_real().len()
     );
 
     // Reference: at 1kHz, inoise_spectrum ≈ 6.606e-14 V²/Hz (ngspice format)
@@ -267,7 +274,7 @@ R3 R3_P R3_N 500k
         .find(|v| v.name == "inoise_spectrum")
         .expect("no inoise_spectrum");
 
-    let inoise_1k = inoise.real[0];
+    let inoise_1k = inoise.data.as_real()[0];
     assert!(
         inoise_1k > 1e-20,
         "Input noise at 1kHz should be > 1e-20: got {:.6e}",
@@ -317,7 +324,7 @@ Q1 Q1_C Q1_B 0 N1
         match thevenin::simulate_dc(&netlist) {
             Ok(r) => eprintln!(
                 "Range {start}-{stop}: OK ({} points)",
-                r.plots[0].vecs[0].real.len()
+                r.plots[0].vecs[0].data.as_real().len()
             ),
             Err(e) => eprintln!("Range {start}-{stop}: FAILED: {e}"),
         }
@@ -354,10 +361,10 @@ Q1 Q1_C Q1_B 0 N1
         .expect("no vc#branch");
 
     // At TEMP=150°C (423.15K), currents should be higher than at 27°C
-    assert_eq!(i_vc.real.len(), 101);
+    assert_eq!(i_vc.data.as_real().len(), 101);
 
     // Reference at V1=0.2V: i(vc) ≈ 1.868e-08 (much higher than room temp)
-    let ic_first = i_vc.real[0];
+    let ic_first = i_vc.data.as_real()[0];
     assert!(
         ic_first.abs() > 1e-10,
         "Collector current at 150°C should be > 1e-10: got {:.6e}",
@@ -428,7 +435,7 @@ Q1 col base 0 N1
 
     // Print all vectors for debugging
     for v in &plot.vecs {
-        eprintln!("{}: {:?}", v.name, v.real);
+        eprintln!("{}: {:?}", v.name, v.data);
     }
 
     // VCC branch current should be the collector current
@@ -437,7 +444,7 @@ Q1 col base 0 N1
         .iter()
         .find(|v| v.name == "vcc#branch")
         .expect("no vcc#branch");
-    let ic = -i_vcc.real[0]; // negative because current flows INTO collector
+    let ic = -i_vcc.data.as_real()[0]; // negative because current flows INTO collector
 
     // Expected: IS * exp(0.7/Vt) / qb ≈ 1e-16 * exp(27.1) ≈ 5.8e-5 A
     eprintln!("Collector current Ic = {:.6e}", ic);
@@ -466,7 +473,7 @@ Q1 col base emit P1
 
     // Print all vectors for debugging
     for v in &plot.vecs {
-        eprintln!("{}: {:?}", v.name, v.real);
+        eprintln!("{}: {:?}", v.name, v.data);
     }
 
     // VC branch current should be the collector current
@@ -475,10 +482,13 @@ Q1 col base emit P1
         .iter()
         .find(|v| v.name == "vc#branch")
         .expect("no vc#branch");
-    eprintln!("PNP Collector current I(VC) = {:.6e}", i_vc.real[0]);
+    eprintln!(
+        "PNP Collector current I(VC) = {:.6e}",
+        i_vc.data.as_real()[0]
+    );
 
     // For PNP at Veb=0.7V, Ic should be similar magnitude to NPN
-    let ic = i_vc.real[0].abs();
+    let ic = i_vc.data.as_real()[0].abs();
     assert!(
         ic > 1e-6 && ic < 1e-3,
         "Ic should be ~5e-5 A, got {:.6e}",
@@ -508,14 +518,14 @@ Q1 Q1_C Q1_B Q1_E P1
     let result = thevenin::simulate_op(&netlist).unwrap();
     let plot = &result.plots[0];
     for v in &plot.vecs {
-        eprintln!("{}: {:?}", v.name, v.real);
+        eprintln!("{}: {:?}", v.name, v.data);
     }
     let i_vc = plot
         .vecs
         .iter()
         .find(|v| v.name == "vc#branch")
         .expect("no vc#branch");
-    let ic = i_vc.real[0].abs();
+    let ic = i_vc.data.as_real()[0].abs();
     eprintln!("Ic = {:.6e}, expected ~2.17e-13", ic);
     assert!(ic < 1e-11, "Ic should be ~2e-13, got {:.6e}", ic);
 }
@@ -546,13 +556,16 @@ Q1 Q1_C Q1_B Q1_E P1
         .iter()
         .find(|v| v.name == "vc#branch")
         .expect("no vc#branch");
-    eprintln!("DC sweep single point: I(VC) = {:.6e}", i_vc.real[0]);
-    eprintln!("abs = {:.6e}", i_vc.real[0].abs());
+    eprintln!(
+        "DC sweep single point: I(VC) = {:.6e}",
+        i_vc.data.as_real()[0]
+    );
+    eprintln!("abs = {:.6e}", i_vc.data.as_real()[0].abs());
     // Should match .OP result of ~2.51e-12 (even if not matching ngspice exactly)
     assert!(
-        i_vc.real[0].abs() < 1e-10,
+        i_vc.data.as_real()[0].abs() < 1e-10,
         "Ic at V1=0.2V should be << 1e-10, got {:.6e}",
-        i_vc.real[0].abs()
+        i_vc.data.as_real()[0].abs()
     );
 }
 

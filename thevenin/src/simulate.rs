@@ -54,11 +54,7 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
         } else {
             0.0
         };
-        vecs.push(SimVector {
-            name: format!("v({})", name),
-            real: vec![v],
-            complex: vec![],
-        });
+        vecs.push(SimVector::real(format!("v({})", name), vec![v]));
     }
 
     // Voltage source branch currents
@@ -70,11 +66,10 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
         } else {
             0.0
         };
-        vecs.push(SimVector {
-            name: format!("{}#branch", vsrc.to_lowercase()),
-            real: vec![current],
-            complex: vec![],
-        });
+        vecs.push(SimVector::real(
+            format!("{}#branch", vsrc.to_lowercase()),
+            vec![current],
+        ));
     }
 
     Ok(SimResult {
@@ -103,11 +98,7 @@ pub fn simulate_op_with_xspice(
         } else {
             0.0
         };
-        vecs.push(SimVector {
-            name: format!("v({})", name),
-            real: vec![v],
-            complex: vec![],
-        });
+        vecs.push(SimVector::real(format!("v({})", name), vec![v]));
     }
 
     let num_nodes = mna.total_num_nodes();
@@ -118,11 +109,10 @@ pub fn simulate_op_with_xspice(
         } else {
             0.0
         };
-        vecs.push(SimVector {
-            name: format!("{}#branch", vsrc.to_lowercase()),
-            real: vec![current],
-            complex: vec![],
-        });
+        vecs.push(SimVector::real(
+            format!("{}#branch", vsrc.to_lowercase()),
+            vec![current],
+        ));
     }
 
     Ok(SimResult {
@@ -198,11 +188,7 @@ pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
         } else {
             0.0
         };
-        vecs.push(SimVector {
-            name: format!("v({})", name),
-            real: vec![v],
-            complex: vec![],
-        });
+        vecs.push(SimVector::real(format!("v({})", name), vec![v]));
     }
     let num_nodes = mna.total_num_nodes();
     for (i, vsrc) in mna.vsource_names.iter().enumerate() {
@@ -212,11 +198,10 @@ pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
         } else {
             0.0
         };
-        vecs.push(SimVector {
-            name: format!("{}#branch", vsrc.to_lowercase()),
-            real: vec![current],
-            complex: vec![],
-        });
+        vecs.push(SimVector::real(
+            format!("{}#branch", vsrc.to_lowercase()),
+            vec![current],
+        ));
     }
     Ok(SimResult {
         plots: vec![SimPlot {
@@ -790,24 +775,15 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
     // Initialize result vectors: sweep variable + node voltages + branch currents.
     let mut vecs = Vec::new();
-    vecs.push(SimVector {
-        name: sweep_var_name,
-        real: Vec::new(),
-        complex: vec![],
-    });
+    vecs.push(SimVector::real(sweep_var_name, Vec::new()));
     for (name, _) in mna.node_map.iter() {
-        vecs.push(SimVector {
-            name: format!("v({})", name),
-            real: Vec::new(),
-            complex: vec![],
-        });
+        vecs.push(SimVector::real(format!("v({})", name), Vec::new()));
     }
     for vsrc in &mna.vsource_names {
-        vecs.push(SimVector {
-            name: format!("{}#branch", vsrc.to_lowercase()),
-            real: Vec::new(),
-            complex: vec![],
-        });
+        vecs.push(SimVector::real(
+            format!("{}#branch", vsrc.to_lowercase()),
+            Vec::new(),
+        ));
     }
 
     // Resolve optional second sweep source.
@@ -838,7 +814,7 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let rhs_after_src2 = mna.system.rhs.clone();
             for &v1 in &points1 {
                 set_source_value(&mut mna, &sweep1, v1, &rhs_after_src2, original_dc1);
-                vecs[0].real.push(v1);
+                vecs[0].data.as_real_mut().push(v1);
                 collect_solution_into(&mna, &nr_opts, &mut vecs[1..], &mut prev_solution)?;
             }
         }
@@ -846,7 +822,7 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
         // Single sweep
         for &v1 in &points1 {
             set_source_value(&mut mna, &sweep1, v1, &original_rhs, original_dc1);
-            vecs[0].real.push(v1);
+            vecs[0].data.as_real_mut().push(v1);
             collect_solution_into(&mna, &nr_opts, &mut vecs[1..], &mut prev_solution)?;
         }
     }
@@ -854,11 +830,10 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // Add device parameter alias for the sweep vector so that
     // .control scripts can access it as @v1[dc] (matching ngspice save behavior).
     let sweep_param_name = format!("@{}[dc]", src.to_lowercase());
-    vecs.push(SimVector {
-        name: sweep_param_name,
-        real: vecs[0].real.clone(),
-        complex: vec![],
-    });
+    vecs.push(SimVector::real(
+        sweep_param_name,
+        vecs[0].data.as_real().to_vec(),
+    ));
 
     Ok(SimResult {
         plots: vec![SimPlot {
@@ -882,13 +857,13 @@ fn collect_solution_into(
 
         for (name, _) in mna.node_map.iter() {
             let v = solution.voltage(name).unwrap_or(0.0);
-            vecs[idx].real.push(v);
+            vecs[idx].data.as_real_mut().push(v);
             idx += 1;
         }
 
         for vsrc in &mna.vsource_names {
             let i = solution.branch_current(vsrc).unwrap_or(0.0);
-            vecs[idx].real.push(i);
+            vecs[idx].data.as_real_mut().push(i);
             idx += 1;
         }
     } else {
@@ -898,12 +873,12 @@ fn collect_solution_into(
         let num_nodes = mna.total_num_nodes();
 
         for (_name, node_idx) in mna.node_map.iter() {
-            vecs[idx].real.push(sol[node_idx]);
+            vecs[idx].data.as_real_mut().push(sol[node_idx]);
             idx += 1;
         }
 
         for (i, _vsrc) in mna.vsource_names.iter().enumerate() {
-            vecs[idx].real.push(sol[num_nodes + i]);
+            vecs[idx].data.as_real_mut().push(sol[num_nodes + i]);
             idx += 1;
         }
 
@@ -929,7 +904,8 @@ mod tests {
             .iter()
             .find(|v| v.name == name)
             .unwrap_or_else(|| panic!("no vector {name}"))
-            .real[0]
+            .data
+            .as_real()[0]
     }
 
     /// Helper to get a branch current from the OP result.
@@ -940,7 +916,8 @@ mod tests {
             .iter()
             .find(|v| v.name == name)
             .unwrap_or_else(|| panic!("no vector {name}"))
-            .real[0]
+            .data
+            .as_real()[0]
     }
 
     #[test]
@@ -992,14 +969,14 @@ R2 mid 0 2k
     }
 
     /// Helper to get a vector from a DC sweep result.
-    fn dc_vector<'a>(result: &'a SimResult, name: &str) -> &'a Vec<f64> {
+    fn dc_vector<'a>(result: &'a SimResult, name: &str) -> &'a [f64] {
         let plot = &result.plots[0];
-        &plot
-            .vecs
+        plot.vecs
             .iter()
             .find(|v| v.name == name)
             .unwrap_or_else(|| panic!("no vector {name}"))
-            .real
+            .data
+            .as_real()
     }
 
     #[test]
@@ -1027,16 +1004,16 @@ R1 1 0 1k
 
         let v_node = dc_vector(&result, "v(1)");
         assert_eq!(v_node.len(), 6);
-        for i in 0..6 {
+        for (i, val) in v_node.iter().enumerate().take(6) {
             let expected_v = i as f64;
-            assert_abs_diff_eq!(v_node[i], expected_v, epsilon = 1e-9);
+            assert_abs_diff_eq!(*val, expected_v, epsilon = 1e-9);
         }
 
         let i_v1 = dc_vector(&result, "v1#branch");
         assert_eq!(i_v1.len(), 6);
-        for i in 0..6 {
+        for (i, val) in i_v1.iter().enumerate().take(6) {
             let expected_i = -(i as f64) / 1000.0;
-            assert_abs_diff_eq!(i_v1[i], expected_i, epsilon = 1e-9);
+            assert_abs_diff_eq!(*val, expected_i, epsilon = 1e-9);
         }
     }
 

@@ -4,14 +4,14 @@ use thevenin_types::Netlist;
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
 /// Helper to get a vector from a transient result.
-fn tran_vector<'a>(result: &'a thevenin_types::SimResult, name: &str) -> &'a Vec<f64> {
-    let plot = &result.plots[0];
-    &plot
+fn tran_vector<'a>(result: &'a thevenin_types::SimResult, name: &str) -> &'a [f64] {
+    result.plots[0]
         .vecs
         .iter()
         .find(|v| v.name == name)
         .unwrap_or_else(|| panic!("no vector '{name}'"))
-        .real
+        .data
+        .as_real()
 }
 
 /// Test CPL DC operating point: 2-line CPL with R*length series resistance.
@@ -39,7 +39,7 @@ R3 5 0 100
     // I = 5 / (100 + 0.5 + 100) = 5/200.5 ≈ 0.02494A
     // V(4) = I * R2 ≈ 2.494V
     let v4_vec = plot.vecs.iter().find(|v| v.name == "v(4)").unwrap();
-    let v4 = v4_vec.real[0];
+    let v4 = v4_vec.data.as_real()[0];
     let expected = 5.0 * 100.0 / 200.5;
     assert!(
         (v4 - expected).abs() < 0.05,

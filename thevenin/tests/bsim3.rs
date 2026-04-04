@@ -98,10 +98,10 @@ fn test_bsim3_qaspec_dc_sweep_vg1p8() {
         .expect("no vds#branch");
 
     // Should have 18 sweep points (0.1 to 1.8 step 0.1)
-    assert_eq!(i_vds.real.len(), 18, "Expected 18 sweep points");
+    assert_eq!(i_vds.data.as_real().len(), 18, "Expected 18 sweep points");
 
     // Drain current should be negative (current into drain)
-    for (i, &id) in i_vds.real.iter().enumerate() {
+    for (i, &id) in i_vds.data.as_real().iter().enumerate() {
         assert!(
             id < 0.0,
             "Point {i}: Drain current should be negative: {id}"
@@ -110,7 +110,7 @@ fn test_bsim3_qaspec_dc_sweep_vg1p8() {
 
     // Reference values at Vg=1.8V, T=27°C from dcSweep_lw1.standard:
     // Vd=0.1: 1.549222e-04, Vd=0.9: 2.358755e-04, Vd=1.8: 2.493198e-04
-    let ids_abs: Vec<f64> = i_vds.real.iter().map(|x| x.abs()).collect();
+    let ids_abs: Vec<f64> = i_vds.data.as_real().iter().map(|x| x.abs()).collect();
 
     // Check order of magnitude: should be in the 100μA - 600μA range
     for (i, &id) in ids_abs.iter().enumerate() {
@@ -155,7 +155,7 @@ fn test_bsim3_qaspec_dc_sweep_vg1p0() {
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
 
-    let ids_abs: Vec<f64> = i_vds.real.iter().map(|x| x.abs()).collect();
+    let ids_abs: Vec<f64> = i_vds.data.as_real().iter().map(|x| x.abs()).collect();
 
     // At Vg=1.0V (moderate inversion): reference ~14.7μA to 23.5μA
     // Should be in μA range
@@ -181,7 +181,7 @@ fn test_bsim3_qaspec_dc_sweep_vg0p4() {
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
 
-    let ids_abs: Vec<f64> = i_vds.real.iter().map(|x| x.abs()).collect();
+    let ids_abs: Vec<f64> = i_vds.data.as_real().iter().map(|x| x.abs()).collect();
 
     // At Vg=0.4V (below Vth=0.7V): reference ~96nA to 138nA (subthreshold)
     // Should converge and produce valid subthreshold current
@@ -221,7 +221,7 @@ Vds d 0 1.8
         .iter()
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
-    let ids = i_vds.real[0];
+    let ids = i_vds.data.as_real()[0];
 
     // Should have negative branch current (current flows into drain)
     assert!(ids < 0.0, "Drain current should be negative: {ids}");
@@ -254,7 +254,7 @@ Vds d 0 0.0
         .iter()
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
-    let ids = i_vds.real[0];
+    let ids = i_vds.data.as_real()[0];
 
     // PMOS: VGS = 0 - 1.8 = -1.8V, VDS = 0 - 1.8 = -1.8V
     assert!(ids > 0.0, "PMOS drain current should be positive: {ids}");
@@ -287,9 +287,9 @@ fn test_bsim3_qaspec_ac_freq() {
         .find(|v| v.name == "frequency")
         .expect("no frequency vector");
     assert!(
-        freq.real.len() >= 50,
+        freq.data.as_real().len() >= 50,
         "Expected at least 50 frequency points, got {}",
-        freq.real.len()
+        freq.data.as_real().len()
     );
 
     // AC analysis returns complex node voltages at each frequency
@@ -302,8 +302,8 @@ fn test_bsim3_qaspec_ac_freq() {
         .find(|v| v.name == "v(g)")
         .expect("no v(g)");
     assert_eq!(
-        vg.complex.len(),
-        freq.real.len(),
+        vg.data.as_complex().len(),
+        freq.data.as_real().len(),
         "Complex vector length should match"
     );
 }
@@ -325,7 +325,7 @@ fn test_bsim3_qaspec_ac_freq_capmod1() {
         .find(|v| v.name == "frequency")
         .expect("no frequency vector");
     assert!(
-        freq.real.len() >= 50,
+        freq.data.as_real().len() >= 50,
         "Expected at least 50 frequency points"
     );
 }
@@ -346,7 +346,7 @@ fn test_bsim3_qaspec_ac_freq_xpart1() {
         .find(|v| v.name == "frequency")
         .expect("no frequency vector");
     assert!(
-        freq.real.len() >= 50,
+        freq.data.as_real().len() >= 50,
         "Expected at least 50 frequency points"
     );
 }
@@ -382,10 +382,10 @@ Vds d 0 0.0
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
 
-    assert_eq!(i_vds.real.len(), 18, "Expected 18 sweep points");
+    assert_eq!(i_vds.data.as_real().len(), 18, "Expected 18 sweep points");
 
     // Short channel should have higher current than long channel
-    let ids_last = i_vds.real[17].abs();
+    let ids_last = i_vds.data.as_real()[17].abs();
     assert!(
         ids_last > 1e-5,
         "Short channel should have significant current: {ids_last}"
@@ -419,10 +419,10 @@ Vds d 0 0.0
         .find(|v| v.name == "vds#branch")
         .expect("no vds#branch");
 
-    assert_eq!(i_vds.real.len(), 18, "Expected 18 sweep points");
+    assert_eq!(i_vds.data.as_real().len(), 18, "Expected 18 sweep points");
 
     // With series resistance, current should be somewhat reduced
-    let ids_last = i_vds.real[17].abs();
+    let ids_last = i_vds.data.as_real()[17].abs();
     assert!(
         ids_last > 1e-6 && ids_last < 1e-2,
         "Current with series R should be reasonable: {ids_last}"
@@ -460,13 +460,13 @@ Vds d 0 1.8
 
     // Should have multiple time points
     assert!(
-        time.real.len() > 10,
+        time.data.as_real().len() > 10,
         "Expected multiple time points, got {}",
-        time.real.len()
+        time.data.as_real().len()
     );
 
     // Final time should be near 200ns
-    let last_time = *time.real.last().unwrap();
+    let last_time = *time.data.as_real().last().unwrap();
     assert!(
         last_time >= 199e-9,
         "Simulation should reach 200ns, got {last_time}"

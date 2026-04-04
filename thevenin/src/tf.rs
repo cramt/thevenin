@@ -289,21 +289,15 @@ pub fn simulate_tf(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
         // Build result vectors
         let vecs = vec![
-            SimVector {
-                name: "transfer_function".to_string(),
-                real: vec![tf_value],
-                complex: vec![],
-            },
-            SimVector {
-                name: format!("output_impedance_at_{}", output.to_lowercase()),
-                real: vec![output_impedance],
-                complex: vec![],
-            },
-            SimVector {
-                name: format!("{}#input_impedance", input.to_lowercase()),
-                real: vec![input_impedance],
-                complex: vec![],
-            },
+            SimVector::real("transfer_function", vec![tf_value]),
+            SimVector::real(
+                format!("output_impedance_at_{}", output.to_lowercase()),
+                vec![output_impedance],
+            ),
+            SimVector::real(
+                format!("{}#input_impedance", input.to_lowercase()),
+                vec![input_impedance],
+            ),
         ];
 
         plots.push(SimPlot {
@@ -328,7 +322,8 @@ mod tests {
             .iter()
             .find(|v| v.name == name)
             .unwrap_or_else(|| panic!("no vector '{name}'"))
-            .real[0]
+            .data
+            .as_real()[0]
     }
 
     #[test]

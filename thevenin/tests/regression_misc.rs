@@ -15,7 +15,8 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
             let names: Vec<_> = plot.vecs.iter().map(|v| &v.name).collect();
             panic!("node {key} not found in results, available: {names:?}")
         })
-        .real[0]
+        .data
+        .as_real()[0]
 }
 
 /// ac-zero: AC analysis at frequency = 0 Hz.
@@ -48,8 +49,8 @@ c3 3 0 1uF
 
     // At f=0: inductor=short, capacitor=open → voltage divider R3/(R1+R3) = 0.5
     // AC results are complex-valued
-    assert_abs_diff_eq!(v3.complex[0].re, 0.5, epsilon = 1e-12);
-    assert_abs_diff_eq!(v3.complex[0].im, 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(v3.data.as_complex()[0].re, 0.5, epsilon = 1e-12);
+    assert_abs_diff_eq!(v3.data.as_complex()[0].im, 0.0, epsilon = 1e-12);
 }
 
 /// bugs-1: B source with unary minus and plus operators (constant expressions).
@@ -246,7 +247,7 @@ R2 2 0 4k
         .filter(|v| v.name.starts_with("pole("))
         .collect();
     assert_eq!(poles.len(), 1);
-    assert_abs_diff_eq!(poles[0].complex[0].re, -5.0e5, epsilon = 1.0);
+    assert_abs_diff_eq!(poles[0].data.as_complex()[0].re, -5.0e5, epsilon = 1.0);
 }
 
 /// .temp directive: Verify temperature is parsed and accessible.
@@ -341,5 +342,5 @@ V1 1 0 1
         .iter()
         .find(|v| v.name.contains("v1"))
         .expect("v1 branch current");
-    assert_abs_diff_eq!(i.real[0].abs(), 1.0 / 300.0, epsilon = 1e-9);
+    assert_abs_diff_eq!(i.data.as_real()[0].abs(), 1.0 / 300.0, epsilon = 1e-9);
 }

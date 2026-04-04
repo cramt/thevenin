@@ -194,9 +194,9 @@ m2 out in ss e n1 W=10u L=0.25u
         .find(|sv| sv.name == "v(out)")
         .expect("v(out)");
     assert!(
-        v_out.real[0] > 2.0,
+        v_out.data.as_real()[0] > 2.0,
         "Inverter output should be high with vin=0, got {}",
-        v_out.real[0]
+        v_out.data.as_real()[0]
     );
 }
 
@@ -234,9 +234,9 @@ m2 out in ss e n1 W=10u L=0.25u
         .find(|sv| sv.name == "v(out)")
         .expect("v(out)");
     assert!(
-        v_out.real[0] < 0.5,
+        v_out.data.as_real()[0] < 0.5,
         "Inverter output should be low with vin=2.5, got {}",
-        v_out.real[0]
+        v_out.data.as_real()[0]
     );
 }
 
@@ -290,5 +290,5 @@ Ve e 0 0.0
         .iter()
         .find(|v| v.name == "v-sweep")
         .expect("v-sweep");
-    assert_eq!(vsweep.real.len(), 25, "Expected 25 sweep points");
+    assert_eq!(vsweep.data.as_real().len(), 25, "Expected 25 sweep points");
 }

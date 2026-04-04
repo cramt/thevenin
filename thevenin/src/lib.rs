@@ -1,4 +1,26 @@
-use thevenin_types::Expr;
+//! Thevenin — a Rust circuit simulator (ngspice-compatible).
+//!
+//! # Quick start
+//!
+//! ```rust
+//! use thevenin::simulate;
+//! use thevenin_types::Netlist;
+//!
+//! let netlist = Netlist::parse("
+//! Voltage Divider
+//! V1 in 0 1.0
+//! R1 in mid 1k
+//! R2 mid 0 2k
+//! .op
+//! .end
+//! ").unwrap();
+//!
+//! let result = simulate(&netlist).unwrap();
+//! let vmid = result["v(mid)"].data.as_real()[0];
+//! assert!((vmid - 0.6667).abs() < 0.001);
+//! ```
+
+use thevenin_types::{Analysis, Expr, Item, Netlist, SimResult};
 
 /// Parse a numeric expression value, returning an error if it's not a literal number.
 pub(crate) fn expr_val(expr: &Expr, context: &str) -> Result<f64, mna::MnaError> {
@@ -18,7 +40,24 @@ pub(crate) fn expr_val_or(expr: &Expr, default: f64) -> f64 {
     }
 }
 
-pub mod ac;
+// ── Solver internals ────────────────────────────────────────────────────────
+pub(crate) mod device_stamp;
+pub(crate) mod mna;
+pub(crate) mod newton;
+pub(crate) mod physics;
+pub(crate) mod simulate;
+pub(crate) mod sparse;
+pub(crate) mod waveform;
+
+// ── Analysis modules ────────────────────────────────────────────────────────
+pub(crate) mod ac;
+pub(crate) mod noise;
+pub(crate) mod pz;
+pub(crate) mod sens;
+pub(crate) mod tf;
+pub(crate) mod transient;
+
+// ── Device models (pub for ongoing development) ─────────────────────────────
 pub mod bjt;
 pub mod bsim3;
 pub mod bsim3soi_dd;
@@ -26,37 +65,46 @@ pub mod bsim3soi_fd;
 pub mod bsim3soi_pd;
 pub mod bsim4;
 pub mod cpl;
-pub(crate) mod device_stamp;
 pub mod diode;
-pub mod expr;
 pub mod hfet;
 pub mod jfet;
-pub mod libproc;
 pub mod ltra;
 pub mod mesa;
 pub mod mesfet;
-pub mod mna;
 pub mod mos6;
 pub mod mosfet;
-pub mod newton;
-pub mod noise;
-pub mod output;
-pub(crate) mod physics;
-pub mod pz;
-pub mod sens;
-pub mod simulate;
-pub mod sparse;
-pub mod subckt;
-pub mod tf;
-pub mod transient;
 pub mod txl;
 pub mod vbic;
-pub mod waveform;
+
+// ── Public modules (used by thevenin-control and test harness) ──────────────
+pub mod expr;
+pub mod libproc;
+pub mod output;
+pub mod subckt;
+
+// ── Crate-internal re-exports (used across internal modules via `crate::`) ───
+pub(crate) use mna::stamp_conductance;
+pub(crate) use sparse::{LinearSystem, SparseMatrix, SparseMatrixError};
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
+// Analysis functions
+pub use ac::simulate_ac;
+pub use noise::simulate_noise;
+pub use pz::simulate_pz;
+pub use sens::simulate_sens;
+pub use simulate::{simulate_dc, simulate_op, simulate_op_dc, simulate_op_with_xspice};
+pub use tf::simulate_tf;
+pub use transient::simulate_tran;
+
+// Utilities
+pub use mna::MnaError;
+pub use simulate::nr_options_from_netlist;
+pub use subckt::flatten_netlist;
 
 /// Extract simulation temperature from a netlist (from `.temp` directive or `.options temp=`).
 /// Returns 27.0°C (room temperature) as default.
-pub fn netlist_temp(netlist: &thevenin_types::Netlist) -> f64 {
-    use thevenin_types::{Expr, Item};
+pub fn netlist_temp(netlist: &Netlist) -> f64 {
     let mut temp_c = 27.0_f64;
     for item in &netlist.items {
         match item {
@@ -78,8 +126,7 @@ pub fn netlist_temp(netlist: &thevenin_types::Netlist) -> f64 {
 
 /// Extract nominal temperature (TNOM) from `.options` in Kelvin.
 /// Defaults to 300.15K (27°C).
-pub fn netlist_tnom(netlist: &thevenin_types::Netlist) -> f64 {
-    use thevenin_types::{Expr, Item};
+pub fn netlist_tnom(netlist: &Netlist) -> f64 {
     let mut tnom_c = 27.0_f64;
     for item in &netlist.items {
         if let Item::Options(params) = item {
@@ -95,43 +142,41 @@ pub fn netlist_tnom(netlist: &thevenin_types::Netlist) -> f64 {
     tnom_c + 273.15
 }
 
-pub use ac::simulate_ac;
-pub use bjt::{BjtInstance, BjtModel, BjtType, stamp_bjt};
-pub use bsim3::{Bsim3Companion, Bsim3Instance, Bsim3Model, stamp_bsim3};
-pub use bsim3soi_dd::{
-    Bsim3SoiDdCompanion, Bsim3SoiDdInstance, Bsim3SoiDdModel, stamp_bsim3soi_dd,
-};
-pub use bsim3soi_fd::{
-    Bsim3SoiFdCompanion, Bsim3SoiFdInstance, Bsim3SoiFdModel, stamp_bsim3soi_fd,
-};
-pub use bsim3soi_pd::{
-    Bsim3SoiPdCompanion, Bsim3SoiPdInstance, Bsim3SoiPdModel, stamp_bsim3soi_pd,
-};
-pub use bsim4::{Bsim4Companion, Bsim4Instance, Bsim4Model, stamp_bsim4};
-pub use diode::DiodeModel;
-pub use hfet::{HfetCompanion, HfetInstance, HfetModel, HfetType};
-pub use jfet::{JfetInstance, JfetModel, JfetType, stamp_jfet};
-pub use mesa::{MesaCompanion, MesaInstance, MesaModel, stamp_mesa};
-pub use mesfet::{MesfetCompanion, MesfetInstance, MesfetModel, MesfetType};
-pub use mna::{
-    CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
-    ResistorInstance, VoltageSourceInstance, assemble_mna, assemble_mna_with_xspice,
-    stamp_conductance,
-};
-pub use mos6::{Mos6Instance, Mos6Model, stamp_mos6};
-pub use mosfet::{MosfetInstance, MosfetModel, MosfetType, stamp_mosfet};
-pub use newton::{NrError, NrMode, NrOptions, NrResult, newton_raphson_solve};
-pub use noise::simulate_noise;
-pub use pz::simulate_pz;
-pub use sens::simulate_sens;
-pub use simulate::{
-    nr_options_from_netlist, simulate_dc, simulate_op, simulate_op_dc, simulate_op_with_xspice,
-    solve_nonlinear_op,
-};
-pub use sparse::{ComplexLinearSystem, LinearSystem, SparseMatrix, SparseMatrixError};
-pub use subckt::{SubcktError, flatten_netlist};
-pub use tf::simulate_tf;
-pub use transient::simulate_tran;
-pub use vbic::{
-    VbicCompanion, VbicInstance, VbicModel, VbicType, stamp_vbic, stamp_vbic_with_voltages,
-};
+/// Run all analyses found in the netlist and return the combined results.
+///
+/// Scans the netlist for analysis directives (`.op`, `.dc`, `.ac`, `.tran`, etc.)
+/// and runs each one, collecting all plots into a single `SimResult`.
+///
+/// If no analysis directive is found, runs a DC operating point (`.op`) by default.
+pub fn simulate(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let analyses: Vec<&Analysis> = netlist
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Analysis(a) => Some(a),
+            _ => None,
+        })
+        .collect();
+
+    if analyses.is_empty() {
+        return simulate_op(netlist);
+    }
+
+    let mut all_plots = Vec::new();
+
+    for analysis in &analyses {
+        let result = match analysis {
+            Analysis::Op => simulate_op(netlist)?,
+            Analysis::Dc { .. } => simulate_dc(netlist)?,
+            Analysis::Ac { .. } => simulate_ac(netlist)?,
+            Analysis::Tran { .. } => simulate_tran(netlist)?,
+            Analysis::Noise { .. } => simulate_noise(netlist)?,
+            Analysis::Sens { .. } => simulate_sens(netlist)?,
+            Analysis::Tf { .. } => simulate_tf(netlist)?,
+            Analysis::Pz { .. } => simulate_pz(netlist)?,
+        };
+        all_plots.extend(result.plots);
+    }
+
+    Ok(SimResult { plots: all_plots })
+}

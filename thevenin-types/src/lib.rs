@@ -1171,10 +1171,131 @@ impl fmt::Display for Netlist {
 // ---------------------------------------------------------------------------
 
 /// Complex number pair for AC/frequency-domain vectors.
-#[derive(Facet, Debug, Clone)]
+#[derive(Facet, Debug, Clone, Copy)]
 pub struct Complex {
     pub re: f64,
     pub im: f64,
+}
+
+impl Complex {
+    /// Create a new complex number.
+    pub fn new(re: f64, im: f64) -> Self {
+        Self { re, im }
+    }
+
+    /// Magnitude (absolute value): sqrt(re² + im²).
+    pub fn magnitude(&self) -> f64 {
+        (self.re * self.re + self.im * self.im).sqrt()
+    }
+
+    /// Phase angle in radians.
+    pub fn phase_rad(&self) -> f64 {
+        self.im.atan2(self.re)
+    }
+
+    /// Phase angle in degrees.
+    pub fn phase_deg(&self) -> f64 {
+        self.phase_rad().to_degrees()
+    }
+}
+
+/// The data payload of a simulation vector — either real or complex.
+#[derive(Facet, Debug, Clone)]
+#[repr(C)]
+pub enum VectorData {
+    /// Real-valued data (DC, transient, DC sweep).
+    Real(Vec<f64>),
+    /// Complex-valued data (AC, pole-zero).
+    Complex(Vec<Complex>),
+}
+
+impl VectorData {
+    /// Get as real slice. Panics if complex.
+    pub fn as_real(&self) -> &[f64] {
+        match self {
+            VectorData::Real(v) => v,
+            VectorData::Complex(_) => panic!("expected real vector data, got complex"),
+        }
+    }
+
+    /// Get as complex slice. Panics if real.
+    pub fn as_complex(&self) -> &[Complex] {
+        match self {
+            VectorData::Complex(v) => v,
+            VectorData::Real(_) => panic!("expected complex vector data, got real"),
+        }
+    }
+
+    /// Get as real slice, or `None` if complex.
+    pub fn try_real(&self) -> Option<&[f64]> {
+        match self {
+            VectorData::Real(v) => Some(v),
+            VectorData::Complex(_) => None,
+        }
+    }
+
+    /// Get as complex slice, or `None` if real.
+    pub fn try_complex(&self) -> Option<&[Complex]> {
+        match self {
+            VectorData::Complex(v) => Some(v),
+            VectorData::Real(_) => None,
+        }
+    }
+
+    /// Get as mutable real vec. Panics if complex.
+    pub fn as_real_mut(&mut self) -> &mut Vec<f64> {
+        match self {
+            VectorData::Real(v) => v,
+            VectorData::Complex(_) => panic!("expected real vector data, got complex"),
+        }
+    }
+
+    /// Get as mutable complex vec. Panics if real.
+    pub fn as_complex_mut(&mut self) -> &mut Vec<Complex> {
+        match self {
+            VectorData::Complex(v) => v,
+            VectorData::Real(_) => panic!("expected complex vector data, got real"),
+        }
+    }
+
+    /// Number of data points.
+    pub fn len(&self) -> usize {
+        match self {
+            VectorData::Real(v) => v.len(),
+            VectorData::Complex(v) => v.len(),
+        }
+    }
+
+    /// Whether the vector has no data points.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether this is real-valued data.
+    pub fn is_real(&self) -> bool {
+        matches!(self, VectorData::Real(_))
+    }
+
+    /// Whether this is complex-valued data.
+    pub fn is_complex(&self) -> bool {
+        matches!(self, VectorData::Complex(_))
+    }
+
+    /// Compute magnitude for each point. Identity for real, |z| for complex.
+    pub fn magnitude(&self) -> Vec<f64> {
+        match self {
+            VectorData::Real(v) => v.iter().map(|x| x.abs()).collect(),
+            VectorData::Complex(v) => v.iter().map(|c| c.magnitude()).collect(),
+        }
+    }
+
+    /// Compute phase in degrees for each point. Zero for real.
+    pub fn phase_deg(&self) -> Vec<f64> {
+        match self {
+            VectorData::Real(v) => vec![0.0; v.len()],
+            VectorData::Complex(v) => v.iter().map(|c| c.phase_deg()).collect(),
+        }
+    }
 }
 
 /// One simulation vector (real or complex data).
@@ -1182,10 +1303,36 @@ pub struct Complex {
 pub struct SimVector {
     /// Vector name as reported by ngspice (e.g. `"v(out)"`, `"i(r1)"`).
     pub name: String,
-    /// Real-valued data points. Non-empty when the vector is real.
-    pub real: Vec<f64>,
-    /// Complex data points. Non-empty when the vector is complex.
-    pub complex: Vec<Complex>,
+    /// The data payload.
+    pub data: VectorData,
+}
+
+impl SimVector {
+    /// Create a new real-valued vector.
+    pub fn real(name: impl Into<String>, data: Vec<f64>) -> Self {
+        Self {
+            name: name.into(),
+            data: VectorData::Real(data),
+        }
+    }
+
+    /// Create a new complex-valued vector.
+    pub fn complex(name: impl Into<String>, data: Vec<Complex>) -> Self {
+        Self {
+            name: name.into(),
+            data: VectorData::Complex(data),
+        }
+    }
+
+    /// Number of data points.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Whether the vector has no data points.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 /// One ngspice plot (analysis result set) containing its vectors.
@@ -1196,10 +1343,68 @@ pub struct SimPlot {
     pub vecs: Vec<SimVector>,
 }
 
+impl SimPlot {
+    /// Look up a vector by name (case-insensitive).
+    pub fn vector(&self, name: &str) -> Option<&SimVector> {
+        self.vecs.iter().find(|v| v.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Look up a vector by name (case-insensitive), or panic with a helpful message.
+    pub fn get(&self, name: &str) -> &SimVector {
+        self.vector(name)
+            .unwrap_or_else(|| panic!("vector '{}' not found in plot '{}'", name, self.name))
+    }
+
+    /// Iterator over node voltage vectors (names starting with `v(`).
+    pub fn voltages(&self) -> impl Iterator<Item = &SimVector> {
+        self.vecs
+            .iter()
+            .filter(|v| v.name.starts_with("v(") || v.name.starts_with("V("))
+    }
+
+    /// Iterator over branch current vectors (names containing `#branch`).
+    pub fn currents(&self) -> impl Iterator<Item = &SimVector> {
+        self.vecs.iter().filter(|v| v.name.contains("#branch"))
+    }
+}
+
+impl core::ops::Index<&str> for SimPlot {
+    type Output = SimVector;
+
+    fn index(&self, name: &str) -> &SimVector {
+        self.get(name)
+    }
+}
+
 /// Complete simulation response: all plots produced by one ngspice run.
 #[derive(Facet, Debug, Clone)]
 pub struct SimResult {
     pub plots: Vec<SimPlot>,
+}
+
+impl SimResult {
+    /// Get the first (and usually only) plot.
+    pub fn plot(&self) -> Option<&SimPlot> {
+        self.plots.first()
+    }
+
+    /// Look up a vector by name in the first plot (case-insensitive).
+    pub fn vector(&self, name: &str) -> Option<&SimVector> {
+        self.plot().and_then(|p| p.vector(name))
+    }
+
+    /// Shorthand: get a vector from the first plot, or panic.
+    pub fn get(&self, name: &str) -> &SimVector {
+        self.plot().expect("no plots in result").get(name)
+    }
+}
+
+impl core::ops::Index<&str> for SimResult {
+    type Output = SimVector;
+
+    fn index(&self, name: &str) -> &SimVector {
+        self.get(name)
+    }
 }
 
 // ---------------------------------------------------------------------------

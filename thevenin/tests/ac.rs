@@ -24,8 +24,8 @@ fn test_lowpass_filter() {
     let v2_vec = plot.vecs.iter().find(|v| v.name == "v(2)").unwrap();
 
     // Should have 31 frequency points (3 decades × 10 pts/decade + 1).
-    assert_eq!(freq_vec.real.len(), 31);
-    assert_eq!(v2_vec.complex.len(), 31);
+    assert_eq!(freq_vec.data.as_real().len(), 31);
+    assert_eq!(v2_vec.data.as_complex().len(), 31);
 
     // Reference values from ngspice lowpass.out (selected points).
     // Format: (index, frequency, v2_real, v2_imag)
@@ -38,9 +38,9 @@ fn test_lowpass_filter() {
     ];
 
     for &(idx, ref_freq, ref_re, ref_im) in reference {
-        let freq = freq_vec.real[idx];
-        let re = v2_vec.complex[idx].re;
-        let im = v2_vec.complex[idx].im;
+        let freq = freq_vec.data.as_real()[idx];
+        let re = v2_vec.data.as_complex()[idx].re;
+        let im = v2_vec.data.as_complex()[idx].im;
 
         // Frequency should match within 0.01%.
         let freq_rel_err = (freq - ref_freq).abs() / ref_freq;
@@ -93,7 +93,7 @@ C1 2 0 1u
     // Find the closest frequency to f_3dB.
     let mut closest_idx = 0;
     let mut min_dist = f64::MAX;
-    for (i, &f) in freq_vec.real.iter().enumerate() {
+    for (i, &f) in freq_vec.data.as_real().iter().enumerate() {
         let dist = ((f / f_3db).ln()).abs();
         if dist < min_dist {
             min_dist = dist;
@@ -101,9 +101,9 @@ C1 2 0 1u
         }
     }
 
-    let f_closest = freq_vec.real[closest_idx];
-    let re = v2_vec.complex[closest_idx].re;
-    let im = v2_vec.complex[closest_idx].im;
+    let f_closest = freq_vec.data.as_real()[closest_idx];
+    let re = v2_vec.data.as_complex()[closest_idx].re;
+    let im = v2_vec.data.as_complex()[closest_idx].im;
     let mag = (re * re + im * im).sqrt();
 
     // Compute analytical magnitude at f_closest: |H(f)| = 1/√(1 + (f/f_3dB)²)

@@ -2,7 +2,7 @@
 //!
 //! Sweeps voltage source V1 from -0.5V to 0.8V and prints the diode current.
 
-use thevenin::simulate_dc;
+use thevenin::simulate;
 use thevenin_types::Netlist;
 
 fn main() {
@@ -18,21 +18,15 @@ D1 anode 0 DMOD
     )
     .expect("failed to parse netlist");
 
-    let result = simulate_dc(&netlist).expect("simulation failed");
+    let result = simulate(&netlist).expect("simulation failed");
 
-    let plot = &result.plots[0];
-    let sweep = &plot.vecs[0]; // sweep variable (v-sweep)
-    // Branch current of V1 (current through the voltage source = diode current)
-    let current_vec = plot
-        .vecs
-        .iter()
-        .find(|v| v.name.contains("branch"))
-        .expect("no branch current found");
+    let sweep = result["v-sweep"].data.as_real();
+    let current = result["v1#branch"].data.as_real();
 
     println!("=== Diode I-V Curve ===");
     println!("{:>10}  {:>14}", "V(anode)", "I(diode)");
     println!("{:>10}  {:>14}", "--------", "--------");
-    for (v, i) in sweep.real.iter().zip(current_vec.real.iter()) {
+    for (v, i) in sweep.iter().zip(current) {
         println!("{v:>10.3}  {i:>14.6e}");
     }
 }

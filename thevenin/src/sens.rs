@@ -561,11 +561,7 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let vecs: Vec<SimVector> = sens_names
         .into_iter()
         .zip(sens_values)
-        .map(|(name, value)| SimVector {
-            name,
-            real: vec![value],
-            complex: vec![],
-        })
+        .map(|(name, value)| SimVector::real(name, vec![value]))
         .collect();
 
     Ok(SimResult {
@@ -592,7 +588,8 @@ mod tests {
                 let names: Vec<_> = result.plots[0].vecs.iter().map(|v| &v.name).collect();
                 panic!("no vector '{name}', available: {names:?}")
             })
-            .real[0]
+            .data
+            .as_real()[0]
     }
 
     #[test]

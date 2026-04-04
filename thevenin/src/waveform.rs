@@ -111,30 +111,6 @@ pub fn evaluate(wf: &Waveform, t: f64, tran: &TranParams) -> f64 {
     }
 }
 
-/// Get the DC value of a waveform (value at t=0 for DC operating point).
-///
-/// For most waveforms, this is the initial/offset value. Returns `None` if
-/// the waveform's DC contribution should come from the Source's `dc` field instead.
-pub fn dc_value(wf: &Waveform) -> Option<f64> {
-    match wf {
-        Waveform::Pulse { v1, .. } => Some(val(v1)),
-        Waveform::Sin { v0, va, phi, .. } => {
-            let phi_rad = opt(phi).unwrap_or(0.0) * PI / 180.0;
-            Some(val(v0) + val(va) * phi_rad.sin())
-        }
-        Waveform::Exp { v1, .. } => Some(val(v1)),
-        Waveform::Pwl(points) => {
-            if points.is_empty() {
-                None
-            } else {
-                Some(val(&points[0].value))
-            }
-        }
-        Waveform::Sffm { v0, .. } => Some(val(v0)),
-        Waveform::Am { .. } => Some(0.0),
-    }
-}
-
 // ---- Individual waveform evaluators ----
 
 /// PULSE waveform.

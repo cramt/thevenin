@@ -12,7 +12,8 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
         .iter()
         .find(|v| v.name == key)
         .unwrap_or_else(|| panic!("node {key} not found in results"))
-        .real[0]
+        .data
+        .as_real()[0]
 }
 
 /// minus-minus: Test that `2--3` is parsed and evaluated correctly as 5.

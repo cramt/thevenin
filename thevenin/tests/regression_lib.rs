@@ -13,7 +13,8 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
         .iter()
         .find(|v| v.name == key)
         .unwrap_or_else(|| panic!("node {key} not found in results"))
-        .real[0]
+        .data
+        .as_real()[0]
 }
 
 fn simulate_with_libs(cir: &str, base_dir: &Path) -> thevenin_types::SimResult {

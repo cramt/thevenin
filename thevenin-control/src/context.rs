@@ -173,10 +173,11 @@ impl SimContext {
     /// Resolve a `$&vector` reference — format scalar value as string.
     pub fn resolve_vec_scalar(&self, name: &str) -> String {
         if let Some(vec) = self.find_vector(name) {
-            if vec.real.len() == 1 {
-                format_number(vec.real[0])
-            } else if !vec.real.is_empty() {
-                format_number(vec.real[vec.real.len() - 1])
+            let real = vec.data.as_real();
+            if real.len() == 1 {
+                format_number(real[0])
+            } else if !real.is_empty() {
+                format_number(real[real.len() - 1])
             } else {
                 "0".to_string()
             }

@@ -3,7 +3,7 @@
 //! A 1V pulse drives a 1kΩ + 10µF RC network.
 //! Time constant τ = R·C = 10ms.
 
-use thevenin::simulate_tran;
+use thevenin::simulate;
 use thevenin_types::Netlist;
 
 fn main() {
@@ -19,22 +19,17 @@ C1 out 0 10u
     )
     .expect("failed to parse netlist");
 
-    let result = simulate_tran(&netlist).expect("simulation failed");
+    let result = simulate(&netlist).expect("simulation failed");
 
-    let plot = &result.plots[0];
-    let time = &plot.vecs[0]; // time
-    let vout = plot
-        .vecs
-        .iter()
-        .find(|v| v.name == "v(out)")
-        .expect("v(out) not found");
+    let time = result["time"].data.as_real();
+    let vout = result["v(out)"].data.as_real();
 
     println!("=== RC Pulse Response ===");
     println!("{:>10}  {:>10}", "Time (s)", "V(out)");
     println!("{:>10}  {:>10}", "--------", "------");
 
     // Print every 10th point to keep output manageable
-    for (i, (t, v)) in time.real.iter().zip(vout.real.iter()).enumerate() {
+    for (i, (t, v)) in time.iter().zip(vout).enumerate() {
         if i % 10 == 0 {
             println!("{t:>10.4e}  {v:>10.6}");
         }

@@ -63,19 +63,22 @@ Rn  n1 0  100k
         .iter()
         .find(|v| v.name == "v(n1001_t)")
         .unwrap()
-        .real[0];
+        .data
+        .as_real()[0];
     let v_n1002 = plot
         .vecs
         .iter()
         .find(|v| v.name == "v(n1002_t)")
         .unwrap()
-        .real[0];
+        .data
+        .as_real()[0];
     let v_n1003 = plot
         .vecs
         .iter()
         .find(|v| v.name == "v(n1003_t)")
         .unwrap()
-        .real[0];
+        .data
+        .as_real()[0];
 
     assert_abs_diff_eq!(v_n1001, 2.0, epsilon = 1e-9);
     assert_abs_diff_eq!(v_n1002, 4.0, epsilon = 1e-9);
@@ -103,13 +106,20 @@ X1 1 0 VDIV
     let plot = &result.plots[0];
 
     // Find v(1) and v(x1.mid)
-    let v1 = plot.vecs.iter().find(|v| v.name == "v(1)").unwrap().real[0];
+    let v1 = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(1)")
+        .unwrap()
+        .data
+        .as_real()[0];
     let v_mid = plot
         .vecs
         .iter()
         .find(|v| v.name == "v(x1.mid)")
         .unwrap()
-        .real[0];
+        .data
+        .as_real()[0];
 
     assert_abs_diff_eq!(v1, 10.0, epsilon = 1e-6);
     assert_abs_diff_eq!(v_mid, 5.0, epsilon = 1e-9);
@@ -152,13 +162,15 @@ X1 1 0 VDIV
         .iter()
         .find(|v| v.name == "v1#branch")
         .unwrap()
-        .real[0];
+        .data
+        .as_real()[0];
     let subckt_iv1 = subckt_result.plots[0]
         .vecs
         .iter()
         .find(|v| v.name == "v1#branch")
         .unwrap()
-        .real[0];
+        .data
+        .as_real()[0];
 
     assert_abs_diff_eq!(direct_iv1, subckt_iv1, epsilon = 1e-12);
 }
@@ -186,13 +198,20 @@ X1 in 0 CHAIN
     let result = thevenin::simulate_op(&netlist).unwrap();
     let plot = &result.plots[0];
 
-    let v_in = plot.vecs.iter().find(|v| v.name == "v(in)").unwrap().real[0];
+    let v_in = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(in)")
+        .unwrap()
+        .data
+        .as_real()[0];
     let v_mid = plot
         .vecs
         .iter()
         .find(|v| v.name == "v(x1.mid)")
         .unwrap()
-        .real[0];
+        .data
+        .as_real()[0];
 
     assert_abs_diff_eq!(v_in, 10.0, epsilon = 1e-9);
     assert_abs_diff_eq!(v_mid, 5.0, epsilon = 1e-9); // voltage divider midpoint
@@ -223,7 +242,8 @@ X1 1 0 RLOAD PARAMS: rval=5k
         .iter()
         .find(|v| v.name == "v1#branch")
         .unwrap()
-        .real[0];
+        .data
+        .as_real()[0];
 
     assert_abs_diff_eq!(i_v1.abs(), 2e-3, epsilon = 1e-9);
 }
@@ -252,9 +272,27 @@ R_load 4 0 1k
 
     // 4 x 1k resistors in series, V=4V, I=4/4000=1mA
     // V(2) = 4 * 3/4 = 3V, V(3) = 4 * 2/4 = 2V, V(4) = 4 * 1/4 = 1V
-    let v2 = plot.vecs.iter().find(|v| v.name == "v(2)").unwrap().real[0];
-    let v3 = plot.vecs.iter().find(|v| v.name == "v(3)").unwrap().real[0];
-    let v4 = plot.vecs.iter().find(|v| v.name == "v(4)").unwrap().real[0];
+    let v2 = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(2)")
+        .unwrap()
+        .data
+        .as_real()[0];
+    let v3 = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(3)")
+        .unwrap()
+        .data
+        .as_real()[0];
+    let v4 = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(4)")
+        .unwrap()
+        .data
+        .as_real()[0];
 
     assert_abs_diff_eq!(v2, 3.0, epsilon = 1e-9);
     assert_abs_diff_eq!(v3, 2.0, epsilon = 1e-9);
@@ -282,7 +320,13 @@ X1 out 0 DCLAMP
     let result = thevenin::simulate_op(&netlist).unwrap();
     let plot = &result.plots[0];
 
-    let v_out = plot.vecs.iter().find(|v| v.name == "v(out)").unwrap().real[0];
+    let v_out = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(out)")
+        .unwrap()
+        .data
+        .as_real()[0];
 
     // Diode forward voltage should be ~0.6-0.8V
     assert!(
@@ -313,9 +357,9 @@ X1 in 0 RLOAD
 
     // 3 data points: V=0, V=5, V=10
     let v1_vec = plot.vecs.iter().find(|v| v.name == "v-sweep").unwrap();
-    assert_eq!(v1_vec.real.len(), 3);
+    assert_eq!(v1_vec.data.as_real().len(), 3);
 
     let i_vec = plot.vecs.iter().find(|v| v.name == "v1#branch").unwrap();
     // At V=10: I = 10/2000 = 5mA
-    assert_abs_diff_eq!(i_vec.real[2].abs(), 5e-3, epsilon = 1e-9);
+    assert_abs_diff_eq!(i_vec.data.as_real()[2].abs(), 5e-3, epsilon = 1e-9);
 }

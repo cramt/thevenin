@@ -4,14 +4,14 @@ use thevenin_types::Netlist;
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
 /// Helper to get a vector from a transient result.
-fn tran_vector<'a>(result: &'a thevenin_types::SimResult, name: &str) -> &'a Vec<f64> {
-    let plot = &result.plots[0];
-    &plot
+fn tran_vector<'a>(result: &'a thevenin_types::SimResult, name: &str) -> &'a [f64] {
+    result.plots[0]
         .vecs
         .iter()
         .find(|v| v.name == name)
         .unwrap_or_else(|| panic!("no vector '{name}'"))
-        .real
+        .data
+        .as_real()
 }
 
 /// Simple lossless transmission line (LC) test.
@@ -127,7 +127,7 @@ R2 3 0 100
     // I = 5 / (100 + 10 + 100) = 5/210 ≈ 0.0238A
     // V(3) = I * R2 = 0.0238 * 100 ≈ 2.381V
     let v3_vec = plot.vecs.iter().find(|v| v.name == "v(3)").unwrap();
-    let v3 = v3_vec.real[0];
+    let v3 = v3_vec.data.as_real()[0];
     let expected = 5.0 * 100.0 / 210.0;
     assert!(
         (v3 - expected).abs() < 0.01,

@@ -85,11 +85,10 @@ pub fn simulate_pz(netlist: &Netlist) -> Result<SimResult, MnaError> {
         if !poles.is_empty() {
             let mut pole_vecs = Vec::new();
             for (i, &(re, im)) in poles.iter().enumerate() {
-                pole_vecs.push(SimVector {
-                    name: format!("pole({})", i + 1),
-                    real: vec![],
-                    complex: vec![Complex { re, im }],
-                });
+                pole_vecs.push(SimVector::complex(
+                    format!("pole({})", i + 1),
+                    vec![Complex { re, im }],
+                ));
             }
             plots.push(SimPlot {
                 name: "pz1".to_string(),
@@ -106,11 +105,10 @@ pub fn simulate_pz(netlist: &Netlist) -> Result<SimResult, MnaError> {
         if !zeros.is_empty() {
             let mut zero_vecs = Vec::new();
             for (i, &(re, im)) in zeros.iter().enumerate() {
-                zero_vecs.push(SimVector {
-                    name: format!("zero({})", i + 1),
-                    real: vec![],
-                    complex: vec![Complex { re, im }],
-                });
+                zero_vecs.push(SimVector::complex(
+                    format!("zero({})", i + 1),
+                    vec![Complex { re, im }],
+                ));
             }
             plots.push(SimPlot {
                 name: if do_poles {
@@ -717,10 +715,10 @@ mod tests {
         let mut poles = Vec::new();
         for plot in &result.plots {
             for vec in &plot.vecs {
-                if vec.name.starts_with("pole(") {
-                    if let Some(c) = vec.complex.first() {
-                        poles.push((c.re, c.im));
-                    }
+                if vec.name.starts_with("pole(")
+                    && let Some(c) = vec.data.as_complex().first()
+                {
+                    poles.push((c.re, c.im));
                 }
             }
         }
@@ -731,10 +729,10 @@ mod tests {
         let mut zeros = Vec::new();
         for plot in &result.plots {
             for vec in &plot.vecs {
-                if vec.name.starts_with("zero(") {
-                    if let Some(c) = vec.complex.first() {
-                        zeros.push((c.re, c.im));
-                    }
+                if vec.name.starts_with("zero(")
+                    && let Some(c) = vec.data.as_complex().first()
+                {
+                    zeros.push((c.re, c.im));
                 }
             }
         }

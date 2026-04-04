@@ -27,7 +27,8 @@ fn op_voltage(result: &SimResult, node: &str) -> f64 {
         .iter()
         .find(|v| v.name == name)
         .unwrap_or_else(|| panic!("no vector {name}"))
-        .real[0]
+        .data
+        .as_real()[0]
 }
 
 /// Extract a branch current from a DC operating point result.
@@ -38,7 +39,8 @@ fn op_branch_current(result: &SimResult, vsrc: &str) -> f64 {
         .iter()
         .find(|v| v.name == name)
         .unwrap_or_else(|| panic!("no vector {name}"))
-        .real[0]
+        .data
+        .as_real()[0]
 }
 
 /// Filter output text using the same rules as ngspice check.sh.

@@ -27,9 +27,9 @@ fn test_mos6_simpleinv_parses_and_op_converges() {
         .find(|v| v.name == "v(100)")
         .expect("should have v(100)");
     assert!(
-        (v100.real[0] - 5.0).abs() < 0.01,
+        (v100.data.as_real()[0] - 5.0).abs() < 0.01,
         "VDD should be 5V, got {}",
-        v100.real[0]
+        v100.data.as_real()[0]
     );
 }
 
@@ -55,15 +55,21 @@ fn test_mos6_simpleinv_transient() {
         .find(|v| v.name == "v(11)")
         .expect("should have v(11)");
 
-    assert!(!v1.real.is_empty(), "v(1) should have data points");
-    assert!(!v11.real.is_empty(), "v(11) should have data points");
+    assert!(
+        !v1.data.as_real().is_empty(),
+        "v(1) should have data points"
+    );
+    assert!(
+        !v11.data.as_real().is_empty(),
+        "v(11) should have data points"
+    );
 
     // Input starts at 0 and ramps to 5V.
     assert!(
-        v1.real[0].abs() < 0.01,
+        v1.data.as_real()[0].abs() < 0.01,
         "v(1) should start near 0, got {}",
-        v1.real[0]
+        v1.data.as_real()[0]
     );
-    let last_v1 = *v1.real.last().unwrap();
+    let last_v1 = *v1.data.as_real().last().unwrap();
     assert!(last_v1 > 4.5, "v(1) should end near 5V, got {last_v1}");
 }

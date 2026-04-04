@@ -82,8 +82,6 @@ pub struct NrResult {
     pub solution: Vec<f64>,
     /// Number of iterations performed (total across all attempts).
     pub iterations: usize,
-    /// Whether convergence was achieved.
-    pub converged: bool,
 }
 
 /// Check convergence of NR iteration using ngspice-style criteria.
@@ -181,7 +179,6 @@ where
             return Ok(NrResult {
                 solution: new_solution,
                 iterations: total_iters,
-                converged: true,
             });
         }
 
@@ -305,7 +302,6 @@ where
     Ok(NrResult {
         solution: result.solution,
         iterations: total_iters,
-        converged: true,
     })
 }
 
@@ -420,7 +416,6 @@ where
     Ok(NrResult {
         solution: result.solution,
         iterations: total_iters,
-        converged: true,
     })
 }
 
@@ -570,7 +565,6 @@ where
     Ok(NrResult {
         solution,
         iterations: total_iters,
-        converged: true,
     })
 }
 
@@ -638,56 +632,12 @@ where
     source_stepping(options, dim, num_nodes, &load_system, initial_guess)
 }
 
-/// Solve a potentially nonlinear system using Newton-Raphson iteration.
-///
-/// # Arguments
-///
-/// * `options` - Convergence parameters (tolerances, iteration limits).
-/// * `dim` - System dimension (number of unknowns).
-/// * `num_nodes` - Number of node voltage entries (for convergence check;
-///   indices 0..num_nodes are voltages, num_nodes.. are branch currents).
-/// * `load_system` - Callback that fills the linear system for a given solution
-///   estimate. Called as `load_system(solution, system, source_factor, gmin)` where
-///   `source_factor` is 1.0 for normal operation and < 1.0 during source stepping,
-///   and `gmin` is the current minimum conductance (elevated during Gmin stepping).
-///   The system is zeroed before each call.
-/// * `initial_guess` - Starting solution vector (length `dim`).
-///
-/// # Convergence strategy
-///
-/// Matches ngspice's `CKTop` fallback chain (cktop.c):
-/// 1. Try direct NR iteration (up to ITL1 iterations).
-/// 2. If that fails, try dynamic Gmin stepping (diagonal shunt elevated).
-/// 3. If that fails, try new Gmin stepping (device-model gmin elevated,
-///    diagonal stays at base — provides regularization through device
-///    junctions rather than external shunts).
-/// 4. If all stepping fails, try source stepping (ramp sources from 0 to full).
-pub fn newton_raphson_solve<F>(
-    options: &NrOptions,
-    dim: usize,
-    num_nodes: usize,
-    load_system: F,
-    initial_guess: &[f64],
-) -> Result<NrResult, NrError>
-where
-    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
-{
-    newton_raphson_solve_with_mode(
-        options,
-        dim,
-        num_nodes,
-        load_system,
-        initial_guess,
-        NrMode::InitJct,
-    )
-}
-
 /// Newton-Raphson solve with explicit first-iteration mode.
 ///
-/// Same as `newton_raphson_solve` but allows the caller to choose whether
-/// the first NR iteration uses `InitJct` (for fresh DC OP) or `Float`
-/// (for DC sweep continuation where the initial guess is already near the
-/// solution and MODEINITJCT would corrupt device voltage limiting state).
+/// `first_mode` controls whether the first NR iteration uses `InitJct` (for
+/// fresh DC OP) or `Float` (for DC sweep continuation where the initial guess
+/// is already near the solution and MODEINITJCT would corrupt device voltage
+/// limiting state).
 pub fn newton_raphson_solve_with_mode<F>(
     options: &NrOptions,
     dim: usize,
@@ -826,9 +776,16 @@ mod tests {
         };
 
         let initial = vec![0.0; dim];
-        let result = newton_raphson_solve(&options, dim, num_nodes, load, &initial).unwrap();
+        let result = newton_raphson_solve_with_mode(
+            &options,
+            dim,
+            num_nodes,
+            load,
+            &initial,
+            NrMode::InitJct,
+        )
+        .unwrap();
 
-        assert!(result.converged);
         assert!(
             result.iterations < 20,
             "expected < 20 iterations, got {}",
@@ -878,9 +835,16 @@ mod tests {
         };
 
         let initial = vec![0.0; dim];
-        let result = newton_raphson_solve(&options, dim, num_nodes, load, &initial).unwrap();
+        let result = newton_raphson_solve_with_mode(
+            &options,
+            dim,
+            num_nodes,
+            load,
+            &initial,
+            NrMode::InitJct,
+        )
+        .unwrap();
 
-        assert!(result.converged);
         assert_eq!(result.iterations, 2); // solve once, confirm on second
         assert_abs_diff_eq!(result.solution[0], 5.0, epsilon = 1e-9);
         assert_abs_diff_eq!(result.solution[1], -5e-3, epsilon = 1e-9);
@@ -949,9 +913,15 @@ mod tests {
         };
 
         let initial = vec![0.0; dim];
-        let result = newton_raphson_solve(&options, dim, num_nodes, load, &initial).unwrap();
-
-        assert!(result.converged);
+        let result = newton_raphson_solve_with_mode(
+            &options,
+            dim,
+            num_nodes,
+            load,
+            &initial,
+            NrMode::InitJct,
+        )
+        .unwrap();
 
         let v_diode = result.solution[1];
         // With 10V source and 100 ohm resistor, diode voltage should still be ~0.6-0.8V

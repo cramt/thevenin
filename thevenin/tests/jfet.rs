@@ -28,10 +28,10 @@ fn test_jfet_2n4221_dc_sweep() {
 
     // Total expected points: 26 per VGS step × 4 VGS steps = 104
     assert_eq!(
-        sweep_var.real.len(),
+        sweep_var.data.as_real().len(),
         104,
         "expected 104 sweep points, got {}",
-        sweep_var.real.len()
+        sweep_var.data.as_real().len()
     );
 
     // Reference data from ngspice-upstream/tests/jfet/jfet_vds-vgs.out
@@ -43,30 +43,30 @@ fn test_jfet_2n4221_dc_sweep() {
     // First 26 points are VGS=-3
     // Check index 0 (VDS=0)
     assert!(
-        i_vd.real[0].abs() < 1e-6,
+        i_vd.data.as_real()[0].abs() < 1e-6,
         "VGS=-3, VDS=0: expected ~0, got {:.6e}",
-        i_vd.real[0]
+        i_vd.data.as_real()[0]
     );
 
     // Check index 1 (VDS=1, VGS=-3): should be in saturation
     let expected_1 = -1.027008e-4;
-    assert_abs_diff_eq!(i_vd.real[1], expected_1, epsilon = 1e-6);
+    assert_abs_diff_eq!(i_vd.data.as_real()[1], expected_1, epsilon = 1e-6);
 
     // Check index 25 (VDS=25, VGS=-3)
     let expected_25 = -1.076206e-4;
-    assert_abs_diff_eq!(i_vd.real[25], expected_25, epsilon = 1e-6);
+    assert_abs_diff_eq!(i_vd.data.as_real()[25], expected_25, epsilon = 1e-6);
 
     // Second 26 points are VGS=-2
     // Check index 27 (VDS=1, VGS=-2): should have larger current
     let expected_27 = -7.504957e-4;
-    assert_abs_diff_eq!(i_vd.real[27], expected_27, epsilon = 1e-5);
+    assert_abs_diff_eq!(i_vd.data.as_real()[27], expected_27, epsilon = 1e-5);
 
     // VGS=-2, VDS=25: ~-9.682677e-4
     let expected_51 = -9.682677e-4;
-    assert_abs_diff_eq!(i_vd.real[51], expected_51, epsilon = 1e-5);
+    assert_abs_diff_eq!(i_vd.data.as_real()[51], expected_51, epsilon = 1e-5);
 
     // Fourth 26 points are VGS=0 (fully on)
     // VGS=0, VDS=5: ~-5.062554e-3
     let expected_83 = -5.062554e-3;
-    assert_abs_diff_eq!(i_vd.real[83], expected_83, epsilon = 1e-4);
+    assert_abs_diff_eq!(i_vd.data.as_real()[83], expected_83, epsilon = 1e-4);
 }

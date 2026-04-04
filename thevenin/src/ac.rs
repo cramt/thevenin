@@ -53,29 +53,27 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let frequencies = generate_ac_sweep(variation, n, fstart_val, fstop_val);
 
     // Build result vectors.
-    let mut freq_vec = SimVector {
-        name: "frequency".to_string(),
-        real: Vec::with_capacity(frequencies.len()),
-        complex: vec![],
-    };
+    let mut freq_vec = SimVector::real("frequency", Vec::with_capacity(frequencies.len()));
 
     let mut node_vecs: Vec<SimVector> = mna
         .node_map
         .iter()
-        .map(|(name, _)| SimVector {
-            name: format!("v({})", name),
-            real: vec![],
-            complex: Vec::with_capacity(frequencies.len()),
+        .map(|(name, _)| {
+            SimVector::complex(
+                format!("v({})", name),
+                Vec::with_capacity(frequencies.len()),
+            )
         })
         .collect();
 
     let mut branch_vecs: Vec<SimVector> = mna
         .vsource_names
         .iter()
-        .map(|name| SimVector {
-            name: format!("{}#branch", name.to_lowercase()),
-            real: vec![],
-            complex: Vec::with_capacity(frequencies.len()),
+        .map(|name| {
+            SimVector::complex(
+                format!("{}#branch", name.to_lowercase()),
+                Vec::with_capacity(frequencies.len()),
+            )
         })
         .collect();
 
@@ -86,12 +84,12 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
         // Build and solve the complex MNA system at this frequency.
         let solution = solve_ac_point(&mna, &op_solution, omega, netlist, nr_opts.gmin)?;
 
-        freq_vec.real.push(freq);
+        freq_vec.data.as_real_mut().push(freq);
 
         // Collect node voltages (complex).
         for (i, (_name, node_idx)) in mna.node_map.iter().enumerate() {
             let (re, im) = solution[node_idx];
-            node_vecs[i].complex.push(Complex { re, im });
+            node_vecs[i].data.as_complex_mut().push(Complex { re, im });
         }
 
         // Collect branch currents (complex).
@@ -99,7 +97,10 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
         for (i, _vsrc) in mna.vsource_names.iter().enumerate() {
             let idx = num_nodes + i;
             let (re, im) = solution[idx];
-            branch_vecs[i].complex.push(Complex { re, im });
+            branch_vecs[i]
+                .data
+                .as_complex_mut()
+                .push(Complex { re, im });
         }
     }
 
@@ -1792,35 +1793,6 @@ pub fn generate_ac_sweep(variation: AcVariation, n: u32, fstart: f64, fstop: f64
     freqs
 }
 
-/// Extract DC operating point solution values in matrix-index order.
-pub fn extract_op_solution(op_result: &SimResult, mna: &MnaSystem) -> Vec<f64> {
-    let num_nodes = mna.total_num_nodes();
-    let dim = num_nodes + mna.vsource_names.len();
-    let mut solution = vec![0.0; dim];
-
-    if let Some(plot) = op_result.plots.first() {
-        for (name, idx) in mna.node_map.iter() {
-            let vec_name = format!("v({})", name);
-            if let Some(v) = plot.vecs.iter().find(|v| v.name == vec_name)
-                && let Some(&val) = v.real.first()
-            {
-                solution[idx] = val;
-            }
-        }
-
-        for (i, vsrc) in mna.vsource_names.iter().enumerate() {
-            let vec_name = format!("{}#branch", vsrc.to_lowercase());
-            if let Some(v) = plot.vecs.iter().find(|v| v.name == vec_name)
-                && let Some(&val) = v.real.first()
-            {
-                solution[num_nodes + i] = val;
-            }
-        }
-    }
-
-    solution
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1882,8 +1854,8 @@ C1 2 0 1u
         let freq_vec = plot.vecs.iter().find(|v| v.name == "frequency").unwrap();
         let v2_vec = plot.vecs.iter().find(|v| v.name == "v(2)").unwrap();
 
-        assert!(!freq_vec.real.is_empty());
-        assert!(!v2_vec.complex.is_empty());
+        assert!(!freq_vec.data.as_real().is_empty());
+        assert!(!v2_vec.data.as_complex().is_empty());
 
         // Find the frequency closest to f_3dB = 1/(2π × 1000 × 1e-6) ≈ 159.15 Hz
         let r = 1000.0;
@@ -1892,9 +1864,9 @@ C1 2 0 1u
 
         // Find the -3dB point by checking magnitude
         let mut found_3db = false;
-        for (i, &freq) in freq_vec.real.iter().enumerate() {
-            let re = v2_vec.complex[i].re;
-            let im = v2_vec.complex[i].im;
+        for (i, &freq) in freq_vec.data.as_real().iter().enumerate() {
+            let re = v2_vec.data.as_complex()[i].re;
+            let im = v2_vec.data.as_complex()[i].im;
             let mag = (re * re + im * im).sqrt();
 
             if (freq - f_3db).abs() / f_3db < 0.05 {
@@ -1911,8 +1883,8 @@ C1 2 0 1u
 
         // At low frequencies, magnitude should be close to 1.0
         let low_freq_mag = {
-            let re = v2_vec.complex[0].re;
-            let im = v2_vec.complex[0].im;
+            let re = v2_vec.data.as_complex()[0].re;
+            let im = v2_vec.data.as_complex()[0].im;
             (re * re + im * im).sqrt()
         };
         assert!(
@@ -1921,10 +1893,10 @@ C1 2 0 1u
         );
 
         // At high frequencies, magnitude should be much less than 1.0
-        let last = v2_vec.complex.len() - 1;
+        let last = v2_vec.data.as_complex().len() - 1;
         let high_freq_mag = {
-            let re = v2_vec.complex[last].re;
-            let im = v2_vec.complex[last].im;
+            let re = v2_vec.data.as_complex()[last].re;
+            let im = v2_vec.data.as_complex()[last].im;
             (re * re + im * im).sqrt()
         };
         assert!(
@@ -1961,8 +1933,8 @@ L1 2 0 0.1
 
         // At low frequencies
         let low_mag = {
-            let re = v2_vec.complex[0].re;
-            let im = v2_vec.complex[0].im;
+            let re = v2_vec.data.as_complex()[0].re;
+            let im = v2_vec.data.as_complex()[0].im;
             (re * re + im * im).sqrt()
         };
         assert!(
@@ -1971,10 +1943,10 @@ L1 2 0 0.1
         );
 
         // At high frequencies
-        let last = v2_vec.complex.len() - 1;
+        let last = v2_vec.data.as_complex().len() - 1;
         let high_mag = {
-            let re = v2_vec.complex[last].re;
-            let im = v2_vec.complex[last].im;
+            let re = v2_vec.data.as_complex()[last].re;
+            let im = v2_vec.data.as_complex()[last].im;
             (re * re + im * im).sqrt()
         };
         assert!(

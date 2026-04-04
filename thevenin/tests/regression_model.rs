@@ -15,7 +15,8 @@ fn op_current(result: &thevenin_types::SimResult, src: &str) -> f64 {
             let names: Vec<_> = plot.vecs.iter().map(|v| &v.name).collect();
             panic!("source current {key} not found in results, available: {names:?}")
         })
-        .real[0]
+        .data
+        .as_real()[0]
 }
 
 /// special-names-1: Model names starting with a digit (e.g. 1n4002, 2sk456).

@@ -27,5 +27,8 @@ fn test_fourbitadder() {
         .iter()
         .find(|v| v.name == "v(1)")
         .expect("should have v(1) vector");
-    assert!(!v1.real.is_empty(), "v(1) should have data points");
+    assert!(
+        !v1.data.as_real().is_empty(),
+        "v(1) should have data points"
+    );
 }

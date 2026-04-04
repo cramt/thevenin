@@ -22,22 +22,22 @@ fn test_hfet_id_vgs() {
         .expect("no vds#branch");
 
     // 101 sweep points (0 to 1.0 in steps of 0.01)
-    assert_eq!(ids.real.len(), 101, "expected 101 sweep points");
+    assert_eq!(ids.data.as_real().len(), 101, "expected 101 sweep points");
 
     // At vds=0 (index 0): current ≈ 0 (3.77e-11)
     assert!(
-        ids.real[0].abs() < 1e-6,
+        ids.data.as_real()[0].abs() < 1e-6,
         "zero-bias current should be near zero"
     );
 
     // At vds=0.1 (index 10): ~-1.075e-4
-    assert_abs_diff_eq!(ids.real[10], -1.075027e-4, epsilon = 2e-5);
+    assert_abs_diff_eq!(ids.data.as_real()[10], -1.075027e-4, epsilon = 2e-5);
 
     // At vds=0.5 (index 50): ~-1.687e-4
-    assert_abs_diff_eq!(ids.real[50], -1.687463e-4, epsilon = 2e-5);
+    assert_abs_diff_eq!(ids.data.as_real()[50], -1.687463e-4, epsilon = 2e-5);
 
     // At vds=1.0 (index 100): ~-2.108e-4
-    assert_abs_diff_eq!(ids.real[100], -2.108001e-4, epsilon = 2e-5);
+    assert_abs_diff_eq!(ids.data.as_real()[100], -2.108001e-4, epsilon = 2e-5);
 }
 
 /// Port of ngspice-upstream/tests/hfet/inverter.cir

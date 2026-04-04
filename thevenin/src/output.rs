@@ -288,9 +288,13 @@ fn build_node_voltage_map(op_plot: &SimPlot) -> HashMap<String, f64> {
     map.insert("0".to_string(), 0.0);
     map.insert("gnd".to_string(), 0.0);
     for vec in &op_plot.vecs {
-        if vec.name.starts_with("v(") && vec.name.ends_with(')') && !vec.real.is_empty() {
+        if vec.name.starts_with("v(")
+            && vec.name.ends_with(')')
+            && let Some(real) = vec.data.try_real()
+            && !real.is_empty()
+        {
             let node = vec.name[2..vec.name.len() - 1].to_string();
-            map.insert(node, vec.real[0]);
+            map.insert(node, real[0]);
         }
     }
     map
@@ -422,10 +426,13 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             nv.insert("gnd".to_string(), 0.0);
             let mut bi: HashMap<String, f64> = HashMap::new();
             for vec in &tran.vecs {
-                if vec.real.is_empty() {
+                let Some(real) = vec.data.try_real() else {
+                    continue;
+                };
+                if real.is_empty() {
                     continue;
                 }
-                let last = *vec.real.last().unwrap();
+                let last = *real.last().unwrap();
                 let lname = vec.name.to_lowercase();
                 if lname.starts_with("v(") && lname.ends_with(')') {
                     let node = lname[2..lname.len() - 1].to_string();
@@ -440,9 +447,12 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             // No TRAN: use DC OP for both node voltages and branch currents.
             let mut bi: HashMap<String, f64> = HashMap::new();
             for vec in &op_plot.vecs {
-                if vec.name.ends_with("#branch") && !vec.real.is_empty() {
+                if vec.name.ends_with("#branch")
+                    && let Some(real) = vec.data.try_real()
+                    && !real.is_empty()
+                {
                     let src = vec.name[..vec.name.len() - 7].to_lowercase();
-                    bi.insert(src, vec.real[0]);
+                    bi.insert(src, real[0]);
                 }
             }
             (node_v.clone(), bi)
@@ -454,22 +464,25 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
     out.push_str("\t----                                  -------\n");
     out.push('\n');
     for vec in &op_plot.vecs {
-        if vec.name.starts_with("v(") && vec.name.ends_with(')') && !vec.real.is_empty() {
+        if vec.name.starts_with("v(")
+            && vec.name.ends_with(')')
+            && let Some(real) = vec.data.try_real()
+            && !real.is_empty()
+        {
             let node = &vec.name[2..vec.name.len() - 1];
             let display = format!("V({node})");
-            out.push_str(&format!("\t{display:<38}{:>15}\n", format_sci(vec.real[0])));
+            out.push_str(&format!("\t{display:<38}{:>15}\n", format_sci(real[0])));
         }
     }
     out.push_str("\n\tSource\tCurrent\n");
     out.push_str("\t------\t-------\n");
     out.push('\n');
     for vec in &op_plot.vecs {
-        if vec.name.ends_with("#branch") && !vec.real.is_empty() {
-            out.push_str(&format!(
-                "\t{:<38}{:>15}\n",
-                &vec.name,
-                format_sci(vec.real[0])
-            ));
+        if vec.name.ends_with("#branch")
+            && let Some(real) = vec.data.try_real()
+            && !real.is_empty()
+        {
+            out.push_str(&format!("\t{:<38}{:>15}\n", &vec.name, format_sci(real[0])));
         }
     }
 
@@ -1401,8 +1414,10 @@ fn format_initial_tran_solution(out: &mut String, netlist: &Netlist, result: &Si
             }
         } else {
             for vec in &plot.vecs {
-                if !vec.real.is_empty() {
-                    let val = vec.real[0];
+                if let Some(real) = vec.data.try_real()
+                    && !real.is_empty()
+                {
+                    let val = real[0];
                     let display_name = strip_v_wrapper(&vec.name);
                     out.push_str(&format!(
                         "{:<40}{:>12}\n",
@@ -1464,8 +1479,10 @@ fn format_sci(val: f64) -> String {
 fn format_tf_output(out: &mut String, plot: &SimPlot) {
     out.push_str("Transfer function information:\n");
     for vec in &plot.vecs {
-        if !vec.real.is_empty() {
-            let val = vec.real[0];
+        if let Some(real) = vec.data.try_real()
+            && !real.is_empty()
+        {
+            let val = real[0];
             out.push_str(&format!("{} = {}\n", vec.name, format_sci(val)));
         }
     }
@@ -1617,11 +1634,11 @@ fn format_ac_print_table(
     let Some(freq_vec) = find_sweep_vector(plot) else {
         return;
     };
-    if freq_vec.real.is_empty() {
-        return;
-    }
-    let freq_complex: Vec<Complex> = freq_vec
-        .real
+    let freq_real = match freq_vec.data.try_real() {
+        Some(r) if !r.is_empty() => r,
+        _ => return,
+    };
+    let freq_complex: Vec<Complex> = freq_real
         .iter()
         .map(|&f| Complex { re: f, im: 0.0 })
         .collect();
@@ -1631,15 +1648,16 @@ fn format_ac_print_table(
     for var in &print_dir.vars {
         let var_lower = var.to_lowercase();
         if let Some(vec) = find_vec_by_name(plot, &var_lower) {
-            if !vec.complex.is_empty() {
-                cols.push((var_lower.clone(), vec.complex.clone()));
-            } else if !vec.real.is_empty() {
+            if let Some(complex) = vec.data.try_complex()
+                && !complex.is_empty()
+            {
+                cols.push((var_lower.clone(), complex.to_vec()));
+            } else if let Some(real) = vec.data.try_real()
+                && !real.is_empty()
+            {
                 // Fallback: treat real as complex with imag=0
-                let as_complex: Vec<Complex> = vec
-                    .real
-                    .iter()
-                    .map(|&r| Complex { re: r, im: 0.0 })
-                    .collect();
+                let as_complex: Vec<Complex> =
+                    real.iter().map(|&r| Complex { re: r, im: 0.0 }).collect();
                 cols.push((var_lower.clone(), as_complex));
             }
         }
@@ -1724,8 +1742,14 @@ fn format_print_all_table(out: &mut String, title: &str, plot: &SimPlot, plot_ty
     let vecs_with_data: Vec<(&str, &[f64])> = plot
         .vecs
         .iter()
-        .filter(|v| !v.real.is_empty())
-        .map(|v| (v.name.as_str(), v.real.as_slice()))
+        .filter_map(|v| {
+            let real = v.data.try_real()?;
+            if real.is_empty() {
+                None
+            } else {
+                Some((v.name.as_str(), real))
+            }
+        })
         .collect();
 
     if vecs_with_data.is_empty() {
@@ -1781,14 +1805,14 @@ fn format_pz_table(out: &mut String, title: &str, pz_plots: &[&SimPlot]) {
     let all_vecs: Vec<&SimVector> = pz_plots
         .iter()
         .flat_map(|p| p.vecs.iter())
-        .filter(|v| !v.complex.is_empty())
+        .filter(|v| v.data.try_complex().is_some_and(|c| !c.is_empty()))
         .collect();
 
     if all_vecs.is_empty() {
         return;
     }
 
-    let n_rows = all_vecs[0].complex.len();
+    let n_rows = all_vecs[0].data.as_complex().len();
     let cols_per_page = 2; // 2 complex columns per page
 
     out.push_str(&format!("\nNo. of Data Rows : {n_rows}\n"));
@@ -1815,8 +1839,9 @@ fn format_pz_table(out: &mut String, title: &str, pz_plots: &[&SimPlot]) {
         for i in 0..n_rows {
             out.push_str(&format!("{i}\t"));
             for vec in chunk {
-                if i < vec.complex.len() {
-                    let c = &vec.complex[i];
+                let complex = vec.data.as_complex();
+                if i < complex.len() {
+                    let c = &complex[i];
                     out.push_str(&format!("{},\t{}\t", format_sci(c.re), format_sci(c.im)));
                 }
             }
@@ -1832,7 +1857,7 @@ fn resolve_print_vars(plot: &SimPlot, var_names: &[String]) -> Vec<(String, Vec<
 
     let sweep_vec = find_sweep_vector(plot);
     if let Some(sv) = &sweep_vec {
-        result.push((sv.name.clone(), sv.real.clone()));
+        result.push((sv.name.clone(), sv.data.as_real().to_vec()));
     }
 
     for var in var_names {
@@ -1841,11 +1866,14 @@ fn resolve_print_vars(plot: &SimPlot, var_names: &[String]) -> Vec<(String, Vec<
                 if sweep_vec.as_ref().is_some_and(|sv| sv.name == v.name) {
                     continue;
                 }
-                if !v.real.is_empty() {
-                    result.push((v.name.clone(), v.real.clone()));
-                } else if !v.complex.is_empty() {
-                    let mags: Vec<f64> = v
-                        .complex
+                if let Some(real) = v.data.try_real()
+                    && !real.is_empty()
+                {
+                    result.push((v.name.clone(), real.to_vec()));
+                } else if let Some(complex) = v.data.try_complex()
+                    && !complex.is_empty()
+                {
+                    let mags: Vec<f64> = complex
                         .iter()
                         .map(|c| (c.re * c.re + c.im * c.im).sqrt())
                         .collect();
@@ -1880,9 +1908,10 @@ fn resolve_single_var(plot: &SimPlot, var: &str) -> Option<(String, Vec<f64>)> {
 
     if let Some(inner) = strip_func(&var_lower, "db") {
         let vec = find_vec_by_name(plot, &inner)?;
-        if !vec.complex.is_empty() {
-            let db_data: Vec<f64> = vec
-                .complex
+        if let Some(complex) = vec.data.try_complex()
+            && !complex.is_empty()
+        {
+            let db_data: Vec<f64> = complex
                 .iter()
                 .map(|c| 20.0 * (c.re * c.re + c.im * c.im).sqrt().log10())
                 .collect();
@@ -1894,8 +1923,10 @@ fn resolve_single_var(plot: &SimPlot, var: &str) -> Option<(String, Vec<f64>)> {
     }
     if let Some(inner) = strip_func(&var_lower, "ph") {
         let vec = find_vec_by_name(plot, &inner)?;
-        if !vec.complex.is_empty() {
-            let ph_data: Vec<f64> = vec.complex.iter().map(|c| c.im.atan2(c.re)).collect();
+        if let Some(complex) = vec.data.try_complex()
+            && !complex.is_empty()
+        {
+            let ph_data: Vec<f64> = complex.iter().map(|c| c.im.atan2(c.re)).collect();
             return Some((format!("ph({inner})"), ph_data));
         }
         return None;
@@ -1936,18 +1967,22 @@ fn resolve_single_var(plot: &SimPlot, var: &str) -> Option<(String, Vec<f64>)> {
 /// Resolve a base variable name to data.
 fn resolve_base_var(plot: &SimPlot, name: &str) -> Option<Vec<f64>> {
     let vec = find_vec_by_name(plot, name)?;
-    if !vec.real.is_empty() {
-        Some(vec.real.clone())
-    } else if !vec.complex.is_empty() {
-        Some(
-            vec.complex
+    if let Some(real) = vec.data.try_real()
+        && !real.is_empty()
+    {
+        return Some(real.to_vec());
+    }
+    if let Some(complex) = vec.data.try_complex()
+        && !complex.is_empty()
+    {
+        return Some(
+            complex
                 .iter()
                 .map(|c| (c.re * c.re + c.im * c.im).sqrt())
                 .collect(),
-        )
-    } else {
-        None
+        );
     }
+    None
 }
 
 /// Find a SimVector by name, handling naming conventions.
