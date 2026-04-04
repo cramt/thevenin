@@ -354,7 +354,7 @@ fn jct_initial_guess(
     // conductances so the NR Jacobian is non-singular.
     for vbic in &mna.vbics {
         let sign = vbic.model.vbic_type.sign();
-        let vcrit = vbic.model.vcrit_bei();
+        let vcrit = vbic.model.vcrit_is();
         let nv = |r: &[f64], idx: Option<usize>| idx.map(|i| r[i]).unwrap_or(0.0);
 
         // 1. Set conditional internal nodes equal to external counterparts

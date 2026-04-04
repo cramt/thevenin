@@ -753,13 +753,20 @@ impl DeviceVoltageState {
 
                 let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) = if init_jct {
                     // MODEINITJCT: initialize junctions for NR starting point.
-                    // ngspice vbicload.c lines 250-258 initializes all junctions
-                    // relative to vcrit, but our NR solver converges reliably
-                    // with the simpler vbei=vcrit, others=0 initialization.
+                    // ngspice vbicload.c lines 250-258:
+                    //   Vbe=Vbei=Vbex = type * VBICtVcrit
+                    //   Vbci = -type * VBICtVcrit
+                    //   Vbc=Vbcx=Vbep = 0
+                    //   Vbcp = Vbc - Vbe = -type * VBICtVcrit
+                    //   Vrci=Vrbi=Vrbp = 0
                     let sign = vbic.model.vbic_type.sign();
-                    let vcrit_bei = sign * model.vcrit_bei();
-                    prev[vi] = [vcrit_bei, 0.0, 0.0, 0.0, 0.0, 0.0];
-                    (vcrit_bei, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                    let vc = sign * model.vcrit_is();
+                    let init_vbei = vc;
+                    let init_vbex = vc;
+                    let init_vbci = -vc;
+                    let init_vbcp = -vc;
+                    prev[vi] = [init_vbei, init_vbex, init_vbci, 0.0, 0.0, init_vbcp];
+                    (init_vbei, init_vbex, init_vbci, 0.0, 0.0, 0.0, 0.0, 0.0, init_vbcp)
                 } else {
                     let (
                         raw_vbei,

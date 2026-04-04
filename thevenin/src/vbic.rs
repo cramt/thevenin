@@ -754,30 +754,24 @@ impl VbicModel {
         self.ibbe_t = self.ibbe * safe_exp(-self.vbbe_t / (self.nbbe_t * vt));
     }
 
-    /// Critical voltage for B-E junction (forward).
-    pub fn vcrit_bei(&self) -> f64 {
-        vcrit(self.nei * self.vt, self.ibei_t)
-    }
-
-    /// Critical voltage for B-C junction.
-    pub fn vcrit_bci(&self) -> f64 {
-        vcrit(self.nci * self.vt, self.ibci_t)
-    }
-
     /// Critical voltage matching ngspice VBICtVcrit (uses IS_T, bare Vt).
-    /// All 6 VBIC junction pnjlim calls use this in ngspice vbicload.c.
-    fn vcrit_is(&self) -> f64 {
+    /// All 6 VBIC junction pnjlim calls AND MODEINITJCT initialization use
+    /// this single vcrit in ngspice vbicload.c (lines 251-258, 656-667).
+    pub fn vcrit_is(&self) -> f64 {
         vcrit(self.vt, self.is_t)
     }
 
     /// Limit B-E internal junction voltage.
+    /// ngspice vbicload.c lines 656-657: uses bare vt and VBICtVcrit (IS_T-based)
+    /// for ALL junctions, not junction-specific ideality/saturation.
     pub fn limit_vbei(&self, v_new: f64, v_old: f64) -> f64 {
-        pnjlim(v_new, v_old, self.nei * self.vt, self.vcrit_bei())
+        pnjlim(v_new, v_old, self.vt, self.vcrit_is())
     }
 
     /// Limit B-C internal junction voltage.
+    /// ngspice vbicload.c lines 660-661: uses bare vt and VBICtVcrit (IS_T-based).
     pub fn limit_vbci(&self, v_new: f64, v_old: f64) -> f64 {
-        pnjlim(v_new, v_old, self.nci * self.vt, self.vcrit_bci())
+        pnjlim(v_new, v_old, self.vt, self.vcrit_is())
     }
 
     /// Limit a generic VBIC junction voltage using IS_T-based vcrit.

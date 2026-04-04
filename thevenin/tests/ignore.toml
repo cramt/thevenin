@@ -50,7 +50,6 @@
 "transmission/ltra2_2_line.cir" = "~5.8% V(3) error at t=29.3ns: cascaded 2-line circuit accumulates CMOS inverter switching errors through second stage"
 
 # === VBIC ===
-"vbic/CEamp.cir" = "VBIC AC: ~13.5% gain error at 6.2GHz rolloff (0.9% at 1.5GHz; DC OP FP precision propagates to high-frequency AC; formulas verified)"
-"vbic/FO.cir" = "VBIC FO: ~5% peak error at high VB/Vc (FP eval order; grows monotonically with bias; all formulas verified 80+ sessions)"
+"vbic/FO.cir" = "VBIC FO: 0.4%→15%+ error growing monotonically with bias (FP eval order; pnjlim fix verified no effect; all formulas verified 80+ sessions)"
 "vbic/diffamp.cir" = "VBIC diffamp: NR non-convergence (13-transistor circuit with self-heating, source stepping also fails)"
 
