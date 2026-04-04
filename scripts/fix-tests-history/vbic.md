@@ -1,6 +1,6 @@
 # VBIC Test History
 
-## Current status (3 tests remaining — CEamp un-ignored session 107)
+## Current status (2 tests remaining — diffamp un-ignored session 109)
 
 | Test | Error | Root cause | Status |
 |---|---|---|---|
@@ -8,7 +8,7 @@
 | FG | 3.3% at Vb=0.89V | Same; slope tolerance masks low-bias points | Passing (rel_tol=4e-2) |
 | temp | 2.3% at Vb=0.76V | Same; slope tolerance masks low-bias points | Passing (rel_tol=3e-2) |
 | CEamp | ~0.9% passband, 13.5% at 6.2GHz rolloff | DC OP FP precision propagates to AC | Passing (rel_tol=2e-2) |
-| diffamp | NR non-convergence | 13-transistor circuit, source stepping also fails | Ignored |
+| diffamp | Fixed | Source stepping InitJct + SINE parser + VBIC transient charges | ✅ Passing |
 
 ## Key clarification (session 81)
 

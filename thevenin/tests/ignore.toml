@@ -50,5 +50,4 @@
 
 # === VBIC ===
 "vbic/FO.cir" = "VBIC FO: 0.4%→15%+ error growing monotonically with bias (FP eval order; pnjlim fix verified no effect; all formulas verified 80+ sessions)"
-"vbic/diffamp.cir" = "VBIC diffamp: OP converges (fixed by source stepping InitJct), but transient V(E1_P) has 1000× too-fast response at startup (expected bandwidth-limited buildup) + missing OP device param / AC output sections"
 

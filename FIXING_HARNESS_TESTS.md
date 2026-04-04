@@ -376,7 +376,7 @@ Append your findings when done.
 
 ## Remaining test summary
 
-**Test counts:** 613 passing (5 with tolerance overrides), 21 ignored, 5 unit tests ignored.
+**Test counts:** 615 passing (5 with tolerance overrides), 19 ignored, 5 unit tests ignored.
 
 | Category | Tests | Status |
 |---|---|---|
@@ -385,5 +385,4 @@ Append your findings when done.
 | BSIM3SOI body voltage / convergence | 4 | Ignored — DD RampVg2 (body collapse in tran), singular matrix ×3 |
 | Transmission line FP / dynamics | 3 | Ignored — CPL/LTRA cascading errors (setup code verified matching ngspice) |
 | General circuit dynamics | 4 | Ignored — rtlinv/schmitt/mosamp timing/model gaps + HFET wrong OP |
-| NR convergence | 1 | Ignored — VBIC diffamp needs gmin/source stepping |
-| Missing infrastructure | 8 | Ignored — .control ×6, BSIM1/2 ×2 |
+| Missing infrastructure | 7 | Ignored — .control ×5, BSIM1/2 ×2 |

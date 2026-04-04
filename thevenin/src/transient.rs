@@ -158,6 +158,37 @@ struct Bsim3SoiDdChargeHistory {
     vbs: f64,
 }
 
+/// History state for VBIC junction charges at the previous timestep.
+/// Tracks B-E (including external), B-C, parasitic B-E, and parasitic B-C
+/// charges for the trapezoidal/BE integration companion model.
+#[derive(Debug, Clone)]
+struct VbicChargeHistory {
+    /// Combined B-E charge (qbe_total + qbex_total) at previous timestep.
+    qbe: f64,
+    /// B-E charge current at previous timestep (for trapezoidal).
+    cqbe: f64,
+    /// Previous Vbei voltage.
+    vbei: f64,
+    /// B-C charge (qbc_total) at previous timestep.
+    qbc: f64,
+    /// B-C charge current at previous timestep (for trapezoidal).
+    cqbc: f64,
+    /// Previous Vbci voltage.
+    vbci: f64,
+    /// Parasitic B-E charge (qbep_total) at previous timestep.
+    qbep: f64,
+    /// Parasitic B-E charge current at previous timestep.
+    cqbep: f64,
+    /// Previous Vbep voltage.
+    vbep: f64,
+    /// Parasitic B-C (substrate) charge (qbcp_total) at previous timestep.
+    qbcp: f64,
+    /// Parasitic B-C charge current at previous timestep.
+    cqbcp: f64,
+    /// Previous Vbcp voltage.
+    vbcp: f64,
+}
+
 /// Compute capacitor companion model coefficients.
 ///
 /// Returns `(geq, ieq)` where:
@@ -807,6 +838,38 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
+    // Initialize VBIC junction charge histories from DC operating point.
+    // At DC steady state, dQ/dt = 0, so charge currents are all zero.
+    // Tracks combined B-E (qbe_total + qbex_total), B-C, parasitic B-E, and
+    // parasitic B-C (substrate) charges for transient integration.
+    let mut vbic_charge_histories: Vec<VbicChargeHistory> = mna
+        .vbics
+        .iter()
+        .map(|vbic| {
+            let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
+                vbic.junction_voltages(&solution);
+            let comp = vbic.model.companion(
+                vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, circuit_nr_opts.gmin,
+            );
+            // Combined Qbe = qbe_total + qbex_total (matching ngspice which combines them).
+            let qbe = comp.qbe_total + comp.qbex_total;
+            VbicChargeHistory {
+                qbe,
+                cqbe: 0.0, // DC steady state: no charge current
+                vbei,
+                qbc: comp.qbc_total,
+                cqbc: 0.0,
+                vbci,
+                qbep: comp.qbep_total,
+                cqbep: 0.0,
+                vbep,
+                qbcp: comp.qbcp_total,
+                cqbcp: 0.0,
+                vbcp,
+            }
+        })
+        .collect();
+
     // Initialize LTRA transient state.
     let has_ltra = !mna.ltras.is_empty();
     let mut ltra_states: Vec<LtraState> = mna
@@ -1112,6 +1175,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             &mosfet_charge_histories,
             &mos6_charge_histories,
             &soidd_charge_histories,
+            &vbic_charge_histories,
         ) {
             Ok(sol) => sol,
             Err(e) if step_h > h_min * 2.0 => {
@@ -1136,7 +1200,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         };
 
         // LTE-based timestep control.
-        let has_bjt_charges = !mna.bjts.is_empty();
+        let has_bjt_charges = !mna.bjts.is_empty() || !mna.vbics.is_empty();
         if method == IntegrationMethod::Trapezoidal && (has_reactive || has_bjt_charges) {
             let new_h = estimate_new_timestep(
                 step_h,
@@ -1545,6 +1609,67 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
         }
 
+        // Update VBIC junction charge histories.
+        for (vi, vbic) in mna.vbics.iter().enumerate() {
+            let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
+                vbic.junction_voltages(&solution);
+            let comp = vbic.model.companion(
+                vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, nr_options.gmin,
+            );
+
+            // Capacitances for incremental charge.
+            let cap_be = comp.cqbe_vbei + comp.cqbex_vbex; // combined BE
+            let cap_bc = comp.cqbc_vbci;
+            let cap_bep = comp.cqbep_vbep;
+            let cap_bcp = comp.cqbcp_vbcp;
+
+            let hist = &vbic_charge_histories[vi];
+            let qbe = hist.qbe + cap_be * (vbei - hist.vbei);
+            let qbc = hist.qbc + cap_bc * (vbci - hist.vbci);
+            let qbep = hist.qbep + cap_bep * (vbep - hist.vbep);
+            let qbcp = hist.qbcp + cap_bcp * (vbcp - hist.vbcp);
+
+            let cqbe = match method {
+                IntegrationMethod::BackwardEuler => (qbe - hist.qbe) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qbe - hist.qbe) / step_h - hist.cqbe
+                }
+            };
+            let cqbc = match method {
+                IntegrationMethod::BackwardEuler => (qbc - hist.qbc) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qbc - hist.qbc) / step_h - hist.cqbc
+                }
+            };
+            let cqbep = match method {
+                IntegrationMethod::BackwardEuler => (qbep - hist.qbep) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qbep - hist.qbep) / step_h - hist.cqbep
+                }
+            };
+            let cqbcp = match method {
+                IntegrationMethod::BackwardEuler => (qbcp - hist.qbcp) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qbcp - hist.qbcp) / step_h - hist.cqbcp
+                }
+            };
+
+            vbic_charge_histories[vi] = VbicChargeHistory {
+                qbe,
+                cqbe,
+                vbei,
+                qbc,
+                cqbc,
+                vbci,
+                qbep,
+                cqbep,
+                vbep,
+                qbcp,
+                cqbcp,
+                vbcp,
+            };
+        }
+
         // Update LTRA histories.
         if has_ltra {
             ltra_time_points.push(t);
@@ -1742,6 +1867,7 @@ fn solve_timestep(
     mosfet_charge_histories: &[MosfetChargeHistory],
     mos6_charge_histories: &[MosfetChargeHistory],
     soidd_charge_histories: &[Bsim3SoiDdChargeHistory],
+    vbic_charge_histories: &[VbicChargeHistory],
 ) -> Result<Vec<f64>, MnaError> {
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
@@ -2402,6 +2528,128 @@ fn solve_timestep(
             stamp_conductance(&mut system.matrix, bp, ep, m * geq_be);
             let ieq_be = sign * m * (cqbe - geq_be * vbe);
             stamp_current_source(&mut system.rhs, bp, ep, ieq_be);
+        }
+
+        // 10. Stamp VBIC junction charge companion models.
+        //     Uses the total charge derivatives (depletion + transit time + overlap)
+        //     from the VbicCompanion result. Four junction pairs:
+        //       Qbe: base_bi - emit_ei  (combined internal + external BE)
+        //       Qbc: base_bi - coll_ci
+        //       Qbep: base_bp - emit_ei (parasitic BE)
+        //       Qbcp: base_bp - subs_si (parasitic BC / substrate)
+        //     Follows the same incremental charge formulation as BJT (section 5).
+        if !mna.vbics.is_empty() {
+            for (vi, vbic) in mna.vbics.iter().enumerate() {
+                let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
+                    vbic.junction_voltages(solution);
+                let comp = vbic.model.companion(
+                    vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin,
+                );
+
+                let sign = vbic.model.vbic_type.sign();
+                let m = vbic.m * vbic.area;
+
+                // Capacitances for incremental charge.
+                let cap_be = comp.cqbe_vbei + comp.cqbex_vbex; // combined BE
+                let cap_bc = comp.cqbc_vbci;
+                let cap_bep = comp.cqbep_vbep;
+                let cap_bcp = comp.cqbcp_vbcp;
+
+                let hist = &vbic_charge_histories[vi];
+
+                // Incremental charge: Q = Q_prev + C(v) * (v - v_prev).
+                let qbe = hist.qbe + cap_be * (vbei - hist.vbei);
+                let qbc = hist.qbc + cap_bc * (vbci - hist.vbci);
+                let qbep = hist.qbep + cap_bep * (vbep - hist.vbep);
+                let qbcp = hist.qbcp + cap_bcp * (vbcp - hist.vbcp);
+
+                // Integrate B-E charge.
+                let (geq_be, cqbe) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = cap_be / h;
+                        let cq = (qbe - hist.qbe) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * cap_be / h;
+                        let cq = 2.0 * (qbe - hist.qbe) / h - hist.cqbe;
+                        (geq, cq)
+                    }
+                };
+
+                // Integrate B-C charge.
+                let (geq_bc, cqbc) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = cap_bc / h;
+                        let cq = (qbc - hist.qbc) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * cap_bc / h;
+                        let cq = 2.0 * (qbc - hist.qbc) / h - hist.cqbc;
+                        (geq, cq)
+                    }
+                };
+
+                // Integrate parasitic B-E charge.
+                let (geq_bep, cqbep) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = cap_bep / h;
+                        let cq = (qbep - hist.qbep) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * cap_bep / h;
+                        let cq = 2.0 * (qbep - hist.qbep) / h - hist.cqbep;
+                        (geq, cq)
+                    }
+                };
+
+                // Integrate parasitic B-C (substrate) charge.
+                let (geq_bcp, cqbcp) = match method {
+                    IntegrationMethod::BackwardEuler => {
+                        let geq = cap_bcp / h;
+                        let cq = (qbcp - hist.qbcp) / h;
+                        (geq, cq)
+                    }
+                    IntegrationMethod::Trapezoidal => {
+                        let geq = 2.0 * cap_bcp / h;
+                        let cq = 2.0 * (qbcp - hist.qbcp) / h - hist.cqbcp;
+                        (geq, cq)
+                    }
+                };
+
+                let bi = vbic.base_bi_idx;
+                let ei = vbic.emit_ei_idx;
+                let bp = vbic.base_bp_idx;
+                let ci = vbic.coll_ci_idx;
+                let si = vbic.subs_si_idx;
+
+                // Stamp B-E charge: base_bi - emit_ei.
+                stamp_conductance(&mut system.matrix, bi, ei, m * geq_be);
+                let ieq_be = sign * m * (cqbe - geq_be * vbei);
+                stamp_current_source(&mut system.rhs, bi, ei, ieq_be);
+
+                // Stamp B-C charge: base_bi - coll_ci.
+                stamp_conductance(&mut system.matrix, bi, ci, m * geq_bc);
+                let ieq_bc = sign * m * (cqbc - geq_bc * vbci);
+                stamp_current_source(&mut system.rhs, bi, ci, ieq_bc);
+
+                // Stamp parasitic B-E charge at controlling voltage pair: base_bx - base_bp.
+                // Qbep is controlled by Vbep = sign*(V_bx - V_bp). The current
+                // physically flows between BP and EI, but without cross-coupling
+                // stamps we use the controlling voltage pair for self-consistency.
+                let bx = vbic.base_bx_idx;
+                stamp_conductance(&mut system.matrix, bx, bp, m * geq_bep);
+                let ieq_bep = sign * m * (cqbep - geq_bep * vbep);
+                stamp_current_source(&mut system.rhs, bx, bp, ieq_bep);
+
+                // Stamp parasitic B-C (substrate) charge: subs_si - base_bp.
+                // Vbcp = sign*(V_si - V_bp), stamp at (SI, BP) to match polarity.
+                stamp_conductance(&mut system.matrix, si, bp, m * geq_bcp);
+                let ieq_bcp = sign * m * (cqbcp - geq_bcp * vbcp);
+                stamp_current_source(&mut system.rhs, si, bp, ieq_bcp);
+            }
         }
     };
 
