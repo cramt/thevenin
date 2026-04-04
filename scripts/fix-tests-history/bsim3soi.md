@@ -385,3 +385,24 @@ the gate-body transcapacitance (cbgb) to make the body voltage respond to gate c
 - Simplified B-E capacitor alone (too stiff, body doesn't respond to gate)
 - Body transcapacitance without other charge rows (singular matrix, sum=0)
 - stamp_conductance for transcapacitances (wrong: adds both rows, not just body row)
+
+## Session 111 findings (2026-04-04)
+
+### Gmin stepping fix (affects all inv2 tests)
+Aligned gmin_stepping and new_gmin_stepping with ngspice's cktop.c:
+- Zero solution vector before starting (cktop.c lines 182-186, 370-374)
+- Use InitJct mode for first step (matching firstmode=MODEINITJCT)
+- Subsequent steps use Float mode (matching continuemode transition)
+
+**Result:** No effect on inv2 convergence. All 3 inv2 tests still fail with singular
+matrix. The issue is deeper than initialization — likely missing body node conductance
+when gmin reaches the circuit's target (1e-25). The floating body/output nodes don't
+have enough structural conductance.
+
+### DD RampVg2 re-investigation
+Test now produces output (doesn't crash) but transient is wrong: Ids stays stuck at
+DC OP value (0.092 A) while expected ramps to 0.55 A when Vg2 ramps. Confirms body
+doesn't respond to gate — full 4-row charge integration still needed.
+
+**Status:** All 4 BSIM3SOI convergence tests remain intractable without major solver
+or body charge model work.

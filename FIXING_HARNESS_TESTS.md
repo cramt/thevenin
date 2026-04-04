@@ -376,7 +376,7 @@ Append your findings when done.
 
 ## Remaining test summary
 
-**Test counts:** 615 passing (5 with tolerance overrides), 19 ignored, 5 unit tests ignored.
+**Test counts:** 616 passing (5 with tolerance overrides), 19 harness tests ignored, 4 unit tests ignored.
 
 | Category | Tests | Status |
 |---|---|---|

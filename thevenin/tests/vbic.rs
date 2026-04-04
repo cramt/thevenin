@@ -368,7 +368,6 @@ Q1 Q1_C Q1_B 0 N1
 // ===================== diffamp: Differential amplifier (OP + TRAN + AC) =====================
 
 #[test]
-#[ignore = "complex multi-transistor circuit, convergence issues pending"]
 fn test_vbic_diffamp() {
     let cir = format!(
         "\

@@ -1,6 +1,6 @@
 # VBIC Test History
 
-## Current status (2 tests remaining — diffamp un-ignored session 109)
+## Current status (1 test remaining — diffamp unit test un-ignored session 112)
 
 | Test | Error | Root cause | Status |
 |---|---|---|---|
@@ -138,3 +138,11 @@ of how VBIC charge states (Qbe, Qbc, Qbep, etc.) are initialized at the start of
 
 **What NOT to retry:** Source stepping without InitJct (confirmed as root cause of convergence
 failure). Tolerance overrides for diffamp (transient error is 1000× at startup, grows large).
+
+## Session 112 findings (2026-04-04)
+
+Un-ignored `test_vbic_diffamp` unit test — it passes now (fixed by fixes 107-109:
+source stepping InitJct, SINE parser, transient junction charges). Test count: 616 passing.
+
+VBIC FO harness test re-checked: first mismatch at x=3.75 with 0.38% error, still
+grows to 15%+ at higher bias. Remains intractable (FP eval order).

@@ -204,7 +204,7 @@ fn gmin_stepping<F>(
     dim: usize,
     num_nodes: usize,
     load_system: &F,
-    initial_guess: &[f64],
+    _initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
@@ -213,10 +213,16 @@ where
     let mut factor = gmin_factor_max;
     let mut gmin = 1e-2_f64;
     let gmin_target = options.gmin.max(0.0);
-    let mut solution = initial_guess.to_vec();
+    // Zero all node voltages before gmin stepping, matching ngspice
+    // dynamic_gmin() cktop.c lines 182-186.  This gives a clean starting
+    // point independent of the (possibly diverged) direct NR attempt.
+    let mut solution = vec![0.0; dim];
     let mut last_good_solution = solution.clone();
     let mut last_good_gmin = gmin;
     let mut total_iters = 0;
+    // Track whether this is the first gmin step so we can use InitJct mode,
+    // matching ngspice which sets firstmode = MODEINITJCT at line 172.
+    let mut first_step = true;
 
     while gmin >= gmin_target * 0.9 {
         let attempt = NrAttempt {
@@ -225,6 +231,14 @@ where
             source_factor: 1.0,
             max_iters: options.itl2,
         };
+        // Use InitJct for the first step (matching ngspice), Float for
+        // subsequent steps (matching ngspice continuemode transition at
+        // cktop.c line 203).
+        let mode = if first_step {
+            NrMode::InitJct
+        } else {
+            NrMode::Float
+        };
         match try_nr(
             options,
             dim,
@@ -232,10 +246,11 @@ where
             load_system,
             &solution,
             &attempt,
-            NrMode::Float,
+            mode,
         ) {
             Ok(result) => {
                 total_iters += result.iterations;
+                first_step = false;
 
                 // Adapt factor based on convergence speed
                 // (matches ngspice cktop.c dynamic_gmin lines 216-223)
@@ -310,7 +325,7 @@ fn new_gmin_stepping<F>(
     dim: usize,
     num_nodes: usize,
     load_system: &F,
-    initial_guess: &[f64],
+    _initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
@@ -321,10 +336,13 @@ where
     let gmin_target = options.gmin.max(0.0);
     // Diagonal gmin stays at the target throughout — only device gmin is stepped.
     let diag = options.diag_gmin;
-    let mut solution = initial_guess.to_vec();
+    // Zero all node voltages before gmin stepping, matching ngspice
+    // new_gmin() cktop.c lines 370-374.
+    let mut solution = vec![0.0; dim];
     let mut last_good_solution = solution.clone();
     let mut last_good_dev_gmin = dev_gmin;
     let mut total_iters = 0;
+    let mut first_step = true;
 
     while dev_gmin >= gmin_target * 0.9 {
         let attempt = NrAttempt {
@@ -333,6 +351,11 @@ where
             source_factor: 1.0,
             max_iters: options.itl2,
         };
+        let mode = if first_step {
+            NrMode::InitJct
+        } else {
+            NrMode::Float
+        };
         match try_nr(
             options,
             dim,
@@ -340,10 +363,11 @@ where
             load_system,
             &solution,
             &attempt,
-            NrMode::Float,
+            mode,
         ) {
             Ok(result) => {
                 total_iters += result.iterations;
+                first_step = false;
 
                 let quarter = options.itl2 / 4;
                 if result.iterations <= quarter {
