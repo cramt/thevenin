@@ -25,7 +25,6 @@
 "hfet/inverter.cir" = "wrong DC OP: V(3)=2.0V vs expected -0.275V (bistable DCFL inverter; gate leakage model + GGR default + pnjlim all fixed to match ngspice HFET2; NR converges to Vdd basin — needs MODEINITFLOAT phase)"
 
 # === Regression: misc ===
-"regression/misc/asrc-tc-1.cir" = ".control: B-source tc1 AC test err=1.5e-6 (tc1 DC works; AC numerical Jacobian precision at tight 1e-9 threshold)"
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
 "regression/misc/resume-1.cir" = ".control: stop when + resume commands not implemented (requires transient state preservation)"
 

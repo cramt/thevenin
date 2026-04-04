@@ -1419,14 +1419,17 @@ pub fn stamp_ac_devices(
         let i0 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &node_voltages).unwrap_or(0.0)
             * bsrc.tc_factor;
 
-        const DV: f64 = 1e-8;
         for (name, idx) in mna.node_map.iter() {
             let v_old = node_voltages[name];
+            // Adaptive step: cube-root of machine epsilon scaled by voltage
+            // magnitude gives optimal balance between truncation error O(h)
+            // and cancellation error O(eps/h) for forward differencing.
+            let dv = f64::EPSILON.cbrt() * v_old.abs().max(1.0);
             let mut perturbed = node_voltages.clone();
-            *perturbed.get_mut(name).unwrap() = v_old + DV;
+            *perturbed.get_mut(name).unwrap() = v_old + dv;
             let i1 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &perturbed).unwrap_or(0.0)
                 * bsrc.tc_factor;
-            let g = (i1 - i0) / DV;
+            let g = (i1 - i0) / dv;
             if g.abs() > 1e-30 {
                 if let Some(ni) = bsrc.pos_idx {
                     sys.real.add(ni, idx, g);
@@ -1449,19 +1452,21 @@ pub fn stamp_ac_devices(
         let f0 = crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &node_voltages).unwrap_or(0.0)
             * bvsrc.tc_factor;
 
-        const DV: f64 = 1e-8;
         let branch = bvsrc.branch_idx;
         for (name, idx) in mna.node_map.iter() {
             let v_old = node_voltages[name];
+            // Adaptive step: same cube-root-epsilon scaling as behavioral
+            // current sources above.
+            let dv = f64::EPSILON.cbrt() * v_old.abs().max(1.0);
             let mut perturbed = node_voltages.clone();
-            *perturbed.get_mut(name).unwrap() = v_old + DV;
+            *perturbed.get_mut(name).unwrap() = v_old + dv;
             let f1_raw = crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &perturbed).unwrap_or(0.0);
             let f1 = if f1_raw.is_finite() {
                 f1_raw * bvsrc.tc_factor
             } else {
                 f0
             };
-            let dfdv = (f1 - f0) / DV;
+            let dfdv = (f1 - f0) / dv;
             if dfdv.is_finite() && dfdv.abs() > 1e-30 {
                 sys.real.add(branch, idx, -dfdv);
             }
