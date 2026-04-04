@@ -187,8 +187,8 @@ impl HfetModel {
             vt2: f64::MAX,
             ggr: if level == 6 { 0.0 } else { 40.0 }, // HFET1: 40.0 (hfetsetup.c), HFET2: 0.0
             del: 0.04,
-            js: 0.0,   // ngspice HFET2 default (hfet2setup.c)
-            n: 5.0,    // ngspice HFET2 default (hfet2setup.c)
+            js: 0.0, // ngspice HFET2 default (hfet2setup.c)
+            n: 5.0,  // ngspice HFET2 default (hfet2setup.c)
             klambda: 0.0,
             kmu: 0.0,
             kvto: 0.0,
@@ -372,7 +372,7 @@ pub struct HfetPrecomp {
     pub is2s: f64,
     pub iso: f64,
     pub ggrwl: f64,
-    pub jslw: f64,  // HFET2: JS * L * W / 2
+    pub jslw: f64, // HFET2: JS * L * W / 2
     pub vcrit: f64,
     pub t_lambda: f64,
     pub t_mu: f64,
@@ -804,7 +804,9 @@ pub fn hfet_companion_full(inst: &HfetInstance, vgs: f64, vgd: f64, gmin: f64) -
         // HFET1 gate leakage (hfetload.c lines 275-297)
         // Gate-source: call leak() if both IS1S and IS2S are non-zero
         if pre.is1s != 0.0 && pre.is2s != 0.0 {
-            let (il, gl) = leak(gmin, vt, vgs, model.rgs, pre.is1s, pre.is2s, model.m1s, model.m2s);
+            let (il, gl) = leak(
+                gmin, vt, vgs, model.rgs, pre.is1s, pre.is2s, model.m1s, model.m2s,
+            );
             cgs_current = il;
             ggs = gl;
         }
@@ -816,7 +818,9 @@ pub fn hfet_companion_full(inst: &HfetInstance, vgs: f64, vgd: f64, gmin: f64) -
 
         // Gate-drain: call leak() if both IS1D and IS2D are non-zero
         if pre.is1d != 0.0 && pre.is2d != 0.0 {
-            let (il, gl) = leak(gmin, vt, vgd, model.rgd, pre.is1d, pre.is2d, model.m1d, model.m2d);
+            let (il, gl) = leak(
+                gmin, vt, vgd, model.rgd, pre.is1d, pre.is2d, model.m1d, model.m2d,
+            );
             cgd_current = il;
             ggd = gl;
         }

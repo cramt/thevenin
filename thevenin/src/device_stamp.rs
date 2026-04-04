@@ -773,7 +773,9 @@ impl DeviceVoltageState {
                     let init_vbci = -vc;
                     let init_vbcp = -vc;
                     prev[vi] = [init_vbei, init_vbex, init_vbci, 0.0, 0.0, init_vbcp];
-                    (init_vbei, init_vbex, init_vbci, 0.0, 0.0, 0.0, 0.0, 0.0, init_vbcp)
+                    (
+                        init_vbei, init_vbex, init_vbci, 0.0, 0.0, 0.0, 0.0, 0.0, init_vbcp,
+                    )
                 } else {
                     let (
                         raw_vbei,

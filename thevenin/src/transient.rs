@@ -822,8 +822,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let vb = inst.body_int_idx.map_or(0.0, |i| solution[i]);
             let ve = inst.e_idx.map_or(0.0, |i| solution[i]);
             let vbe = sign * (vb - ve);
-            let cbox_wl = inst.size_params.kb3 * inst.model.cbox
-                * inst.size_params.weff_cv * inst.size_params.leff_cv;
+            let cbox_wl = inst.size_params.kb3
+                * inst.model.cbox
+                * inst.size_params.weff_cv
+                * inst.size_params.leff_cv;
             Bsim3SoiDdChargeHistory {
                 qbg: cbox_wl * vbe, // reuse qbg field for B-E charge
                 qbd: 0.0,
@@ -849,7 +851,16 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
                 vbic.junction_voltages(&solution);
             let comp = vbic.model.companion(
-                vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, circuit_nr_opts.gmin,
+                vbei,
+                vbex,
+                vbci,
+                vbcx,
+                vbep,
+                vrci,
+                vrbi,
+                vrbp,
+                vbcp,
+                circuit_nr_opts.gmin,
             );
             // Combined Qbe = qbe_total + qbex_total (matching ngspice which combines them).
             let qbe = comp.qbe_total + comp.qbex_total;
@@ -1234,9 +1245,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // Accept: schedule next h from LTE estimate.
             h = new_h.min(step_h * MAX_GROW).min(h_max).max(h_min);
             force_be = false;
-        } else if method == IntegrationMethod::BackwardEuler
-            && (has_reactive || has_bjt_charges)
-        {
+        } else if method == IntegrationMethod::BackwardEuler && (has_reactive || has_bjt_charges) {
             // Order upgrade check (ngspice dctran.c lines 820-831):
             // After a successful BE step, try computing the order-2 (Trap) LTE.
             // If the Trap LTE suggests a timestep <= 1.05× the current step,
@@ -1258,9 +1267,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // Use Trap LTE estimate to control next step size, matching ngspice
             // (line 833: CKTdelta = newdelta regardless of order decision).
             h = trap_h.min(step_h * MAX_GROW).min(h_max).max(h_min);
-        } else if (at_breakpoint || force_be)
-            && (has_ltra || has_txl || has_cpl)
-        {
+        } else if (at_breakpoint || force_be) && (has_ltra || has_txl || has_cpl) {
             // For BE steps in transmission-line-only circuits (no caps/inductors/
             // BJTs to compute LTE), limit step growth and clear force_be since we
             // can't determine if Trap would be appropriate.
@@ -1595,8 +1602,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let vb = inst.body_int_idx.map_or(0.0, |i| solution[i]);
             let ve = inst.e_idx.map_or(0.0, |i| solution[i]);
             let vbe = sign * (vb - ve);
-            let cbox_wl = inst.size_params.kb3 * inst.model.cbox
-                * inst.size_params.weff_cv * inst.size_params.leff_cv;
+            let cbox_wl = inst.size_params.kb3
+                * inst.model.cbox
+                * inst.size_params.weff_cv
+                * inst.size_params.leff_cv;
             let hist = &soidd_charge_histories[di];
             let qbe = hist.qbg + cbox_wl * (vbe - hist.vbg);
             let cqbe = match method {
@@ -1604,8 +1613,15 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 IntegrationMethod::Trapezoidal => 2.0 * (qbe - hist.qbg) / step_h - hist.cqbg,
             };
             soidd_charge_histories[di] = Bsim3SoiDdChargeHistory {
-                qbg: qbe, cqbg: cqbe, qbd: 0.0, cqbd: 0.0, qbs: 0.0, cqbs: 0.0,
-                vbg: vbe, vbd: 0.0, vbs: 0.0,
+                qbg: qbe,
+                cqbg: cqbe,
+                qbd: 0.0,
+                cqbd: 0.0,
+                qbs: 0.0,
+                cqbs: 0.0,
+                vbg: vbe,
+                vbd: 0.0,
+                vbs: 0.0,
             };
         }
 
@@ -1614,7 +1630,16 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
                 vbic.junction_voltages(&solution);
             let comp = vbic.model.companion(
-                vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, nr_options.gmin,
+                vbei,
+                vbex,
+                vbci,
+                vbcx,
+                vbep,
+                vrci,
+                vrbi,
+                vrbp,
+                vbcp,
+                nr_options.gmin,
             );
 
             // Capacitances for incremental charge.
@@ -1631,27 +1656,19 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
             let cqbe = match method {
                 IntegrationMethod::BackwardEuler => (qbe - hist.qbe) / step_h,
-                IntegrationMethod::Trapezoidal => {
-                    2.0 * (qbe - hist.qbe) / step_h - hist.cqbe
-                }
+                IntegrationMethod::Trapezoidal => 2.0 * (qbe - hist.qbe) / step_h - hist.cqbe,
             };
             let cqbc = match method {
                 IntegrationMethod::BackwardEuler => (qbc - hist.qbc) / step_h,
-                IntegrationMethod::Trapezoidal => {
-                    2.0 * (qbc - hist.qbc) / step_h - hist.cqbc
-                }
+                IntegrationMethod::Trapezoidal => 2.0 * (qbc - hist.qbc) / step_h - hist.cqbc,
             };
             let cqbep = match method {
                 IntegrationMethod::BackwardEuler => (qbep - hist.qbep) / step_h,
-                IntegrationMethod::Trapezoidal => {
-                    2.0 * (qbep - hist.qbep) / step_h - hist.cqbep
-                }
+                IntegrationMethod::Trapezoidal => 2.0 * (qbep - hist.qbep) / step_h - hist.cqbep,
             };
             let cqbcp = match method {
                 IntegrationMethod::BackwardEuler => (qbcp - hist.qbcp) / step_h,
-                IntegrationMethod::Trapezoidal => {
-                    2.0 * (qbcp - hist.qbcp) / step_h - hist.cqbcp
-                }
+                IntegrationMethod::Trapezoidal => 2.0 * (qbcp - hist.qbcp) / step_h - hist.cqbcp,
             };
 
             vbic_charge_histories[vi] = VbicChargeHistory {
@@ -2516,9 +2533,7 @@ fn solve_timestep(
             let qbe = hist.qbg + cbox_wl * (vbe - hist.vbg); // reuse qbg for B-E charge
 
             let (geq_be, cqbe) = match method {
-                IntegrationMethod::BackwardEuler => {
-                    (cbox_wl / h, (qbe - hist.qbg) / h)
-                }
+                IntegrationMethod::BackwardEuler => (cbox_wl / h, (qbe - hist.qbg) / h),
                 IntegrationMethod::Trapezoidal => {
                     (2.0 * cbox_wl / h, 2.0 * (qbe - hist.qbg) / h - hist.cqbg)
                 }
@@ -2542,9 +2557,9 @@ fn solve_timestep(
             for (vi, vbic) in mna.vbics.iter().enumerate() {
                 let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
                     vbic.junction_voltages(solution);
-                let comp = vbic.model.companion(
-                    vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin,
-                );
+                let comp = vbic
+                    .model
+                    .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
 
                 let sign = vbic.model.vbic_type.sign();
                 let m = vbic.m * vbic.area;

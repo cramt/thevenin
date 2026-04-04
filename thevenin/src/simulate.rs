@@ -303,9 +303,14 @@ fn jct_initial_guess(
         let sign = bsim.model.mos_type.sign();
         let vgs = sign * (bsim.vth0_inst + 0.1);
         let vds = sign * 0.1;
-        let comp =
-            bsim3soi_dd_companion(vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model);
-        stamp_bsim3soi_dd(&mut system.matrix, &mut system.rhs, bsim, &comp, options.gmin);
+        let comp = bsim3soi_dd_companion(vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model);
+        stamp_bsim3soi_dd(
+            &mut system.matrix,
+            &mut system.rhs,
+            bsim,
+            &comp,
+            options.gmin,
+        );
     }
 
     // Stamp each BSIM3SOI-FD at InitJct voltages.
@@ -315,9 +320,21 @@ fn jct_initial_guess(
         let vds = sign * 0.1;
         let floating_body = bsim.body_idx.is_none();
         let comp = bsim3soi_fd_companion(
-            vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model, floating_body,
+            vgs,
+            vds,
+            0.0,
+            0.0,
+            &bsim.size_params,
+            &bsim.model,
+            floating_body,
         );
-        stamp_bsim3soi_fd(&mut system.matrix, &mut system.rhs, bsim, &comp, options.gmin);
+        stamp_bsim3soi_fd(
+            &mut system.matrix,
+            &mut system.rhs,
+            bsim,
+            &comp,
+            options.gmin,
+        );
     }
 
     // Stamp each BSIM3SOI-PD at InitJct voltages.
@@ -325,9 +342,14 @@ fn jct_initial_guess(
         let sign = bsim.model.mos_type.sign();
         let vgs = sign * (bsim.vth0_inst + 0.1);
         let vds = sign * 0.1;
-        let comp =
-            bsim3soi_pd_companion(vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model);
-        stamp_bsim3soi_pd(&mut system.matrix, &mut system.rhs, bsim, &comp, options.gmin);
+        let comp = bsim3soi_pd_companion(vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model);
+        stamp_bsim3soi_pd(
+            &mut system.matrix,
+            &mut system.rhs,
+            bsim,
+            &comp,
+            options.gmin,
+        );
     }
 
     // Diagonal gmin for numerical stability.
@@ -391,6 +413,51 @@ fn jct_initial_guess(
         // 4. BP = BX (parasitic B-E not biased: Vbep=0).
         if let Some(bp) = vbic.base_bp_idx {
             result[bp] = nv(&result, vbic.base_bx_idx);
+        }
+    }
+
+    // Apply BSIM3SOI MODEINITJCT body node initialization:
+    // For floating-body SOI devices, set the internal body node voltage equal
+    // to the source voltage.  This gives the body-source junction ~0V forward
+    // bias, producing non-negligible junction conductances in the Jacobian so
+    // the body node equation is non-singular from NR iteration 0.  Without
+    // this, circuits with very small gmin (e.g. inv2.cir with gmin=1e-25)
+    // produce a body_gmin of 1e-31 which is insufficient to regularize the
+    // body row, causing a singular matrix.
+    for bsim in &mna.bsim3soi_dds {
+        if bsim.body_idx.is_none()
+            && let Some(bi) = bsim.body_int_idx
+        {
+            let vs = bsim
+                .source_prime_idx
+                .or(bsim.source_idx)
+                .map(|i| result[i])
+                .unwrap_or(0.0);
+            result[bi] = vs;
+        }
+    }
+    for bsim in &mna.bsim3soi_fds {
+        if bsim.body_idx.is_none()
+            && let Some(bi) = bsim.body_int_idx
+        {
+            let vs = bsim
+                .source_prime_idx
+                .or(bsim.source_idx)
+                .map(|i| result[i])
+                .unwrap_or(0.0);
+            result[bi] = vs;
+        }
+    }
+    for bsim in &mna.bsim3soi_pds {
+        if bsim.body_idx.is_none()
+            && let Some(bi) = bsim.body_int_idx
+        {
+            let vs = bsim
+                .source_prime_idx
+                .or(bsim.source_idx)
+                .map(|i| result[i])
+                .unwrap_or(0.0);
+            result[bi] = vs;
         }
     }
 

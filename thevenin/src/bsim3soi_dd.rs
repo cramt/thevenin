@@ -2697,7 +2697,11 @@ pub fn bsim3soi_dd_companion(
     let dt4_xc_dvb = 2.0 * dvdsat_cv_dvb - dvds_cv_dvb;
     let t0_xc = t3_xc * vcs_cv;
     let t1_xc = t4_xc * vds_cv;
-    let xc = if t1_xc.abs() > 1e-30 { t0_xc / t1_xc } else { 0.0 };
+    let xc = if t1_xc.abs() > 1e-30 {
+        t0_xc / t1_xc
+    } else {
+        0.0
+    };
 
     let dt0_xc_dvb = vcs_cv * (2.0 * dvdsat_cv_dvb - dvcs_cv_dvb) + t3_xc * dvcs_cv_dvb;
     let dt0_xc_dvg = vcs_cv * (2.0 * dvdsat_cv_dvg - dvcs_cv_dvg) + t3_xc * dvcs_cv_dvg;
@@ -2822,8 +2826,11 @@ pub fn bsim3soi_dd_companion(
     let t12_e2 = t3_e2 * t12_e2_dvc - t4_e2 * dxc_dvc;
     let dqe2_dvg = t10_e2 * dvgsteff_dvg + t11_e2 * dvbseff_dvg + t12_e2 * dvcs_dvg;
     let dqe2_dvb = t10_e2 * dvgsteff_dvb + t11_e2 * dvbseff_dvb + t12_e2 * dvcs_dvb;
-    let dqe2_dvd = t10_e2 * dvgsteff_dvd + t11_e2 * dvbseff_dvd + t12_e2 * dvcs_dvd
-        + t3_e2 * (dvds_cv_dvd - dvcs_cv_dvd) - t4_e2 * dxc_dvd;
+    let dqe2_dvd = t10_e2 * dvgsteff_dvd
+        + t11_e2 * dvbseff_dvd
+        + t12_e2 * dvcs_dvd
+        + t3_e2 * (dvds_cv_dvd - dvcs_cv_dvd)
+        - t4_e2 * dxc_dvd;
     let dqe2_dve = t10_e2 * dvgsteff_dve + t11_e2 * dvbseff_dve + t12_e2 * dvcs_dve;
 
     // Cbg, Cbb, Cbd, Cbe: transform Qbf derivatives from internal to real voltages
@@ -3015,7 +3022,9 @@ pub fn stamp_bsim3soi_dd(
     // Gmin at the body node than the circuit-level gmin to avoid dominating the
     // extremely small floating-body junction currents.
     if inst.body_idx.is_none() {
-        crate::stamp_conductance(matrix, b, sp, gmin * 1e-6);
+        // Floor at 1e-20 so circuits with very small gmin (e.g. 1e-25) still
+        // have enough body-source coupling to keep the Jacobian non-singular.
+        crate::stamp_conductance(matrix, b, sp, (gmin * 1e-6).max(1e-20));
     }
 
     // --- Body current Jacobian stamps ---

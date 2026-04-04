@@ -2230,7 +2230,9 @@ pub fn stamp_bsim3soi_pd(
     // extremely small floating-body junction currents.
     // When source is ground (sp=None), stamp_conductance only adds to body diagonal,
     // which is equivalent to body-to-ground coupling.
-    let body_gmin = gmin * 1e-6;
+    // Floor at 1e-20 so circuits with very small gmin (e.g. 1e-25) still
+    // have enough body-source coupling to keep the Jacobian non-singular.
+    let body_gmin = (gmin * 1e-6).max(1e-20);
     if inst.body_idx.is_none()
         && let Some(bi) = b
     {

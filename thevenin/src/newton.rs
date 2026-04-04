@@ -336,8 +336,10 @@ where
     let gmin_target = options.gmin.max(0.0);
     // Diagonal gmin stays at the target throughout — only device gmin is stepped.
     let diag = options.diag_gmin;
-    // Zero all node voltages before gmin stepping, matching ngspice
-    // new_gmin() cktop.c lines 370-374.
+    // Reset solution to zero before new_gmin stepping, matching ngspice
+    // new_gmin() which zeroes CKTrhsOld and CKTstate0 (cktop.c lines 370-374).
+    // Starting from the JCT initial guess can trap NR in a wrong basin for
+    // bistable circuits.
     let mut solution = vec![0.0; dim];
     let mut last_good_solution = solution.clone();
     let mut last_good_dev_gmin = dev_gmin;
@@ -351,7 +353,10 @@ where
             source_factor: 1.0,
             max_iters: options.itl2,
         };
+        // Use InitJct for the first step (matching ngspice new_gmin which
+        // resets CKTmode to firstmode=MODEINITJCT at line 360).
         let mode = if first_step {
+            first_step = false;
             NrMode::InitJct
         } else {
             NrMode::Float

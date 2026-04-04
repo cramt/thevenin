@@ -2159,7 +2159,9 @@ pub fn stamp_bsim3soi_fd(
     // at the body node to avoid dominating the extremely small floating-body
     // junction currents.
     if inst.body_idx.is_none() {
-        crate::stamp_conductance(matrix, b, sp, gmin * 1e-6);
+        // Floor at 1e-20 so circuits with very small gmin (e.g. 1e-25) still
+        // have enough body-source coupling to keep the Jacobian non-singular.
+        crate::stamp_conductance(matrix, b, sp, (gmin * 1e-6).max(1e-20));
     }
 
     // Body resistance to external body contact
