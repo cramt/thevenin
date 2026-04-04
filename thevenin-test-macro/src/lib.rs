@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 
 use proc_macro2::{Literal, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use serde::Deserialize;
+use facet::Facet;
 
 /// Per-test tolerance override parsed from `tolerances.toml`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Facet)]
 struct ToleranceOverride {
     rel_tol: f64,
 }
@@ -70,7 +70,7 @@ fn generate_tests() -> Result<TokenStream2, String> {
     let ignores: BTreeMap<String, String> = if ignore_path.exists() {
         let content = std::fs::read_to_string(&ignore_path)
             .map_err(|e| format!("failed to read ignore.toml: {e}"))?;
-        toml::from_str(&content).map_err(|e| format!("failed to parse ignore.toml: {e}"))?
+        facet_toml::from_str(&content).map_err(|e| format!("failed to parse ignore.toml: {e}"))?
     } else {
         BTreeMap::new()
     };
@@ -79,7 +79,7 @@ fn generate_tests() -> Result<TokenStream2, String> {
     let tolerances: BTreeMap<String, ToleranceOverride> = if tolerances_path.exists() {
         let content = std::fs::read_to_string(&tolerances_path)
             .map_err(|e| format!("failed to read tolerances.toml: {e}"))?;
-        toml::from_str(&content).map_err(|e| format!("failed to parse tolerances.toml: {e}"))?
+        facet_toml::from_str(&content).map_err(|e| format!("failed to parse tolerances.toml: {e}"))?
     } else {
         BTreeMap::new()
     };

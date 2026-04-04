@@ -6,17 +6,39 @@
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use facet::Facet;
 
 use crate::ir::*;
+
+/// Dynamic value type for untyped YAML/JSON fields.
+///
+/// Replaces `DynVal` with an explicit enum of the variants CirQ
+/// actually uses: booleans, numbers, strings, sequences, and mappings.
+#[derive(Debug, Clone, Facet)]
+#[facet(untagged)]
+#[repr(u8)]
+enum DynVal {
+    Mapping(BTreeMap<String, DynVal>),
+    Sequence(Vec<DynVal>),
+    Number(f64),
+    Bool(bool),
+    String(String),
+}
+
+impl DynVal {
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            DynVal::String(s) => Some(s),
+            _ => None,
+        }
+    }
+}
 
 /// Errors that can occur during CirQ parsing.
 #[derive(Debug, thiserror::Error)]
 pub enum CirqParseError {
-    #[error("JSON parse error: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("YAML parse error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    #[error("parse error: {0}")]
+    Deserialize(#[from] facet_format::DeserializeError),
     #[error("missing required field: {0}")]
     MissingField(&'static str),
     #[error("invalid component '{id}': {msg}")]
@@ -38,123 +60,123 @@ pub enum CirqParseError {
 pub fn parse_cirq(input: &str) -> Result<Circuit, CirqParseError> {
     let trimmed = input.trim_start();
     let doc: CirqDoc = if trimmed.starts_with('{') {
-        serde_json::from_str(input)?
+        facet_json::from_str(input)?
     } else {
-        serde_yaml::from_str(input)?
+        facet_yaml::from_str(input)?
     };
     lower_doc(doc)
 }
 
 // ---------------------------------------------------------------------------
-// Serde document model (intermediate, not exposed)
+// Facet document model (intermediate, not exposed)
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Facet)]
 struct CirqDoc {
     cirq: String,
     name: String,
-    #[serde(default)]
+    #[facet(default)]
     description: Option<String>,
-    #[serde(default)]
+    #[facet(default)]
     components: Vec<CirqComponent>,
-    #[serde(default)]
+    #[facet(default)]
     subcircuits: Vec<CirqSubcircuit>,
-    #[serde(default)]
+    #[facet(default)]
     models: Vec<CirqModel>,
-    #[serde(default)]
-    params: BTreeMap<String, serde_yaml::Value>,
-    #[serde(default)]
+    #[facet(default)]
+    params: BTreeMap<String, DynVal>,
+    #[facet(default)]
     globals: Vec<String>,
-    #[serde(default)]
+    #[facet(default)]
     includes: Vec<CirqInclude>,
-    #[serde(default)]
+    #[facet(default)]
     functions: Vec<CirqFunction>,
-    #[serde(default)]
-    options: BTreeMap<String, serde_yaml::Value>,
-    #[serde(default)]
+    #[facet(default)]
+    options: BTreeMap<String, DynVal>,
+    #[facet(default)]
     temperature: Option<f64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Facet)]
 struct CirqComponent {
     id: String,
-    #[serde(rename = "type")]
+    #[facet(rename = "type")]
     comp_type: String,
-    #[serde(default)]
+    #[facet(default)]
     description: Option<String>,
-    #[serde(default)]
+    #[facet(default)]
     tags: Vec<String>,
-    #[serde(default)]
+    #[facet(default)]
     model: Option<String>,
-    #[serde(default)]
-    value: Option<serde_yaml::Value>,
-    #[serde(default)]
-    pins: Option<serde_yaml::Value>,
-    #[serde(default)]
-    params: BTreeMap<String, serde_yaml::Value>,
-    #[serde(default)]
+    #[facet(default)]
+    value: Option<DynVal>,
+    #[facet(default)]
+    pins: Option<DynVal>,
+    #[facet(default)]
+    params: BTreeMap<String, DynVal>,
+    #[facet(default)]
     waveform: Option<CirqWaveform>,
     // Port-specific
-    #[serde(default)]
+    #[facet(default)]
     net: Option<String>,
-    #[serde(default)]
+    #[facet(default)]
     direction: Option<String>,
-    #[serde(default)]
+    #[facet(default)]
     order: Option<u32>,
-    #[serde(default)]
+    #[facet(default)]
     domain: Option<String>,
     // Coupling-specific
-    #[serde(default)]
+    #[facet(default)]
     inductors: Option<Vec<String>>,
-    #[serde(default)]
-    coefficient: Option<serde_yaml::Value>,
+    #[facet(default)]
+    coefficient: Option<DynVal>,
     // Behavioral source
-    #[serde(default)]
+    #[facet(default)]
     off: Option<bool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Facet)]
 struct CirqWaveform {
-    #[serde(rename = "type")]
+    #[facet(rename = "type")]
     waveform_type: String,
-    #[serde(flatten)]
-    params: BTreeMap<String, serde_yaml::Value>,
+    #[facet(flatten)]
+    params: BTreeMap<String, DynVal>,
 }
 
-#[derive(Deserialize)]
+#[derive(Facet)]
 struct CirqSubcircuit {
     name: String,
-    #[serde(default)]
+    #[facet(default)]
     description: Option<String>,
-    #[serde(default)]
-    params: BTreeMap<String, serde_yaml::Value>,
-    #[serde(default)]
+    #[facet(default)]
+    params: BTreeMap<String, DynVal>,
+    #[facet(default)]
     components: Vec<CirqComponent>,
-    #[serde(default)]
+    #[facet(default)]
     models: Vec<CirqModel>,
-    #[serde(default)]
+    #[facet(default)]
     subcircuits: Vec<CirqSubcircuit>,
 }
 
-#[derive(Deserialize)]
+#[derive(Facet)]
 struct CirqModel {
     name: String,
-    #[serde(rename = "type")]
+    #[facet(rename = "type")]
     model_type: String,
-    #[serde(default)]
+    #[facet(default)]
     level: Option<u32>,
-    #[serde(default)]
-    params: BTreeMap<String, serde_yaml::Value>,
+    #[facet(default)]
+    params: BTreeMap<String, DynVal>,
 }
 
-#[derive(Deserialize)]
+#[derive(Facet)]
 struct CirqInclude {
     file: String,
-    #[serde(default)]
+    #[facet(default)]
     section: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Facet)]
 struct CirqFunction {
     name: String,
     args: Vec<String>,
@@ -292,7 +314,7 @@ fn lower_cirq_component(
             let coeff = comp
                 .coefficient
                 .as_ref()
-                .map(yaml_to_value)
+                .map(dyn_to_value)
                 .unwrap_or(Value::Num(1.0));
             ComponentKind::Coupling {
                 l1: inductors[0].clone(),
@@ -417,7 +439,7 @@ fn lower_cirq_component(
         "vref" => {
             let (p, n) = extract_two_pin_map(&comp)?;
             let source = SourceSpec {
-                dc: comp.value.as_ref().map(yaml_to_value),
+                dc: comp.value.as_ref().map(dyn_to_value),
                 ..Default::default()
             };
             ComponentKind::VSource { p, n, source }
@@ -428,7 +450,7 @@ fn lower_cirq_component(
             let gain = comp
                 .params
                 .get("gain")
-                .map(yaml_to_value)
+                .map(dyn_to_value)
                 .unwrap_or(Value::Num(1.0));
             ComponentKind::Vcvs {
                 p: pin_or_err(&pins, "p", &comp.id)?,
@@ -444,7 +466,7 @@ fn lower_cirq_component(
             let gm = comp
                 .params
                 .get("gm")
-                .map(yaml_to_value)
+                .map(dyn_to_value)
                 .unwrap_or(Value::Num(0.001));
             ComponentKind::Vccs {
                 p: pin_or_err(&pins, "p", &comp.id)?,
@@ -465,7 +487,7 @@ fn lower_cirq_component(
             let gain = comp
                 .params
                 .get("gain")
-                .map(yaml_to_value)
+                .map(dyn_to_value)
                 .unwrap_or(Value::Num(1.0));
             ComponentKind::Cccs {
                 p: pin_or_err(&pins, "p", &comp.id)?,
@@ -485,7 +507,7 @@ fn lower_cirq_component(
             let tr = comp
                 .params
                 .get("transresistance")
-                .map(yaml_to_value)
+                .map(dyn_to_value)
                 .unwrap_or(Value::Num(1.0));
             ComponentKind::Ccvs {
                 p: pin_or_err(&pins, "p", &comp.id)?,
@@ -498,9 +520,9 @@ fn lower_cirq_component(
         "bsource" => {
             let pins = extract_pin_map(&comp)?;
             let expr = if let Some(v) = comp.params.get("v") {
-                BehavioralExpr::Voltage(yaml_to_string(v))
+                BehavioralExpr::Voltage(dyn_to_string(v))
             } else if let Some(i) = comp.params.get("i") {
-                BehavioralExpr::Current(yaml_to_string(i))
+                BehavioralExpr::Current(dyn_to_string(i))
             } else {
                 return Err(CirqParseError::InvalidComponent {
                     id: comp.id.clone(),
@@ -608,16 +630,16 @@ fn lower_cirq_component(
         // Assume it's a subcircuit instance if we don't recognize the type
         other => {
             let pins = match &comp.pins {
-                Some(serde_yaml::Value::Sequence(seq)) => {
+                Some(DynVal::Sequence(seq)) => {
                     // Positional list → numeric keys
                     seq.iter()
                         .enumerate()
-                        .map(|(i, v)| (i.to_string(), yaml_to_string(v)))
+                        .map(|(i, v)| (i.to_string(), dyn_to_string(v)))
                         .collect()
                 }
-                Some(serde_yaml::Value::Mapping(map)) => map
+                Some(DynVal::Mapping(map)) => map
                     .iter()
-                    .map(|(k, v)| (yaml_to_string(k), yaml_to_string(v)))
+                    .map(|(k, v)| (k.clone(), dyn_to_string(v)))
                     .collect(),
                 _ => BTreeMap::new(),
             };
@@ -641,28 +663,20 @@ fn lower_cirq_component(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn yaml_to_value(v: &serde_yaml::Value) -> Value {
+fn dyn_to_value(v: &DynVal) -> Value {
     match v {
-        serde_yaml::Value::Number(n) => {
-            if let Some(f) = n.as_f64() {
-                Value::Num(f)
-            } else if let Some(i) = n.as_i64() {
-                Value::Num(i as f64)
-            } else {
-                Value::Num(0.0)
-            }
-        }
-        serde_yaml::Value::String(s) => parse_value_string(s),
-        serde_yaml::Value::Bool(b) => Value::Num(if *b { 1.0 } else { 0.0 }),
+        DynVal::Number(n) => Value::Num(*n),
+        DynVal::String(s) => parse_value_string(s),
+        DynVal::Bool(b) => Value::Num(if *b { 1.0 } else { 0.0 }),
         other => Value::Expr(format!("{other:?}")),
     }
 }
 
-fn yaml_to_string(v: &serde_yaml::Value) -> String {
+fn dyn_to_string(v: &DynVal) -> String {
     match v {
-        serde_yaml::Value::String(s) => s.clone(),
-        serde_yaml::Value::Number(n) => n.to_string(),
-        serde_yaml::Value::Bool(b) => b.to_string(),
+        DynVal::String(s) => s.clone(),
+        DynVal::Number(n) => n.to_string(),
+        DynVal::Bool(b) => b.to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -722,22 +736,22 @@ fn try_parse_si_number(s: &str) -> Option<f64> {
     None
 }
 
-fn lower_value_map(map: &BTreeMap<String, serde_yaml::Value>) -> BTreeMap<String, Value> {
+fn lower_value_map(map: &BTreeMap<String, DynVal>) -> BTreeMap<String, Value> {
     map.iter()
-        .map(|(k, v)| (k.clone(), yaml_to_value(v)))
+        .map(|(k, v)| (k.clone(), dyn_to_value(v)))
         .collect()
 }
 
 fn extract_pin_map(comp: &CirqComponent) -> Result<BTreeMap<String, String>, CirqParseError> {
     match &comp.pins {
-        Some(serde_yaml::Value::Mapping(map)) => Ok(map
+        Some(DynVal::Mapping(map)) => Ok(map
             .iter()
-            .map(|(k, v)| (yaml_to_string(k), yaml_to_string(v)))
+            .map(|(k, v)| (k.clone(), dyn_to_string(v)))
             .collect()),
-        Some(serde_yaml::Value::Sequence(seq)) => Ok(seq
+        Some(DynVal::Sequence(seq)) => Ok(seq
             .iter()
             .enumerate()
-            .map(|(i, v)| (i.to_string(), yaml_to_string(v)))
+            .map(|(i, v)| (i.to_string(), dyn_to_string(v)))
             .collect()),
         None => Ok(BTreeMap::new()),
         _ => Err(CirqParseError::InvalidComponent {
@@ -770,7 +784,7 @@ fn pin_or_err(
 fn extract_value(comp: &CirqComponent) -> Result<Value, CirqParseError> {
     comp.value
         .as_ref()
-        .map(yaml_to_value)
+        .map(dyn_to_value)
         .ok_or_else(|| CirqParseError::InvalidComponent {
             id: comp.id.clone(),
             msg: "missing required 'value' field".into(),
@@ -781,10 +795,10 @@ fn build_source_spec(comp: &CirqComponent) -> SourceSpec {
     let dc = comp
         .value
         .as_ref()
-        .map(yaml_to_value)
-        .or_else(|| comp.params.get("dc").map(yaml_to_value));
-    let ac_mag = comp.params.get("ac_mag").map(yaml_to_value);
-    let ac_phase = comp.params.get("ac_phase").map(yaml_to_value);
+        .map(dyn_to_value)
+        .or_else(|| comp.params.get("dc").map(dyn_to_value));
+    let ac_mag = comp.params.get("ac_mag").map(dyn_to_value);
+    let ac_phase = comp.params.get("ac_phase").map(dyn_to_value);
     let waveform = comp.waveform.as_ref().and_then(|w| lower_waveform(w).ok());
 
     SourceSpec {
@@ -828,12 +842,12 @@ fn lower_waveform(w: &CirqWaveform) -> Result<Waveform, CirqParseError> {
                 CirqParseError::UnknownWaveformType("pwl requires 'points'".into())
             })?;
             let points = match points_val {
-                serde_yaml::Value::Sequence(seq) => seq
+                DynVal::Sequence(seq) => seq
                     .iter()
                     .filter_map(|pair| {
-                        if let serde_yaml::Value::Sequence(inner) = pair {
+                        if let DynVal::Sequence(inner) = pair {
                             if inner.len() == 2 {
-                                Some((yaml_to_value(&inner[0]), yaml_to_value(&inner[1])))
+                                Some((dyn_to_value(&inner[0]), dyn_to_value(&inner[1])))
                             } else {
                                 None
                             }
@@ -864,31 +878,31 @@ fn lower_waveform(w: &CirqWaveform) -> Result<Waveform, CirqParseError> {
     }
 }
 
-fn req_param(p: &BTreeMap<String, serde_yaml::Value>, key: &str) -> Result<Value, CirqParseError> {
+fn req_param(p: &BTreeMap<String, DynVal>, key: &str) -> Result<Value, CirqParseError> {
     p.get(key)
-        .map(yaml_to_value)
+        .map(dyn_to_value)
         .ok_or_else(|| CirqParseError::InvalidValue(format!("missing waveform param '{key}'")))
 }
 
-fn opt_param(p: &BTreeMap<String, serde_yaml::Value>, key: &str) -> Option<Value> {
-    p.get(key).map(yaml_to_value)
+fn opt_param(p: &BTreeMap<String, DynVal>, key: &str) -> Option<Value> {
+    p.get(key).map(dyn_to_value)
 }
 
 fn extract_xspice_connections(comp: &CirqComponent) -> Result<Vec<XspicePort>, CirqParseError> {
     match &comp.pins {
-        Some(serde_yaml::Value::Sequence(seq)) => {
+        Some(DynVal::Sequence(seq)) => {
             let mut ports = Vec::new();
             for item in seq {
                 match item {
-                    serde_yaml::Value::String(s) => {
+                    DynVal::String(s) => {
                         ports.push(XspicePort::Scalar(s.clone()));
                     }
-                    serde_yaml::Value::Sequence(inner) => {
-                        let arr: Vec<String> = inner.iter().map(yaml_to_string).collect();
+                    DynVal::Sequence(inner) => {
+                        let arr: Vec<String> = inner.iter().map(dyn_to_string).collect();
                         ports.push(XspicePort::Array(arr));
                     }
                     _ => {
-                        ports.push(XspicePort::Scalar(yaml_to_string(item)));
+                        ports.push(XspicePort::Scalar(dyn_to_string(item)));
                     }
                 }
             }
