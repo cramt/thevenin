@@ -7,7 +7,7 @@ use thevenin::simulate;
 use thevenin_types::Netlist;
 
 fn main() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "\
 RC Low-Pass Filter
 V1 in 0 DC 0 AC 1

@@ -1,6 +1,6 @@
 use approx::assert_abs_diff_eq;
 use thevenin::simulate_dc;
-use thevenin_types::Netlist;
+use thevenin_types::{Analysis, Netlist};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -11,8 +11,12 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 #[test]
 fn test_jfet_2n4221_dc_sweep() {
     let cir = include_str!("fixtures/jfet/jfet_vds-vgs.cir");
-    let netlist = Netlist::parse(cir).unwrap();
-    let result = simulate_dc(&netlist).unwrap();
+    let netlists = Netlist::parse(cir).unwrap();
+    let netlist = netlists
+        .iter()
+        .find(|n| matches!(n.analysis, Analysis::Dc { .. }))
+        .expect("no .dc fork found");
+    let result = simulate_dc(netlist).unwrap();
 
     let plot = &result.plots[0];
     let sweep_var = plot

@@ -14,8 +14,10 @@
 //! .op
 //! .end
 //! ";
-//! let netlist = Netlist::parse(src).unwrap();
-//! println!("{netlist}");  // generates SPICE back out
+//! let netlists = Netlist::parse(src).unwrap();
+//! for netlist in &netlists {
+//!     println!("{netlist}");  // generates SPICE back out
+//! }
 //! ```
 
 pub mod parse;
@@ -1013,6 +1015,7 @@ impl fmt::Display for SubcktDef {
 /// A single logical line (or block) in a SPICE netlist.
 #[derive(Debug, Clone, Facet)]
 #[repr(C)]
+#[allow(clippy::large_enum_variant)]
 pub enum Item {
     /// A circuit element.
     Element(Element),
@@ -1020,8 +1023,6 @@ pub enum Item {
     Subckt(SubcktDef),
     /// A `.model` definition.
     Model(ModelDef),
-    /// An analysis command (`.op`, `.tran`, etc.).
-    Analysis(Analysis),
     /// `.param key=val [key=val ...]`
     Param(Vec<Param>),
     /// `.include "filename"`
@@ -1056,7 +1057,6 @@ impl fmt::Display for Item {
             Item::Element(e) => write!(f, "{e}"),
             Item::Subckt(s) => write!(f, "{s}"),
             Item::Model(m) => write!(f, "{m}"),
-            Item::Analysis(a) => write!(f, "{a}"),
             Item::Param(ps) => {
                 write!(f, ".param")?;
                 write_params(f, ps)
@@ -1108,20 +1108,49 @@ impl fmt::Display for Item {
 // Top-level netlist
 // ---------------------------------------------------------------------------
 
-/// A complete SPICE netlist.
+/// A complete SPICE netlist with exactly one analysis command.
+///
+/// When a SPICE file contains multiple analysis commands, parsing produces
+/// multiple `Netlist` values — one per analysis — where each successive
+/// netlist accumulates the circuit items defined before its analysis command.
 #[derive(Debug, Clone, Facet)]
 pub struct Netlist {
     /// The title line (always the first line of a SPICE file).
     pub title: String,
+    /// Circuit items (elements, models, subcircuits, options, etc.) — no analysis commands.
     pub items: Vec<Item>,
+    /// The single analysis command for this netlist.
+    pub analysis: Analysis,
     /// Raw source text passed to `Netlist::parse()`, used for netlist echo.
     pub source: String,
 }
 
 impl Netlist {
-    /// Parse a SPICE netlist from text.
-    pub fn parse(input: &str) -> Result<Self, ParseError> {
+    /// Parse a SPICE netlist from text, forking at each analysis command.
+    ///
+    /// A file with N analysis commands produces N netlists, each containing
+    /// the accumulated circuit items up to that analysis. A file with no
+    /// analysis commands produces one netlist with a default `.op` analysis.
+    pub fn parse(input: &str) -> Result<Vec<Self>, ParseError> {
         parse::parse(input)
+    }
+
+    /// Parse a SPICE netlist that contains exactly one analysis command.
+    ///
+    /// Returns an error if the netlist contains multiple analysis commands.
+    /// Use [`Netlist::parse`] for netlists with multiple analyses.
+    pub fn parse_single(input: &str) -> Result<Self, ParseError> {
+        let mut netlists = parse::parse(input)?;
+        if netlists.len() > 1 {
+            return Err(ParseError::Syntax {
+                line: 0,
+                msg: format!(
+                    "parse_single: expected 1 analysis command, found {}",
+                    netlists.len()
+                ),
+            });
+        }
+        Ok(netlists.pop().expect("parse produced no netlists"))
     }
 
     /// Iterate over all top-level elements (not descending into subckts).
@@ -1162,6 +1191,7 @@ impl fmt::Display for Netlist {
         for item in &self.items {
             writeln!(f, "{item}")?;
         }
+        writeln!(f, "{}", self.analysis)?;
         write!(f, ".end")
     }
 }
@@ -1525,20 +1555,18 @@ mod tests {
         let n = Netlist {
             title: "Test circuit".into(),
             source: String::new(),
-            items: vec![
-                Item::Element(Element {
-                    name: "V1".into(),
-                    kind: ElementKind::VoltageSource {
-                        pos: "vcc".into(),
-                        neg: "0".into(),
-                        source: Source {
-                            dc: Some(Expr::Num(5.0)),
-                            ..Default::default()
-                        },
+            analysis: Analysis::Op,
+            items: vec![Item::Element(Element {
+                name: "V1".into(),
+                kind: ElementKind::VoltageSource {
+                    pos: "vcc".into(),
+                    neg: "0".into(),
+                    source: Source {
+                        dc: Some(Expr::Num(5.0)),
+                        ..Default::default()
                     },
-                }),
-                Item::Analysis(Analysis::Op),
-            ],
+                },
+            })],
         };
         let s = n.to_string();
         assert!(s.starts_with("Test circuit\n"));

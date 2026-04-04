@@ -129,7 +129,7 @@ fn extract_section(content: &str, section: &str, file: &str) -> Result<Vec<Item>
     // Parse the file as a temporary netlist to get items
     // We wrap it with a dummy title and .end
     let wrapped = format!("lib_wrapper\n{content}\n.end\n");
-    let parsed = Netlist::parse(&wrapped).map_err(|e| LibError::Parse {
+    let parsed = Netlist::parse_single(&wrapped).map_err(|e| LibError::Parse {
         file: file.to_string(),
         source: e,
     })?;
@@ -220,7 +220,7 @@ fn extract_section_raw(content: &str, section: &str, file: &str) -> Result<Vec<I
 
     // Parse the extracted lines
     let section_text = format!("lib_section\n{}\n.end\n", section_lines.join("\n"));
-    let parsed = Netlist::parse(&section_text).map_err(|e| LibError::Parse {
+    let parsed = Netlist::parse_single(&section_text).map_err(|e| LibError::Parse {
         file: file.to_string(),
         source: e,
     })?;

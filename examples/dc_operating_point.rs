@@ -9,7 +9,7 @@ use thevenin::simulate;
 use thevenin_types::Netlist;
 
 fn main() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "\
 Voltage Divider
 V1 in 0 1.0

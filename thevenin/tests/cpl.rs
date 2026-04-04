@@ -17,7 +17,7 @@ fn tran_vector<'a>(result: &'a thevenin_types::SimResult, name: &str) -> &'a [f6
 /// Test CPL DC operating point: 2-line CPL with R*length series resistance.
 #[test]
 fn test_cpl_dc_op() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "CPL DC test
 V1 1 0 DC 5
 R1 1 2 100
@@ -51,7 +51,7 @@ R3 5 0 100
 #[test]
 fn test_cpl_ibm2_transient() {
     let cir = include_str!("fixtures/transmission/cpl_ibm2.cir");
-    let netlist = Netlist::parse(cir).expect("parse failed");
+    let netlist = Netlist::parse_single(cir).expect("parse failed");
     let result = thevenin::simulate_tran(&netlist).expect("tran failed");
     let time = tran_vector(&result, "time");
 
@@ -67,7 +67,7 @@ fn test_cpl_ibm2_transient() {
 #[test]
 fn test_cpl3_4_line_transient() {
     let cir = include_str!("fixtures/transmission/cpl3_4_line.cir");
-    let netlist = Netlist::parse(cir).expect("parse failed");
+    let netlist = Netlist::parse_single(cir).expect("parse failed");
     let result = thevenin::simulate_tran(&netlist).expect("tran failed");
     let time = tran_vector(&result, "time");
 

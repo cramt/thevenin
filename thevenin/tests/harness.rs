@@ -9,9 +9,9 @@
 //! On failure, prints a `TRIAGE_JSON:` line to stdout with structured error info
 //! for machine consumption (used by `scripts/triage-ignored-tests.ts`).
 
-use thevenin::output::{compare_filtered, format_batch_output};
+use thevenin::output::{compare_filtered, format_batch_output_multi};
 use thevenin_control as _;
-use thevenin_types::{Analysis, Item, Netlist, SimResult};
+use thevenin_types::{Analysis, Netlist, SimPlot, SimResult};
 
 /// Failure phases — where in the pipeline did the test fail?
 #[derive(Clone, Copy)]
@@ -104,30 +104,36 @@ fn run_embedded_test(
     rel_tol_override: Option<f64>,
 ) {
     // Parse the netlist (includes already resolved at compile time)
-    let mut netlist = match Netlist::parse(cir) {
+    let mut netlists = match Netlist::parse(cir) {
         Ok(n) => n,
         Err(e) => fail_test(path, Phase::Parse, &e.to_string()),
     };
 
-    // Process .lib directives using the embedded file map
-    if let Err(e) = thevenin::libproc::process_libs_embedded(&mut netlist, aux_files) {
-        fail_test(path, Phase::LibProc, &e.to_string());
+    // Process each forked netlist
+    for netlist in &mut netlists {
+        // Process .lib directives using the embedded file map
+        if let Err(e) = thevenin::libproc::process_libs_embedded(netlist, aux_files) {
+            fail_test(path, Phase::LibProc, &e.to_string());
+        }
+
+        // Resolve expressions/params
+        if let Err(e) = thevenin::expr::resolve_netlist_exprs(netlist) {
+            fail_test(path, Phase::ExprResolve, &e.to_string());
+        }
     }
 
-    // Resolve expressions/params
-    if let Err(e) = thevenin::expr::resolve_netlist_exprs(&mut netlist) {
-        fail_test(path, Phase::ExprResolve, &e.to_string());
-    }
+    // Flatten subcircuits for each fork
+    let netlists: Vec<Netlist> = netlists
+        .iter()
+        .map(|netlist| match thevenin::flatten_netlist(netlist) {
+            Ok(n) => n,
+            Err(e) => fail_test(path, Phase::Flatten, &e.to_string()),
+        })
+        .collect();
 
-    // Flatten subcircuits
-    let netlist = match thevenin::flatten_netlist(&netlist) {
-        Ok(n) => n,
-        Err(e) => fail_test(path, Phase::Flatten, &e.to_string()),
-    };
-
-    // Check for .control block
-    if thevenin_control::has_control_block(&netlist) {
-        let ctrl_result = match thevenin_control::execute_control_block(&netlist) {
+    // Check for .control block (use the first fork — control blocks accumulate into all forks)
+    if thevenin_control::has_control_block(&netlists[0]) {
+        let ctrl_result = match thevenin_control::execute_control_block(&netlists[0]) {
             Ok(r) => r,
             Err(e) => fail_test(path, Phase::Simulate, &e),
         };
@@ -147,51 +153,26 @@ fn run_embedded_test(
         // Output comparison is informational — quit 0 is the primary success criterion.
         // (Output format may differ from ngspice due to missing format features.)
     } else {
-        // Standard analysis path (no .control)
-        let result = match run_all_analyses(&netlist) {
+        // Standard analysis path (no .control) — simulate each fork
+        let result = match run_all_analyses(&netlists) {
             Ok(r) => r,
             Err(e) => fail_test(path, Phase::Simulate, &e),
         };
 
         // Format output in ngspice batch mode and compare
-        let actual_output = format_batch_output(&netlist, &result);
+        let actual_output = format_batch_output_multi(&netlists, &result);
         if let Err(e) = compare_filtered(out, &actual_output, rel_tol_override) {
             fail_test(path, Phase::Compare, &e);
         }
     }
 }
 
-/// Run all analyses found in the netlist and merge results.
-fn run_all_analyses(netlist: &Netlist) -> Result<SimResult, String> {
-    let analyses: Vec<&Analysis> = netlist
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Analysis(a) = item {
-                Some(a)
-            } else {
-                None
-            }
-        })
-        .collect();
+/// Run all analyses across all netlist forks and merge results.
+fn run_all_analyses(netlists: &[Netlist]) -> Result<SimResult, String> {
+    let mut all_plots: Vec<SimPlot> = Vec::new();
 
-    let mut all_plots = Vec::new();
-
-    // If there are no explicit analyses, try OP
-    if analyses.is_empty() {
-        let result =
-            thevenin::simulate_op(netlist).map_err(|e| format!("OP simulation error: {e}"))?;
-        return Ok(result);
-    }
-
-    // Track which multi-analysis simulation types have already run.
-    // simulate_tf / simulate_sens process ALL matching analyses in the netlist,
-    // so calling them once per directive would produce duplicates.
-    let mut tf_done = false;
-    let mut sens_done = false;
-
-    for analysis in &analyses {
-        match analysis {
+    for netlist in netlists {
+        match &netlist.analysis {
             Analysis::Op => {
                 // Use simulate_op_dc (diag_gmin=0) to match ngspice .op branch currents.
                 let result =
@@ -223,20 +204,14 @@ fn run_all_analyses(netlist: &Netlist) -> Result<SimResult, String> {
                 all_plots.extend(result.plots);
             }
             Analysis::Tf { .. } => {
-                if !tf_done {
-                    let result =
-                        thevenin::simulate_tf(netlist).map_err(|e| format!("TF error: {e}"))?;
-                    all_plots.extend(result.plots);
-                    tf_done = true;
-                }
+                let result =
+                    thevenin::simulate_tf(netlist).map_err(|e| format!("TF error: {e}"))?;
+                all_plots.extend(result.plots);
             }
             Analysis::Sens { .. } => {
-                if !sens_done {
-                    let result =
-                        thevenin::simulate_sens(netlist).map_err(|e| format!("Sens error: {e}"))?;
-                    all_plots.extend(result.plots);
-                    sens_done = true;
-                }
+                let result =
+                    thevenin::simulate_sens(netlist).map_err(|e| format!("Sens error: {e}"))?;
+                all_plots.extend(result.plots);
             }
             Analysis::Pz { .. } => {
                 let result =

@@ -5,7 +5,7 @@ const FOURBITADDER_OUT: &str = include_str!("fixtures/transient/fourbitadder.out
 
 #[test]
 fn test_fourbitadder() {
-    let netlist = thevenin_types::Netlist::parse(FOURBITADDER_CIR)
+    let netlist = thevenin_types::Netlist::parse_single(FOURBITADDER_CIR)
         .unwrap_or_else(|e| panic!("cannot parse fourbitadder.cir: {e}"));
 
     // Once BJT and subcircuit support are implemented, this should:

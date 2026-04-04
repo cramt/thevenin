@@ -14,7 +14,12 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 #[test]
 fn test_lowpass_filter() {
     let cir_content = include_str!("fixtures/filters/lowpass.cir");
-    let netlist = Netlist::parse(cir_content).expect("failed to parse lowpass.cir");
+    let netlists = Netlist::parse(cir_content).expect("failed to parse lowpass.cir");
+    // Pick the AC fork (the file has .OP then .AC)
+    let netlist = netlists
+        .iter()
+        .find(|n| matches!(n.analysis, thevenin_types::Analysis::Ac { .. }))
+        .expect("no .ac analysis found");
 
     let result = simulate_ac(&netlist).expect("AC simulation failed");
     assert_eq!(result.plots.len(), 1);
@@ -70,7 +75,7 @@ fn test_lowpass_filter() {
 /// f_3dB = 1/(2πRC) for a single-pole RC filter.
 #[test]
 fn test_rc_lowpass_3db_point() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "RC lowpass 3dB test
 V1 1 0 DC 0 AC 1
 R1 1 2 1k

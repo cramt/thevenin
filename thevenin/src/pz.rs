@@ -2,7 +2,7 @@ use faer::Mat;
 use faer::linalg::solvers::Solve as _;
 
 use thevenin_types::{
-    Analysis, Complex, ElementKind, Item, Netlist, PzAnalysisType, PzInputType, SimPlot, SimResult,
+    Analysis, Complex, ElementKind, Netlist, PzAnalysisType, PzInputType, SimPlot, SimResult,
     SimVector,
 };
 
@@ -18,35 +18,28 @@ use crate::tf::build_jacobian;
 /// - Poles = -1/eigenvalues of G^{-1}*C (for non-zero eigenvalues)
 /// - Zeros via cofactor submatrix eigenvalues
 pub fn simulate_pz(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    // Find .pz analysis command.
-    let pz_params = netlist
-        .items
-        .iter()
-        .find_map(|item| {
-            if let Item::Analysis(Analysis::Pz {
-                node_i,
-                node_g,
-                node_j,
-                node_k,
-                input_type,
-                analysis_type,
-            }) = item
-            {
-                Some((
-                    node_i.clone(),
-                    node_g.clone(),
-                    node_j.clone(),
-                    node_k.clone(),
-                    *input_type,
-                    *analysis_type,
-                ))
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| MnaError::UnsupportedElement("no .pz analysis found".to_string()))?;
-
-    let (node_i, node_g, node_j, node_k, input_type, analysis_type) = pz_params;
+    let (node_i, node_g, node_j, node_k, input_type, analysis_type) = match &netlist.analysis {
+        Analysis::Pz {
+            node_i,
+            node_g,
+            node_j,
+            node_k,
+            input_type,
+            analysis_type,
+        } => (
+            node_i.clone(),
+            node_g.clone(),
+            node_j.clone(),
+            node_k.clone(),
+            *input_type,
+            *analysis_type,
+        ),
+        _ => {
+            return Err(MnaError::UnsupportedElement(
+                "no .pz analysis found".to_string(),
+            ));
+        }
+    };
 
     // Assemble MNA and solve DC operating point.
     let mna = assemble_mna(netlist)?;
@@ -743,7 +736,7 @@ mod tests {
     fn test_pz_simple_rc_poles() {
         // Simple RC filter: R1=1k to ground, R2=1k to ground, C1=1pF between nodes.
         // Expected: 1 pole at -5e8.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "simple pz test
 r1 1 0 1k
 r2 2 0 1k
@@ -770,7 +763,7 @@ c1 1 2 1.0e-12
     fn test_pz_rc_lowpass_voltage() {
         // RC lowpass: V1 at input, R1=1k, C1=10p to ground.
         // Expected: 1 pole at -1e8.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "RC filter
 v1 1 0 0 ac 1.0
 r1 1 2 1k
@@ -795,7 +788,7 @@ c1 2 0 10p
     #[test]
     fn test_pz_bridge_t() {
         // Bridge-T filter with 2 poles and 2 zeros.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "BRIDGE-T FILTER
 V1 1 0 12 AC 1
 C1 1 2 1U
@@ -830,7 +823,7 @@ R4 1 3 1K
     #[test]
     fn test_pz_multistage() {
         // Three-stage VCVS cascade with 3 poles.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Multistage filter
 v1 1 0 0 ac 1.0
 r1 1 2 1k
@@ -862,7 +855,7 @@ c3 6 0 .02p
     #[test]
     fn test_pz_poles_only() {
         // Test POL (poles only) mode.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "test pz
 iin 1 0 ac
 r1 1 0 1
@@ -898,7 +891,7 @@ l3 3 0 0.05
         // AC resistance: R1 has dc=1k, ac=4k. PZ should use ac value.
         // tau = (4k || 4k) * 1n = 2k * 1n = 2e-6
         // pole = -1/tau = -5e5
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "ac resistance test
 Vin 1 0 dc 5.0 ac 3.0
 R1 1 2 1k ac=4k

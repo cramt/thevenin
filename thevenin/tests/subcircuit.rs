@@ -10,7 +10,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 /// properly resolved inside subcircuit instances.
 #[test]
 fn test_global_nodes() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "check treatment of multiple .global cards
 
 .global n1001_t n1002_t
@@ -88,7 +88,7 @@ Rn  n1 0  100k
 #[test]
 fn test_voltage_divider_as_subcircuit() {
     // Voltage divider implemented as a subcircuit, output to ground.
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "Voltage divider subcircuit test
 .subckt VDIV in out
 R1 in mid 1k
@@ -128,7 +128,7 @@ X1 1 0 VDIV
 #[test]
 fn test_voltage_divider_subcircuit_matches_direct() {
     // Direct circuit
-    let direct = Netlist::parse(
+    let direct = Netlist::parse_single(
         "Direct voltage divider
 V1 1 0 5
 R1 1 mid 1k
@@ -141,7 +141,7 @@ R2 mid 0 1k
     let direct_result = thevenin::simulate_op(&direct).unwrap();
 
     // Same circuit as subcircuit
-    let subckt = Netlist::parse(
+    let subckt = Netlist::parse_single(
         "Subcircuit voltage divider
 .subckt VDIV in out
 R1 in mid 1k
@@ -178,7 +178,7 @@ X1 1 0 VDIV
 #[test]
 fn test_nested_subcircuit_simulation() {
     // Two-stage resistor chain using nested subcircuits
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "Nested subcircuit simulation
 .subckt RUNIT a b
 R1 a b 1k
@@ -220,7 +220,7 @@ X1 in 0 CHAIN
 #[test]
 fn test_subcircuit_with_parameter_substitution() {
     // Subcircuit with parameterized resistance
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "Parameterized subcircuit
 .subckt RLOAD p n PARAMS: rval=1k
 R1 p n rval
@@ -251,7 +251,7 @@ X1 1 0 RLOAD PARAMS: rval=5k
 #[test]
 fn test_multiple_subcircuit_instances() {
     // Three instances of the same subcircuit
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "Multiple instances
 .subckt RBUF in out
 R1 in out 1k
@@ -302,7 +302,7 @@ R_load 4 0 1k
 #[test]
 fn test_subcircuit_with_diode() {
     // Subcircuit containing a diode (nonlinear)
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "Subcircuit with diode
 .subckt DCLAMP a k
 .model DMOD D IS=1e-14
@@ -339,7 +339,7 @@ X1 out 0 DCLAMP
 #[test]
 fn test_subcircuit_dc_sweep() {
     // DC sweep through subcircuit
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "DC sweep with subcircuit
 .subckt RLOAD p n
 R1 p n 2k

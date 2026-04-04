@@ -758,6 +758,7 @@ pub fn resolve_netlist_exprs(
     let ctx = build_context(&netlist.items);
     resolve_items(&mut netlist.items, &ctx)?;
     resolve_bsources(&mut netlist.items, &ctx)?;
+    resolve_analysis(&mut netlist.analysis, &ctx)?;
     Ok(ctx)
 }
 
@@ -769,7 +770,6 @@ fn resolve_items(items: &mut [thevenin_types::Item], ctx: &EvalContext) -> Resul
                 // Don't resolve inside subcircuit definitions — the subcircuit
                 // expander handles parameter substitution with instance params.
             }
-            thevenin_types::Item::Analysis(analysis) => resolve_analysis(analysis, ctx)?,
             _ => {}
         }
     }

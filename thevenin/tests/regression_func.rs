@@ -19,7 +19,7 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
 /// func-1: Zero-parameter function.
 #[test]
 fn func_zero_params() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "func zero params
 .func foo0() 1013.0
 V1 1 0 'foo0()'
@@ -36,7 +36,7 @@ R1 1 0 1k
 /// func-1: Single-parameter function.
 #[test]
 fn func_single_param() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "func single param
 .func bar1(p) p
 V1 1 0 'bar1(42)'
@@ -53,7 +53,7 @@ R1 1 0 1k
 /// func-1: Function with arithmetic.
 #[test]
 fn func_arithmetic() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "func arithmetic
 .func double(x) x*2
 .func add(a,b) a+b
@@ -74,7 +74,7 @@ R2 2 0 1k
 /// func-1: Function with ternary operator.
 #[test]
 fn func_ternary() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "func ternary
 .func clamp(x,lo,hi) x<lo ? lo : x>hi ? hi : x
 V1 1 0 'clamp(5, 0, 10)'
@@ -97,7 +97,7 @@ R3 3 0 1k
 /// func-1: Parameter name shadowing — function param shadows .param.
 #[test]
 fn func_param_shadowing() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "func shadowing
 .param xoo = 100
 .func fun1(a, xoo) a*xoo
@@ -116,7 +116,7 @@ R1 1 0 1k
 /// func-1: Function calling built-in math.
 #[test]
 fn func_calling_builtins() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "func builtins
 .func hypot(a,b) sqrt(a*a + b*b)
 V1 1 0 'hypot(3,4)'

@@ -20,7 +20,7 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
 /// Ported from ngspice-upstream/tests/regression/parser/minus-minus.cir
 #[test]
 fn minus_minus_voltage_source() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "minus-minus test
 V1 1 0 '2--3'
 R1 1 0 1k
@@ -37,7 +37,7 @@ R1 1 0 1k
 /// minus-minus: Test double-minus in B-source expression.
 #[test]
 fn minus_minus_bsource() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "minus-minus bsource test
 B1 1 0 V = 2--3
 R1 1 0 1k
@@ -67,7 +67,7 @@ fn xpressn1_arithmetic() {
     ];
 
     for (i, (expr, expected)) in cases.iter().enumerate() {
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "xpressn1 test {i}
 V1 1 0 '{expr}'
 R1 1 0 1k
@@ -108,7 +108,7 @@ fn xpressn1_boolean() {
     ];
 
     for (i, (expr, expected)) in cases.iter().enumerate() {
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "xpressn1 bool test {i}
 V1 1 0 '{expr}'
 R1 1 0 1k
@@ -134,7 +134,7 @@ fn xpressn1_ternary() {
     ];
 
     for (i, (expr, expected)) in cases.iter().enumerate() {
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "xpressn1 ternary test {i}
 V1 1 0 '{expr}'
 R1 1 0 1k
@@ -181,7 +181,7 @@ fn xpressn1_math_functions() {
     ];
 
     for (i, (expr, expected)) in cases.iter().enumerate() {
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "xpressn1 func test {i}
 V1 1 0 '{expr}'
 R1 1 0 1k
@@ -214,7 +214,7 @@ fn xpressn2_precision() {
     ];
 
     for (i, (expr, expected)) in cases.iter().enumerate() {
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "xpressn2 test {i}
 V1 1 0 '{expr}'
 R1 1 0 1k
@@ -248,7 +248,7 @@ fn xpressn3_rounding() {
     for &val in &test_vals {
         // nint
         let expected_nint = val.round();
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "xpressn3 nint test
 V1 1 0 'nint({val})'
 R1 1 0 1k
@@ -262,7 +262,7 @@ R1 1 0 1k
 
         // floor
         let expected_floor = val.floor();
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "xpressn3 floor test
 V1 1 0 'floor({val})'
 R1 1 0 1k
@@ -276,7 +276,7 @@ R1 1 0 1k
 
         // ceil
         let expected_ceil = val.ceil();
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "xpressn3 ceil test
 V1 1 0 'ceil({val})'
 R1 1 0 1k
@@ -306,7 +306,7 @@ fn bxpressn1_arithmetic() {
     ];
 
     for (i, (expr, expected)) in cases.iter().enumerate() {
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "bxpressn1 test {i}
 B1 1 0 V = {expr}
 R1 1 0 1k
@@ -347,7 +347,7 @@ fn bxpressn1_step_predicates() {
     ];
 
     for (i, (expr, expected)) in cases.iter().enumerate() {
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "bxpressn1 step test {i}
 B1 1 0 V = {expr}
 R1 1 0 1k

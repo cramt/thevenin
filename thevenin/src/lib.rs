@@ -6,7 +6,7 @@
 //! use thevenin::simulate;
 //! use thevenin_types::Netlist;
 //!
-//! let netlist = Netlist::parse("
+//! let netlist = Netlist::parse_single("
 //! Voltage Divider
 //! V1 in 0 1.0
 //! R1 in mid 1k
@@ -142,41 +142,19 @@ pub fn netlist_tnom(netlist: &Netlist) -> f64 {
     tnom_c + 273.15
 }
 
-/// Run all analyses found in the netlist and return the combined results.
+/// Run the single analysis in the netlist and return the result.
 ///
-/// Scans the netlist for analysis directives (`.op`, `.dc`, `.ac`, `.tran`, etc.)
-/// and runs each one, collecting all plots into a single `SimResult`.
-///
-/// If no analysis directive is found, runs a DC operating point (`.op`) by default.
+/// Each `Netlist` contains exactly one analysis command. This function
+/// dispatches to the appropriate simulator based on that analysis.
 pub fn simulate(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let analyses: Vec<&Analysis> = netlist
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Analysis(a) => Some(a),
-            _ => None,
-        })
-        .collect();
-
-    if analyses.is_empty() {
-        return simulate_op(netlist);
+    match &netlist.analysis {
+        Analysis::Op => simulate_op(netlist),
+        Analysis::Dc { .. } => simulate_dc(netlist),
+        Analysis::Ac { .. } => simulate_ac(netlist),
+        Analysis::Tran { .. } => simulate_tran(netlist),
+        Analysis::Noise { .. } => simulate_noise(netlist),
+        Analysis::Sens { .. } => simulate_sens(netlist),
+        Analysis::Tf { .. } => simulate_tf(netlist),
+        Analysis::Pz { .. } => simulate_pz(netlist),
     }
-
-    let mut all_plots = Vec::new();
-
-    for analysis in &analyses {
-        let result = match analysis {
-            Analysis::Op => simulate_op(netlist)?,
-            Analysis::Dc { .. } => simulate_dc(netlist)?,
-            Analysis::Ac { .. } => simulate_ac(netlist)?,
-            Analysis::Tran { .. } => simulate_tran(netlist)?,
-            Analysis::Noise { .. } => simulate_noise(netlist)?,
-            Analysis::Sens { .. } => simulate_sens(netlist)?,
-            Analysis::Tf { .. } => simulate_tf(netlist)?,
-            Analysis::Pz { .. } => simulate_pz(netlist)?,
-        };
-        all_plots.extend(result.plots);
-    }
-
-    Ok(SimResult { plots: all_plots })
 }

@@ -111,7 +111,7 @@ Vds d 0 0.0
 #[test]
 fn test_bsim4_dc_sweep_vg1p0() {
     let cir = bsim4_dc_sweep_cir(1.0);
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -160,7 +160,7 @@ fn test_bsim4_dc_sweep_vg1p0() {
 #[test]
 fn test_bsim4_dc_sweep_vg0p6() {
     let cir = bsim4_dc_sweep_cir(0.6);
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -183,7 +183,7 @@ fn test_bsim4_dc_sweep_vg0p6() {
 #[test]
 fn test_bsim4_dc_sweep_saturation_plateau() {
     let cir = bsim4_dc_sweep_cir(1.0);
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -228,7 +228,7 @@ Vds d 0 0.2
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_op(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -262,7 +262,7 @@ Vds d 0 1.2
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_op(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -299,7 +299,7 @@ Vds d 0 1.0
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_op(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -338,7 +338,7 @@ Vds d 0 1.2
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_ac(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -395,7 +395,7 @@ Vds d 0 1.2
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_ac(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -432,7 +432,7 @@ Vds d 0 1.2
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_ac(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -477,7 +477,7 @@ Rload vdd d 1k
 #[test]
 fn test_bsim4_noise1_fnoi0_tnoi0() {
     let cir = bsim4_noise_cir(1.0, "fnoimod=0 tnoimod=0 kf=1e-30 af=1.2 ef=1.1");
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_noise(&netlist).unwrap();
 
     // Should have noise spectrum plot
@@ -529,7 +529,7 @@ fn test_bsim4_noise2_fnoi1_tnoi1() {
         1.0,
         "fnoimod=1 tnoimod=1 noia=6.25e41 noib=3.125e26 noic=8.75 em=4.1e7 ef=1.1",
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_noise(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -569,7 +569,7 @@ fn test_bsim4_noise3_fnoi1_tnoi0() {
         0.8,
         "fnoimod=1 tnoimod=0 noia=6.25e41 noib=3.125e26 noic=8.75 em=4.1e7 ef=1.1",
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_noise(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -591,7 +591,7 @@ fn test_bsim4_noise3_fnoi1_tnoi0() {
 #[test]
 fn test_bsim4_noise4_fnoi0_tnoi1() {
     let cir = bsim4_noise_cir(0.6, "fnoimod=0 tnoimod=1 kf=1e-30 af=1.2 ef=1.1");
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_noise(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -631,7 +631,7 @@ Vds d 0 0.0
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];

@@ -34,7 +34,7 @@ fn sens_value(result: &thevenin_types::SimResult, name: &str) -> f64 {
 /// .tf v(5) vdm — differential-mode transfer function
 #[test]
 fn test_diffpair_tf() {
-    let netlist = Netlist::parse(
+    let netlists = Netlist::parse(
         "simple differential pair - transfer functions
 .model qnl npn(bf=80 rb=100 tf=0.3n tr=6n cje=3p cjc=2p vaf=50)
 .model qnr npn(bf=80 rb=100 tf=0.3n tr=6n cje=3p cjc=2p vaf=50)
@@ -61,29 +61,28 @@ vee 9 0 -12
     )
     .unwrap();
 
-    let result = simulate_tf(&netlist).unwrap();
-    assert_eq!(result.plots.len(), 2);
+    assert_eq!(netlists.len(), 2);
 
     // .tf v(5) vcm — common-mode TF
-    // ngspice reference: transfer_function = -1.10341e-01
-    let tf_cm = tf_value(&result, 0, "transfer_function");
+    let result_cm = simulate_tf(&netlists[0]).unwrap();
+    let tf_cm = tf_value(&result_cm, 0, "transfer_function");
     assert_abs_diff_eq!(tf_cm, -1.10341e-01, epsilon = 1e-2);
 
-    // Output impedance at v(5) ≈ 9447 Ω
-    let z_out_cm = tf_value(&result, 0, "output_impedance_at_v(5)");
+    let z_out_cm = tf_value(&result_cm, 0, "output_impedance_at_v(5)");
     assert_abs_diff_eq!(z_out_cm, 9.447e3, epsilon = 1e2);
 
     // Input impedance of vcm ≈ 1.793 MΩ
-    let z_in_cm = tf_value(&result, 0, "vcm#input_impedance");
+    let z_in_cm = tf_value(&result_cm, 0, "vcm#input_impedance");
     assert_abs_diff_eq!(z_in_cm, 1.793e6, epsilon = 1e4);
 
     // .tf v(5) vdm — differential-mode TF
+    let result_dm = simulate_tf(&netlists[1]).unwrap();
     // ngspice reference: transfer_function = -8.78493e+01
-    let tf_dm = tf_value(&result, 1, "transfer_function");
+    let tf_dm = tf_value(&result_dm, 0, "transfer_function");
     assert_abs_diff_eq!(tf_dm, -8.78493e1, epsilon = 1.0);
 
     // Input impedance of vdm ≈ 8941 Ω
-    let z_in_dm = tf_value(&result, 1, "vdm#input_impedance");
+    let z_in_dm = tf_value(&result_dm, 0, "vdm#input_impedance");
     assert_abs_diff_eq!(z_in_dm, 8.941e3, epsilon = 1e2);
 }
 
@@ -92,7 +91,7 @@ vee 9 0 -12
 /// Tests DC sensitivity of v(5,4) to selected component parameters.
 #[test]
 fn test_diffpair_sens() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "simple differential pair - sensitivity
 .model qnl npn(bf=80 rb=100 tf=0.3n tr=6n cje=3p cjc=2p vaf=50)
 .model qnr npn(bf=80 rb=100 tf=0.3n tr=6n cje=3p cjc=2p vaf=50)
@@ -147,7 +146,7 @@ vee 9 0 -12
 /// Simple I*R circuit: I1=42mA, R1=1k → V(1) = 42V
 #[test]
 fn test_sens_dc_1() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "test sens dc
 i1 0 1 DC 42m
 r1 1 0 1k
@@ -169,7 +168,7 @@ r1 1 0 1k
 /// Resistor network with voltage source
 #[test]
 fn test_sens_dc_2() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "test sens dc
 v1 1 0 DC 42
 r1 1 2 1k

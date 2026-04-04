@@ -11,7 +11,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 #[test]
 fn test_mesfet_subthreshold() {
     let cir = include_str!("fixtures/mes/subth.cir");
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let result = simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];

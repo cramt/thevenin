@@ -10,9 +10,9 @@ extern crate proc_macro;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use facet::Facet;
 use proc_macro2::{Literal, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use facet::Facet;
 
 /// Per-test tolerance override parsed from `tolerances.toml`.
 #[derive(Debug, Facet)]
@@ -79,7 +79,8 @@ fn generate_tests() -> Result<TokenStream2, String> {
     let tolerances: BTreeMap<String, ToleranceOverride> = if tolerances_path.exists() {
         let content = std::fs::read_to_string(&tolerances_path)
             .map_err(|e| format!("failed to read tolerances.toml: {e}"))?;
-        facet_toml::from_str(&content).map_err(|e| format!("failed to parse tolerances.toml: {e}"))?
+        facet_toml::from_str(&content)
+            .map_err(|e| format!("failed to parse tolerances.toml: {e}"))?
     } else {
         BTreeMap::new()
     };

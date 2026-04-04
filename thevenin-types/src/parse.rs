@@ -26,6 +26,14 @@ use crate::{
     Param, PwlPoint, PzAnalysisType, PzInputType, Source, SubcktDef, Waveform, XspiceConnection,
 };
 
+/// Internal parsed line — either a circuit item or an analysis command.
+/// Used only during parsing; the public API separates these into `Netlist`
+/// values with exactly one `Analysis` each.
+enum ParsedLine {
+    Item(Item),
+    Analysis(Analysis),
+}
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -1253,13 +1261,13 @@ fn parse_dot(
     lineno: usize,
     line: &str,
     rest_lines: &mut std::iter::Peekable<impl Iterator<Item = (usize, String)>>,
-) -> Result<Item, ParseError> {
+) -> Result<ParsedLine, ParseError> {
     let tokens = tokenize(line);
     let keyword = tokens[0].to_uppercase();
     let kw = keyword.as_str();
 
     match kw {
-        ".OP" => Ok(Item::Analysis(Analysis::Op)),
+        ".OP" => Ok(ParsedLine::Analysis(Analysis::Op)),
 
         ".DC" => {
             // .dc src start stop step [src2 start2 stop2 step2]
@@ -1280,7 +1288,7 @@ fn parse_dot(
             } else {
                 None
             };
-            Ok(Item::Analysis(Analysis::Dc {
+            Ok(ParsedLine::Analysis(Analysis::Dc {
                 src,
                 start,
                 stop,
@@ -1294,7 +1302,7 @@ fn parse_dot(
             let tstop = parse_expr(tokens.get(2).map(|s| s.as_str()).unwrap_or("0"));
             let tstart = tokens.get(3).map(|s| parse_expr(s));
             let tmax = tokens.get(4).map(|s| parse_expr(s));
-            Ok(Item::Analysis(Analysis::Tran {
+            Ok(ParsedLine::Analysis(Analysis::Tran {
                 tstep,
                 tstop,
                 tstart,
@@ -1312,7 +1320,7 @@ fn parse_dot(
             let n: u32 = tokens.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
             let fstart = parse_expr(tokens.get(3).map(|s| s.as_str()).unwrap_or("0"));
             let fstop = parse_expr(tokens.get(4).map(|s| s.as_str()).unwrap_or("0"));
-            Ok(Item::Analysis(Analysis::Ac {
+            Ok(ParsedLine::Analysis(Analysis::Ac {
                 variation,
                 n,
                 fstart,
@@ -1349,7 +1357,7 @@ fn parse_dot(
                 .unwrap_or(1);
             let fstart = parse_expr(tokens.get(var_idx + 2).map(|s| s.as_str()).unwrap_or("0"));
             let fstop = parse_expr(tokens.get(var_idx + 3).map(|s| s.as_str()).unwrap_or("0"));
-            Ok(Item::Analysis(Analysis::Noise {
+            Ok(ParsedLine::Analysis(Analysis::Noise {
                 output,
                 ref_node,
                 src,
@@ -1369,12 +1377,12 @@ fn parse_dot(
                 .get(2)
                 .ok_or_else(|| syntax(lineno, ".tf: missing input"))?
                 .clone();
-            Ok(Item::Analysis(Analysis::Tf { output, input }))
+            Ok(ParsedLine::Analysis(Analysis::Tf { output, input }))
         }
 
         ".SENS" => {
             let output = tokens[1..].to_vec();
-            Ok(Item::Analysis(Analysis::Sens { output }))
+            Ok(ParsedLine::Analysis(Analysis::Sens { output }))
         }
 
         ".PZ" => {
@@ -1415,7 +1423,7 @@ fn parse_dot(
                     ));
                 }
             };
-            Ok(Item::Analysis(Analysis::Pz {
+            Ok(ParsedLine::Analysis(Analysis::Pz {
                 node_i,
                 node_g,
                 node_j,
@@ -1450,7 +1458,11 @@ fn parse_dot(
             } else {
                 (raw_kind.to_uppercase(), collect_model_params(&tokens[3..]))
             };
-            Ok(Item::Model(ModelDef { name, kind, params }))
+            Ok(ParsedLine::Item(Item::Model(ModelDef {
+                name,
+                kind,
+                params,
+            })))
         }
 
         ".SUBCKT" => {
@@ -1471,30 +1483,30 @@ fn parse_dot(
             }
             let params = collect_params(&tokens[params_start..]);
             let items = parse_subckt_body(rest_lines)?;
-            Ok(Item::Subckt(SubcktDef {
+            Ok(ParsedLine::Item(Item::Subckt(SubcktDef {
                 name,
                 ports,
                 params,
                 items,
-            }))
+            })))
         }
 
         ".ENDS" => {
             // Should be consumed by parse_subckt_body; hitting it at top level
             // is a format quirk — drop it silently.
-            Ok(Item::Raw(line.to_string()))
+            Ok(ParsedLine::Item(Item::Raw(line.to_string())))
         }
 
         ".PARAM" | ".PARAMETERS" => {
             let params = collect_params(&tokens[1..]);
-            Ok(Item::Param(params))
+            Ok(ParsedLine::Item(Item::Param(params)))
         }
 
         ".FUNC" => {
             // .func name(arg1, arg2, ...) body
             // or .func name(arg1, arg2, ...) {body}
             // or .func name(arg1, arg2, ...) 'body'
-            parse_func_def(line)
+            parse_func_def(line).map(ParsedLine::Item)
         }
 
         ".INCLUDE" => {
@@ -1502,7 +1514,7 @@ fn parse_dot(
                 .get(1)
                 .map(|s| s.trim_matches('"').to_string())
                 .unwrap_or_default();
-            Ok(Item::Include(file))
+            Ok(ParsedLine::Item(Item::Include(file)))
         }
 
         ".LIB" => {
@@ -1511,22 +1523,22 @@ fn parse_dot(
                 .map(|s| s.trim_matches(|c| c == '"' || c == '\'').to_string())
                 .unwrap_or_default();
             let entry = tokens.get(2).cloned();
-            Ok(Item::Lib { file, entry })
+            Ok(ParsedLine::Item(Item::Lib { file, entry }))
         }
 
         ".GLOBAL" => {
             let nodes = tokens[1..].to_vec();
-            Ok(Item::Global(nodes))
+            Ok(ParsedLine::Item(Item::Global(nodes)))
         }
 
         ".OPTIONS" | ".OPTION" => {
             let opts = collect_params(&tokens[1..]);
-            Ok(Item::Options(opts))
+            Ok(ParsedLine::Item(Item::Options(opts)))
         }
 
         ".SAVE" | ".PROBE" => {
             let vecs = tokens[1..].to_vec();
-            Ok(Item::Save(vecs))
+            Ok(ParsedLine::Item(Item::Save(vecs)))
         }
 
         ".CONTROL" => {
@@ -1539,17 +1551,17 @@ fn parse_dot(
                 control_lines.push(l.to_string());
                 rest_lines.next();
             }
-            Ok(Item::Control(control_lines))
+            Ok(ParsedLine::Item(Item::Control(control_lines)))
         }
 
         ".ENDL" => {
             // Library section end marker — handled by .lib processing
-            Ok(Item::Raw(line.to_string()))
+            Ok(ParsedLine::Item(Item::Raw(line.to_string())))
         }
 
         ".END" => {
             // Sentinel — signals end of netlist; the caller should stop.
-            Ok(Item::Raw(".end".to_string()))
+            Ok(ParsedLine::Item(Item::Raw(".end".to_string())))
         }
 
         ".TEMP" => {
@@ -1558,10 +1570,10 @@ fn parse_dot(
                 .get(1)
                 .and_then(|t| parse_spice_number(t))
                 .unwrap_or(27.0);
-            Ok(Item::Temp(val))
+            Ok(ParsedLine::Item(Item::Temp(val)))
         }
 
-        _ => Ok(Item::Raw(line.to_string())),
+        _ => Ok(ParsedLine::Item(Item::Raw(line.to_string()))),
     }
 }
 
@@ -1583,7 +1595,11 @@ fn parse_subckt_body(
             _ => {}
         }
         let (lineno, line) = lines.next().unwrap();
-        items.push(parse_line(lineno, &line, lines)?);
+        match parse_line(lineno, &line, lines)? {
+            ParsedLine::Item(item) => items.push(item),
+            // Analysis commands inside subcircuits are ignored (not meaningful).
+            ParsedLine::Analysis(_) => {}
+        }
     }
     Ok(items)
 }
@@ -1596,16 +1612,18 @@ fn parse_line(
     lineno: usize,
     line: &str,
     rest: &mut std::iter::Peekable<impl Iterator<Item = (usize, String)>>,
-) -> Result<Item, ParseError> {
+) -> Result<ParsedLine, ParseError> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
-        return Ok(Item::Raw(String::new()));
+        return Ok(ParsedLine::Item(Item::Raw(String::new())));
     }
 
     let first = trimmed.chars().next().unwrap();
 
     if first == '*' {
-        return Ok(Item::Comment(trimmed[1..].trim().to_string()));
+        return Ok(ParsedLine::Item(Item::Comment(
+            trimmed[1..].trim().to_string(),
+        )));
     }
 
     if first == '.' {
@@ -1613,14 +1631,14 @@ fn parse_line(
     }
 
     // Circuit element
-    parse_element(lineno, trimmed).map(Item::Element)
+    parse_element(lineno, trimmed).map(|e| ParsedLine::Item(Item::Element(e)))
 }
 
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub fn parse(input: &str) -> Result<Netlist, ParseError> {
+pub fn parse(input: &str) -> Result<Vec<Netlist>, ParseError> {
     let logical = preprocess(input);
     let logical = process_conditionals(logical);
     let mut iter = logical.into_iter().peekable();
@@ -1628,20 +1646,57 @@ pub fn parse(input: &str) -> Result<Netlist, ParseError> {
     // First logical line is always the title
     let (_, title) = iter.next().ok_or(ParseError::Empty)?;
 
-    let mut items = Vec::new();
+    let mut parsed_lines = Vec::new();
     while let Some((lineno, line)) = iter.next() {
         // .end (without 's') terminates the top-level netlist
         if line.to_uppercase().trim_start() == ".END" {
             break;
         }
-        items.push(parse_line(lineno, &line, &mut iter)?);
+        parsed_lines.push(parse_line(lineno, &line, &mut iter)?);
     }
 
-    Ok(Netlist {
-        title,
-        items,
-        source: input.to_string(),
-    })
+    // Fork: each analysis command produces a separate Netlist containing
+    // all circuit items accumulated up to that point.
+    let source = input.to_string();
+    let mut accumulated_items = Vec::new();
+    let mut netlists = Vec::new();
+
+    for parsed in parsed_lines {
+        match parsed {
+            ParsedLine::Item(item) => accumulated_items.push(item),
+            ParsedLine::Analysis(analysis) => {
+                netlists.push(Netlist {
+                    title: title.clone(),
+                    items: accumulated_items.clone(),
+                    analysis,
+                    source: source.clone(),
+                });
+            }
+        }
+    }
+
+    if netlists.is_empty() {
+        // No analysis commands found — default to .op with all items.
+        netlists.push(Netlist {
+            title,
+            items: accumulated_items,
+            analysis: Analysis::Op,
+            source,
+        });
+    } else {
+        // Items after the last analysis (e.g. .model definitions at the
+        // end of the file) are appended to every fork — they are not
+        // positional and must be visible to all analyses.
+        let last_fork_len = netlists.last().map(|n| n.items.len()).unwrap_or(0);
+        let trailing = &accumulated_items[last_fork_len..];
+        if !trailing.is_empty() {
+            for netlist in &mut netlists {
+                netlist.items.extend_from_slice(trailing);
+            }
+        }
+    }
+
+    Ok(netlists)
 }
 
 // ---------------------------------------------------------------------------
@@ -1656,7 +1711,15 @@ mod tests {
     #[cfg(target_arch = "wasm32")]
     use wasm_bindgen_test::wasm_bindgen_test as test;
 
+    /// Parse and return the last (or only) netlist fork.
     fn parse_ok(src: &str) -> Netlist {
+        let mut netlists = Netlist::parse(src).expect("parse failed");
+        assert!(!netlists.is_empty(), "parse returned no netlists");
+        netlists.pop().unwrap()
+    }
+
+    /// Parse and return all netlists.
+    fn parse_all(src: &str) -> Vec<Netlist> {
         Netlist::parse(src).expect("parse failed")
     }
 
@@ -1834,18 +1897,18 @@ mod tests {
     #[test]
     fn dot_op() {
         let n = parse_ok("T\n.op\n.end");
-        assert!(matches!(n.items[0], Item::Analysis(Analysis::Op)));
+        assert!(matches!(n.analysis, Analysis::Op));
     }
 
     #[test]
     fn dot_tran() {
         let n = parse_ok("T\n.tran 0.1m 10m\n.end");
-        if let Item::Analysis(Analysis::Tran {
+        if let Analysis::Tran {
             tstep,
             tstop,
             tstart,
             tmax,
-        }) = &n.items[0]
+        } = &n.analysis
         {
             assert_abs_diff_eq!(
                 match tstep {
@@ -1864,20 +1927,20 @@ mod tests {
             assert!(tstart.is_none());
             assert!(tmax.is_none());
         } else {
-            panic!("{:?}", n.items[0]);
+            panic!("{:?}", n.analysis);
         }
     }
 
     #[test]
     fn dot_dc() {
         let n = parse_ok("T\n.dc V1 0 5 1\n.end");
-        if let Item::Analysis(Analysis::Dc {
+        if let Analysis::Dc {
             src,
             start: _,
             stop,
             step: _,
             src2,
-        }) = &n.items[0]
+        } = &n.analysis
         {
             assert_eq!(src, "V1");
             assert_abs_diff_eq!(
@@ -1896,12 +1959,12 @@ mod tests {
     #[test]
     fn dot_ac() {
         let n = parse_ok("T\n.ac DEC 10 1 1Meg\n.end");
-        if let Item::Analysis(Analysis::Ac {
+        if let Analysis::Ac {
             variation,
             n: pts,
             fstart: _,
             fstop,
-        }) = &n.items[0]
+        } = &n.analysis
         {
             assert_eq!(*variation, AcVariation::Dec);
             assert_eq!(*pts, 10);
@@ -1967,7 +2030,7 @@ R2 mid 0 1k
         let n = parse_ok(src);
         let generated = n.to_string();
         // Re-parse and check key properties survive
-        let n2 = Netlist::parse(&generated).unwrap();
+        let n2 = parse_ok(&generated);
         assert_eq!(n2.title, "Voltage divider");
         assert_eq!(n2.elements().count(), 3);
     }
@@ -1983,7 +2046,7 @@ C1 out 0 100n
 .end";
         let n = parse_ok(src);
         let out = n.to_string();
-        let n2 = Netlist::parse(&out).unwrap();
+        let n2 = parse_ok(&out);
         if let ElementKind::VoltageSource { source, .. } = &n2.elements().next().unwrap().kind {
             assert!(matches!(source.waveform, Some(Waveform::Pulse { .. })));
         }

@@ -5,7 +5,7 @@
 
 use approx::assert_abs_diff_eq;
 use thevenin::simulate_op;
-use thevenin_types::{Netlist, SimResult};
+use thevenin_types::{Analysis, Netlist, SimResult};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -15,8 +15,15 @@ const RES_PARTITION_CIR: &str = include_str!("fixtures/resistance/res_partition.
 const RES_PARTITION_OUT: &str = include_str!("fixtures/resistance/res_partition.out");
 const RES_ARRAY_CIR: &str = include_str!("fixtures/resistance/res_array.cir");
 
-fn parse_cir(src: &str, name: &str) -> Netlist {
+fn parse_cir(src: &str, name: &str) -> Vec<Netlist> {
     Netlist::parse(src).unwrap_or_else(|e| panic!("cannot parse {name}: {e}"))
+}
+
+fn find_op(netlists: &[Netlist]) -> &Netlist {
+    netlists
+        .iter()
+        .find(|n| matches!(n.analysis, Analysis::Op))
+        .expect("no .OP fork found")
 }
 
 /// Extract a node voltage from a DC operating point result.
@@ -139,7 +146,8 @@ fn extract_data_rows(text: &str) -> Vec<(usize, Vec<f64>)> {
 
 #[test]
 fn res_simple_parses() {
-    let netlist = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
+    let netlists = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
+    let netlist = &netlists[0];
     assert_eq!(netlist.title, "A simple resistor with a voltage source");
     assert!(netlist.elements().count() >= 2); // R1 and V1
 }
@@ -149,8 +157,9 @@ fn res_simple_dc_op() {
     // Even though .cir uses .TRAN, we can compute the DC operating point.
     // For a purely resistive DC circuit, this matches the "Initial Transient Solution"
     // shown in the ngspice .out file.
-    let netlist = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
-    let result = simulate_op(&netlist).unwrap();
+    let netlists = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
+    let netlist = &netlists[0];
+    let result = simulate_op(netlist).unwrap();
 
     // From .out: Node 1 = 1V, v1#branch = -0.0001
     assert_abs_diff_eq!(op_voltage(&result, "1"), 1.0, epsilon = 1e-9);
@@ -178,7 +187,7 @@ fn res_simple_transient_data_constant() {
 fn res_simple_full_output_comparison() {
     // Full transient output comparison against .out reference.
     // Requires .tran simulation to produce time-series data.
-    let _netlist = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
+    let _netlists = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +199,8 @@ fn res_simple_full_output_comparison() {
 
 #[test]
 fn res_partition_parses() {
-    let netlist = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
+    let netlists = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
+    let netlist = &netlists[0];
     assert_eq!(
         netlist.title,
         "* Resistive partition with different ratios for AC/DC (Print V(2))"
@@ -199,8 +209,9 @@ fn res_partition_parses() {
 
 #[test]
 fn res_partition_dc_op() {
-    let netlist = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
-    let result = simulate_op(&netlist).unwrap();
+    let netlists = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
+    let netlist = find_op(&netlists);
+    let result = simulate_op(netlist).unwrap();
 
     // From .out: V(1)=1.0, V(2)=0.5, vin#branch=-0.0001
     assert_abs_diff_eq!(op_voltage(&result, "1"), 1.0, epsilon = 1e-9);
@@ -227,7 +238,7 @@ fn res_partition_ac_expected_values() {
 #[test]
 fn res_partition_full_output_comparison() {
     // Full AC output comparison against .out reference.
-    let _netlist = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
+    let _netlists = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +254,9 @@ fn res_partition_full_output_comparison() {
 
 #[test]
 fn res_array_parses() {
-    let netlist = parse_cir(RES_ARRAY_CIR, "res_array.cir");
+    let netlists = parse_cir(RES_ARRAY_CIR, "res_array.cir");
+    // Use last fork which has all accumulated items
+    let netlist = netlists.last().unwrap();
     assert_eq!(netlist.title, "A paralled resistor array");
     // Should have Vin + 5 VR sources + 5 resistors + model = 11 elements
     assert!(netlist.elements().count() >= 11);
@@ -253,8 +266,9 @@ fn res_array_parses() {
 fn res_array_dc_op() {
     // Model-based resistor R3 uses rmodel1 with RSH=1000, which requires
     // model evaluation to compute effective resistance. Not yet supported.
-    let netlist = parse_cir(RES_ARRAY_CIR, "res_array.cir");
-    let result = simulate_op(&netlist).unwrap();
+    let netlists = parse_cir(RES_ARRAY_CIR, "res_array.cir");
+    let netlist = find_op(&netlists);
+    let result = simulate_op(netlist).unwrap();
 
     // Expected from .out:
     assert_abs_diff_eq!(op_voltage(&result, "1"), 1.0, epsilon = 1e-9);
@@ -271,7 +285,7 @@ fn res_array_dc_op() {
 
 #[test]
 fn res_array_full_output_comparison() {
-    let _netlist = parse_cir(RES_ARRAY_CIR, "res_array.cir");
+    let _netlists = parse_cir(RES_ARRAY_CIR, "res_array.cir");
 }
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,15 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Parse and return the last (or only) netlist fork.
 fn parse(src: &str) -> Netlist {
+    let mut netlists = Netlist::parse(src).unwrap_or_else(|e| panic!("parse failed: {e}"));
+    assert!(!netlists.is_empty(), "parse returned no netlists");
+    netlists.pop().unwrap()
+}
+
+/// Parse and return all netlist forks.
+fn parse_all(src: &str) -> Vec<Netlist> {
     Netlist::parse(src).unwrap_or_else(|e| panic!("parse failed: {e}"))
 }
 
@@ -623,19 +631,19 @@ fn x_with_inline_params() {
 #[test]
 fn analysis_op() {
     let n = parse("T\n.op\n.end");
-    assert!(matches!(n.items[0], Item::Analysis(Analysis::Op)));
+    assert!(matches!(n.analysis, Analysis::Op));
 }
 
 #[test]
 fn analysis_dc() {
     let n = parse("T\n.dc Vin -5 5 0.1\n.end");
-    if let Item::Analysis(Analysis::Dc {
+    if let Analysis::Dc {
         src,
         start,
         stop,
         step,
         src2,
-    }) = &n.items[0]
+    } = &n.analysis
     {
         assert_eq!(src, "Vin");
         assert_num(start, -5.0);
@@ -650,7 +658,7 @@ fn analysis_dc() {
 #[test]
 fn analysis_dc_double_sweep() {
     let n = parse("T\n.dc V1 0 5 1 V2 0 3 0.5\n.end");
-    if let Item::Analysis(Analysis::Dc { src, src2, .. }) = &n.items[0] {
+    if let Analysis::Dc { src, src2, .. } = &n.analysis {
         assert_eq!(src, "V1");
         let s2 = src2.as_ref().expect("should have src2");
         assert_eq!(s2.src, "V2");
@@ -665,12 +673,12 @@ fn analysis_dc_double_sweep() {
 #[test]
 fn analysis_tran() {
     let n = parse("T\n.tran 1n 100n\n.end");
-    if let Item::Analysis(Analysis::Tran {
+    if let Analysis::Tran {
         tstep,
         tstop,
         tstart,
         tmax,
-    }) = &n.items[0]
+    } = &n.analysis
     {
         assert_num(tstep, 1e-9);
         assert_num(tstop, 100e-9);
@@ -684,7 +692,7 @@ fn analysis_tran() {
 #[test]
 fn analysis_tran_with_tstart() {
     let n = parse("T\n.tran 1n 100n 10n\n.end");
-    if let Item::Analysis(Analysis::Tran { tstart, tmax, .. }) = &n.items[0] {
+    if let Analysis::Tran { tstart, tmax, .. } = &n.analysis {
         assert_num(tstart.as_ref().unwrap(), 10e-9);
         assert!(tmax.is_none());
     } else {
@@ -695,12 +703,12 @@ fn analysis_tran_with_tstart() {
 #[test]
 fn analysis_ac_dec() {
     let n = parse("T\n.ac DEC 100 1 100Meg\n.end");
-    if let Item::Analysis(Analysis::Ac {
+    if let Analysis::Ac {
         variation,
         n: pts,
         fstart,
         fstop,
-    }) = &n.items[0]
+    } = &n.analysis
     {
         assert_eq!(*variation, AcVariation::Dec);
         assert_eq!(*pts, 100);
@@ -714,7 +722,7 @@ fn analysis_ac_dec() {
 #[test]
 fn analysis_ac_oct() {
     let n = parse("T\n.ac OCT 8 100 10k\n.end");
-    if let Item::Analysis(Analysis::Ac { variation, .. }) = &n.items[0] {
+    if let Analysis::Ac { variation, .. } = &n.analysis {
         assert_eq!(*variation, AcVariation::Oct);
     } else {
         panic!()
@@ -724,7 +732,7 @@ fn analysis_ac_oct() {
 #[test]
 fn analysis_ac_lin() {
     let n = parse("T\n.ac LIN 1000 0 1Meg\n.end");
-    if let Item::Analysis(Analysis::Ac { variation, .. }) = &n.items[0] {
+    if let Analysis::Ac { variation, .. } = &n.analysis {
         assert_eq!(*variation, AcVariation::Lin);
     } else {
         panic!()
@@ -734,14 +742,14 @@ fn analysis_ac_lin() {
 #[test]
 fn analysis_noise() {
     let n = parse("T\n.noise V(out) Vin DEC 10 1 1Meg\n.end");
-    if let Item::Analysis(Analysis::Noise {
+    if let Analysis::Noise {
         output,
         ref_node,
         src,
         variation,
         n: pts,
         ..
-    }) = &n.items[0]
+    } = &n.analysis
     {
         assert_eq!(output, "V(out)");
         assert!(ref_node.is_none());
@@ -756,7 +764,7 @@ fn analysis_noise() {
 #[test]
 fn analysis_tf() {
     let n = parse("T\n.tf V(out) Vin\n.end");
-    if let Item::Analysis(Analysis::Tf { output, input }) = &n.items[0] {
+    if let Analysis::Tf { output, input } = &n.analysis {
         assert_eq!(output, "V(out)");
         assert_eq!(input, "Vin");
     } else {
@@ -767,7 +775,7 @@ fn analysis_tf() {
 #[test]
 fn analysis_sens() {
     let n = parse("T\n.sens V(out)\n.end");
-    if let Item::Analysis(Analysis::Sens { output }) = &n.items[0] {
+    if let Analysis::Sens { output } = &n.analysis {
         assert_eq!(output, &["V(out)"]);
     } else {
         panic!()
@@ -964,10 +972,7 @@ fn roundtrip_voltage_divider() {
     let src = "Voltage divider\nV1 in 0 DC 5\nR1 in mid 1k\nR2 mid 0 1k\n.op\n.end";
     let (n1, n2) = roundtrip(src);
     assert_eq!(n1.elements().count(), n2.elements().count());
-    assert!(matches!(
-        &n2.items.last().unwrap(),
-        Item::Analysis(Analysis::Op)
-    ));
+    assert!(matches!(n2.analysis, Analysis::Op));
 }
 
 #[test]
@@ -1012,11 +1017,11 @@ fn roundtrip_ac_analysis() {
     let src = "AC sweep\nV1 in 0 AC 1\nR1 in out 1k\nC1 out 0 100n\n.ac DEC 100 1 10Meg\n.end";
     let (_n1, n2) = roundtrip(src);
     assert!(matches!(
-        &n2.items.last().unwrap(),
-        Item::Analysis(Analysis::Ac {
+        n2.analysis,
+        Analysis::Ac {
             variation: AcVariation::Dec,
             ..
-        })
+        }
     ));
 }
 

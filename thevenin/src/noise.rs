@@ -11,7 +11,7 @@
 
 use std::f64::consts::PI;
 
-use thevenin_types::{Analysis, Item, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::ac::generate_ac_sweep;
 use crate::expr_val;
@@ -28,35 +28,30 @@ const T_NOM: f64 = 300.15;
 
 /// Perform noise analysis.
 pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    // Find the .noise analysis command.
-    let (output, ref_node, src_name, variation, n, fstart, fstop) = netlist
-        .items
-        .iter()
-        .find_map(|item| {
-            if let Item::Analysis(Analysis::Noise {
-                output,
-                ref_node,
-                src,
-                variation,
-                n,
-                fstart,
-                fstop,
-            }) = item
-            {
-                Some((
-                    output.clone(),
-                    ref_node.clone(),
-                    src.clone(),
-                    *variation,
-                    *n,
-                    fstart.clone(),
-                    fstop.clone(),
-                ))
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| MnaError::UnsupportedElement("no .noise analysis found".to_string()))?;
+    let (output, ref_node, src_name, variation, n, fstart, fstop) = match &netlist.analysis {
+        Analysis::Noise {
+            output,
+            ref_node,
+            src,
+            variation,
+            n,
+            fstart,
+            fstop,
+        } => (
+            output.clone(),
+            ref_node.clone(),
+            src.clone(),
+            *variation,
+            *n,
+            fstart.clone(),
+            fstop.clone(),
+        ),
+        _ => {
+            return Err(MnaError::UnsupportedElement(
+                "no .noise analysis found".to_string(),
+            ));
+        }
+    };
 
     let fstart_val = expr_val(&fstart, ".noise")?;
     let fstop_val = expr_val(&fstop, ".noise")?;
@@ -1009,7 +1004,7 @@ mod tests {
         // Total: 4kT * 500 = 4kT * (R1||R2)
         //
         // This is the expected result: output noise = Johnson noise of R1||R2.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Resistor thermal noise test
 V1 1 0 DC 0 AC 1
 R1 1 2 1k
@@ -1046,7 +1041,7 @@ R2 2 0 1k
         // Simplest noise circuit: voltage source in series with resistor.
         // V1 -> R1 -> ground, measure v(1).
         // At the output node, the noise is the Johnson noise of R1.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Simple resistor noise
 V1 1 0 DC 0 AC 1
 R1 1 2 1k
@@ -1095,7 +1090,7 @@ R1 1 2 1k
         // Actually the adjoint matrix includes V1's branch equation, so V1 clamps node 1.
         //
         // Let me just verify the output is reasonable and flat.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Voltage divider noise
 V1 1 0 DC 0 AC 1
 R1 1 2 1k

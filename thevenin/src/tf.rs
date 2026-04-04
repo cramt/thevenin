@@ -2,7 +2,7 @@ use faer::Mat;
 use faer::linalg::solvers::FullPivLu;
 use faer::prelude::Solve;
 
-use thevenin_types::{Analysis, ElementKind, Item, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{Analysis, ElementKind, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
@@ -178,24 +178,14 @@ fn solve_dense(jacobian: &Mat<f64>, rhs: &[f64]) -> Vec<f64> {
 /// - Inject unit excitation at input, solve Y*x = rhs, extract TF + input Z
 /// - Inject unit excitation at output, solve Y*x = rhs, extract output Z
 pub fn simulate_tf(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    // Collect all .tf analyses
-    let tf_params: Vec<_> = netlist
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Analysis(Analysis::Tf { output, input }) = item {
-                Some((output.clone(), input.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if tf_params.is_empty() {
-        return Err(MnaError::UnsupportedElement(
-            "no .tf analysis found".to_string(),
-        ));
-    }
+    let (output, input) = match &netlist.analysis {
+        Analysis::Tf { output, input } => (output.clone(), input.clone()),
+        _ => {
+            return Err(MnaError::UnsupportedElement(
+                "no .tf analysis found".to_string(),
+            ));
+        }
+    };
 
     // Assemble MNA and solve DC OP
     let mna = assemble_mna(netlist)?;
@@ -207,12 +197,12 @@ pub fn simulate_tf(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let dim = mna.system.dim();
     let mut plots = Vec::new();
 
-    for (output, input) in &tf_params {
+    {
         // Parse output spec
-        let (out_pos, out_neg, out_is_voltage) = parse_output_spec(output, &mna)?;
+        let (out_pos, out_neg, out_is_voltage) = parse_output_spec(&output, &mna)?;
 
         // Parse input spec
-        let in_src = find_input_source(input, &mna, netlist)?;
+        let in_src = find_input_source(&input, &mna, netlist)?;
 
         // === Transfer function + input impedance ===
         // Inject unit excitation at input
@@ -331,7 +321,7 @@ mod tests {
         // V1=10V, R1=1k, R2=1k → TF from V1 to V(mid) = 0.5
         // Input impedance = R1 + R2 = 2k (seen by V1)
         // Output impedance at V(mid) = R1||R2 = 500
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "TF test - voltage divider
 V1 1 0 10
 R1 1 mid 1k
@@ -361,7 +351,7 @@ R2 mid 0 1k
         // TF = V(1)/I1 = R1 = 2k (transresistance)
         // Input impedance = R1 = 2k (looking into the current source)
         // Output impedance at V(1) = R1 = 2k
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "TF test - current source
 I1 0 1 1m
 R1 1 0 2k
@@ -390,7 +380,7 @@ R1 1 0 2k
         // Actually: V1 at node 1 = 10V, R1 from 1→a, R2 from a→0
         // V(a) = V1 * R2/(R1+R2) = 10 * 2/3 = 6.667V
         // TF of V(1,a) = V(1) - V(a) = 10 - 6.667 = 3.333V per 10V = 1/3
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "TF test - differential output
 V1 1 0 10
 R1 1 a 1k
@@ -414,8 +404,8 @@ R2 a 0 2k
 
     #[test]
     fn test_tf_multiple_analyses() {
-        // Two .tf commands in same netlist
-        let netlist = Netlist::parse(
+        // Two .tf commands in same netlist — produces two forks
+        let netlists = Netlist::parse(
             "Multiple TF
 V1 1 0 10
 R1 1 mid 1k
@@ -427,13 +417,14 @@ R2 mid 0 1k
         )
         .unwrap();
 
-        let result = simulate_tf(&netlist).unwrap();
-        assert_eq!(result.plots.len(), 2);
+        assert_eq!(netlists.len(), 2);
 
-        let tf1 = tf_value(&result, 0, "transfer_function");
+        let result1 = simulate_tf(&netlists[0]).unwrap();
+        let tf1 = tf_value(&result1, 0, "transfer_function");
         assert_abs_diff_eq!(tf1, 0.5, epsilon = 1e-9);
 
-        let tf2 = tf_value(&result, 1, "transfer_function");
+        let result2 = simulate_tf(&netlists[1]).unwrap();
+        let tf2 = tf_value(&result2, 0, "transfer_function");
         assert_abs_diff_eq!(tf2, 1.0, epsilon = 1e-9);
     }
 }

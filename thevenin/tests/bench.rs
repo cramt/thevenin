@@ -127,7 +127,7 @@ fn bench_parse_bsim3_netlist() {
     let cir = bsim3_dc_cir(1.0);
     let iters = 100;
     let (total, per) = bench_fn(iters, || {
-        let _ = Netlist::parse(&cir).unwrap();
+        let _ = Netlist::parse_single(&cir).unwrap();
     });
     report("parse_bsim3_netlist", iters, total, per);
 }
@@ -136,14 +136,14 @@ fn bench_parse_bsim3_netlist() {
 fn bench_parse_lowpass_netlist() {
     let iters = 500;
     let (total, per) = bench_fn(iters, || {
-        let _ = Netlist::parse(LOWPASS_CIR).unwrap();
+        let _ = Netlist::parse_single(LOWPASS_CIR).unwrap();
     });
     report("parse_lowpass_netlist", iters, total, per);
 }
 
 #[test]
 fn bench_op_resistor_divider() {
-    let netlist = Netlist::parse(RESISTOR_DIVIDER_CIR).unwrap();
+    let netlist = Netlist::parse_single(RESISTOR_DIVIDER_CIR).unwrap();
     let iters = 100;
     let (total, per) = bench_fn(iters, || {
         let _ = simulate_op(&netlist).unwrap();
@@ -154,7 +154,7 @@ fn bench_op_resistor_divider() {
 #[test]
 fn bench_dc_sweep_bsim3() {
     let cir = bsim3_dc_cir(1.0);
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let iters = 10;
     let (total, per) = bench_fn(iters, || {
         let _ = simulate_op(&netlist).unwrap();
@@ -164,7 +164,7 @@ fn bench_dc_sweep_bsim3() {
 
 #[test]
 fn bench_ac_lowpass() {
-    let netlist = Netlist::parse(LOWPASS_CIR).unwrap();
+    let netlist = Netlist::parse_single(LOWPASS_CIR).unwrap();
     let iters = 20;
     let (total, per) = bench_fn(iters, || {
         let _ = simulate_ac(&netlist).unwrap();
@@ -174,7 +174,7 @@ fn bench_ac_lowpass() {
 
 #[test]
 fn bench_sensitivity() {
-    let netlist = Netlist::parse(SENSITIVITY_CIR).unwrap();
+    let netlist = Netlist::parse_single(SENSITIVITY_CIR).unwrap();
     let iters = 50;
     let (total, per) = bench_fn(iters, || {
         let _ = simulate_sens(&netlist).unwrap();

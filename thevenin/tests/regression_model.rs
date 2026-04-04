@@ -26,7 +26,7 @@ fn op_current(result: &thevenin_types::SimResult, src: &str) -> f64 {
 /// that the saturation current ratios match expectations.
 #[test]
 fn special_names_diode_models() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "check special modelnames starting with a digit
 i1 1 0 dc -100u
 
@@ -70,7 +70,7 @@ d4 t4 0 1smb4148
 /// Ported from ngspice-upstream/tests/regression/model/instance-defaults.cir
 #[test]
 fn model_instance_defaults() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "check whether .model accepts instance defaults
 v1 1 0 dc=1
 r1 1 0 myres

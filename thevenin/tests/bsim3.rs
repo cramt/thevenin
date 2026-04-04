@@ -87,7 +87,7 @@ Vbs b 0 0.0
 #[test]
 fn test_bsim3_qaspec_dc_sweep_vg1p8() {
     let cir = bsim3_dc_sweep_cir(1.8);
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -145,7 +145,7 @@ fn test_bsim3_qaspec_dc_sweep_vg1p8() {
 #[test]
 fn test_bsim3_qaspec_dc_sweep_vg1p0() {
     let cir = bsim3_dc_sweep_cir(1.0);
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -171,7 +171,7 @@ fn test_bsim3_qaspec_dc_sweep_vg1p0() {
 #[test]
 fn test_bsim3_qaspec_dc_sweep_vg0p4() {
     let cir = bsim3_dc_sweep_cir(0.4);
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -212,7 +212,7 @@ Vds d 0 1.8
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = simulate_op(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -245,7 +245,7 @@ Vds d 0 0.0
 .op
 .end
 ";
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let result = simulate_op(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -275,7 +275,7 @@ Vds d 0 0.0
 #[test]
 fn test_bsim3_qaspec_ac_freq() {
     let cir = bsim3_ac_freq_cir("");
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_ac(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -315,7 +315,7 @@ fn test_bsim3_qaspec_ac_freq() {
 #[test]
 fn test_bsim3_qaspec_ac_freq_capmod1() {
     let cir = bsim3_ac_freq_cir("+ capmod=1");
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_ac(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -336,7 +336,7 @@ fn test_bsim3_qaspec_ac_freq_capmod1() {
 #[test]
 fn test_bsim3_qaspec_ac_freq_xpart1() {
     let cir = bsim3_ac_freq_cir("+ xpart=1");
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_ac(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -372,7 +372,7 @@ Vds d 0 0.0
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -409,7 +409,7 @@ Vds d 0 0.0
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -448,7 +448,7 @@ Vds d 0 1.8
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_tran(&netlist).unwrap();
 
     let plot = &result.plots[0];

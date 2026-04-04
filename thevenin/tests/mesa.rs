@@ -1,6 +1,6 @@
 use approx::assert_abs_diff_eq;
 use thevenin::simulate_dc;
-use thevenin_types::Netlist;
+use thevenin_types::{Analysis, Netlist};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -11,7 +11,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 #[test]
 fn test_mesa_dcfl_inverter() {
     let cir = include_str!("fixtures/mesa/mesa.cir");
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse(cir).unwrap().pop().unwrap();
     let result = simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -48,7 +48,7 @@ fn test_mesa_dcfl_inverter() {
 #[test]
 fn test_mesa_gate_leakage() {
     let cir = include_str!("fixtures/mesa/mesa13.cir");
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse(cir).unwrap().pop().unwrap();
     let result = simulate_dc(&netlist).unwrap();
     assert!(!result.plots.is_empty());
 }
@@ -59,7 +59,11 @@ fn test_mesa_gate_leakage() {
 #[test]
 fn test_mesa_level2_double_sweep() {
     let cir = include_str!("fixtures/mesa/mesa11.cir");
-    let netlist = Netlist::parse(cir).unwrap();
-    let result = simulate_dc(&netlist).unwrap();
+    let netlists = Netlist::parse(cir).unwrap();
+    let netlist = netlists
+        .iter()
+        .find(|n| matches!(n.analysis, Analysis::Dc { .. }))
+        .expect("no .dc fork found");
+    let result = simulate_dc(netlist).unwrap();
     assert!(!result.plots.is_empty());
 }

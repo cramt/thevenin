@@ -8,7 +8,7 @@
 //! estimation using the difference between BE and Trap results for
 //! capacitor/inductor charges/fluxes.
 
-use thevenin_types::{Analysis, Item, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
 use crate::device_stamp::{DeviceVoltageState, stamp_current_source};
@@ -493,24 +493,19 @@ fn estimate_new_timestep(
 /// Uses adaptive timestep control with LTE estimation when reactive elements
 /// are present, falling back to fixed timestep for purely resistive circuits.
 pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    // Find the .tran analysis command.
-    let (tstep, tstop, tstart, tmax) = netlist
-        .items
-        .iter()
-        .find_map(|item| {
-            if let Item::Analysis(Analysis::Tran {
-                tstep,
-                tstop,
-                tstart,
-                tmax,
-            }) = item
-            {
-                Some((tstep.clone(), tstop.clone(), tstart.clone(), tmax.clone()))
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| MnaError::UnsupportedElement("no .tran analysis found".to_string()))?;
+    let (tstep, tstop, tstart, tmax) = match &netlist.analysis {
+        Analysis::Tran {
+            tstep,
+            tstop,
+            tstart,
+            tmax,
+        } => (tstep.clone(), tstop.clone(), tstart.clone(), tmax.clone()),
+        _ => {
+            return Err(MnaError::UnsupportedElement(
+                "no .tran analysis found".to_string(),
+            ));
+        }
+    };
 
     let h_print = expr_val(&tstep, ".tran tstep")?;
     let t_stop = expr_val(&tstop, ".tran tstop")?;
@@ -2710,7 +2705,7 @@ mod tests {
         // RC = 1k * 1u = 1ms
         // At t = 1ms (1 RC): V ≈ 5*(1 - 0.368) = 3.16
         // At t = 5ms (5 RC): V ≈ 5*(1 - 0.0067) = 4.97
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "RC step response
 V1 1 0 5
 R1 1 out 1k
@@ -2765,7 +2760,7 @@ C1 out 0 1u IC=0
         // Period: T = 1/f ≈ 6.283 us
         //
         // V(1) = V0 * cos(2*pi*f*t) = cos(t/sqrt(LC))
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "LC oscillator
 C1 1 0 1u IC=1
 L1 1 0 1u
@@ -2855,7 +2850,7 @@ L1 1 0 1u
         // R1=1k, C1=1u → RC = 1ms.
         // During the pulse high, cap charges toward 5V.
         // During pulse low, cap discharges toward 0V.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "PULSE into RC
 V1 1 0 PULSE(0 5 0 1u 1u 5m 10m)
 R1 1 out 1k
@@ -2898,7 +2893,7 @@ C1 out 0 1u IC=0
         // SIN source with known frequency, verify output matches analytical.
         // V1 = SIN(0 1 1000) → 1V amplitude, 1kHz, no offset.
         // With a simple R load (no reactive elements), V(1) should track V1.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "SIN source test
 V1 1 0 SIN(0 1 1000)
 R1 1 0 1k
@@ -2930,7 +2925,7 @@ R1 1 0 1k
     fn test_pwl_source_transient() {
         // PWL source: ramp from 0 to 5V in 1ms, hold 5V for 1ms, ramp to 0 in 1ms.
         // With R load, V(1) should track the source.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "PWL source test
 V1 1 0 PWL(0 0 1m 5 2m 5 3m 0)
 R1 1 0 1k
@@ -2976,7 +2971,7 @@ R1 1 0 1k
     fn test_current_source_pulse() {
         // PULSE current source into a resistor.
         // I1 pulses from 0 to 1mA, R1=1k → V(1) should pulse from 0 to 1V.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "PULSE current source
 I1 0 1 PULSE(0 1m 0 1u 1u 1m 2m)
 R1 1 0 1k
@@ -3015,7 +3010,7 @@ R1 1 0 1k
         //
         // PULSE source: 0→5V with 1us edges, 1ms high, 2ms period.
         // RC = 1k * 1u = 1ms.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Adaptive timestep PULSE RC
 V1 1 0 PULSE(0 5 0 1u 1u 1m 2m)
 R1 1 out 1k

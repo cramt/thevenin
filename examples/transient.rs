@@ -7,7 +7,7 @@ use thevenin::simulate;
 use thevenin_types::Netlist;
 
 fn main() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "\
 RC Pulse Response
 V1 in 0 PULSE(0 1 0 1n 1n 50m 100m)

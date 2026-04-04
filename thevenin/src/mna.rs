@@ -3336,7 +3336,7 @@ mod tests {
     fn test_voltage_divider() {
         // V1=5V, R1=1k (between node 1 and mid), R2=1k (between mid and 0)
         // Expected: V(mid) = 2.5V, V(1) = 5V, I(V1) = -2.5mA
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Voltage divider test
 V1 1 0 5
 R1 1 mid 1k
@@ -3370,7 +3370,7 @@ R2 mid 0 1k
     fn test_current_source_with_resistors() {
         // I1=1mA from 0 to node 1, R1=1k between node 1 and 0
         // V(1) = I * R = 1e-3 * 1000 = 1.0V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Current source test
 I1 0 1 1m
 R1 1 0 1k
@@ -3391,7 +3391,7 @@ R1 1 0 1k
     fn test_series_resistors_with_voltage_source() {
         // V1=10V, R1=2k and R2=3k in series
         // V(mid) = 10 * 3k/(2k+3k) = 6V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Series resistors
 V1 in 0 10
 R1 in mid 2k
@@ -3412,7 +3412,7 @@ R2 mid 0 3k
     #[test]
     fn test_ground_node_excluded() {
         // Single resistor from node 1 to ground with voltage source
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Ground test
 V1 1 0 3.3
 R1 1 0 330
@@ -3440,7 +3440,7 @@ R1 1 0 330
         // Two current sources into the same node with a resistor
         // I1=2mA from 0 to 1, I2=3mA from 0 to 1, R1=1k from 1 to 0
         // V(1) = (2m + 3m) * 1k = 5V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Multiple current sources
 I1 0 1 2m
 I2 0 1 3m
@@ -3461,7 +3461,7 @@ R1 1 0 1k
         // RC circuit: V1=10V, R1=1k, C1=1u between mid and 0
         // In DC, capacitor is open circuit, so no current flows through R1.
         // V(mid) = V1 = 10V (no voltage drop across R1)
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "RC circuit DC test
 V1 1 0 10
 R1 1 mid 1k
@@ -3490,7 +3490,7 @@ C1 mid 0 1u
         // In DC, inductor is short circuit, so full current flows.
         // V(mid) = 0V (inductor shorts mid to ground)
         // I = V1/R1 = 5/1000 = 5mA
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "RL circuit DC test
 V1 1 0 5
 R1 1 mid 1k
@@ -3526,7 +3526,7 @@ L1 mid 0 1m
     fn test_vcvs_voltage_follower() {
         // VCVS with gain=1 (voltage follower): V(out) = V(in)
         // V1=5V at node "in", E1 copies to "out", R1=1k load on "out"
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "VCVS voltage follower
 V1 in 0 5
 R1 in 0 10k
@@ -3551,7 +3551,7 @@ R2 out 0 1k
     fn test_vcvs_amplifier() {
         // VCVS with gain=10: V(out) = 10 * V(in)
         // V1=1V, E1 gain=10
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "VCVS amplifier
 V1 in 0 1
 R1 in 0 10k
@@ -3575,7 +3575,7 @@ R2 out 0 1k
         // V1=1V → R1=1k → inv node → R2=2k → out
         // E1 out 0 0 inv 100000 (gain from 0 to inv, i.e., V(out) = -100000 * V(inv))
         // With ideal gain: V(out) ≈ -R2/R1 * V(in) = -2V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Inverting amplifier
 V1 in 0 1
 R1 in inv 1k
@@ -3602,7 +3602,7 @@ E1 out 0 0 inv 100000
         // so G1 0 out means current enters "out" from ground.
         // V1=2V at "in", G1 gm=1m, R2=1k load
         // V(out) = gm * V(in) * R2 = 1e-3 * 2 * 1000 = 2V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "VCCS test
 V1 in 0 2
 R1 in 0 10k
@@ -3630,7 +3630,7 @@ R2 out 0 1k
         // V1=10V, R1=10k → I(Vsense) = 1mA (in MNA branch convention)
         // F1 0 out: current enters "out" from ground
         // F1 gain=5 → I_out = 5mA into R2=1k → V(out) = 5V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "CCCS test
 V1 1 0 10
 R1 1 sense 10k
@@ -3654,7 +3654,7 @@ R2 out 0 1k
         // CCVS: H1 output voltage = rm * I(Vsense)
         // V1=5V, R1=5k → I(Vsense) = 1mA
         // H1 rm=2k → V(out) = 2k * 1mA = 2V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "CCVS test
 V1 1 0 5
 R1 1 sense 5k
@@ -3680,7 +3680,7 @@ R2 out 0 10k
     fn test_modedc_ignores_dc_uses_waveform_at_t0() {
         // Vin with DC=1 and SIN(offset=0), at t=0 SIN gives 0, not DC.
         // In MODEDC, node 1 should be 0V.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "modedc test
 Vin 1 0 DC 1 SIN (0 1 100MEG 1NS 0.0) AC 1
 R1 1 0 1k

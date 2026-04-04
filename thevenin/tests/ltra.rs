@@ -19,7 +19,7 @@ fn tran_vector<'a>(result: &'a thevenin_types::SimResult, name: &str) -> &'a [f6
 /// The signal should appear at the far end after td.
 #[test]
 fn test_ltra_lossless_step() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "LTRA lossless test
 V1 1 0 PULSE(0 1 0 0.1n 0.1n 100n 200n)
 R1 1 2 50
@@ -64,7 +64,7 @@ R2 3 0 200
 /// Uses the same model parameters as the ngspice ltra1 test but with a simpler driver.
 #[test]
 fn test_ltra_rlc_simple() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "LTRA RLC simple test
 V1 1 0 PULSE(0 5 0 0.2n 0.2n 15n 32n)
 R1 1 2 50
@@ -106,7 +106,7 @@ C1 3 0 0.025e-12
 /// A simple LTRA with R > 0 should act like a resistor in DC.
 #[test]
 fn test_ltra_dc_op() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "LTRA DC test
 V1 1 0 DC 5
 R1 1 2 100
@@ -140,7 +140,7 @@ R2 3 0 100
 #[test]
 fn test_ltra1_1_line_ngspice() {
     let cir = include_str!("fixtures/transmission/ltra1_1_line.cir");
-    let netlist = Netlist::parse(cir).expect("parse failed");
+    let netlist = Netlist::parse_single(cir).expect("parse failed");
     let result = thevenin::simulate_tran(&netlist).expect("tran failed");
     let time = tran_vector(&result, "time");
     let v2 = tran_vector(&result, "v(2)");
@@ -171,7 +171,7 @@ fn test_ltra1_1_line_ngspice() {
 #[test]
 fn test_ltra2_2_line_ngspice() {
     let cir = include_str!("fixtures/transmission/ltra2_2_line.cir");
-    let netlist = Netlist::parse(cir).expect("parse failed");
+    let netlist = Netlist::parse_single(cir).expect("parse failed");
     let result = thevenin::simulate_tran(&netlist).expect("tran failed");
     let time = tran_vector(&result, "time");
     let _v2 = tran_vector(&result, "v(2)");

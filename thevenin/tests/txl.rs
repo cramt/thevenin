@@ -18,7 +18,7 @@ fn tran_vector<'a>(result: &'a thevenin_types::SimResult, name: &str) -> &'a [f6
 /// A TXL line with R > 0 should act as R*length resistance in DC.
 #[test]
 fn test_txl_dc_op() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "TXL DC test
 V1 1 0 DC 5
 R1 1 2 100
@@ -50,7 +50,7 @@ R2 3 0 100
 /// Simple TXL transient test with a step source.
 #[test]
 fn test_txl_transient_simple() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "TXL transient test
 V1 1 0 PULSE(0 5 0 0.1n 0.1n 50n 100n)
 R1 1 2 50
@@ -92,7 +92,7 @@ R2 3 0 200
 #[test]
 fn test_txl1_1_line_ngspice() {
     let cir = include_str!("fixtures/transmission/txl1_1_line.cir");
-    let netlist = Netlist::parse(cir).expect("parse failed");
+    let netlist = Netlist::parse_single(cir).expect("parse failed");
     let result = thevenin::simulate_tran(&netlist).expect("tran failed");
     let time = tran_vector(&result, "time");
     let _v2 = tran_vector(&result, "v(2)");
@@ -110,7 +110,7 @@ fn test_txl1_1_line_ngspice() {
 #[test]
 fn test_txl2_3_line_ngspice() {
     let cir = include_str!("fixtures/transmission/txl2_3_line.cir");
-    let netlist = Netlist::parse(cir).expect("parse failed");
+    let netlist = Netlist::parse_single(cir).expect("parse failed");
     let result = thevenin::simulate_tran(&netlist).expect("tran failed");
     let time = tran_vector(&result, "time");
 

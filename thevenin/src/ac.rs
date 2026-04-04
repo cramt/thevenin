@@ -1,8 +1,6 @@
 use std::f64::consts::PI;
 
-use thevenin_types::{
-    AcVariation, Analysis, Complex, Item, Netlist, SimPlot, SimResult, SimVector,
-};
+use thevenin_types::{AcVariation, Analysis, Complex, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::expr_val;
 use crate::expr_val_or;
@@ -17,24 +15,19 @@ use crate::sparse::ComplexLinearSystem;
 /// 3. Apply AC source excitation.
 /// 4. Solve for complex node voltages.
 pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    // Find the .ac analysis command.
-    let (variation, n, fstart, fstop) = netlist
-        .items
-        .iter()
-        .find_map(|item| {
-            if let Item::Analysis(Analysis::Ac {
-                variation,
-                n,
-                fstart,
-                fstop,
-            }) = item
-            {
-                Some((*variation, *n, fstart.clone(), fstop.clone()))
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| MnaError::UnsupportedElement("no .ac analysis found".to_string()))?;
+    let (variation, n, fstart, fstop) = match &netlist.analysis {
+        Analysis::Ac {
+            variation,
+            n,
+            fstart,
+            fstop,
+        } => (*variation, *n, fstart.clone(), fstop.clone()),
+        _ => {
+            return Err(MnaError::UnsupportedElement(
+                "no .ac analysis found".to_string(),
+            ));
+        }
+    };
 
     let fstart_val = expr_val(&fstart, ".ac")?;
     let fstop_val = expr_val(&fstop, ".ac")?;
@@ -1835,7 +1828,7 @@ mod tests {
     fn test_rc_lowpass_3db() {
         // RC lowpass: R=1k, C=1uF, f_3dB = 1/(2πRC) ≈ 159.15 Hz
         // At f_3dB, magnitude should be 1/√2 ≈ 0.7071
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "RC lowpass filter
 V1 1 0 DC 0 AC 1
 R1 1 2 1k
@@ -1912,7 +1905,7 @@ C1 2 0 1u
         // V(2)/V(1) = jωL / (R + jωL) = jωL/(R+jωL)
         // |H(f)| = ωL / √(R² + (ωL)²)
         // f_3dB = R/(2πL) = 1000/(2π×0.1) ≈ 1591.5 Hz
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "RL highpass
 V1 1 0 DC 0 AC 1
 R1 1 2 1k

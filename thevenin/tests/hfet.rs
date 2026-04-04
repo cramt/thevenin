@@ -11,7 +11,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 #[test]
 fn test_hfet_id_vgs() {
     let cir = include_str!("fixtures/hfet/id_vgs.cir");
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let result = simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -47,6 +47,6 @@ fn test_hfet_id_vgs() {
 #[test]
 fn test_hfet_inverter() {
     let cir = include_str!("fixtures/hfet/inverter.cir");
-    let _netlist = Netlist::parse(cir).unwrap();
+    let _netlist = Netlist::parse_single(cir).unwrap();
     // TODO: implement transient test once HFET transient support is verified
 }

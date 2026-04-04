@@ -6,7 +6,7 @@ use thevenin::simulate;
 use thevenin_types::Netlist;
 
 fn main() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "\
 Diode IV Curve
 V1 anode 0 0

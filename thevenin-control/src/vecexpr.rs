@@ -1245,6 +1245,7 @@ mod tests {
         SimContext::new(thevenin_types::Netlist {
             title: String::new(),
             items: Vec::new(),
+            analysis: thevenin_types::Analysis::Op,
             source: String::new(),
         })
     }

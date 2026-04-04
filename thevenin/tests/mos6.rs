@@ -13,7 +13,7 @@ const SIMPLEINV_CIR: &str = include_str!("fixtures/mos6/simpleinv.cir");
 /// be near VDD (5V) or near 0V depending on the model bias conditions.
 #[test]
 fn test_mos6_simpleinv_parses_and_op_converges() {
-    let netlist = Netlist::parse(SIMPLEINV_CIR).unwrap();
+    let netlist = Netlist::parse_single(SIMPLEINV_CIR).unwrap();
 
     // Run the operating point (DC) analysis to verify convergence.
     let result = thevenin::simulate_op(&netlist).unwrap();
@@ -36,7 +36,7 @@ fn test_mos6_simpleinv_parses_and_op_converges() {
 /// Test transient analysis of MOS6 CMOS inverter with PWL input ramp.
 #[test]
 fn test_mos6_simpleinv_transient() {
-    let netlist = Netlist::parse(SIMPLEINV_CIR).unwrap();
+    let netlist = Netlist::parse_single(SIMPLEINV_CIR).unwrap();
     let result = thevenin::simulate_tran(&netlist).unwrap();
 
     assert!(!result.plots.is_empty(), "should produce at least one plot");

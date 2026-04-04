@@ -147,6 +147,7 @@ pub fn flatten_netlist(netlist: &Netlist) -> Result<Netlist, SubcktError> {
     Ok(Netlist {
         title: netlist.title.clone(),
         source: netlist.source.clone(),
+        analysis: netlist.analysis.clone(),
         items: flat_items,
     })
 }
@@ -694,7 +695,7 @@ mod tests {
 
     #[test]
     fn test_simple_subcircuit_expansion() {
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Subcircuit test
 .subckt DIVIDER in out
 R1 in mid 1k
@@ -746,7 +747,7 @@ X1 1 0 DIVIDER
 
     #[test]
     fn test_subcircuit_with_params() {
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Param test
 .subckt RLOAD p n PARAMS: rval=1k
 R1 p n rval
@@ -787,7 +788,7 @@ X1 1 0 RLOAD PARAMS: rval=2k
 
     #[test]
     fn test_nested_subcircuit() {
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Nested subcircuit test
 .subckt INNER a b
 R1 a b 1k
@@ -842,7 +843,7 @@ X1 in 0 OUTER
 
     #[test]
     fn test_multiple_instances() {
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Multiple instances
 .subckt BUF in out
 R1 in out 100
@@ -888,7 +889,7 @@ R1 3 0 1k
 
     #[test]
     fn test_undefined_subcircuit_error() {
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Error test
 X1 1 0 NONEXISTENT
 .op
@@ -907,7 +908,7 @@ X1 1 0 NONEXISTENT
 
     #[test]
     fn test_port_count_mismatch_error() {
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Port mismatch test
 .subckt BUF in out
 R1 in out 100
@@ -929,7 +930,7 @@ X1 1 2 3 BUF
 
     #[test]
     fn test_subcircuit_with_model() {
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Subcircuit with model
 .subckt DCLAMP a k
 .model DMOD D IS=1e-14
@@ -991,7 +992,7 @@ X1 1 0 DCLAMP
 
     #[test]
     fn test_no_subcircuits_passthrough() {
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "No subcircuits
 V1 1 0 5
 R1 1 0 1k

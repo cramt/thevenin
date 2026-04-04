@@ -1199,7 +1199,7 @@ mod tests {
     #[test]
     fn test_mesa_model_parsing() {
         use thevenin_types::Netlist;
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "test\n\
              z1 2 3 0 mesmod l=1u w=20u\n\
              .model mesmod nmf level=2\n\

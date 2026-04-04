@@ -31,7 +31,7 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
 /// n1003_t: I=-9mA, R=1k||8k = 8k/9 → V = 9mA * 8k/9 = 8.0V
 #[test]
 fn global_multiple_cards() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "check treatment of multiple .global cards
 
 .global n1001_t n1002_t
@@ -87,7 +87,7 @@ Rn  n1 0  100k
 /// with proper shadowing behavior.
 #[test]
 fn model_scope_nested() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "check scoping of nested .model definitions
 
 i1  n1001_t 0  dc=-1

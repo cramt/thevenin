@@ -3,7 +3,7 @@
 //! Tests ported from ngspice-upstream/tests/vbic/ test suite.
 //! All 6 test circuits use the same VBIC model parameters.
 
-use thevenin_types::Netlist;
+use thevenin_types::{Analysis, Netlist};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -68,7 +68,7 @@ Q1 Q1_C Q1_B Q1_E P1
 .END
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -115,7 +115,7 @@ Q1 Q1_C V1_P 0 N1
 .END
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -167,7 +167,7 @@ Q1 2 1 0 0 N1
 .END
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_ac(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -242,7 +242,7 @@ R3 R3_P R3_N 500k
 .END
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_noise(&netlist).unwrap();
 
     // Noise result has two plots: noise1 (spectrum) and noise2 (integrated)
@@ -320,7 +320,7 @@ Q1 Q1_C Q1_B 0 N1
 .END
 "
         );
-        let netlist = Netlist::parse(&cir).unwrap();
+        let netlist = Netlist::parse_single(&cir).unwrap();
         match thevenin::simulate_dc(&netlist) {
             Ok(r) => eprintln!(
                 "Range {start}-{stop}: OK ({} points)",
@@ -350,7 +350,7 @@ Q1 Q1_C Q1_B 0 N1
 .END
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
+    let netlist = Netlist::parse_single(&cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
 
     let plot = &result.plots[0];
@@ -412,8 +412,12 @@ Q9 Q9_B Q9_B Q8_B Q9_B P1
 .END
 "
     );
-    let netlist = Netlist::parse(&cir).unwrap();
-    let _result = thevenin::simulate_ac(&netlist).unwrap();
+    let netlists = Netlist::parse(&cir).unwrap();
+    let netlist = netlists
+        .iter()
+        .find(|n| matches!(n.analysis, Analysis::Ac { .. }))
+        .expect("no .ac fork found");
+    let _result = thevenin::simulate_ac(netlist).unwrap();
 }
 
 // ===================== Simple NPN sanity test =====================
@@ -429,7 +433,7 @@ Q1 col base 0 N1
 .MODEL N1 NPN LEVEL=4 IS=1e-16 RCI=60 RBI=40 RE=2 RCX=10 RBX=10 RBP=40 VEF=10 VER=4 IKF=2e-3 IKR=2e-4
 .END
 ";
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let result = thevenin::simulate_op(&netlist).unwrap();
     let plot = &result.plots[0];
 
@@ -467,7 +471,7 @@ Q1 col base emit P1
 .MODEL P1 PNP LEVEL=4 IS=1e-16 RCI=60 RBI=40 RE=2 RCX=10 RBX=10 RBP=40 VEF=10 VER=4 IKF=2e-3 IKR=2e-4
 .END
 ";
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let result = thevenin::simulate_op(&netlist).unwrap();
     let plot = &result.plots[0];
 
@@ -514,7 +518,7 @@ Q1 Q1_C Q1_B Q1_E P1
 + GAMM=2e-11 HRCF=2 QCO=1e-12 AVC1=2 AVC2=15 TF=10e-12 TR=100e-12 TD=2e-11 RTH=300
 .END
 ";
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let result = thevenin::simulate_op(&netlist).unwrap();
     let plot = &result.plots[0];
     for v in &plot.vecs {
@@ -548,7 +552,7 @@ Q1 Q1_C Q1_B Q1_E P1
 + GAMM=2e-11 HRCF=2 QCO=1e-12 AVC1=2 AVC2=15 TF=10e-12 TR=100e-12 TD=2e-11 RTH=300
 .END
 ";
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let result = thevenin::simulate_dc(&netlist).unwrap();
     let plot = &result.plots[0];
     let i_vc = plot
@@ -578,7 +582,7 @@ V1 1 0 1.0
 .OPTIONS GMIN=1e-13 NOACCT
 .END
 ";
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     for item in &netlist.items {
         eprintln!("item: {:?}", item);
     }

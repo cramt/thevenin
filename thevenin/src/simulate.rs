@@ -716,31 +716,27 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // conductances; an additional diagonal Gmin is only added during the
     // Gmin-stepping fallback inside newton_raphson_solve.
     nr_opts.diag_gmin = 0.0;
-    // Find the .dc analysis command in the netlist.
-    let (src, start, stop, step, src2) = netlist
-        .items
-        .iter()
-        .find_map(|item| {
-            if let Item::Analysis(Analysis::Dc {
-                src,
-                start,
-                stop,
-                step,
-                src2,
-            }) = item
-            {
-                Some((
-                    src.clone(),
-                    start.clone(),
-                    stop.clone(),
-                    step.clone(),
-                    src2.clone(),
-                ))
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| MnaError::UnsupportedElement("no .dc analysis found".to_string()))?;
+    // Extract the .dc analysis parameters from the netlist.
+    let (src, start, stop, step, src2) = match &netlist.analysis {
+        Analysis::Dc {
+            src,
+            start,
+            stop,
+            step,
+            src2,
+        } => (
+            src.clone(),
+            start.clone(),
+            stop.clone(),
+            step.clone(),
+            src2.clone(),
+        ),
+        _ => {
+            return Err(MnaError::UnsupportedElement(
+                "no .dc analysis found".to_string(),
+            ));
+        }
+    };
 
     let start_val = expr_val(&start, ".dc")?;
     let stop_val = expr_val(&stop, ".dc")?;
@@ -923,7 +919,7 @@ mod tests {
     #[test]
     fn test_voltage_divider_op() {
         // V1=5V, R1=1k, R2=1k → V(mid) = 2.5V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Voltage divider
 V1 1 0 5
 R1 1 mid 1k
@@ -951,7 +947,7 @@ R2 mid 0 1k
     fn test_current_source_with_series_resistors() {
         // I1=1mA from 0 to 1, R1=1k (1 to mid), R2=2k (mid to 0)
         // Total R = 3k, V(1) = 1e-3 * 3000 = 3.0V, V(mid) = 1e-3 * 2000 = 2.0V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Series resistors with current source
 I1 0 1 1m
 R1 1 mid 1k
@@ -983,7 +979,7 @@ R2 mid 0 2k
     fn test_dc_sweep_voltage_source() {
         // Sweep V1 from 0 to 5V in 1V steps across a 1k resistor
         // Expect 6 data points, I(V1) = -V/R at each point
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "DC sweep test
 V1 1 0 0
 R1 1 0 1k
@@ -1023,7 +1019,7 @@ R1 1 0 1k
         // R1 between node 1 and node 2
         // V1 at node 1, V2 at node 2
         // I = (V1 - V2) / R
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Double DC sweep
 V1 1 0 0
 V2 2 0 0
@@ -1064,7 +1060,7 @@ R1 1 2 1k
     fn test_res_simple_op() {
         // Port of ngspice-upstream/tests/resistance/res_simple.cir
         // R1=10k, V1=1V DC → I(V1) = -1/10000 = -0.0001A
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "A simple resistor with a voltage source
 R1 1 0 10k
 V1 1 0 DC 1
@@ -1087,7 +1083,7 @@ V1 1 0 DC 1
         // V1=1V, R1=1k, D1 (default model) from node 2 to ground.
         // Circuit: V1(1V) -> node 1 -> R1(1k) -> node 2 -> D1 -> ground
         // Expected: V(2) ≈ 0.6-0.7V (diode forward voltage)
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Diode forward voltage test
 V1 1 0 1
 R1 1 2 1k
@@ -1124,7 +1120,7 @@ D1 2 0 DMOD
     #[test]
     fn test_diode_with_custom_model() {
         // Test with custom IS parameter
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Diode with custom model
 V1 1 0 1
 R1 1 2 1k
@@ -1151,7 +1147,7 @@ D1 2 0 DMOD
         // Sweep voltage across a diode and verify the I-V characteristic.
         // Circuit: V1 -> R1(1k) -> D1 -> ground
         // Sweep V1 from -1V to 1V in 0.5V steps (5 points)
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Diode I-V sweep
 V1 1 0 0
 R1 1 2 1k
@@ -1204,7 +1200,7 @@ D1 2 0 DMOD
         // Use a simple circuit: V1 -> D1 -> ground (no series resistance)
         // With a large resistor to limit current.
         // At each sweep point, verify I = IS * (exp(V_d / Vt) - 1) approximately.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Diode Shockley verification
 V1 1 0 0
 R1 1 2 100
@@ -1256,7 +1252,7 @@ D1 2 0 DMOD
         //
         // With a smaller RC we stay safely in active region:
         // RC=1k → VC ≈ 10 - 4.65 = 5.35V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "BJT common-emitter OP
 VCC 1 0 10
 RC 1 col 1k
@@ -1301,7 +1297,7 @@ Q1 col base 0 QMOD
     #[test]
     fn test_bjt_dc_sweep() {
         // Sweep VBE and verify IC increases exponentially with VBE.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "BJT DC sweep
 VBE 1 0 0.6
 VCE 2 0 5
@@ -1348,7 +1344,7 @@ Q1 2 1 0 QMOD
         //
         // At VGS=3V, VTO=0.7V → Vgst=2.3V.
         // Check if MOSFET is conducting (V(drain) < VDD).
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "NMOS inverter OP
 VDD 1 0 5
 VGS 2 0 3
@@ -1384,7 +1380,7 @@ M1 3 2 0 0 NMOD W=10u L=1u
         // Sweep VGS from 0 to 5V across NMOS with RD load.
         // Below threshold (VGS < VTO=0.7V): V(drain) ≈ VDD (cutoff)
         // Above threshold: V(drain) drops as MOSFET conducts.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "NMOS transfer curve
 VDD 1 0 5
 VGS 2 0 0
@@ -1450,7 +1446,7 @@ M1 3 2 0 0 NMOD W=10u L=1u
     fn test_pmos_op() {
         // PMOS with VDD=5V. Gate at ground → VSG = 5V (well above |VTP|=1V).
         // Should conduct, pulling drain up toward VDD.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "PMOS OP test
 VDD 1 0 5
 RS 3 0 10k
@@ -1478,7 +1474,7 @@ M1 3 0 1 1 PMOD W=10u L=1u
         // CMOS inverter: NMOS + PMOS complementary pair.
         // VIN=0 → PMOS on, NMOS off → VOUT ≈ VDD
         // VIN=VDD → PMOS off, NMOS on → VOUT ≈ 0
-        let netlist_low = Netlist::parse(
+        let netlist_low = Netlist::parse_single(
             "CMOS inverter VIN=0
 VDD 1 0 5
 VIN 2 0 0
@@ -1501,7 +1497,7 @@ MN 3 2 0 0 NMOD W=10u L=1u
             "CMOS inv with VIN=0: VOUT should be ~5V, got {vout_low:.4}"
         );
 
-        let netlist_high = Netlist::parse(
+        let netlist_high = Netlist::parse_single(
             "CMOS inverter VIN=5
 VDD 1 0 5
 VIN 2 0 5
@@ -1530,7 +1526,7 @@ MN 3 2 0 0 NMOD W=10u L=1u
         // Port of ngspice-upstream/tests/jfet/jfet_vds-vgs.cir operating point.
         // N-channel JFET 2N4221 at VGS=-2V, VDS=25V.
         // Expected from ngspice: I(VD) ≈ -9.68268e-4
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "JFET 2N4221 OP
 j1 2 1 0 MODJ
 VD 2 0 25
@@ -1560,7 +1556,7 @@ VG 1 0 -2
         // V1=1V → R1=1k → inv → R2=2k → out
         // E1 out 0 0 inv 100000 (non-inverting=ground, inverting=inv)
         // Ideal gain: V(out) = -R2/R1 * V(in) = -2V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Inverting amplifier
 V1 in 0 1
 R1 in inv 1k
@@ -1585,7 +1581,7 @@ E1 out 0 0 inv 100000
     fn test_vccs_op() {
         // VCCS driving load: G1 0 out in 0 2m, V(in)=3V, R=1k
         // V(out) = gm * V(in) * R = 2e-3 * 3 * 1000 = 6V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "VCCS OP test
 V1 in 0 3
 R1 in 0 10k
@@ -1606,7 +1602,7 @@ R2 out 0 1k
     fn test_cccs_op() {
         // CCCS with gain=10: F1 0 out Vsense 10
         // V1=5V, R1=5k → I(Vsense)=1mA, F1 → 10mA into R2=500 → V(out)=5V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "CCCS OP test
 V1 1 0 5
 R1 1 sense 5k
@@ -1628,7 +1624,7 @@ R2 out 0 500
     fn test_ccvs_op() {
         // CCVS: H1 out 0 Vsense 3k → V(out) = 3k * I(Vsense)
         // V1=10V, R1=10k → I(Vsense)=1mA → V(out)=3V
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "CCVS OP test
 V1 1 0 10
 R1 1 sense 10k
@@ -1650,7 +1646,7 @@ R2 out 0 10k
     fn test_jfet_dc_sweep() {
         // JFET DC sweep: sweep VDS from 0 to 25V at VGS=-2V.
         // Current should increase in linear region then saturate.
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "JFET DC sweep
 j1 2 1 0 MODJ
 VD 2 0 25
@@ -1696,7 +1692,7 @@ VG 1 0 -2
     fn test_spaced_kv_mosfet_params() {
         // Verify that `w = 10u` (with spaces around =) parses correctly.
         // NMOS pull-down through R: VDD → R → out → NMOS → GND
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "Spaced kv test
 m1 2 1 0 0 nm w = 10u l = 1u
 R1 3 2 1k

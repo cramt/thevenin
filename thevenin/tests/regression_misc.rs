@@ -26,7 +26,7 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
 /// V(3) = V(1) * R3/(R1+R3) = 1.0 * 1k/(1k+1k) = 0.5
 #[test]
 fn ac_zero_frequency() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "whether .ac works for freq=0
 v1 1 0 dc=0 ac=1
 r1 1 2 1k
@@ -65,7 +65,7 @@ fn bsource_unary_operators() {
     ];
 
     for (i, (expr, desc, expected)) in cases.iter().enumerate() {
-        let netlist = Netlist::parse(&format!(
+        let netlist = Netlist::parse_single(&format!(
             "bugs-1 test {i}: {desc}
 B1 1 0 {expr}
 R1 1 0 1Meg
@@ -85,7 +85,7 @@ R1 1 0 1Meg
 fn bsource_power_with_param() {
     // Use voltage sources with expressions instead of B-sources since
     // B-sources with .param references get resolved to constants
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "bugs-1 power operator test
 .param aux=-2
 
@@ -111,7 +111,7 @@ R2 n2 0 1Meg
 /// Ported from ngspice-upstream/tests/regression/misc/log-functions-1.cir
 #[test]
 fn log_functions_in_voltage_params() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "regression test for log, log10 and ln
 
 v1 1 0 dc 2.7
@@ -147,7 +147,7 @@ R3 n3 0 1Meg
 /// Ported from ngspice-upstream/tests/regression/misc/if-elseif.cir
 #[test]
 fn if_elseif_nested() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "multiple .elseif, nested .if
 .param select = 3
 .param select2 = 3
@@ -193,7 +193,7 @@ V1 1 0 1
 /// DC: R1=1k, R2=4k → V(2) = 5.0 * R2/(R1+R2) = 5.0 * 4/5 = 4.0
 #[test]
 fn ac_resistance_op() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "check for proper use of ac resistance
 
 Vin 1 0 dc 5.0 ac 3.0
@@ -223,7 +223,7 @@ R2 2 0 4k
 /// pole = -1/tau = -500000
 #[test]
 fn ac_resistance_pz() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "check for proper use of ac resistance
 
 Vin 1 0 dc 5.0 ac 3.0
@@ -254,7 +254,7 @@ R2 2 0 4k
 /// Ported from ngspice-upstream/tests/regression/temper/temper-1.cir (parse part)
 #[test]
 fn temp_directive_parsing() {
-    let netlist = thevenin_types::Netlist::parse(
+    let netlist = thevenin_types::Netlist::parse_single(
         "test .temp directive
 v1 1 0 1
 r1 1 0 1k
@@ -271,7 +271,7 @@ r1 1 0 1k
 /// .temp default: Without .temp directive, temperature should be 27°C.
 #[test]
 fn temp_default() {
-    let netlist = thevenin_types::Netlist::parse(
+    let netlist = thevenin_types::Netlist::parse_single(
         "test default temperature
 v1 1 0 1
 r1 1 0 1k
@@ -288,7 +288,7 @@ r1 1 0 1k
 /// Tests that the first matching branch is selected.
 #[test]
 fn if_elseif_first_match() {
-    let netlist = thevenin_types::Netlist::parse(
+    let netlist = thevenin_types::Netlist::parse_single(
         "test first match
 .param select = 1
 
@@ -315,7 +315,7 @@ V1 1 0 1
 /// if-elseif: .else fallback path.
 #[test]
 fn if_else_fallback() {
-    let netlist = thevenin_types::Netlist::parse(
+    let netlist = thevenin_types::Netlist::parse_single(
         "test else fallback
 .param select = 99
 

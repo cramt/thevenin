@@ -19,6 +19,83 @@ pub struct PrintDirective {
     pub vars: Vec<String>,
 }
 
+/// Format a simulation result in ngspice batch-mode text format,
+/// using multiple netlist forks (for checking if any analysis is `.op`).
+pub fn format_batch_output_multi(netlists: &[Netlist], result: &SimResult) -> String {
+    // Use the last fork (has all accumulated items including .print directives).
+    let netlist = netlists.last().expect("no netlists");
+    let mut out = String::new();
+    let title = &netlist.title;
+    let (temp, tnom) = netlist_temp_tnom(netlist);
+
+    out.push_str(&format!("\nCircuit: {title}\n"));
+    out.push_str(&format!(
+        "\nDoing analysis at TEMP = {temp:.6} and TNOM = {tnom:.6}\n"
+    ));
+
+    let prints = parse_print_directives(netlist);
+
+    let has_tran = result
+        .plots
+        .iter()
+        .any(|p| plot_analysis_type(&p.name) == "tran");
+    let has_print_tran = prints
+        .iter()
+        .any(|p| p.analysis.eq_ignore_ascii_case("tran"));
+    if has_tran && has_print_tran {
+        format_initial_tran_solution(&mut out, netlist, result);
+    }
+
+    if has_list_option(netlist) && !netlist.source.is_empty() {
+        out.push_str(&format_netlist_echo(&netlist.source));
+    }
+
+    // Check across all forks whether any has an explicit .op analysis
+    if any_has_explicit_op(netlists) {
+        format_op_section(&mut out, netlist, result);
+    }
+
+    let tf_plots: Vec<&SimPlot> = result
+        .plots
+        .iter()
+        .filter(|p| plot_analysis_type(&p.name) == "tf")
+        .collect();
+    for tf_plot in &tf_plots {
+        format_tf_output(&mut out, tf_plot);
+    }
+
+    let pz_plots: Vec<&SimPlot> = result
+        .plots
+        .iter()
+        .filter(|p| plot_analysis_type(&p.name) == "pz")
+        .collect();
+    if !pz_plots.is_empty() {
+        format_pz_table(&mut out, title, &pz_plots);
+    }
+
+    for plot in &result.plots {
+        let plot_type = plot_analysis_type(&plot.name);
+        if plot_type == "op" || plot_type == "pz" {
+            continue;
+        }
+
+        let matching_prints: Vec<&PrintDirective> = prints
+            .iter()
+            .filter(|p| p.analysis.eq_ignore_ascii_case(&plot_type))
+            .collect();
+
+        if plot_type == "sens" {
+            format_print_all_table(&mut out, title, plot, &plot_type);
+        } else if !matching_prints.is_empty() {
+            for p in &matching_prints {
+                format_print_table(&mut out, title, plot, p);
+            }
+        }
+    }
+
+    out
+}
+
 /// Format a simulation result in ngspice batch-mode text format.
 pub fn format_batch_output(netlist: &Netlist, result: &SimResult) -> String {
     let mut out = String::new();
@@ -276,10 +353,12 @@ fn format_netlist_echo(source: &str) -> String {
 }
 
 fn has_explicit_op(netlist: &Netlist) -> bool {
-    netlist
-        .items
-        .iter()
-        .any(|item| matches!(item, Item::Analysis(Analysis::Op)))
+    matches!(netlist.analysis, Analysis::Op)
+}
+
+/// Check if any netlist in a set has an explicit `.op` analysis.
+fn any_has_explicit_op(netlists: &[Netlist]) -> bool {
+    netlists.iter().any(|n| matches!(n.analysis, Analysis::Op))
 }
 
 /// Build a node-name → voltage map from an OP plot.

@@ -18,7 +18,7 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
 }
 
 fn simulate_with_libs(cir: &str, base_dir: &Path) -> thevenin_types::SimResult {
-    let mut netlist = Netlist::parse(cir).unwrap();
+    let mut netlist = Netlist::parse_single(cir).unwrap();
     thevenin::libproc::process_libs(&mut netlist, base_dir).unwrap();
     thevenin::simulate_op(&netlist).unwrap()
 }
@@ -87,7 +87,7 @@ fn lib_ex3a() {
 /// sub2: local sub has R=2k, X1+R1 = 2k||2k = 1k → V = 1mA * 1k = 1V
 #[test]
 fn scope_1() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "scope-1, subckt scopes
 i1001_t n1001_t 0 -1mA
 x1001_t n1001_t 0 sub1
@@ -131,7 +131,7 @@ R1 n1 n2 2k
 /// top-level sub: R1(3k) → 3V (negative because current source is -1mA flowing into node)
 #[test]
 fn scope_2() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "scope-2, subckt scopes
 i1001_t n1001_t 0 -1mA
 x1001_t n1001_t 0 sub1
@@ -192,7 +192,7 @@ R1 n1 n2 2k
 /// x1003_t: sub foo=3k → top-level sub: R1='foo*11'=33k → V = 33V
 #[test]
 fn scope_3() {
-    let netlist = Netlist::parse(
+    let netlist = Netlist::parse_single(
         "scope-3, subckt scopes
 .param foo = 2k
 

@@ -191,16 +191,14 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
         return run_temp_sweep(parts[2], parts[3], parts[4], ctx);
     }
 
-    // Parse the command line into an Analysis and temporarily inject it into the netlist
+    // Parse the command line into an Analysis and build a single-analysis netlist
     let analysis = parse_analysis_command(&cmd, &parts[1..])?;
 
-    // Build a working copy of the netlist with TEMPER expressions resolved
+    // Build a working copy of the netlist with the analysis set directly
     let mut netlist = ctx.netlist.clone();
+    netlist.analysis = analysis.clone();
     let temp_c = thevenin::netlist_temp(&netlist);
     evaluate_temper_exprs(&mut netlist, temp_c);
-    netlist
-        .items
-        .push(thevenin_types::Item::Analysis(analysis.clone()));
 
     let result = match &analysis {
         Analysis::Op => thevenin::simulate_op_dc(&netlist).map_err(|e| format!("OP: {e}")),

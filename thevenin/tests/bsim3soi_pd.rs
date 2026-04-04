@@ -104,7 +104,7 @@ Ve e 0 0.0
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).expect("parse");
+    let netlist = Netlist::parse_single(&cir).expect("parse");
     let result = simulate_op(&netlist);
     assert!(result.is_ok(), "OP failed: {:?}", result.err());
 }
@@ -126,7 +126,7 @@ Ve e 0 0.0
 .end
 "
         );
-        let netlist = Netlist::parse(&cir).expect("parse");
+        let netlist = Netlist::parse_single(&cir).expect("parse");
         let result = simulate_op(&netlist);
         assert!(
             result.is_ok(),
@@ -154,7 +154,7 @@ Ve e 0 1.25
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).expect("parse");
+    let netlist = Netlist::parse_single(&cir).expect("parse");
     let result = simulate_op(&netlist);
     assert!(result.is_ok(), "PMOS OP failed: {:?}", result.err());
 }
@@ -181,7 +181,7 @@ m2 out in ss e n1 W=10u L=0.25u
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).expect("parse");
+    let netlist = Netlist::parse_single(&cir).expect("parse");
     let result = simulate_op(&netlist);
     assert!(result.is_ok(), "Inverter OP failed: {:?}", result.err());
 
@@ -221,7 +221,7 @@ m2 out in ss e n1 W=10u L=0.25u
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).expect("parse");
+    let netlist = Netlist::parse_single(&cir).expect("parse");
     let result = simulate_op(&netlist);
     assert!(result.is_ok(), "Inverter OP failed: {:?}", result.err());
 
@@ -258,7 +258,7 @@ Vb b 0 0.0
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).expect("parse");
+    let netlist = Netlist::parse_single(&cir).expect("parse");
     let result = simulate_op(&netlist);
     assert!(result.is_ok(), "5-terminal OP failed: {:?}", result.err());
 }
@@ -279,7 +279,7 @@ Ve e 0 0.0
 .end
 "
     );
-    let netlist = Netlist::parse(&cir).expect("parse");
+    let netlist = Netlist::parse_single(&cir).expect("parse");
     let result = simulate_dc(&netlist);
     assert!(result.is_ok(), "DC sweep failed: {:?}", result.err());
 

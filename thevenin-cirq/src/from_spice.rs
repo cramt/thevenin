@@ -20,9 +20,16 @@ pub enum SpiceLowerError {
 }
 
 /// Parse SPICE text and lower it to the CirQ IR.
+///
+/// Uses the first netlist fork (ignoring analysis type — CirQ is structural only).
 pub fn from_spice(input: &str) -> Result<Circuit, SpiceLowerError> {
-    let netlist = Netlist::parse(input)?;
-    lower_netlist(&netlist)
+    let netlists = Netlist::parse(input)?;
+    // CirQ only cares about circuit structure; pick the last fork which has
+    // the most accumulated items.
+    let netlist = netlists
+        .last()
+        .ok_or(SpiceLowerError::Parse(thevenin_types::ParseError::Empty))?;
+    lower_netlist(netlist)
 }
 
 /// Lower an already-parsed SPICE netlist to the CirQ IR.
@@ -130,8 +137,8 @@ fn lower_item(
         Item::Temp(t) => {
             circuit.temperature = Some(*t);
         }
-        // Ignored: Analysis, Comment, Save, Raw
-        Item::Analysis(_) | Item::Comment(_) | Item::Save(_) | Item::Raw(_) | Item::Control(_) => {}
+        // Ignored: Comment, Save, Raw, Control
+        Item::Comment(_) | Item::Save(_) | Item::Raw(_) | Item::Control(_) => {}
     }
     Ok(())
 }

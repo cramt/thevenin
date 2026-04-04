@@ -2,7 +2,7 @@ use faer::Mat;
 use faer::linalg::solvers::FullPivLu;
 use faer::prelude::Solve;
 
-use thevenin_types::{Analysis, Item, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
@@ -173,18 +173,14 @@ fn parse_sens_output(
 /// because the near-cancellation happens inside the sparse linear solve rather
 /// than in a dot product with a potentially-inaccurate adjoint vector.
 pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    // Parse .sens analysis
-    let sens_output = netlist
-        .items
-        .iter()
-        .find_map(|item| {
-            if let Item::Analysis(Analysis::Sens { output }) = item {
-                Some(output.clone())
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| MnaError::UnsupportedElement("no .sens analysis found".to_string()))?;
+    let sens_output = match &netlist.analysis {
+        Analysis::Sens { output } => output.clone(),
+        _ => {
+            return Err(MnaError::UnsupportedElement(
+                "no .sens analysis found".to_string(),
+            ));
+        }
+    };
 
     let output_var = &sens_output[0];
 
@@ -600,7 +596,7 @@ mod tests {
         // S[R1_m] = -V/m = -42
         // S[I1_m] = I_dc * R / m = 42
         // S[R1_scale] = V/scale = 42
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "sens dc test
 i1 0 1 DC 42m
 r1 1 0 1k
@@ -623,7 +619,7 @@ r1 1 0 1k
     fn test_sens_dc_resistor_network() {
         // sens-dc-2: V1=42V, R1=1k, R2=1.5k, R3=2.2k, R4=3.3k, R5=1.8k, Rx=2.7k
         // Sensitivity of V(4) to each component
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "sens dc resistor network
 v1 1 0 DC 42
 r1 1 2 1k
@@ -684,7 +680,7 @@ rx 2 4 2.7k
         // S[V1] = R2/(R1+R2) = 0.5
         // S[R1] = dV/dR1 = -V1*R2/(R1+R2)^2 = -10*1000/4e6 = -2.5e-3
         // S[R2] = dV/dR2 = V1*R1/(R1+R2)^2 = 10*1000/4e6 = 2.5e-3
-        let netlist = Netlist::parse(
+        let netlist = Netlist::parse_single(
             "sens voltage divider
 v1 1 0 10
 r1 1 mid 1k

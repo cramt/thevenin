@@ -45,7 +45,7 @@ A1 in out amp1
 .op
 .end
 ";
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let registry = gain_vccs_registry(0.01);
     let result = thevenin::simulate_op_with_xspice(&netlist, registry).unwrap();
 
@@ -124,7 +124,7 @@ A1 [mid 0] nlc1
 .op
 .end
 ";
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let registry = nonlinear_conductance_registry();
     let result = thevenin::simulate_op_with_xspice(&netlist, registry).unwrap();
 
@@ -155,7 +155,7 @@ R2 out 0 1k
 .op
 .end
 ";
-    let netlist = Netlist::parse(cir).unwrap();
+    let netlist = Netlist::parse_single(cir).unwrap();
     let registry = Arc::new(CodeModelRegistry::new());
     let result = thevenin::simulate_op_with_xspice(&netlist, registry).unwrap();
 
