@@ -2465,25 +2465,41 @@ pub fn bsim3soi_dd_companion(
     // Vdsatii for impact ionization (b3soiddld.c lines 1761-1810)
     // When AII > 0, the ionization saturation voltage is computed from
     // AII/BII/CII/DII parameters; otherwise it defaults to Vdsat.
-    let vdsatii = if model.aii > 0.0 {
-        let t0_cii = if model.cii != 0.0 {
+    let (vdsatii, dvdsatii_dvg, dvdsatii_dvd, dvdsatii_dvb);
+    if model.aii > 0.0 {
+        let (t0_cii, dt0_cii_dvd) = if model.cii != 0.0 {
             let t0_lim = model.cii / 3.0_f64.sqrt() + model.dii;
             let t1_lim = vds_i - t0_lim - 0.1;
             let t2_lim = (t1_lim * t1_lim + 0.4).sqrt();
-            let t3_lim = t0_lim + 0.5 * (t1_lim + t2_lim);
-            let t4_lim = t3_lim - model.dii;
+            let _t3_lim = t0_lim + 0.5 * (t1_lim + t2_lim);
+            let dt3_dvd = 0.5 * (1.0 + t1_lim / t2_lim);
+            let t4_lim = _t3_lim - model.dii;
             let t5_cii = model.cii / t4_lim;
-            t5_cii * t5_cii
+            let t0_v = t5_cii * t5_cii;
+            let dt0_dvd = -2.0 * t0_v / t4_lim * dt3_dvd;
+            (t0_v, dt0_dvd)
         } else {
-            0.0
+            (0.0, 0.0)
         };
         let t0 = t0_cii + 1.0;
         let t3 = model.aii + model.bii / sp.leff;
         let t4 = 1.0 / (t0 * vgsteff + t3 * esat_l);
-        esat_l * vgsteff * t4
+        let t5 = -t4 * t4;
+        let t7 = esat_l * vgsteff;
+        let t8 = t4 * vgsteff;
+        vdsatii = t7 * t4;
+        let dt4_dvg = t5 * (t0 + t3 * desat_l_dvg);
+        let dt4_dvb = t5 * t3 * desat_l_dvb;
+        let dt4_dvd = t5 * (vgsteff * dt0_cii_dvd + t3 * desat_l_dvd);
+        dvdsatii_dvg = t7 * dt4_dvg + t4 * (esat_l + vgsteff * desat_l_dvg);
+        dvdsatii_dvb = t7 * dt4_dvb + t8 * desat_l_dvb;
+        dvdsatii_dvd = t7 * dt4_dvd + t8 * desat_l_dvd;
     } else {
-        vdsat
-    };
+        vdsatii = vdsat;
+        dvdsatii_dvg = dvdsat_dvg;
+        dvdsatii_dvb = dvdsat_dvb;
+        dvdsatii_dvd = dvdsat_dvd;
+    }
 
     // Effective Vdsii: smooth clamp Vdseffii ≈ min(Vdsatii, Vds)
     // (b3soiddld.c lines 1847-1866)
@@ -2492,33 +2508,64 @@ pub fn bsim3soi_dd_companion(
     let vdseffii = vdsatii - 0.5 * (t1_ii + t2_ii_val);
     let diff_vdsii = vds_i - vdseffii;
 
+    // dVdseffii/dV* derivatives (b3soiddld.c lines 1850-1862)
+    let t0_ii = t1_ii / t2_ii_val;
+    let t3_ii = 2.0 * sp.delta / t2_ii_val;
+    let t4_ii = t0_ii + t3_ii;
+    let dt2ii_dvg = t4_ii * dvdsatii_dvg;
+    let dt2ii_dvd = t4_ii * dvdsatii_dvd - t0_ii;
+    let dt2ii_dvb = t4_ii * dvdsatii_dvb;
+    let dvdseffii_dvg = 0.5 * (dvdsatii_dvg - dt2ii_dvg);
+    let dvdseffii_dvd = 0.5 * (dvdsatii_dvd - dt2ii_dvd + 1.0);
+    let dvdseffii_dvb = 0.5 * (dvdsatii_dvb - dt2ii_dvb);
+
     // Impact ionization (DD: b3soiddld.c lines 2156-2200)
-    // Uses diffVdsii = Vds - Vdseffii (excess drain voltage beyond saturation)
-    // as the electric field driving impact ionization, not Vds - beta0.
+    // Full chain-rule derivatives matching ngspice's decomposed approach.
     let t2_alpha = model.alpha1 + sp.alpha0 / sp.leff;
     let (iii, gii_d, gii_g, gii_b, gii_e) = if t2_alpha <= 0.0 || sp.beta0 <= 0.0 {
         (0.0, 0.0, 0.0, 0.0, 0.0)
     } else if diff_vdsii > sp.beta0 / EXP_THRESHOLD {
         let t0 = -sp.beta0 / diff_vdsii;
+        let t10 = t0 / diff_vdsii;
+        let dt0_dvg = t10 * dvdseffii_dvg;
         let t1 = t2_alpha * diff_vdsii * t0.exp();
         let iii = t1 * ids;
-        // Simplified derivatives: dIii/dV ≈ Iii/Ids * dIds/dV
-        // (full ngspice uses decomposed Gm0/Gds0/Gmb0 with chain rule)
+
         let t3 = t1 / diff_vdsii * (t0 - 1.0);
-        let gii_d = t1 * gds - t3 * ids;
-        let gii_g = t1 * gm;
-        let gii_b = t1 * gmbs;
-        // gii_e: back-gate coupling (ngspice b3soiddld.c line 2201: Giie = T2*dVgsteff_dVe + T4*dVbseff_dVe + T5*dVcs_dVe)
-        let gii_e = t1 * gme;
+        let dt1_dvg = t1 * (dt0_dvg - dvdseffii_dvg / diff_vdsii);
+        let dt1_dvd = -t3 * (1.0 - dvdseffii_dvd);
+        let dt1_dvb = t3 * dvdseffii_dvb;
+
+        // Decomposed derivatives: Iii = T1 * Ids, so
+        // dIii/dV = (T1 * dIds/dV_internal + Ids * dT1/dV_internal) * chain_rule
+        // ngspice lines 2191-2201
+        let t2_v = t1 * gm0 + ids * dt1_dvg;
+        let t3_v = t1 * gds0 + ids * dt1_dvd;
+        let t4_v = t1 * gmbs0 + ids * dt1_dvb;
+        let t5_v = t1 * gmc;
+
+        let gii_g = t2_v * dvgsteff_dvg + t4_v * dvbseff_dvg + t5_v * dvcs_dvg;
+        let gii_b = t2_v * dvgsteff_dvb + t4_v * dvbseff_dvb + t5_v * dvcs_dvb;
+        let gii_d = t2_v * dvgsteff_dvd + t4_v * dvbseff_dvd + t5_v * dvcs_dvd + t3_v;
+        let gii_e = t2_v * dvgsteff_dve + t4_v * dvbseff_dve + t5_v * dvcs_dve;
         (iii, gii_d, gii_g, gii_b, gii_e)
     } else if diff_vdsii > 0.0 {
         let t3_min = t2_alpha * MIN_EXP;
         let t1 = t3_min * diff_vdsii;
         let iii = t1 * ids;
-        let gii_d = t3_min * ids + t1 * gds;
-        let gii_g = t1 * gm;
-        let gii_b = t1 * gmbs;
-        let gii_e = t1 * gme;
+        let dt1_dvg = -t3_min * dvdseffii_dvg;
+        let dt1_dvd = t3_min * (1.0 - dvdseffii_dvd);
+        let dt1_dvb = -t3_min * dvdseffii_dvb;
+
+        let t2_v = t1 * gm0 + ids * dt1_dvg;
+        let t3_v = t1 * gds0 + ids * dt1_dvd;
+        let t4_v = t1 * gmbs0 + ids * dt1_dvb;
+        let t5_v = t1 * gmc;
+
+        let gii_g = t2_v * dvgsteff_dvg + t4_v * dvbseff_dvg + t5_v * dvcs_dvg;
+        let gii_b = t2_v * dvgsteff_dvb + t4_v * dvbseff_dvb + t5_v * dvcs_dvb;
+        let gii_d = t2_v * dvgsteff_dvd + t4_v * dvbseff_dvd + t5_v * dvcs_dvd + t3_v;
+        let gii_e = t2_v * dvgsteff_dve + t4_v * dvbseff_dve + t5_v * dvcs_dve;
         (iii, gii_d, gii_g, gii_b, gii_e)
     } else {
         (0.0, 0.0, 0.0, 0.0, 0.0)
