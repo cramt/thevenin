@@ -166,7 +166,7 @@ fn parse_sens_output(
 /// 3. For each parameter p:
 ///    a. Compute z = delta_b - delta_Y*x (perturbation of companion stamps)
 ///    b. Solve Y * delta_E = z (forward solve with same LU)
-///    c. S(p) = (delta_E[out_pos] - delta_E[out_neg]) / delta_p
+///    c. S(p) = (delta_E\[out_pos\] - delta_E\[out_neg\]) / delta_p
 ///
 /// The direct method is numerically more stable than the adjoint method for
 /// circuits where the sensitivity is a small difference of large contributions,

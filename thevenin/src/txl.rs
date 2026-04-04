@@ -57,9 +57,9 @@ pub struct TxLine {
     pub h2_aten: f64,
     /// Attenuation factor for h3 (combined Y*exp).
     pub h3_aten: f64,
-    /// Sum of h1 residues (h1C = sum of h1_term[i].c after scaling).
+    /// Sum of h1 residues (h1C = sum of h1_term\[i\].c after scaling).
     pub h1c: f64,
-    /// Cached exp(h1_term[i].x * h) values.
+    /// Cached exp(h1_term\[i\].x * h) values.
     pub h1e: [f64; 3],
     /// Whether the propagation function has complex conjugate poles.
     pub if_img: bool,

@@ -1043,7 +1043,7 @@ pub struct LtraExcitation {
 
 /// Stamp the LTRA matrix for transient analysis and compute RHS excitation.
 ///
-/// Returns the matrix coefficients added. The RHS excitation is added to rhs[br1] and rhs[br2].
+/// Returns the matrix coefficients added. The RHS excitation is added to rhs\[br1\] and rhs\[br2\].
 #[expect(clippy::too_many_arguments)]
 pub fn stamp_ltra_transient(
     inst: &LtraInstance,

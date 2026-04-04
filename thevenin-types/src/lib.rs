@@ -1175,7 +1175,7 @@ impl Netlist {
         })
     }
 
-    /// Lines to feed directly to [`ngspice::NgSpice::load_circuit`].
+    /// Lines to feed directly to `ngspice::NgSpice::load_circuit`.
     ///
     /// Returns the netlist rendered as individual SPICE lines, terminated
     /// by `.end`.

@@ -77,11 +77,11 @@ pub struct CpLine {
     pub ext: bool,
     pub ratio: Vec<f64>,
     pub taul: Vec<f64>,
-    /// h1t[i][j]: admittance (Y) terms.
+    /// h1t\[i\]\[j\]: admittance (Y) terms.
     pub h1t: Vec<Vec<Option<Tms>>>,
-    /// h2t[i][j][k]: current coupling through mode k.
+    /// h2t\[i\]\[j\]\[k\]: current coupling through mode k.
     pub h2t: Vec<Vec<Vec<Option<Tms>>>>,
-    /// h3t[i][j][k]: voltage coupling through mode k.
+    /// h3t\[i\]\[j\]\[k\]: voltage coupling through mode k.
     pub h3t: Vec<Vec<Vec<Option<Tms>>>>,
     /// h1C coefficients.
     pub h1c_coeff: Vec<Vec<f64>>,
@@ -1448,15 +1448,15 @@ pub struct CplTransientStamp {
     pub ibr2: Vec<usize>,
     pub pos_nodes: Vec<Option<usize>>,
     pub neg_nodes: Vec<Option<usize>>,
-    /// Admittance matrix entries: ibr1[m]->pos[p] and ibr2[m]->neg[p].
+    /// Admittance matrix entries: ibr1\[m\]->pos\[p\] and ibr2\[m\]->neg\[p\].
     pub admittance: Vec<Vec<f64>>,
     /// RHS contributions for ibr1 equations.
     pub ff: Vec<f64>,
     /// RHS contributions for ibr2 equations.
     pub gg: Vec<f64>,
-    /// Coupling entries: ibr1[m]->neg[p] = -f, ibr2[m]->pos[p] = -f.
+    /// Coupling entries: ibr1\[m\]->neg\[p\] = -f, ibr2\[m\]->pos\[p\] = -f.
     pub coupling_v: Vec<Vec<Vec<f64>>>,
-    /// Coupling entries: ibr1[m]->ibr2[p] = -f, ibr2[m]->ibr1[p] = -f.
+    /// Coupling entries: ibr1\[m\]->ibr2\[p\] = -f, ibr2\[m\]->ibr1\[p\] = -f.
     pub coupling_i: Vec<Vec<Vec<f64>>>,
     /// Whether extended timestep coupling is active.
     pub ext: bool,
