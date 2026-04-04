@@ -181,3 +181,47 @@ The ~31% error at t=293ns is from transient dynamics (same class as rtlinv). Not
 missing feature issue.
 
 **What NOT to retry:** BJT feature audits for schmitt (all present).
+
+## Session 107 findings (2026-04-04)
+
+### HFET inverter: Gate leakage model fix + pnjlim addition
+
+**Discovered:** Major model discrepancies between thevenin's HFET implementation and
+ngspice's HFET2 (level=5):
+
+1. **Wrong gate leakage model:** Code used HFET1-style gate leakage (multi-level diode
+   `leak()` function with js1s/js1d/js2s/js2d parameters + gatemod selector) instead of
+   HFET2 formula (`JSLW*(exp(vgs/N*vt)-1) + GGRLW*vgs*exp(-vgs*DEL/vt)`). HFET2 uses
+   JS (single junction parameter) and N (ideality factor, default 5.0).
+
+2. **Wrong GGR default:** Was 40.0 (HFET1 default), should be 0.0 (HFET2 default,
+   hfet2setup.c). This added spurious gate recombination conductance.
+
+3. **Missing JS and N parameters:** HFET2 uses JS (default 0) and N (default 5.0) for
+   gate junction. These were absent — the code used HFET1's js1s/js1d instead.
+
+4. **Missing pnjlim:** ngspice HFET2 applies BOTH DEVpnjlim AND DEVfetlim (hfet2load.c
+   lines 179-185). Our code only had fetlim. Added pnjlim with vcrit computed from JSLW
+   (infinity when JS=0, so effectively disabled for this circuit).
+
+5. **HFET1 params ignored by ngspice HFET2:** The test model card sets js1s=1e-12 and
+   js1d=1e-12, which are HFET1-only parameters. ngspice HFET2 silently ignores them
+   (not in hfet2mpar.c parameter table). Our code was accepting and using them.
+
+**Implemented:** All five fixes above. Gate leakage now uses HFET2 formula. GGR defaults
+to 0. JS (default 0) and N (default 5.0) added. pnjlim added to limiting chain.
+No regressions (613 tests pass). Clippy clean.
+
+**Result:** HFET inverter still converges to V(3)≈2.0V (was 1.96V before, now exactly
+Vdd since gate leakage is zero). The fix is correct (matching ngspice model) but doesn't
+change the NR convergence basin for this bistable circuit.
+
+**Root cause confirmed:** The DCFL inverter convergence issue is NOT a gate leakage or
+model parameter bug. With JS=0 and GGR=0, ngspice also has zero gate leakage. The
+circuit has two stable equilibria (V≈Vdd and V≈-0.275V), and which one NR finds depends
+on the exact iteration path. ngspice's path differs from ours due to the MODEINITFLOAT
+mode (ngspice does InitJct → InitFloat → normal NR; we do InitJct → normal NR).
+
+**What NOT to retry:** Gate leakage model changes (now matches ngspice exactly), GGR
+default changes, JS/N parameter additions. The HFET inverter requires matching ngspice's
+MODEINITJCT → MODEINITFLOAT → normal NR three-phase initialization sequence.

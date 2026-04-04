@@ -1,9 +1,9 @@
 //! HFET (Heterojunction FET) device model.
 //!
-//! Implements the HFET1 (level=5) model from ngspice,
+//! Implements the HFET2 (level=5) model from ngspice,
 //! used with `.model name NHFET/PHFET level=5` syntax.
 //!
-//! Reference: ngspice hfet1/ device directory (hfetload.c, hfetdefs.h, hfettemp.c).
+//! Reference: ngspice hfet2/ device directory (hfet2load.c, hfet2defs.h, hfet2temp.c).
 
 use thevenin_types::{Expr, ModelDef};
 
@@ -84,6 +84,8 @@ pub struct HfetModel {
     pub vt2: f64,     // Second channel threshold
     pub ggr: f64,     // Gate-source recombination
     pub del: f64,     // Temperature-dependent gate recombination
+    pub js: f64,      // Junction saturation current (HFET2)
+    pub n: f64,       // Diode ideality factor (HFET2, default 5.0)
     pub klambda: f64, // Lambda temperature coefficient
     pub kmu: f64,     // Mu temperature coefficient
     pub kvto: f64,    // Vto temperature coefficient
@@ -173,8 +175,10 @@ impl HfetModel {
             eta2: 2.0,
             d2: 0.2e-6,
             vt2: f64::MAX,
-            ggr: 40.0,
+            ggr: 0.0,  // ngspice HFET2 default (hfet2setup.c)
             del: 0.04,
+            js: 0.0,   // ngspice HFET2 default (hfet2setup.c)
+            n: 5.0,    // ngspice HFET2 default (hfet2setup.c)
             klambda: 0.0,
             kmu: 0.0,
             kvto: 0.0,
@@ -276,6 +280,8 @@ impl HfetModel {
                 }
                 "GGR" => m.ggr = val,
                 "DEL" => m.del = val,
+                "JS" => m.js = val,
+                "N" => m.n = val,
                 "KLAMBDA" => m.klambda = val,
                 "KMU" => m.kmu = val,
                 "KVTO" => m.kvto = val,
@@ -352,6 +358,7 @@ pub struct HfetPrecomp {
     pub is2s: f64,
     pub iso: f64,
     pub ggrwl: f64,
+    pub jslw: f64,  // HFET2: JS * L * W / 2
     pub vcrit: f64,
     pub t_lambda: f64,
     pub t_mu: f64,
@@ -381,14 +388,13 @@ impl HfetPrecomp {
         let is2s = model.js2s * w * l / 2.0;
         let iso = model.astar * w * l / 2.0;
         let ggrwl = model.ggr * l * w / 2.0;
+        let jslw = model.js * l * w / 2.0;
 
-        let vcrit = if model.gatemod == 0 {
-            if is1s != 0.0 {
-                vt * (vt / (std::f64::consts::SQRT_2 * is1s)).ln()
-            } else {
-                f64::MAX
-            }
-        } else if iso != 0.0 {
+        // Voltage limiting critical voltage for junction exponential
+        let vcrit = if jslw > 0.0 {
+            let vtn = model.n * vt;
+            vtn * (vtn / (std::f64::consts::SQRT_2 * jslw)).ln()
+        } else if model.gatemod != 0 && iso > 0.0 {
             vt * (vt / (std::f64::consts::SQRT_2 * iso)).ln()
         } else {
             f64::MAX
@@ -407,6 +413,7 @@ impl HfetPrecomp {
             is2s,
             iso,
             ggrwl,
+            jslw,
             vcrit,
             t_lambda,
             t_mu,
@@ -473,7 +480,8 @@ pub struct HfetCompanion {
 }
 
 /// Gate leakage current model (from hfetload.c `leak` function).
-#[expect(clippy::too_many_arguments)]
+/// Used by HFET1 (level=1) gate model; kept for future HFET1 support.
+#[expect(dead_code, clippy::too_many_arguments)]
 fn leak(gmin: f64, vt: f64, v: f64, rs: f64, is1: f64, is2: f64, m1: f64, m2: f64) -> (f64, f64) {
     let vt1 = vt * m1;
     let vt2 = vt * m2;
@@ -511,7 +519,7 @@ fn leak(gmin: f64, vt: f64, v: f64, rs: f64, is1: f64, is2: f64, m1: f64, m2: f6
     }
 }
 
-/// Diode function from hfetload.c.
+/// Diode function from hfetload.c (HFET1 gate model helper).
 fn diode_fn(u: f64) -> f64 {
     const U0: f64 = -2.303;
     const A: f64 = 2.221;
@@ -775,31 +783,30 @@ pub fn hfet_companion_full(inst: &HfetInstance, vgs: f64, vgd: f64, gmin: f64) -
     let mut gmg = 0.0;
     let mut gmd = 0.0;
 
-    // Gate leakage
+    // Gate leakage — HFET2 model (hfet2load.c lines 192-205)
+    // Uses JS (junction saturation current), N (ideality factor),
+    // GGR (gate recombination conductance), DEL (recombination parameter).
+    // JSLW = JS*L*W/2, GGRLW = GGR*L*W/2, vtn = N*vt.
     if model.gatemod == 0 {
-        if pre.is1s != 0.0 && pre.is2s != 0.0 {
-            let (il, gl) = leak(
-                gmin, vt, vgs, model.rgs, pre.is1s, pre.is2s, model.m1s, model.m2s,
-            );
-            cgs_current = il;
-            ggs = gl;
-        }
-        let arg = -vgs * model.del / vt;
-        let earg = arg.exp();
-        cgs_current += pre.ggrwl * vgs * earg;
-        ggs += pre.ggrwl * earg * (1.0 - arg);
+        let vtn = model.n * vt;
 
-        if pre.is1d != 0.0 && pre.is2d != 0.0 {
-            let (il, gl) = leak(
-                gmin, vt, vgd, model.rgd, pre.is1d, pre.is2d, model.m1d, model.m2d,
-            );
-            cgd_current = il;
-            ggd = gl;
+        // Gate-source
+        {
+            let arg = -vgs * model.del / vt;
+            let earg = arg.exp();
+            let expe = (vgs / vtn).exp();
+            ggs = pre.jslw * expe / vtn + pre.ggrwl * earg * (1.0 - arg);
+            cgs_current = pre.jslw * (expe - 1.0) + pre.ggrwl * vgs * earg;
         }
-        let arg = -vgd * model.del / vt;
-        let earg = arg.exp();
-        cgd_current += pre.ggrwl * vgd * earg;
-        ggd += pre.ggrwl * earg * (1.0 - arg);
+
+        // Gate-drain
+        {
+            let arg = -vgd * model.del / vt;
+            let earg = arg.exp();
+            let expe = (vgd / vtn).exp();
+            ggd = pre.jslw * expe / vtn + pre.ggrwl * earg * (1.0 - arg);
+            cgd_current = pre.jslw * (expe - 1.0) + pre.ggrwl * vgd * earg;
+        }
     }
 
     // Channel current

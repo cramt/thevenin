@@ -1124,9 +1124,13 @@ impl DeviceVoltageState {
                     // initial guess determines which OP the NR solver finds.
                     (-1.0, -1.0)
                 } else {
+                    // HFET2 (hfet2load.c lines 179-185) applies both
+                    // DEVpnjlim and DEVfetlim voltage limiting.
                     let (raw_vgs, raw_vgd) = hfet.junction_voltages(solution);
-                    let vgs = fetlim(raw_vgs, prev[hi].0, hfet.precomp.t_vto);
-                    let vgd = fetlim(raw_vgd, prev[hi].1, hfet.precomp.t_vto);
+                    let vgs_lim = pnjlim(raw_vgs, prev[hi].0, VT_NOM, hfet.precomp.vcrit);
+                    let vgd_lim = pnjlim(raw_vgd, prev[hi].1, VT_NOM, hfet.precomp.vcrit);
+                    let vgs = fetlim(vgs_lim, prev[hi].0, hfet.precomp.t_vto);
+                    let vgd = fetlim(vgd_lim, prev[hi].1, hfet.precomp.t_vto);
                     (vgs, vgd)
                 };
                 prev[hi] = (vgs, vgd);
