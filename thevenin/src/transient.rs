@@ -131,6 +131,33 @@ struct HfetChargeHistory {
     vgdpp: f64,
 }
 
+/// History state for BSIM3SOI-DD body charge at the previous timestep.
+/// Tracks the body node charge wrt gate, drain, and source terminals.
+/// Currently only the B-E (buried oxide) capacitance is integrated; the
+/// full multi-terminal charge model (G, D, B, E rows) is future work.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct Bsim3SoiDdChargeHistory {
+    /// Body charge component from gate voltage: Q_bg.
+    qbg: f64,
+    /// Body charge component from drain voltage: Q_bd.
+    qbd: f64,
+    /// Body charge component from source voltage: Q_bs.
+    qbs: f64,
+    /// Charge current dQbg/dt at previous timestep (for trapezoidal).
+    cqbg: f64,
+    /// Charge current dQbd/dt at previous timestep (for trapezoidal).
+    cqbd: f64,
+    /// Charge current dQbs/dt at previous timestep (for trapezoidal).
+    cqbs: f64,
+    /// Previous V(body) - V(gate).
+    vbg: f64,
+    /// Previous V(body) - V(drain).
+    vbd: f64,
+    /// Previous V(body) - V(source).
+    vbs: f64,
+}
+
 /// Compute capacitor companion model coefficients.
 ///
 /// Returns `(geq, ieq)` where:
@@ -753,6 +780,33 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
+    // Initialize BSIM3SOI-DD body charge histories from DC operating point.
+    // We model the dominant body-to-backgate capacitance (CboxWL) as a simple
+    // two-terminal capacitor. The charge history tracks Q_be = CboxWL * V_be.
+    let mut soidd_charge_histories: Vec<Bsim3SoiDdChargeHistory> = mna
+        .bsim3soi_dds
+        .iter()
+        .map(|inst| {
+            let sign = inst.model.mos_type.sign();
+            let vb = inst.body_int_idx.map_or(0.0, |i| solution[i]);
+            let ve = inst.e_idx.map_or(0.0, |i| solution[i]);
+            let vbe = sign * (vb - ve);
+            let cbox_wl = inst.size_params.kb3 * inst.model.cbox
+                * inst.size_params.weff_cv * inst.size_params.leff_cv;
+            Bsim3SoiDdChargeHistory {
+                qbg: cbox_wl * vbe, // reuse qbg field for B-E charge
+                qbd: 0.0,
+                qbs: 0.0,
+                cqbg: 0.0,
+                cqbd: 0.0,
+                cqbs: 0.0,
+                vbg: vbe, // reuse vbg field for vbe
+                vbd: 0.0,
+                vbs: 0.0,
+            }
+        })
+        .collect();
+
     // Initialize LTRA transient state.
     let has_ltra = !mna.ltras.is_empty();
     let mut ltra_states: Vec<LtraState> = mna
@@ -1057,6 +1111,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             &hfet_charge_histories,
             &mosfet_charge_histories,
             &mos6_charge_histories,
+            &soidd_charge_histories,
         ) {
             Ok(sol) => sol,
             Err(e) if step_h > h_min * 2.0 => {
@@ -1470,6 +1525,26 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
         }
 
+        // Update BSIM3SOI-DD body charge histories (B-E capacitor).
+        for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
+            let sign = inst.model.mos_type.sign();
+            let vb = inst.body_int_idx.map_or(0.0, |i| solution[i]);
+            let ve = inst.e_idx.map_or(0.0, |i| solution[i]);
+            let vbe = sign * (vb - ve);
+            let cbox_wl = inst.size_params.kb3 * inst.model.cbox
+                * inst.size_params.weff_cv * inst.size_params.leff_cv;
+            let hist = &soidd_charge_histories[di];
+            let qbe = hist.qbg + cbox_wl * (vbe - hist.vbg);
+            let cqbe = match method {
+                IntegrationMethod::BackwardEuler => (qbe - hist.qbg) / step_h,
+                IntegrationMethod::Trapezoidal => 2.0 * (qbe - hist.qbg) / step_h - hist.cqbg,
+            };
+            soidd_charge_histories[di] = Bsim3SoiDdChargeHistory {
+                qbg: qbe, cqbg: cqbe, qbd: 0.0, cqbd: 0.0, qbs: 0.0, cqbs: 0.0,
+                vbg: vbe, vbd: 0.0, vbs: 0.0,
+            };
+        }
+
         // Update LTRA histories.
         if has_ltra {
             ltra_time_points.push(t);
@@ -1666,6 +1741,7 @@ fn solve_timestep(
     hfet_charge_histories: &[HfetChargeHistory],
     mosfet_charge_histories: &[MosfetChargeHistory],
     mos6_charge_histories: &[MosfetChargeHistory],
+    soidd_charge_histories: &[Bsim3SoiDdChargeHistory],
 ) -> Result<Vec<f64>, MnaError> {
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
@@ -2285,6 +2361,47 @@ fn solve_timestep(
                 let ieq_gb = sign * m * (cqgb - geq_gb * vgb_signed);
                 stamp_current_source(&mut system.rhs, gp, b, ieq_gb);
             }
+        }
+
+        // 9. Stamp BSIM3SOI-DD body charge companion model.
+        //    The dominant body charge coupling in SOI is through the buried oxide
+        //    capacitance (CboxWL = kb3 * Cbox * weffCV * leffCV) between body and
+        //    back-gate (E node). We stamp this as a simple two-terminal capacitor
+        //    using the same companion model pattern as MOSFET Meyer caps.
+        for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
+            let sign = inst.model.mos_type.sign();
+            let m = inst.m;
+            let sp_dd = &inst.size_params;
+
+            // Buried oxide body-to-backgate capacitance
+            let cbox_wl = sp_dd.kb3 * inst.model.cbox * sp_dd.weff_cv * sp_dd.leff_cv;
+            if cbox_wl <= 0.0 {
+                continue;
+            }
+
+            let bp = inst.body_int_idx;
+            let ep = inst.e_idx;
+
+            let vb = bp.map_or(0.0, |i| solution[i]);
+            let ve = ep.map_or(0.0, |i| solution[i]);
+            let vbe = sign * (vb - ve);
+
+            let hist = &soidd_charge_histories[di];
+            let qbe = hist.qbg + cbox_wl * (vbe - hist.vbg); // reuse qbg for B-E charge
+
+            let (geq_be, cqbe) = match method {
+                IntegrationMethod::BackwardEuler => {
+                    (cbox_wl / h, (qbe - hist.qbg) / h)
+                }
+                IntegrationMethod::Trapezoidal => {
+                    (2.0 * cbox_wl / h, 2.0 * (qbe - hist.qbg) / h - hist.cqbg)
+                }
+            };
+
+            // Stamp B-E capacitor: two-terminal conductance + current source.
+            stamp_conductance(&mut system.matrix, bp, ep, m * geq_be);
+            let ieq_be = sign * m * (cqbe - geq_be * vbe);
+            stamp_current_source(&mut system.rhs, bp, ep, ieq_be);
         }
     };
 

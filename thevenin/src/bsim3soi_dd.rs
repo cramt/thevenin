@@ -237,6 +237,8 @@ pub struct Bsim3SoiDdModel {
     pub csieff: f64,
     pub qsieff: f64,
     pub vfbb: f64,
+    /// Cboxt = cbox*csi/(cbox+csi) (buried oxide + silicon cap series combination)
+    pub cboxt: f64,
     /// Processed adice: adice0 / (1 + Cboxt/cox), where Cboxt = cbox*csi/(cbox+csi)
     pub adice: f64,
 }
@@ -343,6 +345,9 @@ pub struct Bsim3SoiDdSizeParam {
     pub kb3: f64,
     pub dvbd0: f64,
     pub dvbd1: f64,
+
+    /// abulkCVfactor = (1 + clc/leff)^cle (ngspice b3soiddtemp.c line 194)
+    pub abulk_cv_factor: f64,
 
     /// Minimum substrate current (convergence aid for body node).
     /// ngspice b3soiddtemp.c line 744: 5e-2 * weff * tsi * max(isdif, isrec)
@@ -620,6 +625,7 @@ impl Bsim3SoiDdModel {
             csieff: 0.0,
             qsieff: 0.0,
             vfbb: 0.0,
+            cboxt: 0.0,
             adice: 1.0,
         };
         m.precompute();
@@ -887,8 +893,8 @@ impl Bsim3SoiDdModel {
         // Matches ngspice b3soiddtemp.c line 587.
         self.vfbb = -self.mos_type.sign() * self.vtm * (npeak / nsub).ln();
         // Processed adice: adice0 / (1 + Cboxt/Cox)
-        let cboxt = self.cbox * self.csi / (self.cbox + self.csi);
-        self.adice = self.adice0 / (1.0 + cboxt / self.cox);
+        self.cboxt = self.cbox * self.csi / (self.cbox + self.csi);
+        self.adice = self.adice0 / (1.0 + self.cboxt / self.cox);
     }
 
     /// Number of internal nodes this model creates.
@@ -1143,6 +1149,8 @@ impl Bsim3SoiDdModel {
             kb3: kb3_binned,
             dvbd0: dvbd0_binned,
             dvbd1: dvbd1_binned,
+            // ngspice b3soiddtemp.c line 194: abulkCVfactor = (1 + clc/leff)^cle
+            abulk_cv_factor: (1.0 + self.clc / leff).powf(self.cle),
             // ngspice b3soiddtemp.c line 744: minimum substrate current for body node stability
             min_isub: 5.0e-2 * weff * self.tsi * self.isdif.max(self.isrec),
             nseg: 1.0,
@@ -1733,7 +1741,7 @@ pub fn bsim3soi_dd_companion(
     };
 
     // Abulk calculation (ngspice DD formula: keta applied multiplicatively, +1 at end)
-    let (abulk0, _dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb) = {
+    let (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb) = {
         let (mut abulk0, mut dabulk0_dvb, mut abulk, mut dabulk_dvg, mut dabulk_dvb) =
             if sp.a0 == 0.0 {
                 (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64)
@@ -2562,26 +2570,322 @@ pub fn bsim3soi_dd_companion(
     let ceq_body = iii + igidl + isgidl - ibs - ibd + sp.min_isub
         - (gbbs * vbs_i + gbgs * vgs_i + gbds * vds_i + gbes * ves_i);
 
-    // Capacitances
-    let cox_wl = cox * weff_ch * leff;
-    let (cggb, cgdb, cgsb) = if vgsteff > 0.0 {
-        let t0 = 1.0 - abulk * vdseff / (2.0 * vgst2vtm);
-        (cox_wl * (1.0 - t0 * t0), -cox_wl * t0 * 0.5, 0.0)
-    } else {
-        (cox_wl * 0.05, 0.0, 0.0)
-    };
-    let cbgb = 0.0;
-    let cbdb = 0.0;
-    let cbsb = 0.0;
-    let cdgb = -cggb - cgdb;
-    let cddb = -cgdb;
-    let cdsb = -(cdgb + cddb);
+    // ========== Charge (CV) model — capMod=2 (ngspice b3soiddld.c lines 2637-3425) ==========
+    let cox_wl = model.cox * sp.weff_cv * sp.leff_cv;
 
-    let qinv = if vgsteff > 0.0 {
-        cox_wl * vgsteff * (1.0 - 0.5 * abulk * vdseff / vgst2vtm)
+    // CV-specific Vgsteff: double the exponential argument for better
+    // continuity in moderate inversion (ngspice b3soiddld.c line 2660).
+    // We reuse vgsteff from IV but add the 1e-4 offset matching C code.
+    let vgsteff_cv = vgsteff + 1e-4;
+
+    // Vfb for charge model (bias-dependent, using operating-point Vth)
+    // ngspice b3soiddld.c line 2675: Vfb = Vth - phi - K1*sqrtPhis
+    let vfb_cv = vth - phi - sp.k1 * sqrt_phis;
+    let dvfb_cv_dvb = dvth_dvb - sp.k1 * dsqrt_phis_dvb;
+    let dvfb_cv_dvd = dvth_dvd;
+
+    // Vfbeff: smooth flat-band voltage (ngspice b3soiddld.c lines 2688-2704)
+    const DELTA_3: f64 = 0.02;
+    let v3 = vfb_cv - vgs_eff + vbseff - DELTA_3;
+    let t0_fb = if vfb_cv <= 0.0 {
+        (v3 * v3 - 4.0 * DELTA_3 * vfb_cv).sqrt()
     } else {
-        0.0
+        (v3 * v3 + 4.0 * DELTA_3 * vfb_cv).sqrt()
     };
+    let t2_fb = if vfb_cv <= 0.0 {
+        -DELTA_3 / t0_fb
+    } else {
+        DELTA_3 / t0_fb
+    };
+    let t1_fb = 0.5 * (1.0 + v3 / t0_fb);
+    let vfbeff = vfb_cv - 0.5 * (v3 + t0_fb);
+    let dvfbeff_dvd = (1.0 - t1_fb - t2_fb) * dvfb_cv_dvd;
+    let dvfbeff_dvb = (1.0 - t1_fb - t2_fb) * dvfb_cv_dvb - t1_fb;
+    let dvfbeff_dvrg = t1_fb * dvgs_eff_dvg;
+
+    // Qac0 (accumulation charge, ngspice b3soiddld.c lines 2706-2711)
+    let qac0 = -cox_wl * (vfbeff - vfb_cv);
+    let dqac0_dvrg = -cox_wl * dvfbeff_dvrg;
+    let dqac0_dvd = -cox_wl * (dvfbeff_dvd - dvfb_cv_dvd);
+    let dqac0_dvb = -cox_wl * (dvfbeff_dvb - dvfb_cv_dvb);
+
+    // Qsub0 (depletion charge, ngspice b3soiddld.c lines 2713-2735)
+    let t0_k1 = 0.5 * sp.k1;
+    let t3_sub = vgs_eff - vfbeff - vbseff - vgsteff_cv;
+    let (t1_sub, t2_sub) = if sp.k1 == 0.0 {
+        (0.0, 0.0)
+    } else if t3_sub < 0.0 {
+        (t0_k1 + t3_sub / sp.k1, cox_wl)
+    } else {
+        let s = (t0_k1 * t0_k1 + t3_sub).sqrt();
+        (s, cox_wl * t0_k1 / s)
+    };
+    let qsub0 = cox_wl * sp.k1 * (t0_k1 - t1_sub);
+    let dqsub0_dvrg = t2_sub * (dvfbeff_dvrg - dvgs_eff_dvg);
+    let dqsub0_dvg = t2_sub;
+    let dqsub0_dvd = t2_sub * dvfbeff_dvd;
+    let dqsub0_dvb = t2_sub * (dvfbeff_dvb + 1.0);
+
+    // AbulkCV (ngspice b3soiddld.c lines 2739-2740)
+    let abulk_cv = abulk0 * sp.abulk_cv_factor;
+    let dabulk_cv_dvb = dabulk0_dvb * sp.abulk_cv_factor;
+
+    // VdsatCV (ngspice b3soiddld.c lines 2743-2746)
+    let vdsat_cv = vgsteff_cv / abulk_cv + 1e-5;
+    let dvdsat_cv_dvg = 1.0 / abulk_cv;
+    let dvdsat_cv_dvb = -(vdsat_cv - 1e-5) * dabulk_cv_dvb / abulk_cv;
+
+    // VdseffCV: smooth clamp of VdsatCV vs Vds (ngspice b3soiddld.c lines 2748-2756)
+    let v4 = vdsat_cv - vds_i - DELTA_4;
+    let t0_cv = (v4 * v4 + 4.0 * DELTA_4 * vdsat_cv).sqrt();
+    let vdseff_cv = vdsat_cv - 0.5 * (v4 + t0_cv);
+    let t1_cv = 0.5 * (1.0 + v4 / t0_cv);
+    let t2_cv = DELTA_4 / t0_cv;
+    let t3_cv = (1.0 - t1_cv - t2_cv) / abulk_cv;
+    let dvdseff_cv_dvg = t3_cv;
+    let dvdseff_cv_dvd = t1_cv;
+    let dvdseff_cv_dvb = -t3_cv * (vdsat_cv - 1e-5) * dabulk_cv_dvb; // using VdsatCV before +1e-5
+
+    // VdsCV = VdseffCV for capMod=2 (ngspice b3soiddld.c lines 2761-2769)
+    let mut vds_cv = vdseff_cv + 1e-5;
+    if vds_cv > vdsat_cv - 1e-7 {
+        vds_cv = vdsat_cv - 1e-7;
+    }
+    let dvds_cv_dvg = dvdseff_cv_dvg;
+    let dvds_cv_dvd = dvdseff_cv_dvd;
+    let dvds_cv_dvb = dvdseff_cv_dvb;
+
+    // VcsCV calculation (ngspice b3soiddld.c lines 2772-2796)
+    const DELTA_VCSCV: f64 = 1e-5;
+    let t1_vcscv = vds_cv - vcs - vds_cv * vds_cv * DELTA_VCSCV;
+    let t5_vcscv = 2.0 * DELTA_VCSCV;
+    let t2_vcscv = (t1_vcscv * t1_vcscv + t5_vcscv * vds_cv * vds_cv).sqrt();
+
+    let dt1_vcscv_dvb = dvds_cv_dvb * (1.0 - 2.0 * vds_cv * DELTA_VCSCV);
+    let dt2_vcscv_dvb = (t1_vcscv * dt1_vcscv_dvb + t5_vcscv * vds_cv * dvds_cv_dvb) / t2_vcscv;
+    let dt1_vcscv_dvd = dvds_cv_dvd * (1.0 - 2.0 * vds_cv * DELTA_VCSCV);
+    let dt2_vcscv_dvd = (t1_vcscv * dt1_vcscv_dvd + t5_vcscv * vds_cv * dvds_cv_dvd) / t2_vcscv;
+    let dt1_vcscv_dvg = dvds_cv_dvg * (1.0 - 2.0 * vds_cv * DELTA_VCSCV);
+    let dt2_vcscv_dvg = (t1_vcscv * dt1_vcscv_dvg + t5_vcscv * vds_cv * dvds_cv_dvg) / t2_vcscv;
+    let dt1_vcscv_dvc: f64 = -1.0;
+    let dt2_vcscv_dvc = t1_vcscv * dt1_vcscv_dvc / t2_vcscv;
+
+    let mut vcs_cv = vcs + 0.5 * (t1_vcscv - t2_vcscv);
+    let mut dvcs_cv_dvb = 0.5 * (dt1_vcscv_dvb - dt2_vcscv_dvb);
+    let mut dvcs_cv_dvg = 0.5 * (dt1_vcscv_dvg - dt2_vcscv_dvg);
+    let mut dvcs_cv_dvd = 0.5 * (dt1_vcscv_dvd - dt2_vcscv_dvd);
+    let mut dvcs_cv_dvc = 1.0 + 0.5 * (dt1_vcscv_dvc - dt2_vcscv_dvc);
+    if vcs_cv < 0.0 {
+        vcs_cv = 0.0;
+        dvcs_cv_dvb = 0.0;
+        dvcs_cv_dvg = 0.0;
+        dvcs_cv_dvd = 0.0;
+        dvcs_cv_dvc = 0.0;
+    } else if vcs_cv > vds_cv {
+        vcs_cv = vds_cv;
+        dvcs_cv_dvb = dvds_cv_dvb;
+        dvcs_cv_dvg = dvds_cv_dvg;
+        dvcs_cv_dvd = dvds_cv_dvd;
+        dvcs_cv_dvc = 0.0;
+    }
+
+    // Xc calculation (cross-section parameter, ngspice b3soiddld.c lines 2798-2823)
+    let t3_xc = 2.0 * vdsat_cv - vcs_cv;
+    let t4_xc = 2.0 * vdsat_cv - vds_cv;
+    let dt4_xc_dvg = 2.0 * dvdsat_cv_dvg - dvds_cv_dvg;
+    let dt4_xc_dvd = -dvds_cv_dvd;
+    let dt4_xc_dvb = 2.0 * dvdsat_cv_dvb - dvds_cv_dvb;
+    let t0_xc = t3_xc * vcs_cv;
+    let t1_xc = t4_xc * vds_cv;
+    let xc = if t1_xc.abs() > 1e-30 { t0_xc / t1_xc } else { 0.0 };
+
+    let dt0_xc_dvb = vcs_cv * (2.0 * dvdsat_cv_dvb - dvcs_cv_dvb) + t3_xc * dvcs_cv_dvb;
+    let dt0_xc_dvg = vcs_cv * (2.0 * dvdsat_cv_dvg - dvcs_cv_dvg) + t3_xc * dvcs_cv_dvg;
+    let dt0_xc_dvd = 2.0 * dvcs_cv_dvd * (vdsat_cv - vcs_cv);
+    let dt0_xc_dvc = 2.0 * dvcs_cv_dvc * (vdsat_cv - vcs_cv);
+
+    let dt1_xc_dvb = vds_cv * dt4_xc_dvb + t4_xc * dvds_cv_dvb;
+    let dt1_xc_dvg = vds_cv * dt4_xc_dvg + t4_xc * dvds_cv_dvg;
+    let dt1_xc_dvd = dvds_cv_dvd * t4_xc + vds_cv * dt4_xc_dvd;
+
+    let (dxc_dvb, dxc_dvg, dxc_dvd, dxc_dvc) = if t1_xc.abs() > 1e-30 {
+        (
+            (dt0_xc_dvb - dt1_xc_dvb * xc) / t1_xc,
+            (dt0_xc_dvg - dt1_xc_dvg * xc) / t1_xc,
+            (dt0_xc_dvd - dt1_xc_dvd * xc) / t1_xc,
+            dt0_xc_dvc / t1_xc,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+
+    // Qsubs1 (ngspice b3soiddld.c lines 2825-2866)
+    let t0_qs1 = abulk_cv * vcs_cv;
+    let dt0_qs1_dvb = dabulk_cv_dvb * vcs_cv + dvcs_cv_dvb * abulk_cv;
+    let dt0_qs1_dvg = dvcs_cv_dvg * abulk_cv;
+    let dt0_qs1_dvd = abulk_cv * dvcs_cv_dvd;
+    let dt0_qs1_dvc = abulk_cv * dvcs_cv_dvc;
+
+    let t1_qs1 = 12.0 * (vgsteff_cv - 0.5 * t0_qs1 + 1e-20);
+    let dt1_qs1_dvb = -6.0 * dt0_qs1_dvb;
+    let dt1_qs1_dvg = 12.0 * (1.0 - 0.5 * dt0_qs1_dvg);
+    let dt1_qs1_dvd = -6.0 * dt0_qs1_dvd;
+    let dt1_qs1_dvc = -6.0 * dt0_qs1_dvc;
+
+    let t2_qs1 = vcs_cv / t1_qs1;
+    let t4_qs1 = t1_qs1 * t1_qs1;
+    let dt2_qs1_dvb = (dvcs_cv_dvb * t1_qs1 - dt1_qs1_dvb * vcs_cv) / t4_qs1;
+    let dt2_qs1_dvg = (dvcs_cv_dvg * t1_qs1 - dt1_qs1_dvg * vcs_cv) / t4_qs1;
+    let dt2_qs1_dvd = (dvcs_cv_dvd * t1_qs1 - dt1_qs1_dvd * vcs_cv) / t4_qs1;
+    let dt2_qs1_dvc = (dvcs_cv_dvc * t1_qs1 - dt1_qs1_dvc * vcs_cv) / t4_qs1;
+
+    let t3_qs1 = t0_qs1 * t2_qs1;
+    let dt3_qs1_dvb = dt0_qs1_dvb * t2_qs1 + dt2_qs1_dvb * t0_qs1;
+    let dt3_qs1_dvg = dt0_qs1_dvg * t2_qs1 + dt2_qs1_dvg * t0_qs1;
+    let dt3_qs1_dvd = dt0_qs1_dvd * t2_qs1 + dt2_qs1_dvd * t0_qs1;
+    let dt3_qs1_dvc = dt0_qs1_dvc * t2_qs1 + dt2_qs1_dvc * t0_qs1;
+
+    let t4_abulk = 1.0 - abulk_cv;
+    let dt4_abulk_dvb = -dabulk_cv_dvb;
+
+    let t5_qs1 = 0.5 * vcs_cv - t3_qs1;
+    let dt5_qs1_dvb = 0.5 * dvcs_cv_dvb - dt3_qs1_dvb;
+    let dt5_qs1_dvg = 0.5 * dvcs_cv_dvg - dt3_qs1_dvg;
+    let dt5_qs1_dvd = 0.5 * dvcs_cv_dvd - dt3_qs1_dvd;
+    let dt5_qs1_dvc = 0.5 * dvcs_cv_dvc - dt3_qs1_dvc;
+
+    let t6_qs1 = t4_abulk * t5_qs1 * cox_wl;
+    let t7_qs1 = cox_wl * xc;
+
+    let qsubs1 = cox_wl * xc * t4_abulk * t5_qs1;
+    let dqsubs1_dvb = t6_qs1 * dxc_dvb + t7_qs1 * (t4_abulk * dt5_qs1_dvb + dt4_abulk_dvb * t5_qs1);
+    let dqsubs1_dvg = t6_qs1 * dxc_dvg + t7_qs1 * t4_abulk * dt5_qs1_dvg;
+    let dqsubs1_dvd = t6_qs1 * dxc_dvd + t7_qs1 * t4_abulk * dt5_qs1_dvd;
+    let dqsubs1_dvc = t6_qs1 * dxc_dvc + t7_qs1 * t4_abulk * dt5_qs1_dvc;
+
+    // Qsubs2 (ngspice b3soiddld.c lines 2868-2874)
+    let qsubs2 = -cox_wl * (1.0 - xc) * (abulk_cv - 1.0) * vcs;
+    let t2_qs2 = cox_wl * (abulk_cv - 1.0) * vcs;
+    let dqsubs2_dvb = t2_qs2 * dxc_dvb - cox_wl * (1.0 - xc) * vcs * dabulk_cv_dvb;
+    let dqsubs2_dvg = t2_qs2 * dxc_dvg;
+    let dqsubs2_dvd = t2_qs2 * dxc_dvd;
+    let dqsubs2_dvc = t2_qs2 * dxc_dvc - cox_wl * (1.0 - xc) * (abulk_cv - 1.0);
+
+    // Qbf: total front-gate body charge (ngspice b3soiddld.c lines 2876-2886)
+    let _qbf = qac0 + qsub0 + qsubs1 + qsubs2;
+    let dqbf_dvrg = dqac0_dvrg + dqsub0_dvrg;
+    let dqbf_dvg = dqsub0_dvg + dqsubs1_dvg + dqsubs2_dvg;
+    let dqbf_dvd = dqac0_dvd + dqsub0_dvd + dqsubs1_dvd + dqsubs2_dvd;
+    let dqbf_dvb = dqac0_dvb + dqsub0_dvb + dqsubs1_dvb + dqsubs2_dvb;
+    let dqbf_dvc = dqsubs1_dvc + dqsubs2_dvc;
+    let dqbf_dve = 0.0;
+
+    // Backgate charge: Qsicv, Qbf0 (ngspice b3soiddld.c lines 3228-3247)
+    let cbox_wl = sp.kb3 * model.cbox * sp.weff_cv * sp.leff_cv;
+
+    let t0_bk = 0.5 * sp.k1;
+    let t2_bk1 = (phi - vbs0t).abs().sqrt();
+    let t3_bk1 = phi + sp.k1 * t2_bk1 - vbs0t;
+    let t4_bk1 = (t0_bk * t0_bk + t3_bk1).sqrt();
+    let _qsicv = sp.k1 * cox_wl * (t0_bk - t4_bk1);
+
+    let t2_bk2 = (phi - vbs0mos).abs().sqrt();
+    let t3_bk2 = phi + sp.k1 * t2_bk2 - vbs0mos;
+    let t4_bk2 = (t0_bk * t0_bk + t3_bk2).sqrt();
+    let qbf0 = sp.k1 * cox_wl * (t0_bk - t4_bk2);
+    let t6_bk2 = cox_wl * t0_bk / t4_bk2.max(1e-30) * (1.0 + t0_bk / t2_bk2.max(1e-30));
+    let dqbf0_dve = t6_bk2 * dvbs0mos_dve;
+
+    // Qe1 (ngspice b3soiddld.c lines 3249-3264)
+    let t5_e1 = -cbox_wl * (vbsdio - vbs0);
+    let t6_e1 = cbox_wl * xc;
+    let _qe1 = -_qsicv + qbf0 + t5_e1 * xc;
+    let dqe1_dvg = t5_e1 * (dxc_dvg * dvgsteff_dvg + dxc_dvb * dvbseff_dvg + dxc_dvc * dvcs_dvg)
+        - t6_e1 * dvbsdio_dvg;
+    let dqe1_dvb = t5_e1 * (dxc_dvg * dvgsteff_dvb + dxc_dvb * dvbseff_dvb + dxc_dvc * dvcs_dvb)
+        - t6_e1 * dvbsdio_dvb;
+    let dqe1_dvd = t5_e1
+        * (dxc_dvg * dvgsteff_dvd + dxc_dvb * dvbseff_dvd + dxc_dvc * dvcs_dvd + dxc_dvd)
+        - t6_e1 * dvbsdio_dvd;
+    let dqe1_dve = dqbf0_dve + t6_e1 * (dvbs0_dve - dvbsdio_dve);
+
+    // Qe2 (ngspice b3soiddld.c lines 3266-3284)
+    let t2_e2 = -model.cboxt * sp.weff_cv * sp.leff_cv;
+    let t3_e2 = t2_e2 * 0.5 * (1.0 - xc);
+    let t4_e2 = t2_e2 * 0.5 * (vds_cv - vcs_cv);
+    let _qe2 = t2_e2 * 0.5 * (1.0 - xc) * (vds_cv - vcs_cv);
+
+    // T10=dVgsteff, T11=dVbseff, T12=dVcs transform
+    let t10_e2 = t3_e2 * (dvds_cv_dvg - dvcs_cv_dvg) - t4_e2 * dxc_dvg;
+    let t11_e2 = t3_e2 * (dvds_cv_dvb - dvcs_cv_dvb) - t4_e2 * dxc_dvb;
+    let t12_e2_dvc = -dvcs_cv_dvc; // dVdsCV_dVc = 0 for capMod=2
+    let t12_e2 = t3_e2 * t12_e2_dvc - t4_e2 * dxc_dvc;
+    let dqe2_dvg = t10_e2 * dvgsteff_dvg + t11_e2 * dvbseff_dvg + t12_e2 * dvcs_dvg;
+    let dqe2_dvb = t10_e2 * dvgsteff_dvb + t11_e2 * dvbseff_dvb + t12_e2 * dvcs_dvb;
+    let dqe2_dvd = t10_e2 * dvgsteff_dvd + t11_e2 * dvbseff_dvd + t12_e2 * dvcs_dvd
+        + t3_e2 * (dvds_cv_dvd - dvcs_cv_dvd) - t4_e2 * dxc_dvd;
+    let dqe2_dve = t10_e2 * dvgsteff_dve + t11_e2 * dvbseff_dve + t12_e2 * dvcs_dve;
+
+    // Cbg, Cbb, Cbd, Cbe: transform Qbf derivatives from internal to real voltages
+    // (ngspice b3soiddld.c lines 3288-3299)
+    let cbg = dqbf_dvrg + dqbf_dvg * dvgsteff_dvg + dqbf_dvb * dvbseff_dvg + dqbf_dvc * dvcs_dvg;
+    let cbb = dqbf_dvg * dvgsteff_dvb + dqbf_dvb * dvbseff_dvb + dqbf_dvc * dvcs_dvb;
+    let cbd = dqbf_dvg * dvgsteff_dvd + dqbf_dvb * dvbseff_dvd + dqbf_dvc * dvcs_dvd + dqbf_dvd;
+    let cbe = dqbf_dvg * dvgsteff_dve + dqbf_dvb * dvbseff_dve + dqbf_dvc * dvcs_dve + dqbf_dve;
+
+    // Qex (external charge, ngspice b3soiddld.c lines 3378-3385)
+    const QEX_FACT: f64 = 20.0;
+    let t0_ex = QEX_FACT * sp.k1 * cox_wl;
+    let _qex = t0_ex * (vbs_i - vbsdio);
+    let dqex_dvg = -t0_ex * dvbsdio_dvg;
+    let dqex_dvb = t0_ex * (1.0 - dvbsdio_dvb);
+    let dqex_dvd = -t0_ex * dvbsdio_dvd;
+    let dqex_dve = -t0_ex * dvbsdio_dve;
+
+    // Gate charge: qinv and derivatives (ngspice b3soiddld.c lines 3313-3327)
+    let t0_qi = abulk_cv * vdseff_cv;
+    let t1_qi = 12.0 * (vgsteff_cv - 0.5 * t0_qi + 1e-20);
+    let t2_qi = vdseff_cv / t1_qi;
+    let t3_qi = t0_qi * t2_qi;
+    let t4_qi = 1.0 - 12.0 * t2_qi * t2_qi * abulk_cv;
+    let t5_qi = 6.0 * t0_qi * (4.0 * vgsteff_cv - t0_qi) / (t1_qi * t1_qi) - 0.5;
+    let t6_qi = 12.0 * t2_qi * t2_qi * vgsteff_cv;
+    let qinv = cox_wl * (vgsteff_cv - 0.5 * vdseff_cv + t3_qi);
+    let cgg1 = cox_wl * (t4_qi + t5_qi * dvdseff_cv_dvg);
+    let cgd1 = cox_wl * t5_qi * dvdseff_cv_dvd;
+    let cgb1 = cox_wl * (t5_qi * dvdseff_cv_dvb + t6_qi * dabulk_cv_dvb);
+
+    // Source charge partition: 50/50 model (xpart=0.5 default, ngspice line 3362-3367)
+    let qsrc = -0.5 * qinv;
+    let csg1 = -0.5 * cgg1;
+    let csb1 = -0.5 * cgb1;
+    let _csd1 = -0.5 * cgd1;
+
+    // Transform source derivatives to real voltages (ngspice b3soiddld.c lines 3370-3376)
+    let csg = csg1 * dvgsteff_dvg + csb1 * dvbseff_dvg;
+    let csd = _csd1 + csg1 * dvgsteff_dvd + csb1 * dvbseff_dvd;
+    let csb = csg1 * dvgsteff_dvb + csb1 * dvbseff_dvb;
+    let cse = csg1 * dvgsteff_dve + csb1 * dvbseff_dve;
+
+    // Gate charge derivatives in real voltages (ngspice b3soiddld.c lines 3392-3398)
+    let cgg = (cgg1 * dvgsteff_dvg + cgb1 * dvbseff_dvg) - cbg;
+    let cgd = (cgd1 + cgg1 * dvgsteff_dvd + cgb1 * dvbseff_dvd) - cbd;
+    let cgb_cv = (cgb1 * dvbseff_dvb + cgg1 * dvgsteff_dvb) - cbb;
+    let cge = (cgg1 * dvgsteff_dve + cgb1 * dvbseff_dve) - cbe;
+
+    // Final capacitance assignments (ngspice b3soiddld.c lines 3400-3424)
+    let cggb = cgg - dqe2_dvg;
+    let cgsb = -(cgg + cgd + cgb_cv + cge) + (dqe2_dvg + dqe2_dvd + dqe2_dvb + dqe2_dve);
+    let cgdb = cgd - dqe2_dvd;
+
+    let cbgb = cbg - dqe1_dvg + dqex_dvg;
+    let cbsb = -(cbg + cbd + cbb + cbe) + (dqe1_dvg + dqe1_dvd + dqe1_dvb + dqe1_dve)
+        - (dqex_dvg + dqex_dvd + dqex_dvb + dqex_dve);
+    let cbdb = cbd - dqe1_dvd + dqex_dvd;
+
+    let cdgb = -(cgg + cbg + csg);
+    let cddb = -(cgd + cbd + csd);
+    let cdsb = (cgg + cgd + cgb_cv + cge + cbg + cbd + cbb + cbe + csg + csd + csb + cse);
 
     Bsim3SoiDdCompanion {
         ids: ids / sp.nseg,

@@ -379,6 +379,13 @@ impl DeviceVoltageState {
         self.prev_hfet.borrow().clone()
     }
 
+    /// Get the current limited BSIM3SOI-DD voltages (vgs, vds, vbs, ves) for each instance.
+    /// Call after `stamp_devices()` to read the voltages used for the last stamp.
+    #[allow(dead_code)]
+    pub fn prev_bsim3soi_dd_voltages(&self) -> Vec<(f64, f64, f64, f64)> {
+        self.prev_bsim3soi_dd.borrow().clone()
+    }
+
     /// Stamp all nonlinear device companion models into the MNA system.
     ///
     /// In `NrMode::InitJct` (first iteration of each NR attempt), junction

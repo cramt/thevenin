@@ -339,3 +339,49 @@ Jacobian. This is a fundamental SOI body-node conditioning issue that requires e
 - Forcing source stepping for SOI circuits (tried, no effect)
 - Separating device gmin from diagonal gmin (tried, gets stuck earlier)
 - Direct jump to target gmin after source stepping (tried, fails at gmin=0)
+
+## Session 108 findings (2026-04-04)
+
+### DD RampVg2: Body charge model implemented (partial)
+
+**What was done:**
+1. Implemented full capMod=2 body charge computation in bsim3soi_dd.rs (~200 LOC):
+   - Vfbeff (effective flat-band for CV), Qac0, Qsub0, Qsubs1, Qsubs2 → Qbf
+   - VdsatCV, VdseffCV, VdsCV, VcsCV, Xc (cross-section parameter)
+   - Qsicv, Qbf0, Qe1, Qe2, Qex (backgate/external charges)
+   - Full derivative chain transformations: Cbg, Cbb, Cbd, Cbe, Ce1g/b/d/e, Ce2g/b/d/e
+   - Final capacitance assignments: cbgb, cbdb, cbsb, cdgb, cddb, cdsb, cggb, cgdb, cgsb
+   - Added abulk_cv_factor size parameter and cboxt model parameter
+2. Added simplified B-E (buried oxide) capacitor transient integration in transient.rs:
+   - CboxWL = kb3 * Cbox * weffCV * leffCV between body and back-gate
+   - Two-terminal companion model (stamp_conductance + current source)
+   - Charge history tracking (Bsim3SoiDdChargeHistory struct)
+
+**Results:**
+- DC tests: 3/3 pass (no regressions from body charge computation)
+- RampVg2 with B-E cap only: body voltage no longer collapses (92.01mV stable),
+  BUT doesn't respond to gate pulse (stays flat at 92mV instead of rising to 553mV).
+- Full multi-terminal stamp (Y[B,G], Y[B,D], Y[B,S]): causes singular matrix because
+  body row entries sum to zero (cbgb + cbdb + cbsb = 0 when cbeb = 0), providing
+  no diagonal reinforcement.
+
+**Root cause of remaining issue:**
+The body charge model is a MULTI-TERMINAL charge (Qb depends on Vg, Vd, Vs, Ve).
+In ngspice, ALL four charge rows (G, D, B, E) are stamped simultaneously into the
+Y-matrix. Without gate/drain/substrate charge stamps, the body row has off-diagonal
+entries that sum to zero, making the matrix singular. The body dynamics also require
+the gate-body transcapacitance (cbgb) to make the body voltage respond to gate changes.
+
+**What needs to be done (future work ~150 LOC):**
+1. Stamp gate charge row: Y[G,G] += cggb/h, Y[G,D] += cgdb/h, Y[G,S] += cgsb/h
+2. Stamp drain charge row: Y[D,G] += cdgb/h, Y[D,D] += cddb/h, Y[D,S] += cdsb/h
+3. Stamp body charge row: Y[B,G] += cbgb/h, Y[B,D] += cbdb/h, Y[B,S] += cbsb/h, Y[B,E] += cbeb/h
+4. Stamp substrate (E) row: Y[E,G] += cegb/h, Y[E,D] += cedb/h, Y[E,S] += cesb/h, Y[E,E] += ceeb/h
+5. Add cbeb computation to companion (= Cbe - Ce1e + dQex_dVe, all terms already available)
+6. Proper charge history tracking per terminal pair
+7. RHS integration for each charge row
+
+**What NOT to retry:**
+- Simplified B-E capacitor alone (too stiff, body doesn't respond to gate)
+- Body transcapacitance without other charge rows (singular matrix, sum=0)
+- stamp_conductance for transcapacitances (wrong: adds both rows, not just body row)
