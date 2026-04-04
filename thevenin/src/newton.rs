@@ -424,112 +424,102 @@ where
     })
 }
 
-/// Source stepping fallback with elevated Gmin.
+/// Gillespie source stepping (ngspice `gillespie_src`, cktop.c lines 481-658).
 ///
-/// Ramps all independent sources from 0 to full value while keeping an
-/// elevated diagonal Gmin (1e-2) to prevent near-singular matrices from
-/// floating nodes (e.g. LTRA ports connected only through reactive elements).
-/// After all source steps converge, reduces Gmin to the target value using
-/// the same schedule as `gmin_stepping`.
+/// Ramps all independent sources from 0 → 100% at the **target** gmin with
+/// adaptive step sizing and backtracking on failure.  No gmin reduction phase
+/// — the circuit is solved at its nominal gmin throughout the ramp, avoiding
+/// the gmin bifurcation that plagues floating-body SOI devices.
 ///
-/// This combined approach handles circuits where plain gmin_stepping diverges
-/// (too many iterations needed) and plain source_stepping fails with a
-/// singular matrix at Gmin = options.gmin.
+/// If the initial solve at sources=0 fails, a preliminary gmin stepping is
+/// done at sources=0 first (ngspice lines 510-548).
 fn source_stepping<F>(
     options: &NrOptions,
     dim: usize,
     num_nodes: usize,
     load_system: &F,
-    initial_guess: &[f64],
+    _initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
-    // Use elevated Gmin throughout source ramping to prevent near-singular
-    // matrices caused by floating nodes (e.g. LTRA-coupled node pairs where
-    // the only path to ground is the tiny diagonal Gmin=1e-12).
-    let gmin_elevated = 1e-2_f64;
-    let num_steps = 10;
-    let mut solution = initial_guess.to_vec();
+    let target_gmin = options.gmin;
+    // Zero the solution before source stepping (ngspice lines 497-501).
+    let mut solution = vec![0.0; dim];
     let mut total_iters = 0;
 
-    // Phase 1: ramp sources with elevated Gmin.
-    // Use InitJct for the first iteration of step 0, matching ngspice which
-    // sets MODEINITJCT before the first source stepping NIiter call.  This
-    // initializes device junction voltages to built-in potentials, giving the
-    // NR a physically reasonable starting point (especially critical for
-    // multi-transistor circuits with self-heating thermal nodes).
-    for step in 0..=num_steps {
-        let factor = step as f64 / num_steps as f64;
-        let attempt = NrAttempt {
-            diag_gmin: gmin_elevated,
-            dev_gmin: gmin_elevated,
-            source_factor: factor,
-            max_iters: options.itl2,
-        };
-        let first_mode = if step == 0 {
-            NrMode::InitJct
-        } else {
-            NrMode::Float
-        };
-        let result = try_nr(
-            options,
-            dim,
-            num_nodes,
-            load_system,
-            &solution,
-            &attempt,
-            first_mode,
-        )?;
-        total_iters += result.iterations;
-        solution = result.solution;
-    }
-
-    // Phase 2: reduce Gmin from elevated level to target.
-    //
-    // First try a direct jump to the target Gmin (or diag_gmin=0 for DC OP).
-    // Source stepping phase 1 already found a solution near the physical
-    // operating point with elevated Gmin.  Often NR converges directly at
-    // the target from this good starting point, avoiding the expensive
-    // gradual reduction.  This matches ngspice's behavior where CKTdiagGmin
-    // goes to 0 for DC OP after source stepping.
-    let direct_target = options.diag_gmin.min(options.gmin);
-    let direct_attempt = NrAttempt {
-        diag_gmin: direct_target,
-        dev_gmin: direct_target,
-        source_factor: 1.0,
-        max_iters: options.itl1,
+    // Step 1: solve at sources = 0 with target gmin.
+    let zero_attempt = NrAttempt {
+        diag_gmin: target_gmin,
+        dev_gmin: target_gmin,
+        source_factor: 0.0,
+        max_iters: options.itl2,
     };
-    if let Ok(result) = try_nr(
+    match try_nr(
         options,
         dim,
         num_nodes,
         load_system,
         &solution,
-        &direct_attempt,
-        NrMode::Float,
+        &zero_attempt,
+        NrMode::InitJct,
     ) {
-        return Ok(NrResult {
-            solution: result.solution,
-            iterations: total_iters + result.iterations,
-            converged: true,
-        });
+        Ok(result) => {
+            total_iters += result.iterations;
+            solution = result.solution;
+        }
+        Err(_) => {
+            // Sources=0 failed at target gmin — do gmin stepping at sources=0
+            // first (ngspice lines 510-548: ramp CKTdiagGmin from elevated to
+            // gshunt at sources=0).
+            let gmin_start = target_gmin.max(1e-12) * 1e10;
+            let mut gmin = gmin_start;
+            for _ in 0..=10 {
+                let attempt = NrAttempt {
+                    diag_gmin: gmin,
+                    dev_gmin: gmin,
+                    source_factor: 0.0,
+                    max_iters: options.itl2,
+                };
+                match try_nr(
+                    options,
+                    dim,
+                    num_nodes,
+                    load_system,
+                    &solution,
+                    &attempt,
+                    NrMode::Float,
+                ) {
+                    Ok(result) => {
+                        total_iters += result.iterations;
+                        solution = result.solution;
+                        gmin /= 10.0;
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
     }
 
-    // Direct jump failed — fall back to gradual reduction.
-    // Dynamic retry-on-failure: when a 10x step fails, back up and try a
-    // smaller factor (sqrt(sqrt(factor))), matching ngspice dynamic_gmin.
-    let default_factor = 10.0_f64;
-    let mut gmin_factor = default_factor;
-    let mut gmin = gmin_elevated / gmin_factor;
-    let mut last_good_gmin = gmin_elevated;
+    // Step 2: ramp sources from 0 → 100% at target gmin with adaptive step
+    // size and backtracking (ngspice lines 553-641).
+    let mut conv_fact = 0.0_f64;
+    let mut raise = 0.001_f64;
+    let mut src_fact = conv_fact + raise;
     let mut backup = solution.clone();
 
-    while gmin >= options.gmin * 0.9 {
+    while raise >= 1e-7 && conv_fact < 1.0 {
+        if src_fact > 1.0 {
+            src_fact = 1.0;
+        }
+
         let attempt = NrAttempt {
-            diag_gmin: gmin,
-            dev_gmin: gmin,
-            source_factor: 1.0,
+            // diag_gmin = 0 during source ramp, matching ngspice gillespie_src
+            // where CKTdiagGmin = CKTgshunt = 0 after the initial gmin stepping.
+            // Device models see options.gmin through the load closure.
+            diag_gmin: 0.0,
+            dev_gmin: target_gmin,
+            source_factor: src_fact,
             max_iters: options.itl2,
         };
         match try_nr(
@@ -543,44 +533,42 @@ where
         ) {
             Ok(result) => {
                 total_iters += result.iterations;
+                conv_fact = src_fact;
                 backup.copy_from_slice(&result.solution);
                 solution = result.solution;
-                last_good_gmin = gmin;
-                gmin_factor = default_factor;
-                gmin /= gmin_factor;
+
+                // Adapt step size based on convergence speed.
+                let quarter = options.itl2 / 4;
+                if result.iterations <= quarter {
+                    raise *= 1.5;
+                }
+                if result.iterations > 3 * quarter {
+                    raise *= 0.5;
+                }
+                src_fact = conv_fact + raise;
             }
             Err(_) => {
-                if (last_good_gmin - gmin).abs() / last_good_gmin < 1e-4 {
-                    // Can't subdivide further — break and try final solve.
+                if src_fact - conv_fact < 1e-8 {
                     break;
                 }
-                gmin_factor = gmin_factor.sqrt().sqrt();
-                gmin = last_good_gmin / gmin_factor;
+                raise /= 10.0;
+                if raise > 0.01 {
+                    raise = 0.01;
+                }
+                src_fact = conv_fact + raise;
                 solution.copy_from_slice(&backup);
             }
         }
     }
 
-    // Final solve at target Gmin.
-    let attempt = NrAttempt {
-        diag_gmin: options.gmin,
-        dev_gmin: options.gmin,
-        source_factor: 1.0,
-        max_iters: options.itl2,
-    };
-    let result = try_nr(
-        options,
-        dim,
-        num_nodes,
-        load_system,
-        &solution,
-        &attempt,
-        NrMode::Float,
-    )?;
-    total_iters += result.iterations;
+    if conv_fact < 1.0 {
+        return Err(NrError::NoConvergence {
+            iterations: total_iters,
+        });
+    }
 
     Ok(NrResult {
-        solution: result.solution,
+        solution,
         iterations: total_iters,
         converged: true,
     })
