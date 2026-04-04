@@ -109,8 +109,21 @@ fn check_convergence(old: &[f64], new: &[f64], num_nodes: usize, options: &NrOpt
 }
 
 /// Parameters for a single NR attempt.
+///
+/// ngspice has two separate Gmin mechanisms:
+/// - `CKTdiagGmin` (diagonal shunt: conductance from every node to ground)
+/// - `CKTgmin` (device-model gmin: minimum junction conductance seen by device models)
+///
+/// These are stepped independently in different convergence algorithms:
+/// - `dynamic_gmin` steps only `CKTdiagGmin` (diagonal shunt)
+/// - `new_gmin` steps only `CKTgmin` (device-model conductance)
 struct NrAttempt {
-    gmin: f64,
+    /// Gmin added to the matrix diagonal (every node to ground).
+    /// Corresponds to ngspice `CKTdiagGmin`.
+    diag_gmin: f64,
+    /// Gmin passed to the load closure for device-model stamps.
+    /// Corresponds to ngspice `CKTgmin` during `new_gmin` stepping.
+    dev_gmin: f64,
     source_factor: f64,
     max_iters: usize,
 }
@@ -147,13 +160,13 @@ where
             &solution,
             &mut system,
             attempt.source_factor,
-            attempt.gmin,
+            attempt.dev_gmin,
             mode,
         );
 
-        // Add Gmin from each node to ground for numerical stability.
+        // Add diagonal Gmin from each node to ground for numerical stability.
         for i in 0..num_nodes {
-            system.matrix.add(i, i, attempt.gmin);
+            system.matrix.add(i, i, attempt.diag_gmin);
         }
 
         let new_solution = system.solve()?;
@@ -180,17 +193,12 @@ where
     })
 }
 
-/// Dynamic Gmin stepping fallback.
+/// Dynamic Gmin stepping fallback (ngspice `dynamic_gmin`).
 ///
-/// Start with an elevated diagonal Gmin (1e-2), converge, then progressively
-/// reduce toward the target Gmin. Uses adaptive factor sizing and backtracking
-/// on failure, matching ngspice's `dynamic_gmin()` algorithm from `cktop.c`.
-///
-/// Key differences from the simpler SPICE3-style stepping:
-/// - **Adaptive factor**: shrinks/grows based on NR iteration count per step
-/// - **Backtracking**: on failure, restores last good solution and tries a
-///   smaller step size (factor = sqrt(sqrt(factor)))
-/// - **Minimum factor**: stops when factor drops below 1.00005 (step too small)
+/// Steps the **diagonal shunt** (CKTdiagGmin) while keeping device-model gmin
+/// at the elevated level too (combined approach).  Uses adaptive factor sizing
+/// and backtracking on failure, matching ngspice's `dynamic_gmin()` algorithm
+/// from `cktop.c`.
 fn gmin_stepping<F>(
     options: &NrOptions,
     dim: usize,
@@ -212,7 +220,8 @@ where
 
     while gmin >= gmin_target * 0.9 {
         let attempt = NrAttempt {
-            gmin,
+            diag_gmin: gmin,
+            dev_gmin: gmin,
             source_factor: 1.0,
             max_iters: options.itl2,
         };
@@ -262,7 +271,109 @@ where
 
     // Final solve with target Gmin.
     let attempt = NrAttempt {
-        gmin: gmin_target,
+        diag_gmin: gmin_target,
+        dev_gmin: gmin_target,
+        source_factor: 1.0,
+        max_iters: options.itl2,
+    };
+    let result = try_nr(
+        options,
+        dim,
+        num_nodes,
+        load_system,
+        &solution,
+        &attempt,
+        NrMode::Float,
+    )?;
+    total_iters += result.iterations;
+
+    Ok(NrResult {
+        solution: result.solution,
+        iterations: total_iters,
+        converged: true,
+    })
+}
+
+/// New Gmin stepping fallback (ngspice `new_gmin`).
+///
+/// Unlike `gmin_stepping` (which elevates the diagonal shunt), this steps only
+/// the **device-model gmin** (`CKTgmin`) while keeping diagonal gmin at the
+/// target value.  Device models use the elevated gmin for junction conductances,
+/// providing regularization through the device's own matrix stamps rather than
+/// through an external node-to-ground shunt.
+///
+/// This is more physically meaningful for floating-body SOI devices and multi-
+/// transistor circuits where the body/internal nodes couple to the circuit only
+/// through device junctions, not through diagonal shunts.
+fn new_gmin_stepping<F>(
+    options: &NrOptions,
+    dim: usize,
+    num_nodes: usize,
+    load_system: &F,
+    initial_guess: &[f64],
+) -> Result<NrResult, NrError>
+where
+    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
+{
+    let gmin_factor_max = 10.0_f64;
+    let mut factor = gmin_factor_max;
+    let mut dev_gmin = 1e-2_f64;
+    let gmin_target = options.gmin.max(0.0);
+    // Diagonal gmin stays at the target throughout — only device gmin is stepped.
+    let diag = options.diag_gmin;
+    let mut solution = initial_guess.to_vec();
+    let mut last_good_solution = solution.clone();
+    let mut last_good_dev_gmin = dev_gmin;
+    let mut total_iters = 0;
+
+    while dev_gmin >= gmin_target * 0.9 {
+        let attempt = NrAttempt {
+            diag_gmin: diag,
+            dev_gmin,
+            source_factor: 1.0,
+            max_iters: options.itl2,
+        };
+        match try_nr(
+            options,
+            dim,
+            num_nodes,
+            load_system,
+            &solution,
+            &attempt,
+            NrMode::Float,
+        ) {
+            Ok(result) => {
+                total_iters += result.iterations;
+
+                let quarter = options.itl2 / 4;
+                if result.iterations <= quarter {
+                    factor = (factor * factor.sqrt()).min(gmin_factor_max);
+                } else if result.iterations > 3 * quarter {
+                    factor = factor.sqrt().max(1.00005);
+                }
+
+                last_good_solution.clone_from(&result.solution);
+                last_good_dev_gmin = dev_gmin;
+                solution = result.solution;
+                dev_gmin /= factor;
+            }
+            Err(_) => {
+                if factor < 1.00005 {
+                    return Err(NrError::NoConvergence {
+                        iterations: total_iters,
+                    });
+                }
+                factor = factor.sqrt().sqrt();
+                dev_gmin = last_good_dev_gmin / factor;
+                solution.clone_from(&last_good_solution);
+            }
+        }
+    }
+
+    // Final solve with target device gmin.
+    let attempt = NrAttempt {
+        diag_gmin: diag,
+        dev_gmin: gmin_target,
         source_factor: 1.0,
         max_iters: options.itl2,
     };
@@ -314,12 +425,23 @@ where
     let mut total_iters = 0;
 
     // Phase 1: ramp sources with elevated Gmin.
+    // Use InitJct for the first iteration of step 0, matching ngspice which
+    // sets MODEINITJCT before the first source stepping NIiter call.  This
+    // initializes device junction voltages to built-in potentials, giving the
+    // NR a physically reasonable starting point (especially critical for
+    // multi-transistor circuits with self-heating thermal nodes).
     for step in 0..=num_steps {
         let factor = step as f64 / num_steps as f64;
         let attempt = NrAttempt {
-            gmin: gmin_elevated,
+            diag_gmin: gmin_elevated,
+            dev_gmin: gmin_elevated,
             source_factor: factor,
             max_iters: options.itl2,
+        };
+        let first_mode = if step == 0 {
+            NrMode::InitJct
+        } else {
+            NrMode::Float
         };
         let result = try_nr(
             options,
@@ -328,7 +450,7 @@ where
             load_system,
             &solution,
             &attempt,
-            NrMode::Float,
+            first_mode,
         )?;
         total_iters += result.iterations;
         solution = result.solution;
@@ -344,7 +466,8 @@ where
     // goes to 0 for DC OP after source stepping.
     let direct_target = options.diag_gmin.min(options.gmin);
     let direct_attempt = NrAttempt {
-        gmin: direct_target,
+        diag_gmin: direct_target,
+        dev_gmin: direct_target,
         source_factor: 1.0,
         max_iters: options.itl1,
     };
@@ -375,7 +498,8 @@ where
 
     while gmin >= options.gmin * 0.9 {
         let attempt = NrAttempt {
-            gmin,
+            diag_gmin: gmin,
+            dev_gmin: gmin,
             source_factor: 1.0,
             max_iters: options.itl2,
         };
@@ -410,7 +534,8 @@ where
 
     // Final solve at target Gmin.
     let attempt = NrAttempt {
-        gmin: options.gmin,
+        diag_gmin: options.gmin,
+        dev_gmin: options.gmin,
         source_factor: 1.0,
         max_iters: options.itl2,
     };
@@ -450,7 +575,8 @@ where
 {
     // First try: direct NR with the nominal diag_gmin.
     let attempt = NrAttempt {
-        gmin: options.diag_gmin,
+        diag_gmin: options.diag_gmin,
+        dev_gmin: options.diag_gmin,
         source_factor: 1.0,
         max_iters: options.itl4,
     };
@@ -512,9 +638,13 @@ where
 ///
 /// # Convergence strategy
 ///
+/// Matches ngspice's `CKTop` fallback chain (cktop.c):
 /// 1. Try direct NR iteration (up to ITL1 iterations).
-/// 2. If that fails, try Gmin stepping (elevated Gmin, gradually reduced).
-/// 3. If that also fails, try source stepping (ramp sources from 0 to full).
+/// 2. If that fails, try dynamic Gmin stepping (diagonal shunt elevated).
+/// 3. If that fails, try new Gmin stepping (device-model gmin elevated,
+///    diagonal stays at base — provides regularization through device
+///    junctions rather than external shunts).
+/// 4. If all stepping fails, try source stepping (ramp sources from 0 to full).
 pub fn newton_raphson_solve<F>(
     options: &NrOptions,
     dim: usize,
@@ -557,7 +687,8 @@ where
     // (matching ngspice CKTdiagGmin initial value); for transient timesteps
     // it may be elevated to options.gmin for regularization.
     let attempt = NrAttempt {
-        gmin: options.diag_gmin,
+        diag_gmin: options.diag_gmin,
+        dev_gmin: options.diag_gmin,
         source_factor: 1.0,
         max_iters: options.itl1,
     };
@@ -573,12 +704,21 @@ where
         return Ok(result);
     }
 
-    // Fallback 1: Gmin stepping.
+    // Fallback 1: Dynamic Gmin stepping (diagonal shunt + device gmin elevated).
     if let Ok(result) = gmin_stepping(options, dim, num_nodes, &load_system, initial_guess) {
         return Ok(result);
     }
 
-    // Fallback 2: Source stepping.
+    // Fallback 2: New Gmin stepping (device-model gmin elevated, diagonal at base).
+    // This provides regularization through device junction conductances rather
+    // than through diagonal shunts, which is more effective for circuits with
+    // floating internal nodes (SOI body, VBIC thermal) that couple to the
+    // circuit only through device model stamps.
+    if let Ok(result) = new_gmin_stepping(options, dim, num_nodes, &load_system, initial_guess) {
+        return Ok(result);
+    }
+
+    // Fallback 3: Source stepping.
     source_stepping(options, dim, num_nodes, &load_system, initial_guess)
 }
 

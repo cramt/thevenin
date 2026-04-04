@@ -539,7 +539,7 @@ fn parse_waveform(tok: &str) -> Option<Waveform> {
             pw: g(5),
             per: g(6),
         })
-    } else if let Some(args) = args_of("SIN(") {
+    } else if let Some(args) = args_of("SIN(").or_else(|| args_of("SINE(")) {
         let g = |i| args.get(i).cloned();
         Some(Waveform::Sin {
             v0: g(0)?,
@@ -606,7 +606,7 @@ fn parse_waveform(tok: &str) -> Option<Waveform> {
 fn is_waveform_keyword(s: &str) -> bool {
     matches!(
         s.to_uppercase().as_str(),
-        "PULSE" | "SIN" | "EXP" | "PWL" | "SFFM" | "AM"
+        "PULSE" | "SIN" | "SINE" | "EXP" | "PWL" | "SFFM" | "AM"
     )
 }
 

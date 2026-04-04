@@ -102,3 +102,39 @@ only at the steep rolloff.
 
 **What NOT to retry:** pnjlim parameter changes for FO (NEI=NCI=1.0 makes them identical),
 tolerance overrides for FO (error >15%, unbounded growth with bias).
+
+## Session 109 findings (2026-04-04)
+
+### VBIC diffamp: OP convergence fixed (2 fixes)
+
+**Fix 1: Source stepping InitJct mode (newton.rs)**
+Source stepping's phase 1 now uses `NrMode::InitJct` for step 0, matching ngspice which
+sets `MODEINITJCT` before the first source stepping NIiter call. Previously all steps used
+`NrMode::Float`. This initializes device junction voltages to built-in potentials, giving
+NR a physically reasonable starting point for the 13-transistor circuit with 13 thermal nodes.
+
+**Fix 2: SINE waveform parser (parse.rs)**
+The parser's `parse_waveform()` function checked `upper.starts_with("SIN(")` but the diffamp
+circuit uses `Sine(...)` which uppercases to `SINE(` — doesn't match `SIN(`. Added `SINE(`
+as an alternative prefix. Also added `"SINE"` to `is_waveform_keyword()`. Without this fix,
+V2's sine waveform was not stored, and the transient used DC=0 (zero input → zero output).
+
+**Fix 3: new_gmin_stepping algorithm (newton.rs)**
+Implemented ngspice's `new_gmin` algorithm as a separate fallback step. Unlike `gmin_stepping`
+(which elevates both diagonal shunt and device gmin), `new_gmin_stepping` only elevates the
+device-model gmin while keeping diagonal gmin at base value. NrAttempt now has separate
+`diag_gmin` and `dev_gmin` fields. Fallback chain: direct NR → gmin_stepping → new_gmin → source.
+No effect on diffamp (uses forced source stepping) but improves convergence architecture.
+
+**Result:** OP now converges. Transient runs but V(E1_P) has 1000× too-fast initial response
+(expected: bandwidth-limited buildup from 0 to ~0.8mV over 2.5ns; got: immediate -112μV at
+10ps). The expected output also has OP device parameter tables and AC frequency sweep sections
+that our output doesn't include (US-061 / AC formatting gaps).
+
+**Root cause of transient error:** Likely related to VBIC capacitance initialization or
+charge history setup at the DC OP → transient transition. The circuit's ~10MHz bandwidth should
+limit the response rise time, but our transient shows immediate full gain. May need investigation
+of how VBIC charge states (Qbe, Qbc, Qbep, etc.) are initialized at the start of transient.
+
+**What NOT to retry:** Source stepping without InitJct (confirmed as root cause of convergence
+failure). Tolerance overrides for diffamp (transient error is 1000× at startup, grows large).
