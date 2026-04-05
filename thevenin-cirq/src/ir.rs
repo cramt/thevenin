@@ -365,6 +365,17 @@ pub enum ComponentKind {
         model: String,
         pins: BTreeMap<String, String>,
     },
+
+    // -- Digital logic gate --
+    DigitalGate {
+        gate_type: DigitalGateType,
+        pins: BTreeMap<String, String>,
+    },
+
+    // -- Unrecognized element (no fabricated connections) --
+    Raw {
+        text: String,
+    },
 }
 
 /// BJT polarity.
@@ -393,6 +404,42 @@ pub enum JfetPolarity {
 pub enum BehavioralExpr {
     Voltage(String),
     Current(String),
+}
+
+/// Digital gate type (spec-defined primitives).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DigitalGateType {
+    And,
+    Or,
+    Not,
+    Nand,
+    Nor,
+    Xor,
+    Xnor,
+    Buf,
+    Dff,
+    DffSr,
+    Mux2,
+    Latch,
+}
+
+impl fmt::Display for DigitalGateType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::And => write!(f, "and"),
+            Self::Or => write!(f, "or"),
+            Self::Not => write!(f, "not"),
+            Self::Nand => write!(f, "nand"),
+            Self::Nor => write!(f, "nor"),
+            Self::Xor => write!(f, "xor"),
+            Self::Xnor => write!(f, "xnor"),
+            Self::Buf => write!(f, "buf"),
+            Self::Dff => write!(f, "dff"),
+            Self::DffSr => write!(f, "dff_sr"),
+            Self::Mux2 => write!(f, "mux2"),
+            Self::Latch => write!(f, "latch"),
+        }
+    }
 }
 
 /// XSPICE port: scalar or vector.
@@ -451,9 +498,14 @@ impl Component {
             | ComponentKind::Ltra { .. }
             | ComponentKind::Txl { .. } => DomainClass::Analog,
 
+            // r[impl domain.primitives.digital]
+            ComponentKind::DigitalGate { .. } => DomainClass::Digital,
+
             ComponentKind::Xspice { .. } | ComponentKind::Cell { .. } => DomainClass::Unknown,
 
-            ComponentKind::SubcktInstance { .. } => DomainClass::Unknown,
+            ComponentKind::SubcktInstance { .. } | ComponentKind::Raw { .. } => {
+                DomainClass::Unknown
+            }
 
             ComponentKind::Port {
                 domain_override, ..
@@ -473,6 +525,8 @@ impl Component {
             | ComponentKind::Capacitor { p, n, .. }
             | ComponentKind::Inductor { p, n, .. } => vec![p, n],
 
+            // Coupling references inductor component IDs, not nets — the
+            // actual net connections are counted via the inductor components.
             ComponentKind::Coupling { .. } => vec![],
 
             ComponentKind::Diode { a, k, .. } => vec![a, k],
@@ -537,7 +591,12 @@ impl Component {
 
             ComponentKind::Port { net, .. } => vec![net],
 
-            ComponentKind::Cell { pins, .. } => pins.values().map(|s| s.as_str()).collect(),
+            ComponentKind::Cell { pins, .. } | ComponentKind::DigitalGate { pins, .. } => {
+                pins.values().map(|s| s.as_str()).collect()
+            }
+
+            // Raw elements have no known connections — do not fabricate any.
+            ComponentKind::Raw { .. } => vec![],
         }
     }
 }

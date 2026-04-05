@@ -51,6 +51,8 @@ pub enum CirqParseError {
     UnknownDomain(String),
     #[error("unknown waveform type '{0}'")]
     UnknownWaveformType(String),
+    #[error("unsupported CirQ version '{0}'")]
+    UnsupportedVersion(String),
 }
 
 // r[impl format.version]
@@ -188,7 +190,17 @@ struct CirqFunction {
 // ---------------------------------------------------------------------------
 
 fn lower_doc(doc: CirqDoc) -> Result<Circuit, CirqParseError> {
-    let _ = doc.cirq; // version — validated if needed in future
+    // r[format.version.semver]
+    // Reject documents whose major version exceeds what we support (0.x).
+    let major: u32 = doc
+        .cirq
+        .split('.')
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    if major > 0 {
+        return Err(CirqParseError::UnsupportedVersion(doc.cirq));
+    }
 
     let mut circuit = Circuit {
         name: doc.name,
@@ -252,14 +264,17 @@ fn lower_cirq_component(
                 .ok_or(CirqParseError::MissingField("direction"))?;
             let direction = parse_direction(&dir_str)?;
             let domain_override = comp.domain.as_deref().map(parse_domain).transpose()?;
-            let order = comp.order.unwrap_or_else(|| {
-                let o = *next_port_order;
-                *next_port_order += 1;
-                o
-            });
-            if let Some(o) = comp.order {
-                *next_port_order = o + 1;
-            }
+            let order = match comp.order {
+                Some(o) => {
+                    *next_port_order = o + 1;
+                    o
+                }
+                None => {
+                    let o = *next_port_order;
+                    *next_port_order += 1;
+                    o
+                }
+            };
             ComponentKind::Port {
                 net,
                 direction,
@@ -328,7 +343,7 @@ fn lower_cirq_component(
             ComponentKind::Diode {
                 a: pin_or_err(&pins, "a", &comp.id)?,
                 k: pin_or_err(&pins, "k", &comp.id)?,
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
@@ -341,7 +356,7 @@ fn lower_cirq_component(
                 b: pin_or_err(&pins, "b", &comp.id)?,
                 e: pin_or_err(&pins, "e", &comp.id)?,
                 s: pins.get("s").cloned(),
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
                 off: comp.off.unwrap_or(false),
             }
@@ -355,7 +370,7 @@ fn lower_cirq_component(
                 b: pin_or_err(&pins, "b", &comp.id)?,
                 e: pin_or_err(&pins, "e", &comp.id)?,
                 s: pins.get("s").cloned(),
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
                 off: comp.off.unwrap_or(false),
             }
@@ -363,28 +378,34 @@ fn lower_cirq_component(
 
         "nmos" => {
             let pins = extract_pin_map(&comp)?;
+            let s_pin = pin_or_err(&pins, "s", &comp.id)?;
+            // r[prim.nmos]: bulk pin is optional; defaults to source when omitted.
+            let b_pin = pins.get("b").cloned().unwrap_or_else(|| s_pin.clone());
             ComponentKind::Mosfet {
                 polarity: MosfetPolarity::Nmos,
                 d: pin_or_err(&pins, "d", &comp.id)?,
                 g: pin_or_err(&pins, "g", &comp.id)?,
-                s: pin_or_err(&pins, "s", &comp.id)?,
-                b: pin_or_err(&pins, "b", &comp.id)?,
+                s: s_pin,
+                b: b_pin,
                 body: pins.get("body").cloned(),
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
 
         "pmos" => {
             let pins = extract_pin_map(&comp)?;
+            let s_pin = pin_or_err(&pins, "s", &comp.id)?;
+            // r[prim.pmos]: bulk pin is optional; defaults to source when omitted.
+            let b_pin = pins.get("b").cloned().unwrap_or_else(|| s_pin.clone());
             ComponentKind::Mosfet {
                 polarity: MosfetPolarity::Pmos,
                 d: pin_or_err(&pins, "d", &comp.id)?,
                 g: pin_or_err(&pins, "g", &comp.id)?,
-                s: pin_or_err(&pins, "s", &comp.id)?,
-                b: pin_or_err(&pins, "b", &comp.id)?,
+                s: s_pin,
+                b: b_pin,
                 body: pins.get("body").cloned(),
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
@@ -396,7 +417,7 @@ fn lower_cirq_component(
                 d: pin_or_err(&pins, "d", &comp.id)?,
                 g: pin_or_err(&pins, "g", &comp.id)?,
                 s: pin_or_err(&pins, "s", &comp.id)?,
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
@@ -408,7 +429,7 @@ fn lower_cirq_component(
                 d: pin_or_err(&pins, "d", &comp.id)?,
                 g: pin_or_err(&pins, "g", &comp.id)?,
                 s: pin_or_err(&pins, "s", &comp.id)?,
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
@@ -419,20 +440,20 @@ fn lower_cirq_component(
                 d: pin_or_err(&pins, "d", &comp.id)?,
                 g: pin_or_err(&pins, "g", &comp.id)?,
                 s: pin_or_err(&pins, "s", &comp.id)?,
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
 
         "vsource" => {
             let (p, n) = extract_two_pin_map(&comp)?;
-            let source = build_source_spec(&comp);
+            let source = build_source_spec(&comp)?;
             ComponentKind::VSource { p, n, source }
         }
 
         "isource" => {
             let (p, n) = extract_two_pin_map(&comp)?;
-            let source = build_source_spec(&comp);
+            let source = build_source_spec(&comp)?;
             ComponentKind::ISource { p, n, source }
         }
 
@@ -479,11 +500,7 @@ fn lower_cirq_component(
 
         "cccs" => {
             let pins = extract_pin_map(&comp)?;
-            let vsource = comp
-                .params
-                .get("vsource")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_default();
+            let vsource = require_param_str(&comp, "vsource")?;
             let gain = comp
                 .params
                 .get("gain")
@@ -499,11 +516,7 @@ fn lower_cirq_component(
 
         "ccvs" => {
             let pins = extract_pin_map(&comp)?;
-            let vsource = comp
-                .params
-                .get("vsource")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_default();
+            let vsource = require_param_str(&comp, "vsource")?;
             let tr = comp
                 .params
                 .get("transresistance")
@@ -553,13 +566,35 @@ fn lower_cirq_component(
             }
         }
 
-        // Digital primitives — not natively in SPICE, but valid CirQ
+        // Digital primitives — not natively in SPICE, but valid CirQ.
+        // r[domain.primitives.digital]
         "and" | "or" | "not" | "nand" | "nor" | "xor" | "xnor" | "buf" | "dff" | "dff_sr"
         | "mux2" | "latch" => {
             let pins = extract_pin_map(&comp)?;
-            ComponentKind::Cell {
-                model: comp.comp_type.clone(),
-                pins,
+            let gate_type = parse_digital_gate_type(comp.comp_type.as_str())?;
+            ComponentKind::DigitalGate { gate_type, pins }
+        }
+
+        // r[prim.transformer]: primary (p1, n1) and secondary (p2, n2) with turns ratio
+        "transformer" => {
+            let pins = extract_pin_map(&comp)?;
+            ComponentKind::Tline {
+                p1: pin_or_err(&pins, "p1", &comp.id)?,
+                n1: pin_or_err(&pins, "n1", &comp.id)?,
+                p2: pin_or_err(&pins, "p2", &comp.id)?,
+                n2: pin_or_err(&pins, "n2", &comp.id)?,
+                params: lower_value_map(&comp.params),
+            }
+        }
+
+        // r[prim.crystal]: two-pin passive, value = resonant frequency
+        "crystal" => {
+            let (p, n) = extract_two_pin_map(&comp)?;
+            ComponentKind::Capacitor {
+                p,
+                n,
+                value: extract_value(&comp)?,
+                params: lower_value_map(&comp.params),
             }
         }
 
@@ -582,7 +617,7 @@ fn lower_cirq_component(
                 n1: pin_or_err(&pins, "n1", &comp.id)?,
                 p2: pin_or_err(&pins, "p2", &comp.id)?,
                 n2: pin_or_err(&pins, "n2", &comp.id)?,
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
@@ -594,7 +629,7 @@ fn lower_cirq_component(
                 n1: pin_or_err(&pins, "n1", &comp.id)?,
                 p2: pin_or_err(&pins, "p2", &comp.id)?,
                 n2: pin_or_err(&pins, "n2", &comp.id)?,
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
@@ -606,23 +641,19 @@ fn lower_cirq_component(
                 n: pin_or_err(&pins, "n", &comp.id)?,
                 cp: pin_or_err(&pins, "cp", &comp.id)?,
                 cn: pin_or_err(&pins, "cn", &comp.id)?,
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
 
         "iswitch" => {
             let pins = extract_pin_map(&comp)?;
-            let vsource = comp
-                .params
-                .get("vsource")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_default();
+            let vsource = require_param_str(&comp, "vsource")?;
             ComponentKind::ISwitch {
                 p: pin_or_err(&pins, "p", &comp.id)?,
                 n: pin_or_err(&pins, "n", &comp.id)?,
                 vsource,
-                model: comp.model.unwrap_or_default(),
+                model: require_model(&comp)?,
                 params: lower_value_map(&comp.params),
             }
         }
@@ -742,6 +773,46 @@ fn lower_value_map(map: &BTreeMap<String, DynVal>) -> BTreeMap<String, Value> {
         .collect()
 }
 
+fn require_model(comp: &CirqComponent) -> Result<String, CirqParseError> {
+    comp.model
+        .clone()
+        .ok_or_else(|| CirqParseError::InvalidComponent {
+            id: comp.id.clone(),
+            msg: "missing required 'model' field".into(),
+        })
+}
+
+fn require_param_str(comp: &CirqComponent, key: &str) -> Result<String, CirqParseError> {
+    comp.params
+        .get(key)
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .ok_or_else(|| CirqParseError::InvalidComponent {
+            id: comp.id.clone(),
+            msg: format!("missing required param '{key}'"),
+        })
+}
+
+fn parse_digital_gate_type(s: &str) -> Result<DigitalGateType, CirqParseError> {
+    match s {
+        "and" => Ok(DigitalGateType::And),
+        "or" => Ok(DigitalGateType::Or),
+        "not" => Ok(DigitalGateType::Not),
+        "nand" => Ok(DigitalGateType::Nand),
+        "nor" => Ok(DigitalGateType::Nor),
+        "xor" => Ok(DigitalGateType::Xor),
+        "xnor" => Ok(DigitalGateType::Xnor),
+        "buf" => Ok(DigitalGateType::Buf),
+        "dff" => Ok(DigitalGateType::Dff),
+        "dff_sr" => Ok(DigitalGateType::DffSr),
+        "mux2" => Ok(DigitalGateType::Mux2),
+        "latch" => Ok(DigitalGateType::Latch),
+        other => Err(CirqParseError::InvalidComponent {
+            id: String::new(),
+            msg: format!("unknown digital gate type '{other}'"),
+        }),
+    }
+}
+
 fn extract_pin_map(comp: &CirqComponent) -> Result<BTreeMap<String, String>, CirqParseError> {
     match &comp.pins {
         Some(DynVal::Mapping(map)) => Ok(map
@@ -791,7 +862,7 @@ fn extract_value(comp: &CirqComponent) -> Result<Value, CirqParseError> {
         })
 }
 
-fn build_source_spec(comp: &CirqComponent) -> SourceSpec {
+fn build_source_spec(comp: &CirqComponent) -> Result<SourceSpec, CirqParseError> {
     let dc = comp
         .value
         .as_ref()
@@ -799,14 +870,14 @@ fn build_source_spec(comp: &CirqComponent) -> SourceSpec {
         .or_else(|| comp.params.get("dc").map(dyn_to_value));
     let ac_mag = comp.params.get("ac_mag").map(dyn_to_value);
     let ac_phase = comp.params.get("ac_phase").map(dyn_to_value);
-    let waveform = comp.waveform.as_ref().and_then(|w| lower_waveform(w).ok());
+    let waveform = comp.waveform.as_ref().map(lower_waveform).transpose()?;
 
-    SourceSpec {
+    Ok(SourceSpec {
         dc,
         ac_mag,
         ac_phase,
         waveform,
-    }
+    })
 }
 
 fn lower_waveform(w: &CirqWaveform) -> Result<Waveform, CirqParseError> {
@@ -839,24 +910,30 @@ fn lower_waveform(w: &CirqWaveform) -> Result<Waveform, CirqParseError> {
         }),
         "pwl" => {
             let points_val = p.get("points").ok_or_else(|| {
-                CirqParseError::UnknownWaveformType("pwl requires 'points'".into())
+                CirqParseError::InvalidValue("pwl waveform requires 'points' parameter".into())
             })?;
             let points = match points_val {
-                DynVal::Sequence(seq) => seq
-                    .iter()
-                    .filter_map(|pair| {
-                        if let DynVal::Sequence(inner) = pair {
-                            if inner.len() == 2 {
-                                Some((dyn_to_value(&inner[0]), dyn_to_value(&inner[1])))
-                            } else {
-                                None
+                DynVal::Sequence(seq) => {
+                    let mut pts = Vec::with_capacity(seq.len());
+                    for (i, pair) in seq.iter().enumerate() {
+                        match pair {
+                            DynVal::Sequence(inner) if inner.len() == 2 => {
+                                pts.push((dyn_to_value(&inner[0]), dyn_to_value(&inner[1])));
                             }
-                        } else {
-                            None
+                            _ => {
+                                return Err(CirqParseError::InvalidValue(format!(
+                                    "pwl points[{i}]: expected [time, value] pair"
+                                )));
+                            }
                         }
-                    })
-                    .collect(),
-                _ => Vec::new(),
+                    }
+                    pts
+                }
+                _ => {
+                    return Err(CirqParseError::InvalidValue(
+                        "pwl 'points' must be a sequence of [time, value] pairs".into(),
+                    ));
+                }
             };
             Ok(Waveform::Pwl { points })
         }
@@ -1366,5 +1443,168 @@ components:
             }
             (a, b) => panic!("expected Resistor/Resistor, got {a:?} / {b:?}"),
         }
+    }
+
+    // -- Error path tests --
+
+    #[test]
+    fn missing_required_pin_errors() {
+        let yaml = r#"
+cirq: "0.3"
+name: Bad
+components:
+  - id: R1
+    type: resistor
+    value: 100
+    pins: { p: a }
+"#;
+        let err = parse_cirq(yaml).unwrap_err();
+        assert!(err.to_string().contains("missing required pin 'n'"));
+    }
+
+    #[test]
+    fn missing_model_errors() {
+        let yaml = r#"
+cirq: "0.3"
+name: Bad
+components:
+  - id: D1
+    type: diode
+    pins: { a: anode, k: cathode }
+"#;
+        let err = parse_cirq(yaml).unwrap_err();
+        assert!(err.to_string().contains("missing required 'model'"));
+    }
+
+    #[test]
+    fn missing_vsource_param_errors() {
+        let yaml = r#"
+cirq: "0.3"
+name: Bad
+components:
+  - id: F1
+    type: cccs
+    pins: { p: out, n: "0" }
+    params: { gain: 5 }
+"#;
+        let err = parse_cirq(yaml).unwrap_err();
+        assert!(err.to_string().contains("vsource"));
+    }
+
+    #[test]
+    fn malformed_waveform_errors() {
+        let yaml = r#"
+cirq: "0.3"
+name: Bad
+components:
+  - id: V1
+    type: vsource
+    value: 0
+    pins: { p: in, n: "0" }
+    waveform:
+      type: pulse
+      v1: 0
+"#;
+        // pulse requires v2 — should error, not silently drop
+        let err = parse_cirq(yaml).unwrap_err();
+        assert!(err.to_string().contains("v2"));
+    }
+
+    #[test]
+    fn malformed_pwl_point_errors() {
+        let yaml = r#"
+cirq: "0.3"
+name: Bad
+components:
+  - id: V1
+    type: vsource
+    value: 0
+    pins: { p: in, n: "0" }
+    waveform:
+      type: pwl
+      points: [[0, 0], "bad", [1, 5]]
+"#;
+        let err = parse_cirq(yaml).unwrap_err();
+        assert!(err.to_string().contains("points[1]"));
+    }
+
+    #[test]
+    fn unsupported_version_errors() {
+        let yaml = r#"
+cirq: "1.0"
+name: Future
+components: []
+"#;
+        let err = parse_cirq(yaml).unwrap_err();
+        assert!(err.to_string().contains("unsupported"));
+    }
+
+    // -- MOSFET optional bulk pin --
+
+    // r[verify prim.nmos]
+    #[test]
+    fn mosfet_bulk_defaults_to_source() {
+        let yaml = r#"
+cirq: "0.3"
+name: Bulk Default
+components:
+  - id: M1
+    type: nmos
+    model: NMOD
+    pins: { d: out, g: in, s: gnd }
+"#;
+        let circuit = parse_cirq(yaml).unwrap();
+        match &circuit.components[0].kind {
+            ComponentKind::Mosfet { s, b, .. } => {
+                assert_eq!(b, s, "bulk should default to source pin");
+                assert_eq!(s, "gnd");
+            }
+            other => panic!("expected Mosfet, got {other:?}"),
+        }
+    }
+
+    // -- Digital domain inference --
+
+    // r[verify domain.inference.digital]
+    #[test]
+    fn digital_gate_infers_digital_domain() {
+        let yaml = r#"
+cirq: "0.3"
+name: Digital
+components:
+  - id: U1
+    type: and
+    pins: { a: net_a, b: net_b, y: net_y }
+"#;
+        let circuit = parse_cirq(yaml).unwrap();
+        match &circuit.components[0].kind {
+            ComponentKind::DigitalGate { gate_type, .. } => {
+                assert_eq!(*gate_type, DigitalGateType::And);
+            }
+            other => panic!("expected DigitalGate, got {other:?}"),
+        }
+        // Nets connected only to digital gates should be digital
+        assert_eq!(circuit.nets["net_a"].domain, Domain::Digital);
+        assert_eq!(circuit.nets["net_y"].domain, Domain::Digital);
+    }
+
+    // r[verify domain.inference.mixed]
+    #[test]
+    fn mixed_domain_inference() {
+        let yaml = r#"
+cirq: "0.3"
+name: Mixed
+components:
+  - id: R1
+    type: resistor
+    value: "1k"
+    pins: { p: shared, n: gnd }
+  - id: U1
+    type: buf
+    pins: { a: shared, y: out }
+"#;
+        let circuit = parse_cirq(yaml).unwrap();
+        // 'shared' is touched by both analog (resistor) and digital (buf)
+        assert_eq!(circuit.nets["shared"].domain, Domain::Mixed);
     }
 }

@@ -1,5 +1,5 @@
-# CircuitNet Format Specification
-**Version 0.2 — Draft**
+# CirQ Format Specification
+**Version 0.3 — Draft**
 
 A human- and machine-friendly schema for describing electronic circuits.
 Serialization-agnostic: use JSON, YAML, TOML, or anything that maps to the same data model.
@@ -9,7 +9,7 @@ Serialization-agnostic: use JSON, YAML, TOML, or anything that maps to the same 
 # Format Version
 
 r[format.version]
-Every CircuitNet document MUST include a top-level `circuitnet` field containing the format version as a string (e.g. `"0.2"`). Documents without this field are invalid.
+Every CirQ document MUST include a top-level `cirq` field containing the format version as a string (e.g. `"0.3"`). Documents without this field are invalid.
 
 r[format.version.semver]
 The version string MUST follow semantic versioning. Parsers SHOULD reject documents whose major version is higher than the parser's supported major version.
@@ -19,7 +19,7 @@ The version string MUST follow semantic versioning. Parsers SHOULD reject docume
 # Top-Level Structure
 
 r[doc.name]
-Every CircuitNet document MUST include a top-level `name` field containing a non-empty string identifying the circuit.
+Every CirQ document MUST include a top-level `name` field containing a non-empty string identifying the circuit.
 
 r[doc.description]
 A top-level `description` field MAY be present. If present it MUST be a human-readable string. It has no semantic effect.
@@ -27,8 +27,8 @@ A top-level `description` field MAY be present. If present it MUST be a human-re
 r[doc.components]
 A top-level `components` field MUST be present and MUST be a list. It MAY be empty. It contains all component and port instances in the circuit.
 
-r[doc.modules]
-A top-level `modules` field MAY be present. If present it MUST be a list of module definitions. If absent it is treated as an empty list.
+r[doc.subcircuits]
+A top-level `subcircuits` field MAY be present. If present it MUST be a list of subcircuit definitions. If absent it is treated as an empty list.
 
 ---
 
@@ -38,7 +38,7 @@ r[net.implicit]
 Nets are implicit. A net is created automatically when its name is first referenced by any pin or port `net` field. No explicit net declaration is required or supported at the top level.
 
 r[net.name]
-A net name MUST be a non-empty string. Net names are case-sensitive and unique within their containing circuit or module scope.
+A net name MUST be a non-empty string. Net names are case-sensitive and unique within their containing circuit or subcircuit scope.
 
 r[net.reserved]
 The names `gnd`, `0`, `vdd`, `vcc`, and `vss` are reserved by convention as common supply and ground rails. They carry no special electrical behavior — they are ordinary nets whose meaning is established by the designer.
@@ -87,10 +87,10 @@ Components with `type: cell` are not classified as analog or digital. Their pin 
 # Components
 
 r[component.id]
-Every component MUST have an `id` field. The `id` MUST be a non-empty string, unique within the containing circuit or module scope.
+Every component MUST have an `id` field. The `id` MUST be a non-empty string, unique within the containing circuit or subcircuit scope.
 
 r[component.type]
-Every component MUST have a `type` field referencing a primitive type, the name of a module defined in `modules`, or one of the special types `port` and `cell`.
+Every component MUST have a `type` field referencing a primitive type, the name of a subcircuit defined in `subcircuits`, or one of the special types `port` and `cell`.
 
 r[component.description]
 A component MAY include a `description` string field. It has no semantic effect.
@@ -107,7 +107,7 @@ r[component.pins]
 All non-port components MUST include a `pins` field mapping pin names to net names. Both keys and values MUST be non-empty strings.
 
 r[component.pins.names]
-Pin names for primitive types are defined in the primitive type tables in this specification. For module instances, pin names MUST match the `id` fields of the module's `port` components.
+Pin names for primitive types are defined in the primitive type tables in this specification. For subcircuit instances, pin names MUST match the `id` fields of the subcircuit's `port` components.
 
 r[component.pins.net-creation]
 Each net name referenced in a `pins` field implicitly creates that net in the current scope if it does not already exist.
@@ -118,7 +118,7 @@ r[component.value]
 Passive components (`resistor`, `capacitor`, `inductor`, `crystal`, `vref`) SHOULD include a `value` field. `vsource` and `isource` MAY include a `value` field. Other primitive types MUST NOT include a `value` field.
 
 r[component.value.format]
-The `value` field MUST be either a number or a string. When a number, it is used directly. When a string, it MUST be parseable as a decimal number optionally followed by an SI prefix character, or as scientific notation (e.g. `"1e-9"`). The SI prefix characters are: `f` (10⁻¹⁵), `p` (10⁻¹²), `n` (10⁻⁹), `u` (10⁻⁶), `m` (10⁻³), `k` (10³), `M` (10⁶), `G` (10⁹). Prefix matching is case-insensitive. Unit symbols MUST NOT be included. Parsers MUST accept both forms and treat them equivalently (e.g. `10000`, `"10k"`, and `"1e4"` all represent the same value).
+The `value` field MUST be either a number or a string. When a number, it is used directly. When a string, it MUST be parseable as a decimal number optionally followed by an SI prefix suffix, or as scientific notation (e.g. `"1e-9"`). The SI prefix suffixes are: `a` (10⁻¹⁸), `f` (10⁻¹⁵), `p` (10⁻¹²), `n` (10⁻⁹), `u` (10⁻⁶), `m` (10⁻³), `k` (10³), `meg` (10⁶), `G` (10⁹), `t` (10¹²). Prefix matching is case-insensitive except that `m` always means milli (10⁻³); use `meg` for mega (10⁶). The SPICE extension `mil` (25.4x10⁻⁶) is also accepted. Unit symbols MUST NOT be included. Parsers MUST accept both forms and treat them equivalently (e.g. `10000`, `"10k"`, and `"1e4"` all represent the same value).
 
 ## Params
 
@@ -130,7 +130,7 @@ A component MAY include a `params` field containing a key-value map of additiona
 # Port Components
 
 r[port.type]
-A component with `type: port` defines an external connection point on the circuit or module. It is the only mechanism for declaring a circuit's interface.
+A component with `type: port` defines an external connection point on the circuit or subcircuit. It is the only mechanism for declaring a circuit's interface.
 
 r[port.net]
 A port component MUST include a `net` field containing the name of the internal net it exposes. This implicitly creates that net if it does not already exist.
@@ -145,7 +145,7 @@ r[port.no-pins]
 Port components MUST NOT include a `pins` field.
 
 r[port.id-as-name]
-The `id` of a port component serves as the external port name. When the circuit is instantiated as a module, the parent circuit uses the port `id` as the pin name.
+The `id` of a port component serves as the external port name. When the circuit is instantiated as a subcircuit, the parent circuit uses the port `id` as the pin name.
 
 ---
 
@@ -191,10 +191,10 @@ r[prim.pnp]
 `pnp` has pins: `b`, `c`, `e`.
 
 r[prim.nmos]
-`nmos` has pins: `g` (gate), `d` (drain), `s` (source). Pin `b` (bulk) is optional; if omitted it is assumed connected to source.
+`nmos` has pins: `g` (gate), `d` (drain), `s` (source). Pin `b` (bulk) is optional; if omitted, the bulk is implicitly connected to the same net as the source pin (`s`).
 
 r[prim.pmos]
-`pmos` has pins: `g`, `d`, `s`. Pin `b` is optional; if omitted it is assumed connected to source.
+`pmos` has pins: `g` (gate), `d` (drain), `s` (source). Pin `b` (bulk) is optional; if omitted, the bulk is implicitly connected to the same net as the source pin (`s`).
 
 r[prim.njfet]
 `njfet` has pins: `g`, `d`, `s`.
@@ -258,41 +258,41 @@ A component with `type: cell` represents a black-box component whose internal st
 
 ---
 
-# Modules
+# Subcircuits
 
-r[module.name]
-Every module MUST have a `name` field containing a non-empty string. Module names MUST be unique within the `modules` list of a document.
+r[subckt.name]
+Every subcircuit MUST have a `name` field containing a non-empty string. Subcircuit names MUST be unique within the `subcircuits` list of a document.
 
-r[module.components]
-Every module MUST have a `components` field structured identically to the top-level `components` field.
+r[subckt.components]
+Every subcircuit MUST have a `components` field structured identically to the top-level `components` field.
 
-r[module.interface]
-A module's external interface is defined exclusively by its `port` components. A module with no `port` components has no external interface.
+r[subckt.interface]
+A subcircuit's external interface is defined exclusively by its `port` components. A subcircuit with no `port` components has no external interface.
 
-r[module.instantiation]
-A module is instantiated by creating a component whose `type` matches the module's `name`. The `pins` field of the instance MUST map the module's port `id` values to nets in the parent scope.
+r[subckt.instantiation]
+A subcircuit is instantiated by creating a component whose `type` matches the subcircuit's `name`. The `pins` field of the instance MUST map the subcircuit's port `id` values to nets in the parent scope.
 
-r[module.instantiation.pins-complete]
-All ports of a module MUST be connected when instantiated. Omitting a port from the `pins` map of an instance is an error.
+r[subckt.instantiation.pins-complete]
+All ports of a subcircuit MUST be connected when instantiated. Omitting a port from the `pins` map of an instance is an error.
 
-r[module.scope]
-Net names inside a module are scoped to that module. They do not conflict with net names in the parent circuit or other modules.
+r[subckt.scope]
+Net names inside a subcircuit are scoped to that subcircuit. They do not conflict with net names in the parent circuit or other subcircuits.
 
-r[module.description]
-A module MAY include a `description` field. It has no semantic effect.
+r[subckt.description]
+A subcircuit MAY include a `description` field. It has no semantic effect.
 
 ---
 
 # File Conventions
 
 r[file.ext.yaml]
-CircuitNet documents serialized as YAML SHOULD use the extension `.circuit.yaml`.
+CirQ documents serialized as YAML SHOULD use the extension `.circuit.yaml`.
 
 r[file.ext.json]
-CircuitNet documents serialized as JSON SHOULD use the extension `.circuit.json`.
+CirQ documents serialized as JSON SHOULD use the extension `.circuit.json`.
 
 r[file.ext.lib]
-Module library files SHOULD use the extension `.lib.yaml` or `.lib.json`.
+Subcircuit library files SHOULD use the extension `.lib.yaml` or `.lib.json`.
 
 r[file.ext.layout]
 Layout sidecar files MUST use the extension `.layout.json` and MUST be named after their corresponding circuit file (e.g. `foo.circuit.yaml` → `foo.layout.json`).
@@ -308,7 +308,7 @@ r[layout.not-handwritten]
 The layout sidecar is intended for GUI tool consumption and generation only. It is not designed for hand-editing.
 
 r[layout.version]
-The layout sidecar MUST include a top-level `circuitnet_layout` field containing the layout format version as a string.
+The layout sidecar MUST include a top-level `cirq_layout` field containing the layout format version as a string.
 
 r[layout.circuit]
 The layout sidecar MUST include a `circuit` field containing the `name` of the circuit it corresponds to.
@@ -356,7 +356,7 @@ The layout sidecar MAY include a `viewport` object. If present it MUST contain `
 ## RC Low-Pass Filter
 
 ```yaml
-circuitnet: "0.2"
+cirq: "0.3"
 name: rc_lowpass
 description: "First-order RC low-pass filter, fc ≈ 1.6kHz"
 
@@ -390,7 +390,7 @@ components:
 ## AC to DC Rectifier
 
 ```yaml
-circuitnet: "0.2"
+cirq: "0.3"
 name: ac_dc_rectifier
 description: "Full-wave bridge rectifier with capacitor filter."
 
@@ -451,7 +451,7 @@ components:
 ## Mixed-Signal Comparator
 
 ```yaml
-circuitnet: "0.2"
+cirq: "0.3"
 name: analog_comparator
 description: "Analog threshold comparator with digital output"
 
@@ -521,9 +521,9 @@ components:
 - **Component layout geometry** — in the sidecar `.layout.json`
 - **Timing constraints** — out of scope
 - **Technology / PDK parameters** — reference via `model:` string, resolved externally
-- **Bus / vector nets** — not in v0.2; treat multi-bit nets as individual named nets
-- **Model libraries** — pin domain declarations for `cell` types; planned for v0.3
+- **Bus / vector nets** — not in v0.3; treat multi-bit nets as individual named nets
+- **Model libraries** — pin domain declarations for `cell` types; planned for a future version
 
 ---
 
-*CircuitNet is an open schema. No tooling required to read or write it — any YAML/JSON library works.*
+*CirQ is an open schema. No tooling required to read or write it — any YAML/JSON library works.*

@@ -65,18 +65,15 @@ pub fn lower_netlist(netlist: &Netlist) -> Result<Circuit, SpiceLowerError> {
 // ---------------------------------------------------------------------------
 
 /// Map from model name (lowercased) → SPICE model kind string (uppercased).
+///
+/// Only collects models at the current scope level — does NOT recurse into
+/// subcircuit definitions, because subcircuit-local models are scoped to
+/// their defining subcircuit and must not leak into the parent scope.
 fn collect_model_types(items: &[Item]) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     for item in items {
-        match item {
-            Item::Model(m) => {
-                map.insert(m.name.to_lowercase(), m.kind.to_uppercase());
-            }
-            Item::Subckt(s) => {
-                let inner = collect_model_types(&s.items);
-                map.extend(inner);
-            }
-            _ => {}
+        if let Item::Model(m) = item {
+            map.insert(m.name.to_lowercase(), m.kind.to_uppercase());
         }
     }
     map
@@ -444,12 +441,10 @@ fn lower_element(
         }
 
         ElementKind::Raw(rest) => {
-            // Store as behavioral source with the raw text — best effort
-            ComponentKind::BehavioralSource {
-                p: "0".into(),
-                n: "0".into(),
-                expr: BehavioralExpr::Voltage(rest.clone()),
-            }
+            // Preserve unrecognized elements without fabricating connections.
+            // A Raw component has no net connections and won't affect domain
+            // inference — downstream consumers can inspect or report it.
+            ComponentKind::Raw { text: rest.clone() }
         }
     };
 
