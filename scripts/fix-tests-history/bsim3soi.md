@@ -1,12 +1,13 @@
 # BSIM3SOI Test History
 
-## Current status (3 remaining — DD t3 now passes with tolerance override)
+## Current status (2 remaining — DD t3 tolerance override, FD inv2 un-ignored session 113)
 
 | Test | Status |
 |---|---|
 | DD t3 | ✅ PASSING with rel_tol=4e-2 (session 102). Exhaustively verified sessions 99-101. |
+| FD inv2 | ✅ PASSING (un-ignored session 113). Previous gmin/source stepping fixes resolved convergence. |
 | DD RampVg2 | Body voltage collapses from 92mV to ~0 at first transient step (DC OP correct) |
-| DD/FD/PD inv2 | NR non-convergence (singular matrix, needs source/gmin stepping) |
+| DD/PD inv2 | NR non-convergence (342/172 iters; body voltage bifurcation) |
 
 ## DD fixes
 
@@ -406,3 +407,24 @@ doesn't respond to gate — full 4-row charge integration still needed.
 
 **Status:** All 4 BSIM3SOI convergence tests remain intractable without major solver
 or body charge model work.
+
+## Session 113 findings (2026-04-05)
+
+### FD inv2: NOW PASSES — un-ignored
+
+**Discovery:** Running all 19 ignored tests revealed `bsim3soifd/inv2.cir` now passes
+cleanly. The accumulated gmin stepping / new_gmin_stepping / source stepping improvements
+from sessions 105-111 (fixes 102-103, 107, 111) resolved the FD convergence issue.
+
+FD inv2 was the easiest of the 3 inv2 variants because:
+1. FD body node is NOT in the matrix (body_int_idx = None, matching ngspice b3soifdset.c)
+2. FD has NO body row matrix stamps (confirmed session 105)
+3. The convergence issue was purely floating output node conditioning during gmin reduction
+
+DD inv2 (342 iterations) and PD inv2 (172 iterations) still fail — they have actual body
+node rows that become singular when gmin drops below ~4e-4.
+
+**Action:** Removed `bsim3soifd/inv2.cir` from ignore.toml. Test count: 617 passing, 22 skipped.
+
+**What NOT to retry:** DD/PD inv2 (confirmed still failing). The FD fix is from accumulated
+solver improvements, not a targeted change.
