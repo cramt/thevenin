@@ -12,15 +12,18 @@
 
 # VBIC: companion model FP eval order (~0.2% base error, verified 80+ sessions)
 # CEamp: DC OP FP precision propagates to AC gain rolloff; ~0.9% passband error,
-# 13.5% at 6.2GHz absorbed by slope-aware tolerance (verified formulas)
+# 13.5% at 6.2GHz absorbed by slope-aware tolerance. Fails at 1.5e-2.
 "vbic/CEamp.cir" = { rel_tol = 2e-2 }
-# FG peak: slope-masked high-bias points
-"vbic/FG.cir" = { rel_tol = 4e-2 }
-# temp peak: slope-masked high-bias points
-"vbic/temp.cir" = { rel_tol = 3e-2 }
+# FG: 3.3% raw peak at Vb=0.89V, but slope-aware tolerance absorbs most of it.
+# Effective non-slope-masked error ~2.2%. Passes at 2e-2, fails at 1.5e-2.
+"vbic/FG.cir" = { rel_tol = 2e-2 }
+# temp: 2.3% raw peak at Vb=0.76V, slope-masked high-bias points.
+# Passes at 2e-2, fails at 1.5e-2.
+"vbic/temp.cir" = { rel_tol = 2e-2 }
 
-# Transmission: TXL cascade accumulation (2.4% peak, verified)
-"transmission/txl2_3_line.cir" = { rel_tol = 3e-2 }
+# Transmission: TXL cascade accumulation (2.4% peak, verified).
+# Passes at 2.5e-2, fails at 2e-2.
+"transmission/txl2_3_line.cir" = { rel_tol = 2.5e-2 }
 
 # Transmission: LTRA 2-line cascade accumulation (~0.75% peak non-slope-masked error)
 # LTRA convolution code verified against ngspice ltraload.c: all three convolution
@@ -28,11 +31,12 @@
 # conventions, initial condition handling, and delayed value interpolation.
 # Error from CMOS inverter switching timing differences cascading through the
 # second stage (ltra1_1_line passes at default tolerance, confirming LTRA code correct).
-# Same error class as txl2_3_line and CPL tests (verified sessions 102-103).
-"transmission/ltra2_2_line.cir" = { rel_tol = 1e-2 }
+# Passes at 8e-3, fails at 7.5e-3.
+"transmission/ltra2_2_line.cir" = { rel_tol = 8e-3 }
 
 # BSIM3SOI-DD: analytical body voltage chain FP eval order (~3.15% peak at Vd=1.51V)
 # Exhaustively verified sessions 99-101: ALL 8 stages of Vbs0t→Vbseff chain match
 # ngspice exactly term-by-term. Error from NR-converged body voltage being 1.5mV
 # different (FP eval order), propagating through analytical chain.
-"bsim3soidd/t3.cir" = { rel_tol = 4e-2 }
+# Passes at 3.5e-2, fails at 3e-2.
+"bsim3soidd/t3.cir" = { rel_tol = 3.5e-2 }

@@ -194,8 +194,7 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let is_dc = !is_ac;
 
     // Skip "dc" keyword if present (output[1] = "dc").
-    let _dc_keyword =
-        sens_output.len() > 1 && sens_output[1].eq_ignore_ascii_case("dc");
+    let _dc_keyword = sens_output.len() > 1 && sens_output[1].eq_ignore_ascii_case("dc");
 
     if is_ac {
         return simulate_ac_sens(netlist, output_var, &sens_output[2..]);
@@ -584,9 +583,8 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
 /// Parse a numeric literal from AC sweep parameters (e.g. "1e6", "1.1e6").
 fn parse_spice_num(s: &str) -> Result<f64, MnaError> {
-    s.parse::<f64>().map_err(|_| {
-        MnaError::UnsupportedElement(format!("bad number in AC sens sweep: {s}"))
-    })
+    s.parse::<f64>()
+        .map_err(|_| MnaError::UnsupportedElement(format!("bad number in AC sens sweep: {s}")))
 }
 
 /// Solve a complex system Y * x = rhs using a pre-factored complex LU.
@@ -666,8 +664,8 @@ fn complex_susceptance_sensitivity(
     // z = -(dY * x)
     let mut z = vec![(0.0, 0.0); dim];
     if let Some(p) = pos {
-        z[p].0 += db * va.1;   // -(-dB*va_im) = +dB*va_im
-        z[p].1 -= db * va.0;   // -(+dB*va_re) = -dB*va_re
+        z[p].0 += db * va.1; // -(-dB*va_im) = +dB*va_im
+        z[p].1 -= db * va.0; // -(+dB*va_re) = -dB*va_re
     }
     if let Some(n) = neg {
         z[n].0 -= db * va.1;
@@ -756,8 +754,9 @@ fn simulate_ac_sens(
             rhs[(i, 0)] = c64::new(sys.rhs_real[i], sys.rhs_imag[i]);
         }
         let x_mat = lu.solve(&rhs);
-        let ac_solution: Vec<(f64, f64)> =
-            (0..dim).map(|i| (x_mat[(i, 0)].re, x_mat[(i, 0)].im)).collect();
+        let ac_solution: Vec<(f64, f64)> = (0..dim)
+            .map(|i| (x_mat[(i, 0)].re, x_mat[(i, 0)].im))
+            .collect();
 
         // Helper to record a sensitivity value.
         let mut sens_idx = 0usize;
@@ -785,7 +784,14 @@ fn simulate_ac_sens(
             let g = 1.0 / r.resistance;
             let dg_dr = -g * g; // d(1/R)/dR = -1/R²
             let s = complex_conductance_sensitivity(
-                &lu, r.pos_idx, r.neg_idx, dg_dr, &ac_solution, out_pos, out_neg, dim,
+                &lu,
+                r.pos_idx,
+                r.neg_idx,
+                dg_dr,
+                &ac_solution,
+                out_pos,
+                out_neg,
+                dim,
             );
             record(name, s);
         }
@@ -798,7 +804,14 @@ fn simulate_ac_sens(
             };
             // d(jωC)/dC = jω.  Susceptance change per unit C = ω.
             let s = complex_susceptance_sensitivity(
-                &lu, cap.pos_idx, cap.neg_idx, omega, &ac_solution, out_pos, out_neg, dim,
+                &lu,
+                cap.pos_idx,
+                cap.neg_idx,
+                omega,
+                &ac_solution,
+                out_pos,
+                out_neg,
+                dim,
             );
             record(name, s);
         }

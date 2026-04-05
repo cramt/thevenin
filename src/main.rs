@@ -57,8 +57,9 @@ fn convert(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Read input
     let spice = match &input {
-        Some(path) if path != "-" => std::fs::read_to_string(path)
-            .map_err(|e| format!("failed to read {path}: {e}"))?,
+        Some(path) if path != "-" => {
+            std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?
+        }
         _ => {
             let mut buf = String::new();
             io::stdin()
@@ -80,8 +81,7 @@ fn convert(
     // Write output
     match &output {
         Some(path) => {
-            std::fs::write(path, &result)
-                .map_err(|e| format!("failed to write {path}: {e}"))?;
+            std::fs::write(path, &result).map_err(|e| format!("failed to write {path}: {e}"))?;
         }
         None => {
             io::stdout()

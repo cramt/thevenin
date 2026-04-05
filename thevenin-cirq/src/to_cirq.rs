@@ -388,26 +388,13 @@ fn component_to_out(comp: &Component) -> CirqOutComponent {
             apply_source_spec(&mut out, source);
         }
 
-        ComponentKind::Vcvs {
-            p,
-            n,
-            cp,
-            cn,
-            gain,
-        } => {
+        ComponentKind::Vcvs { p, n, cp, cn, gain } => {
             out.comp_type = "vcvs".into();
             out.pins = Some(four_pin_map(p, n, cp, cn));
-            out.params
-                .insert("gain".into(), value_to_out(gain));
+            out.params.insert("gain".into(), value_to_out(gain));
         }
 
-        ComponentKind::Vccs {
-            p,
-            n,
-            cp,
-            cn,
-            gm,
-        } => {
+        ComponentKind::Vccs { p, n, cp, cn, gm } => {
             out.comp_type = "vccs".into();
             out.pins = Some(four_pin_map(p, n, cp, cn));
             out.params.insert("gm".into(), value_to_out(gm));
@@ -423,8 +410,7 @@ fn component_to_out(comp: &Component) -> CirqOutComponent {
             out.pins = Some(two_pin_map(p, n));
             out.params
                 .insert("vsource".into(), CirqOutVal::Text(vsource.clone()));
-            out.params
-                .insert("gain".into(), value_to_out(gain));
+            out.params.insert("gain".into(), value_to_out(gain));
         }
 
         ComponentKind::Ccvs {
@@ -446,12 +432,10 @@ fn component_to_out(comp: &Component) -> CirqOutComponent {
             out.pins = Some(two_pin_map(p, n));
             match expr {
                 BehavioralExpr::Voltage(e) => {
-                    out.params
-                        .insert("v".into(), CirqOutVal::Text(e.clone()));
+                    out.params.insert("v".into(), CirqOutVal::Text(e.clone()));
                 }
                 BehavioralExpr::Current(e) => {
-                    out.params
-                        .insert("i".into(), CirqOutVal::Text(e.clone()));
+                    out.params.insert("i".into(), CirqOutVal::Text(e.clone()));
                 }
             }
         }
@@ -525,10 +509,7 @@ fn component_to_out(comp: &Component) -> CirqOutComponent {
             out.params = value_map_to_out(params);
         }
 
-        ComponentKind::Xspice {
-            connections,
-            model,
-        } => {
+        ComponentKind::Xspice { connections, model } => {
             out.comp_type = "xspice".into();
             out.model = Some(model.clone());
             // Flatten XSPICE connections into a pin map with numeric keys
@@ -729,13 +710,7 @@ fn waveform_to_out(wf: &Waveform) -> CirqOutWaveform {
             }
             "pwl"
         }
-        Waveform::Sffm {
-            v0,
-            va,
-            fc,
-            fs,
-            md,
-        } => {
+        Waveform::Sffm { v0, va, fc, fs, md } => {
             params.insert("v0".into(), value_to_out(v0));
             params.insert("va".into(), value_to_out(va));
             insert_opt(&mut params, "fc", fc);

@@ -270,3 +270,50 @@ both give same result). HFET1 model is now correct — the convergence basin iss
 purely an NR iteration path difference requiring MODEINITFIX phase implementation
 (ngspice niiter.c lines 336-342: InitJct→InitFix→Float with matrix reorder at
 each transition).
+
+## Session 117 findings (2026-04-05)
+
+### Full triage of all 15 remaining ignored tests
+
+All 15 remaining ignored harness tests confirmed intractable:
+
+| Test | Category | Error |
+|---|---|---|
+| bsim1/test.cir | Model not implemented | BSIM1 produces near-zero Ids |
+| bsim2/test.cir | Model not implemented | BSIM2 produces near-zero Ids |
+| bsim3soidd/inv2.cir | NR non-convergence | 342 iterations, singular matrix |
+| bsim3soidd/RampVg2.cir | Missing body charge integration | DC OP 0.38% ok, transient body doesn't respond |
+| bsim3soipd/inv2.cir | NR non-convergence | 172 iterations, singular matrix |
+| general/mosamp.cir | Level 2 MOSFET missing | 35% DC OP error (Level 1 fallback) |
+| general/rtlinv.cir | Transient dynamics | 4.3%→89% cascading timing error |
+| general/schmitt.cir | Transient dynamics | 31% at t=293ns settling |
+| hfet/inverter.cir | Wrong convergence basin | V(3)=1.955V vs expected -0.275V |
+| regression/misc/asrc-tc-2.cir | .control scripting | Parameter expressions + .control |
+| regression/misc/resume-1.cir | .control scripting | stop/alter/resume commands |
+| regression/model/binning-1.cir | .control scripting | BSIM4 model binning |
+| transmission/cpl_ibm2.cir | FP accumulation | 6.4% + sign reversal |
+| transmission/cpl3_4_line.cir | FP accumulation | 0.8%→13.8% cascading |
+| vbic/FO.cir | FP eval order | 0.38%→15%+ growing with bias |
+
+### HFET MODEINITFIX analysis
+
+Analyzed ngspice's MODEINITFIX phase (niiter.c lines 336-342) and its effect on HFET
+devices. For ON devices (HFETAoff=0, which includes all devices in the inverter circuit),
+MODEINITFIX uses solution voltages with limiting — same as MODEINITFLOAT. The only
+difference is the NISHOULDREORDER flag (sparse matrix pivot reselection) and convergence
+checking transition. For dense matrix LU (our solver), this is effectively a no-op.
+Implementing MODEINITFIX would NOT fix the HFET inverter convergence basin issue.
+
+### Tolerance tightenings (FIX 113)
+
+Tightened 5 of 6 tolerance overrides after binary-searching pass boundaries:
+- vbic/FG.cir: 4e-2 → 2e-2 (slope masking absorbs more than expected)
+- vbic/temp.cir: 3e-2 → 2e-2 (same mechanism)
+- transmission/txl2_3_line.cir: 3e-2 → 2.5e-2
+- transmission/ltra2_2_line.cir: 1e-2 → 8e-3
+- bsim3soidd/t3.cir: 4e-2 → 3.5e-2
+- vbic/CEamp.cir: unchanged at 2e-2 (already at minimum)
+
+**What NOT to retry:** All 15 ignored tests — exhaustively confirmed in intractable
+categories. MODEINITFIX for HFET (no effect with dense LU). Tolerance overrides for
+any ignored test (errors too large or unbounded).
