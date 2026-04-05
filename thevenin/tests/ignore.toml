@@ -35,8 +35,6 @@
 # === Regression: pz ===
 
 # === Regression: sens ===
-"regression/sens/sens-ac-1.cir" = "AC sensitivity not implemented: .control exec strips 'ac' keyword, simulate_sens only has DC path. Computes DC sens (dV/dR=I_dc=1.27) instead of complex AC sens at f=1MHz"
-"regression/sens/sens-ac-2.cir" = "AC sensitivity not implemented: same root cause as sens-ac-1 (simulate_sens DC-only path)"
 
 
 

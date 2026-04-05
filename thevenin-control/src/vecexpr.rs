@@ -511,19 +511,19 @@ fn parse_add(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecV
 }
 
 fn parse_mul(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecVal, String> {
-    let mut left = parse_unary(tokens, pos, ctx)?;
+    let mut left = parse_power(tokens, pos, ctx)?;
     while *pos < tokens.len() {
         match &tokens[*pos] {
             Token::Star => {
                 *pos += 1;
-                let right = parse_unary(tokens, pos, ctx)?;
+                let right = parse_power(tokens, pos, ctx)?;
                 left = vec_complex_binop(&left, &right, |ar, ai, br, bi| {
                     (ar * br - ai * bi, ar * bi + ai * br)
                 });
             }
             Token::Slash => {
                 *pos += 1;
-                let right = parse_unary(tokens, pos, ctx)?;
+                let right = parse_power(tokens, pos, ctx)?;
                 left = vec_complex_binop(&left, &right, |ar, ai, br, bi| {
                     let denom = br * br + bi * bi;
                     if denom != 0.0 {
@@ -533,12 +533,35 @@ fn parse_mul(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecV
                     }
                 });
             }
-            Token::Caret => {
-                *pos += 1;
-                let right = parse_unary(tokens, pos, ctx)?;
-                left = vec_binop(&left, &right, |a, b| a.powf(b));
-            }
             _ => break,
+        }
+    }
+    Ok(left)
+}
+
+/// Power operator `^` — higher precedence than `*` and `/`.
+fn parse_power(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecVal, String> {
+    let mut left = parse_unary(tokens, pos, ctx)?;
+    while *pos < tokens.len() {
+        if tokens[*pos] == Token::Caret {
+            *pos += 1;
+            let right = parse_unary(tokens, pos, ctx)?;
+            left = vec_complex_binop(&left, &right, |ar, ai, br, _bi| {
+                // Complex power: (ar + j*ai)^br
+                // For real exponent (bi≈0): z^n = |z|^n * e^{j*n*θ}
+                if ai == 0.0 {
+                    // Both operands real: standard powf
+                    (ar.powf(br), 0.0)
+                } else {
+                    let mag = (ar * ar + ai * ai).sqrt();
+                    let theta = ai.atan2(ar);
+                    let new_mag = mag.powf(br);
+                    let new_theta = br * theta;
+                    (new_mag * new_theta.cos(), new_mag * new_theta.sin())
+                }
+            });
+        } else {
+            break;
         }
     }
     Ok(left)
@@ -611,6 +634,21 @@ fn parse_primary_base(
         Token::LParen => {
             *pos += 1;
             let val = parse_or(tokens, pos, ctx)?;
+            // Check for complex literal: (re, im) → complex number
+            if *pos < tokens.len() && tokens[*pos] == Token::Comma {
+                *pos += 1; // skip comma
+                let imag_val = parse_or(tokens, pos, ctx)?;
+                if *pos < tokens.len() && tokens[*pos] == Token::RParen {
+                    *pos += 1;
+                }
+                // Build complex VecVal from (real, imag) pair
+                let re = val.as_scalar();
+                let im = imag_val.as_scalar();
+                return Ok(VecVal {
+                    data: vec![re],
+                    imag: vec![im],
+                });
+            }
             if *pos < tokens.len() && tokens[*pos] == Token::RParen {
                 *pos += 1;
             }

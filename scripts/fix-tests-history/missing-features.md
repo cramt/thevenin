@@ -7,7 +7,7 @@
 | .control: B-source nodes not in OP | 2 | asrc-tc-1 (v(3)), log-functions-1 (v(b1)) |
 | .control: alter/resume commands | 2 | alter-vec (alter cmd), resume-1 (stop/resume) |
 | .control: imaginary unit | 1 | ac-resistance (complex 'i' variable) |
-| AC sensitivity not implemented | 2 | sens-ac-1/2 (.control works; simulate_sens only has DC path) |
+| ~~AC sensitivity not implemented~~ | ~~2~~ | ~~sens-ac-1/2~~ ✅ FIXED (session 116) |
 | .control: model binning | 1 | binning-1 (BSIM4 bin selection) |
 | .control: node naming | 2 | bxpressn-1 (B-source internal node), xpressn-3 (subcircuit internal node) |
 | .control: parameter expressions | 1 | asrc-tc-2 (r={1k + v(9)}) |
@@ -40,6 +40,25 @@ The .control interpreter works correctly — the issue is the missing AC sensiti
 
 **What NOT to retry:** Simple numerical accuracy fixes or .control parser changes — the entire
 AC sensitivity analysis path needs to be implemented.
+
+### sens-ac-1/2: FIXED — AC sensitivity implemented (session 116)
+
+**Implemented:** Full AC sensitivity analysis in `sens.rs` (~200 LOC):
+1. Fixed exec.rs to preserve "ac" keyword in sens command args
+2. Implemented `simulate_ac_sens()` using the direct method with complex LU:
+   - Builds complex Y(ω) using existing `stamp_ac_devices` + `apply_ac_excitation`
+   - Factors Y with complex FullPivLu (faer c64)
+   - For each parameter (R, C, L, V_acmag, I_acmag), computes z = -dY*x or delta_b
+   - Solves Y * delta_E = z and extracts complex sensitivity
+3. Added `name: Option<String>` to `CapacitorInstance` and `InductorInstance` in mna.rs
+   to identify user-defined elements (vs device-internal parasitics)
+4. Fixed three .control expression evaluator bugs exposed by the tests:
+   - Complex literal `(re, im)` not parsed (treated `(0,2)` as just `0`)
+   - Complex `^` power operator used real-only `vec_binop` instead of `vec_complex_binop`
+   - `^` had same precedence as `*`/`/` — `a/b^2` parsed as `(a/b)^2` instead of `a/(b^2)`
+5. Fixed `resolve_vec_scalar` in context.rs to handle complex vectors (was panicking)
+
+**Result:** Both sens-ac-1 and sens-ac-2 pass. 634 tests pass, 17 skipped, 0 failures.
 
 ### binning-1: Confirmed BSIM4 model binning issue, not .control
 

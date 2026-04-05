@@ -1469,7 +1469,7 @@ pub fn stamp_ac_devices(
 }
 
 /// Apply AC source excitation to the complex RHS.
-fn apply_ac_excitation(
+pub fn apply_ac_excitation(
     sys: &mut ComplexLinearSystem,
     netlist: &Netlist,
     mna: &MnaSystem,

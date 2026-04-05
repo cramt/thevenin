@@ -1,16 +1,21 @@
+use std::f64::consts::PI;
+
 use faer::Mat;
+use faer::c64;
 use faer::linalg::solvers::FullPivLu;
 use faer::prelude::Solve;
 
-use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{AcVariation, Analysis, Complex, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
+use crate::ac::{generate_ac_sweep, stamp_ac_devices};
 use crate::bjt::stamp_bjt;
 use crate::jfet::stamp_jfet;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
 use crate::mosfet::stamp_mosfet;
 use crate::newton::NrOptions;
 use crate::simulate::solve_op_raw;
+use crate::sparse::ComplexLinearSystem;
 use crate::tf::build_jacobian;
 
 /// Solve Y * delta_E = z and extract the output sensitivity.
@@ -184,13 +189,20 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
     let output_var = &sens_output[0];
 
-    // Check DC vs AC (only DC supported currently)
+    // Check DC vs AC.
     let is_ac = sens_output.len() > 1 && sens_output[1].eq_ignore_ascii_case("ac");
+    let is_dc = !is_ac;
+
+    // Skip "dc" keyword if present (output[1] = "dc").
+    let _dc_keyword =
+        sens_output.len() > 1 && sens_output[1].eq_ignore_ascii_case("dc");
+
     if is_ac {
-        return Err(MnaError::UnsupportedElement(
-            "AC sensitivity not yet supported".to_string(),
-        ));
+        return simulate_ac_sens(netlist, output_var, &sens_output[2..]);
     }
+
+    // ---------- DC sensitivity path (unchanged below) ----------
+    let _ = is_dc;
 
     // Assemble MNA and solve DC OP.
     // Use diag_gmin = 0 to match ngspice's CKTdiagGmin = 0 for DC analysis.
@@ -558,6 +570,294 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .into_iter()
         .zip(sens_values)
         .map(|(name, value)| SimVector::real(name, vec![value]))
+        .collect();
+
+    Ok(SimResult {
+        plots: vec![SimPlot {
+            name: "sens1".to_string(),
+            vecs,
+        }],
+    })
+}
+
+// ── AC sensitivity ──────────────────────────────────────────────────────────
+
+/// Parse a numeric literal from AC sweep parameters (e.g. "1e6", "1.1e6").
+fn parse_spice_num(s: &str) -> Result<f64, MnaError> {
+    s.parse::<f64>().map_err(|_| {
+        MnaError::UnsupportedElement(format!("bad number in AC sens sweep: {s}"))
+    })
+}
+
+/// Solve a complex system Y * x = rhs using a pre-factored complex LU.
+fn solve_complex_forward(lu: &FullPivLu<c64>, rhs: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let dim = rhs.len();
+    let mut b = Mat::<c64>::zeros(dim, 1);
+    for (i, &(re, im)) in rhs.iter().enumerate() {
+        b[(i, 0)] = c64::new(re, im);
+    }
+    let x = lu.solve(&b);
+    (0..dim).map(|i| (x[(i, 0)].re, x[(i, 0)].im)).collect()
+}
+
+/// Extract complex output from delta_E.
+fn extract_complex_output(
+    delta_e: &[(f64, f64)],
+    out_pos: Option<usize>,
+    out_neg: Option<usize>,
+) -> (f64, f64) {
+    let vp = out_pos.map(|i| delta_e[i]).unwrap_or((0.0, 0.0));
+    let vn = out_neg.map(|i| delta_e[i]).unwrap_or((0.0, 0.0));
+    (vp.0 - vn.0, vp.1 - vn.1)
+}
+
+/// Compute AC sensitivity for a real conductance perturbation dG between nodes
+/// (pos, neg).  The matrix perturbation is purely real (affects G part of Y).
+#[expect(clippy::too_many_arguments)]
+fn complex_conductance_sensitivity(
+    lu: &FullPivLu<c64>,
+    pos: Option<usize>,
+    neg: Option<usize>,
+    dg: f64,
+    ac_solution: &[(f64, f64)],
+    out_pos: Option<usize>,
+    out_neg: Option<usize>,
+    dim: usize,
+) -> (f64, f64) {
+    let vp = pos.map(|i| ac_solution[i]).unwrap_or((0.0, 0.0));
+    let vn = neg.map(|i| ac_solution[i]).unwrap_or((0.0, 0.0));
+    let va = (vp.0 - vn.0, vp.1 - vn.1); // v_across (complex)
+
+    // dY * x at pos: +dG * v_across; at neg: -dG * v_across
+    // z = -(dY * x)
+    let mut z = vec![(0.0, 0.0); dim];
+    if let Some(p) = pos {
+        z[p].0 -= dg * va.0;
+        z[p].1 -= dg * va.1;
+    }
+    if let Some(n) = neg {
+        z[n].0 += dg * va.0;
+        z[n].1 += dg * va.1;
+    }
+
+    let delta_e = solve_complex_forward(lu, &z);
+    extract_complex_output(&delta_e, out_pos, out_neg)
+}
+
+/// Compute AC sensitivity for an imaginary susceptance perturbation dB between
+/// nodes (pos, neg).  The perturbation is j*dB (affects B part of Y = G + jB).
+#[expect(clippy::too_many_arguments)]
+fn complex_susceptance_sensitivity(
+    lu: &FullPivLu<c64>,
+    pos: Option<usize>,
+    neg: Option<usize>,
+    db: f64,
+    ac_solution: &[(f64, f64)],
+    out_pos: Option<usize>,
+    out_neg: Option<usize>,
+    dim: usize,
+) -> (f64, f64) {
+    let vp = pos.map(|i| ac_solution[i]).unwrap_or((0.0, 0.0));
+    let vn = neg.map(|i| ac_solution[i]).unwrap_or((0.0, 0.0));
+    let va = (vp.0 - vn.0, vp.1 - vn.1);
+
+    // dY[pos,pos] = j*dB, dY[pos,neg] = -j*dB, etc.
+    // (j*dB) * (va_re + j*va_im) = -dB*va_im + j*dB*va_re
+    // z = -(dY * x)
+    let mut z = vec![(0.0, 0.0); dim];
+    if let Some(p) = pos {
+        z[p].0 += db * va.1;   // -(-dB*va_im) = +dB*va_im
+        z[p].1 -= db * va.0;   // -(+dB*va_re) = -dB*va_re
+    }
+    if let Some(n) = neg {
+        z[n].0 -= db * va.1;
+        z[n].1 += db * va.0;
+    }
+
+    let delta_e = solve_complex_forward(lu, &z);
+    extract_complex_output(&delta_e, out_pos, out_neg)
+}
+
+/// AC sensitivity analysis (.sens ... ac ...).
+///
+/// At each frequency ω, builds the complex MNA system Y(ω)*x = b,
+/// factors Y, then for each parameter p:
+///   z = delta_b - delta_Y*x   (perturbation)
+///   delta_E = Y^-1 * z
+///   S(p) = (delta_E[out+] - delta_E[out-]) / delta_p
+fn simulate_ac_sens(
+    netlist: &Netlist,
+    output_var: &str,
+    ac_params: &[String], // ["lin", "1", "1e6", "1.1e6"]
+) -> Result<SimResult, MnaError> {
+    if ac_params.len() < 4 {
+        return Err(MnaError::UnsupportedElement(
+            "sens AC needs: variation n fstart fstop".to_string(),
+        ));
+    }
+    let variation = match ac_params[0].to_lowercase().as_str() {
+        "dec" => AcVariation::Dec,
+        "oct" => AcVariation::Oct,
+        "lin" => AcVariation::Lin,
+        other => {
+            return Err(MnaError::UnsupportedElement(format!(
+                "sens AC: unknown variation: {other}"
+            )));
+        }
+    };
+    let n = parse_spice_num(&ac_params[1])? as u32;
+    let fstart = parse_spice_num(&ac_params[2])?;
+    let fstop = parse_spice_num(&ac_params[3])?;
+
+    // Assemble MNA and solve DC OP.
+    let mna = assemble_mna(netlist)?;
+    let nr_opts = crate::simulate::nr_options_from_netlist(netlist);
+    let op_solution = if mna.has_nonlinear() {
+        crate::simulate::solve_nonlinear_op(&mna, &nr_opts)?
+    } else {
+        solve_op_raw(&mna)?
+    };
+
+    let (out_pos, out_neg, _) = parse_sens_output(output_var, &mna)?;
+    let num_nodes = mna.total_num_nodes();
+    let dim = num_nodes + mna.vsource_names.len();
+    let gmin = nr_opts.gmin;
+
+    let frequencies = generate_ac_sweep(variation, n, fstart, fstop);
+    let num_freq = frequencies.len();
+
+    // Pre-allocate per-parameter accumulation (name → Vec of complex values).
+    let mut param_names: Vec<String> = Vec::new();
+    let mut param_values: Vec<Vec<Complex>> = Vec::new();
+
+    // We compute sensitivities at the first frequency to discover parameter
+    // names, then extend at subsequent frequencies.
+    for (fi, &freq) in frequencies.iter().enumerate() {
+        let omega = 2.0 * PI * freq;
+
+        // Build complex AC system.
+        let mut sys = ComplexLinearSystem::new(dim);
+        stamp_ac_devices(&mna, &op_solution, omega, &mut sys, gmin);
+        crate::ac::apply_ac_excitation(&mut sys, netlist, &mna, num_nodes);
+
+        // Build dense complex matrix and factor it.
+        let mut mat = Mat::<c64>::zeros(dim, dim);
+        for t in sys.real.triplets() {
+            mat[(t.row, t.col)] += c64::new(t.value, 0.0);
+        }
+        for t in sys.imag.triplets() {
+            mat[(t.row, t.col)] += c64::new(0.0, t.value);
+        }
+        let lu = FullPivLu::new(mat.as_ref());
+
+        // Solve for AC node voltages: Y * x = b.
+        let mut rhs = Mat::<c64>::zeros(dim, 1);
+        for i in 0..dim {
+            rhs[(i, 0)] = c64::new(sys.rhs_real[i], sys.rhs_imag[i]);
+        }
+        let x_mat = lu.solve(&rhs);
+        let ac_solution: Vec<(f64, f64)> =
+            (0..dim).map(|i| (x_mat[(i, 0)].re, x_mat[(i, 0)].im)).collect();
+
+        // Helper to record a sensitivity value.
+        let mut sens_idx = 0usize;
+        let mut record = |name: String, val: (f64, f64)| {
+            let c = Complex {
+                re: val.0,
+                im: val.1,
+            };
+            if fi == 0 {
+                param_names.push(name);
+                param_values.push({
+                    let mut v = Vec::with_capacity(num_freq);
+                    v.push(c);
+                    v
+                });
+            } else {
+                param_values[sens_idx].push(c);
+            }
+            sens_idx += 1;
+        };
+
+        // ── Resistors: sensitivity to R ──
+        for r in &mna.resistors {
+            let name = r.name.to_lowercase();
+            let g = 1.0 / r.resistance;
+            let dg_dr = -g * g; // d(1/R)/dR = -1/R²
+            let s = complex_conductance_sensitivity(
+                &lu, r.pos_idx, r.neg_idx, dg_dr, &ac_solution, out_pos, out_neg, dim,
+            );
+            record(name, s);
+        }
+
+        // ── Capacitors: sensitivity to C ──
+        for cap in &mna.capacitors {
+            let name = match &cap.name {
+                Some(n) => n.to_lowercase(),
+                None => continue, // skip device-internal parasitics
+            };
+            // d(jωC)/dC = jω.  Susceptance change per unit C = ω.
+            let s = complex_susceptance_sensitivity(
+                &lu, cap.pos_idx, cap.neg_idx, omega, &ac_solution, out_pos, out_neg, dim,
+            );
+            record(name, s);
+        }
+
+        // ── Inductors: sensitivity to L ──
+        for ind in &mna.inductors {
+            let name = match &ind.name {
+                Some(n) => n.to_lowercase(),
+                None => continue,
+            };
+            // Inductor stamp: imag[branch, branch] = -ωL.
+            // d(-jωL)/dL = -jω.  Perturbation on branch diagonal: -jω * dL.
+            // dY * x at branch: (-jω) * x[branch]
+            // z = -(dY*x) at branch = jω * x[branch]
+            let xb = ac_solution[ind.branch_idx];
+            // jω * (xb_re + j*xb_im) = -ω*xb_im + j*ω*xb_re
+            // z[branch] = (-(-ω*xb_im), -(ω*xb_re))  — wait, z = -(dY*x)
+            // dY*x at branch = (-jω) * xb = ω*xb_im - j*ω*xb_re
+            // z[branch] = -(ω*xb_im - j*ω*xb_re) = -ω*xb_im + j*ω*xb_re
+            let mut z = vec![(0.0, 0.0); dim];
+            z[ind.branch_idx] = (-omega * xb.1, omega * xb.0);
+            let delta_e = solve_complex_forward(&lu, &z);
+            let s = extract_complex_output(&delta_e, out_pos, out_neg);
+            record(name, s);
+        }
+
+        // ── Voltage sources: sensitivity to AC magnitude ──
+        for (i, vsrc) in mna.vsource_names.iter().enumerate() {
+            let branch_idx = num_nodes + i;
+            // Perturbation: delta_b[branch] = 1 (unit AC mag change).
+            let mut z = vec![(0.0, 0.0); dim];
+            z[branch_idx] = (1.0, 0.0);
+            let delta_e = solve_complex_forward(&lu, &z);
+            let s = extract_complex_output(&delta_e, out_pos, out_neg);
+            record(format!("{}_acmag", vsrc.to_lowercase()), s);
+        }
+
+        // ── Current sources: sensitivity to AC magnitude ──
+        for cs in &mna.current_sources {
+            let name = cs.name.to_lowercase();
+            // Perturbation: delta_b[pos] -= 1, delta_b[neg] += 1.
+            let mut z = vec![(0.0, 0.0); dim];
+            if let Some(p) = cs.pos_idx {
+                z[p].0 -= 1.0;
+            }
+            if let Some(n) = cs.neg_idx {
+                z[n].0 += 1.0;
+            }
+            let delta_e = solve_complex_forward(&lu, &z);
+            let s = extract_complex_output(&delta_e, out_pos, out_neg);
+            record(format!("{name}_acmag"), s);
+        }
+    }
+
+    // Build result vectors.
+    let vecs: Vec<SimVector> = param_names
+        .into_iter()
+        .zip(param_values)
+        .map(|(name, values)| SimVector::complex(name, values))
         .collect();
 
     Ok(SimResult {

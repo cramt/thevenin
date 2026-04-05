@@ -127,6 +127,8 @@ pub struct DiodeInstance {
 /// A resolved capacitor instance with matrix indices.
 #[derive(Debug, Clone)]
 pub struct CapacitorInstance {
+    /// Element name (`Some` for user-defined, `None` for device-internal parasitics).
+    pub name: Option<String>,
     /// Positive node matrix index (None = ground).
     pub pos_idx: Option<usize>,
     /// Negative node matrix index (None = ground).
@@ -140,6 +142,8 @@ pub struct CapacitorInstance {
 /// A resolved inductor instance with matrix indices.
 #[derive(Debug, Clone)]
 pub struct InductorInstance {
+    /// Element name (`Some` for user-defined, `None` for device-internal).
+    pub name: Option<String>,
     /// Positive node matrix index (None = ground).
     pub pos_idx: Option<usize>,
     /// Negative node matrix index (None = ground).
@@ -799,6 +803,7 @@ fn push_bjt_caps(
     if cje_total > 0.0 {
         indices.cje_idx = Some(capacitors.len());
         capacitors.push(CapacitorInstance {
+            name: None,
             pos_idx: base_prime_idx,
             neg_idx: emit_prime_idx,
             capacitance: cje_total,
@@ -811,6 +816,7 @@ fn push_bjt_caps(
     if cjc_total > 0.0 {
         indices.cjc_idx = Some(capacitors.len());
         capacitors.push(CapacitorInstance {
+            name: None,
             pos_idx: base_prime_idx,
             neg_idx: col_prime_idx,
             capacitance: cjc_total,
@@ -822,6 +828,7 @@ fn push_bjt_caps(
     let cjs_total = model.cjs * area * m;
     if cjs_total > 0.0 {
         capacitors.push(CapacitorInstance {
+            name: None,
             pos_idx: col_prime_idx,
             neg_idx: None, // substrate = ground
             capacitance: cjs_total,
@@ -877,6 +884,7 @@ fn push_mosfet_caps(
     let cgs_ov = cgso * w * m;
     if cgs_ov > 0.0 {
         capacitors.push(CapacitorInstance {
+            name: None,
             pos_idx: gate_idx,
             neg_idx: source_prime_idx,
             capacitance: cgs_ov,
@@ -888,6 +896,7 @@ fn push_mosfet_caps(
     let cgd_ov = cgdo * w * m;
     if cgd_ov > 0.0 {
         capacitors.push(CapacitorInstance {
+            name: None,
             pos_idx: gate_idx,
             neg_idx: drain_prime_idx,
             capacitance: cgd_ov,
@@ -899,6 +908,7 @@ fn push_mosfet_caps(
     let cgb_ov = cgbo * l * m;
     if cgb_ov > 0.0 {
         capacitors.push(CapacitorInstance {
+            name: None,
             pos_idx: gate_idx,
             neg_idx: bulk_idx,
             capacitance: cgb_ov,
@@ -915,6 +925,7 @@ fn push_mosfet_caps(
     };
     if cbd_total > 0.0 {
         capacitors.push(CapacitorInstance {
+            name: None,
             pos_idx: bulk_idx,
             neg_idx: drain_prime_idx,
             capacitance: cbd_total,
@@ -930,6 +941,7 @@ fn push_mosfet_caps(
     };
     if cbs_total > 0.0 {
         capacitors.push(CapacitorInstance {
+            name: None,
             pos_idx: bulk_idx,
             neg_idx: source_prime_idx,
             capacitance: cbs_total,
@@ -1431,6 +1443,7 @@ fn assemble_mna_flat(
                 };
                 if dm.cjo > 0.0 {
                     capacitors.push(CapacitorInstance {
+                        name: None,
                         pos_idx: jct_node,
                         neg_idx: cathode_idx,
                         capacitance: dm.cjo,
@@ -2401,6 +2414,7 @@ fn assemble_mna_flat(
                 let neg_idx = node_map.get(neg);
                 let ic = extract_ic_param(params);
                 capacitors.push(CapacitorInstance {
+                    name: Some(element.name.clone()),
                     pos_idx,
                     neg_idx,
                     capacitance: cap_val,
@@ -2420,6 +2434,7 @@ fn assemble_mna_flat(
                 let branch = n + vsource_idx;
                 let ic = extract_ic_param(params);
                 inductors.push(InductorInstance {
+                    name: Some(element.name.clone()),
                     pos_idx,
                     neg_idx,
                     branch_idx: branch,

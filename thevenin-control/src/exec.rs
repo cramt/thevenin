@@ -562,12 +562,9 @@ fn parse_analysis_command(cmd: &str, args: &[&str]) -> Result<Analysis, String> 
             if args.is_empty() {
                 return Err("sens: need output variable".to_string());
             }
-            // `sens v(1) dc` — collect output vars, skip "dc"/"ac" keyword
-            let output: Vec<String> = args
-                .iter()
-                .filter(|a| !a.eq_ignore_ascii_case("dc") && !a.eq_ignore_ascii_case("ac"))
-                .map(|a| a.to_string())
-                .collect();
+            // `sens v(1) dc` or `sens v(1) ac lin 1 1e6 1.1e6`
+            // Keep all tokens — simulate_sens parses dc/ac from output[1].
+            let output: Vec<String> = args.iter().map(|a| a.to_string()).collect();
             Ok(Analysis::Sens { output })
         }
         "noise" => {

@@ -173,13 +173,23 @@ impl SimContext {
     /// Resolve a `$&vector` reference — format scalar value as string.
     pub fn resolve_vec_scalar(&self, name: &str) -> String {
         if let Some(vec) = self.find_vector(name) {
-            let real = vec.data.as_real();
-            if real.len() == 1 {
-                format_number(real[0])
-            } else if !real.is_empty() {
-                format_number(real[real.len() - 1])
-            } else {
-                "0".to_string()
+            match &vec.data {
+                thevenin_types::VectorData::Real(real) => {
+                    if real.len() == 1 {
+                        format_number(real[0])
+                    } else if !real.is_empty() {
+                        format_number(real[real.len() - 1])
+                    } else {
+                        "0".to_string()
+                    }
+                }
+                thevenin_types::VectorData::Complex(cplx) => {
+                    if let Some(c) = cplx.last() {
+                        format!("{},{}", format_number(c.re), format_number(c.im))
+                    } else {
+                        "0".to_string()
+                    }
+                }
             }
         } else {
             "0".to_string()
