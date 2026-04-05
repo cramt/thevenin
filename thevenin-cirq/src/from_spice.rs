@@ -17,17 +17,33 @@ use crate::ir::*;
 pub enum SpiceLowerError {
     #[error("parse error: {0}")]
     Parse(#[from] thevenin_types::ParseError),
+    #[error("netlist contains {0} analysis forks — expected exactly 1")]
+    MultipleForks(usize),
 }
 
 /// Parse SPICE text and lower it to the CirQ IR.
 ///
-/// Uses the first netlist fork (ignoring analysis type — CirQ is structural only).
+/// Fails if the netlist contains multiple analysis forks (e.g. `.OP` + `.TRAN`),
+/// since CirQ represents a single circuit structure. Use [`from_spice_any`] to
+/// accept multi-fork netlists by picking the first fork.
 pub fn from_spice(input: &str) -> Result<Circuit, SpiceLowerError> {
     let netlists = Netlist::parse(input)?;
-    // CirQ only cares about circuit structure; pick the last fork which has
-    // the most accumulated items.
+    if netlists.len() > 1 {
+        return Err(SpiceLowerError::MultipleForks(netlists.len()));
+    }
     let netlist = netlists
-        .last()
+        .first()
+        .ok_or(SpiceLowerError::Parse(thevenin_types::ParseError::Empty))?;
+    lower_netlist(netlist)
+}
+
+/// Parse SPICE text and lower it to the CirQ IR, accepting any number of
+/// analysis forks. Picks the first fork (CirQ is structural only, so the
+/// analysis type doesn't matter).
+pub fn from_spice_any(input: &str) -> Result<Circuit, SpiceLowerError> {
+    let netlists = Netlist::parse(input)?;
+    let netlist = netlists
+        .first()
         .ok_or(SpiceLowerError::Parse(thevenin_types::ParseError::Empty))?;
     lower_netlist(netlist)
 }
@@ -836,7 +852,7 @@ R1 in out 1k
 .ac DEC 100 1 1G
 .end
 ";
-        let circuit = from_spice(spice).unwrap();
+        let circuit = from_spice_any(spice).unwrap();
         // Only V1 and R1 should be in components — analysis is ignored
         assert_eq!(circuit.components.len(), 2);
     }

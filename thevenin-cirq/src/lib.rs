@@ -12,5 +12,6 @@
 pub mod cirq_parse;
 pub mod from_spice;
 pub mod ir;
+pub mod to_cirq;
 
 pub use ir::*;

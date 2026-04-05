@@ -34,6 +34,9 @@ publish = false
 [dependencies]
 thevenin-types = { path = "thevenin-types" }
 thevenin = { path = "thevenin" }
+thevenin-cirq = { path = "thevenin-cirq" }
+facet.workspace = true
+figue = "2"
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true

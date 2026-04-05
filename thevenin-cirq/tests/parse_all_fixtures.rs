@@ -47,7 +47,7 @@ fn all_fixture_cir_files_parse_to_ir() {
             }
         };
 
-        match thevenin_cirq::from_spice::from_spice(&src) {
+        match thevenin_cirq::from_spice::from_spice_any(&src) {
             Ok(circuit) => {
                 // Sanity: name should be non-empty
                 assert!(
