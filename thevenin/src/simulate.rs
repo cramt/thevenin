@@ -286,8 +286,8 @@ fn jct_initial_guess(
     // conductance path, preventing singular matrices during JCT init.
     for bsim in &mna.bsim3soi_dds {
         let sign = bsim.model.mos_type.sign();
-        let vgs = sign * (bsim.vth0_inst + 0.1);
-        let vds = sign * 0.1;
+        let vgs = sign * 0.1 + bsim.vth0_inst;
+        let vds = 0.0;
         let comp = bsim3soi_dd_companion(vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model);
         stamp_bsim3soi_dd(
             &mut system.matrix,
@@ -301,8 +301,8 @@ fn jct_initial_guess(
     // Stamp each BSIM3SOI-FD at InitJct voltages.
     for bsim in &mna.bsim3soi_fds {
         let sign = bsim.model.mos_type.sign();
-        let vgs = sign * (bsim.vth0_inst + 0.1);
-        let vds = sign * 0.1;
+        let vgs = sign * 0.1 + bsim.vth0_inst;
+        let vds = 0.0;
         let floating_body = bsim.body_idx.is_none();
         let comp = bsim3soi_fd_companion(
             vgs,
@@ -325,8 +325,8 @@ fn jct_initial_guess(
     // Stamp each BSIM3SOI-PD at InitJct voltages.
     for bsim in &mna.bsim3soi_pds {
         let sign = bsim.model.mos_type.sign();
-        let vgs = sign * (bsim.vth0_inst + 0.1);
-        let vds = sign * 0.1;
+        let vgs = sign * 0.1 + bsim.vth0_inst;
+        let vds = 0.0;
         let comp = bsim3soi_pd_companion(vgs, vds, 0.0, 0.0, &bsim.size_params, &bsim.model);
         stamp_bsim3soi_pd(
             &mut system.matrix,

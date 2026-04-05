@@ -456,3 +456,46 @@ state (vin=0, tested by inverter_op) now passes.
 
 **What NOT to retry:** bsim3soi_pd_pmos_op and bsim3soi_pd_inverter_input_high — both are
 NR non-convergence in PMOS operating conditions, classified as intractable.
+
+## Session 118 findings (2026-04-06)
+
+### PMOS InitJct + ceq sign fix — 2 unit tests un-ignored
+
+**Root cause found:** TWO bugs causing PMOS SOI NR non-convergence:
+
+**Bug 1: Wrong MODEINITJCT formula for PMOS (all BSIM3/BSIM4/SOI models)**
+
+ngspice uses different InitJct formulas per model:
+- BSIM3: `vgs = type * vth0 + 0.1; vds = 0.1;` (b3ld.c:212)
+- BSIM3SOI-DD/FD/PD: `vgs = type * 0.1 + vth0; vds = 0.0;` (b3soipdld.c:369)
+- BSIM4: `vgs = type * vth0 + 0.1; vds = 0.1;` (b4v5ld.c:298)
+
+Our code used `vgs = sign * (vth0 + 0.1); vds = sign * 0.1;` everywhere.
+
+For NMOS (sign=1, vth0=+0.5): both formulas give vgs=0.6 (coincidentally identical).
+For PMOS (sign=-1, vth0=-0.5): our formula gave vgs=+0.4 (wrong!), ngspice gives -0.6 (SOI) or +0.6 (BSIM3/4). The PMOS device was initialized in completely the wrong region.
+
+Fixed in device_stamp.rs (5 sites) and simulate.rs (3 sites: jct_initial_guess).
+
+**Bug 2: Missing PMOS type sign on junction/body ceqs (all SOI models)**
+
+The ceq sign fix (commit 0d9f0a9) correctly removed the extra `sign` from `ceq_d` (which
+already has type sign from the companion), but INCORRECTLY also removed the needed `sign`
+from junction/body ceqs (ceq_bs, ceq_bd, ceq_iii, ceq_gidl, ceq_sgidl, ceq_body).
+
+In ngspice, these ceqs are computed unsigned (b3soipdld.c lines 2665-2696) but then
+NEGATED for PMOS in the stamping section (b3soipdld.c lines 3981-3991):
+```c
+if (type < 0) {
+    ceqbody = -ceqbody; ceqbs = -ceqbs; ceqbd = -ceqbd; ...
+}
+```
+
+The old code applied `sign` to ALL ceqs (including ceq_d) — wrong because ceq_d got
+double-signed. The fix (0d9f0a9) removed `sign` from ALL ceqs — wrong because junction
+ceqs lost their needed sign. Correct behavior: sign on junction/body ceqs, no sign on ceq_d.
+
+Fixed in bsim3soi_pd.rs, bsim3soi_dd.rs, bsim3soi_fd.rs stamp functions.
+
+**Result:** Both `bsim3soi_pd_pmos_op` and `bsim3soi_pd_inverter_input_high` now pass.
+636 tests pass, 15 skipped (was 634/17). No regressions. Clippy clean.

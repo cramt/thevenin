@@ -569,10 +569,10 @@ impl DeviceVoltageState {
             let mut prev = self.prev_bsim3.borrow_mut();
             for (bi, bsim) in mna.bsim3s.iter().enumerate() {
                 let (vgs, vds, vbs) = if init_jct {
-                    // MODEINITJCT: vgs = type * (vth0 + 0.1), vds = type * 0.1, vbs = 0.
-                    // Matches ngspice b3ld.c MODEINITJCT behavior.
+                    // MODEINITJCT: vgs = type * vth0 + 0.1, vds = 0.1, vbs = 0.
+                    // Matches ngspice b3ld.c:212: vgs = type * vth0 + 0.1; vds = 0.1;
                     let sign = bsim.model.mos_type.sign();
-                    (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0)
+                    (sign * bsim.vth0_inst + 0.1, 0.1, 0.0)
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
                     bsim3_limit(
@@ -597,9 +597,10 @@ impl DeviceVoltageState {
             let mut prev = self.prev_bsim3soi_pd.borrow_mut();
             for (bi, bsim) in mna.bsim3soi_pds.iter().enumerate() {
                 let (vgs, vds, vbs, ves) = if init_jct {
-                    // MODEINITJCT: same pattern as BSIM3 with ves = 0.
+                    // MODEINITJCT: vgs = type*0.1 + vth0, vds = 0, vbs = 0, ves = 0.
+                    // Matches ngspice b3soipdld.c:369: vgs = type*0.1 + vth0; vds = 0;
                     let sign = bsim.model.mos_type.sign();
-                    (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0, 0.0)
+                    (sign * 0.1 + bsim.vth0_inst, 0.0, 0.0, 0.0)
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
                     bsim3soi_pd_limit(
@@ -628,9 +629,10 @@ impl DeviceVoltageState {
             for (bi, bsim) in mna.bsim3soi_fds.iter().enumerate() {
                 let floating_body = bsim.body_idx.is_none();
                 let (vgs, vds, vbs, ves) = if init_jct {
-                    // MODEINITJCT: same pattern as BSIM3 with ves = 0.
+                    // MODEINITJCT: vgs = type*0.1 + vth0, vds = 0, vbs = 0, ves = 0.
+                    // Matches ngspice b3soifdld.c:371: vgs = type*0.1 + vth0; vds = 0;
                     let sign = bsim.model.mos_type.sign();
-                    (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0, 0.0)
+                    (sign * 0.1 + bsim.vth0_inst, 0.0, 0.0, 0.0)
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
                     bsim3soi_fd_limit(
@@ -666,9 +668,10 @@ impl DeviceVoltageState {
             let mut prev = self.prev_bsim3soi_dd.borrow_mut();
             for (bi, bsim) in mna.bsim3soi_dds.iter().enumerate() {
                 let (vgs, vds, vbs, ves) = if init_jct {
-                    // MODEINITJCT: same pattern as BSIM3 with ves = 0.
+                    // MODEINITJCT: vgs = type*0.1 + vth0, vds = 0, vbs = 0, ves = 0.
+                    // Matches ngspice b3soiddld.c:400: vgs = type*0.1 + vth0; vds = 0;
                     let sign = bsim.model.mos_type.sign();
-                    (sign * (bsim.vth0_inst + 0.1), sign * 0.1, 0.0, 0.0)
+                    (sign * 0.1 + bsim.vth0_inst, 0.0, 0.0, 0.0)
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
                     bsim3soi_dd_limit(
@@ -697,9 +700,10 @@ impl DeviceVoltageState {
             let mut prev = self.prev_bsim4.borrow_mut();
             for (bi, bsim) in mna.bsim4s.iter().enumerate() {
                 let (vgs, vds, vbs) = if init_jct {
-                    // MODEINITJCT: same pattern as BSIM3.
+                    // MODEINITJCT: vgs = type * vth0 + 0.1, vds = 0.1, vbs = 0.
+                    // Matches ngspice b4v5ld.c:298-299: vgs = type * vth0 + 0.1;
                     let sign = bsim.model.mos_type.sign();
-                    (sign * (bsim.size_params.vth0 + 0.1), sign * 0.1, 0.0)
+                    (sign * bsim.size_params.vth0 + 0.1, 0.1, 0.0)
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
                     bsim4_limit(

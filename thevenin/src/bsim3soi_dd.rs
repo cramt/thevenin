@@ -3158,12 +3158,15 @@ pub fn stamp_bsim3soi_dd(
 
     // --- RHS current source stamps ---
     // Matches ngspice b3soiddld.c lines 4011-4016 structure.
-    // ceq_d (cdreq) has `sign` (model type) inside.
-    // Junction and body CEQs are NOT type-signed for forward mode.
+    // ceq_d (cdreq) has `sign` (model type) inside — no extra sign needed.
+    // Junction and body CEQs are computed WITHOUT type sign in the companion,
+    // but NEGATED for PMOS in the stamping section (b3soiddld.c lines 4001-4008:
+    // ceqbs=-ceqbs, ceqbd=-ceqbd, ceqbody=-ceqbody for type<0).
+    let sign = inst.model.mos_type.sign();
     let ceq_d = m * comp.ceq_d;
-    let ceq_jd = m * comp.ceq_jd;
-    let ceq_js = m * comp.ceq_js;
-    let ceq_body = m * comp.ceq_body;
+    let ceq_jd = sign * m * comp.ceq_jd;
+    let ceq_js = sign * m * comp.ceq_js;
+    let ceq_body = sign * m * comp.ceq_body;
 
     // ngspice: rhs[dNodePrime] += ceqbd - cdreq
     if let Some(d) = dp {

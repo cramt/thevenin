@@ -2137,10 +2137,12 @@ pub fn stamp_bsim3soi_fd(
     }
 
     // RHS: comp.ceq_d already has `sign` inside (ngspice: cdreq = type * (...)),
-    // so we multiply by `m` only. Impact ionization ceq is NOT type-signed in
-    // ngspice BSIM3SOI-FD (b3soifdld.c).
+    // so we multiply by `m` only. Impact ionization ceq is computed WITHOUT type
+    // sign in the companion, but NEGATED for PMOS in the stamping section
+    // (b3soifdld.c lines 3122: ceqbody=-ceqbody for type<0).
+    let sign = inst.model.mos_type.sign();
     let ceq_d = m * comp.ceq_d;
-    let ceq_iii = m * comp.ceq_iii;
+    let ceq_iii = sign * m * comp.ceq_iii;
     if let Some(d) = dp {
         rhs[d] -= ceq_d + ceq_iii;
     }
