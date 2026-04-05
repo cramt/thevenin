@@ -44,7 +44,7 @@
 
 # === Transmission lines ===
 "transmission/cpl_ibm2.cir" = "~6.4% error at t=9.65ns, sign reversal at t=12.6ns: CPL 2-line coupling FP accumulation (all code verified)"
-"transmission/ltra2_2_line.cir" = "~5.8% V(3) error at t=29.3ns: cascaded 2-line circuit accumulates CMOS inverter switching errors through second stage"
+# ltra2_2_line: moved to tolerances.toml (peak error ~0.75%, bounded)
 "transmission/cpl3_4_line.cir" = "~13.8% peak error at t=38.8ns: CPL 4-line CMOS switching timing shift (all setup + convolution code verified identical to ngspice; FP accumulation)"
 
 # === VBIC ===
