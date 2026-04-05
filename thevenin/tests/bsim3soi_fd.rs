@@ -159,7 +159,6 @@ Ve e 0 1.25
 /// SOI FD Inverter test from ngspice-upstream/tests/bsim3soifd/inv2.cir pattern.
 /// Tests both NMOS and PMOS FD SOI together in a CMOS inverter.
 #[test]
-#[ignore = "SOI FD inverter convergence needs source-stepping improvements"]
 fn bsim3soi_fd_inverter_op() {
     let cir = format!(
         "\

@@ -162,7 +162,6 @@ Ve e 0 1.25
 /// SOI Inverter test from ngspice-upstream/tests/bsim3soipd/inv2.cir
 /// Tests both NMOS and PMOS SOI together in a CMOS inverter.
 #[test]
-#[ignore = "SOI inverter convergence needs source-stepping improvements"]
 fn bsim3soi_pd_inverter_op() {
     let cir = format!(
         "\

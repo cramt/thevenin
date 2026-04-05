@@ -428,3 +428,31 @@ node rows that become singular when gmin drops below ~4e-4.
 
 **What NOT to retry:** DD/PD inv2 (confirmed still failing). The FD fix is from accumulated
 solver improvements, not a targeted change.
+
+## Session 114 findings (2026-04-05)
+
+### Unit tests: FD inverter_op and PD inverter_op NOW PASS — un-ignored
+
+**Discovery:** Running all ignored unit tests revealed that 2 of the 4 ignored unit tests
+now pass:
+
+1. `bsim3soi_fd_inverter_op` (bsim3soi_fd.rs) — SOI FD inverter convergence. Previously
+   ignored with "SOI FD inverter convergence needs source-stepping improvements". Now
+   passes thanks to accumulated gmin/source stepping fixes from sessions 105-113.
+
+2. `bsim3soi_pd_inverter_op` (bsim3soi_pd.rs) — SOI PD inverter with vin=0 (PMOS on).
+   Previously ignored with "SOI inverter convergence needs source-stepping improvements".
+   Now converges and produces V(out) > 2.0V as expected.
+
+**Still failing (NR non-convergence):**
+- `bsim3soi_pd_pmos_op` — NR fails after 131 iterations (standalone PMOS device)
+- `bsim3soi_pd_inverter_input_high` — NR fails after 396 iterations (inverter with Vin=2.5V, NMOS on)
+
+Both failures are PMOS-related NR convergence issues (ceq sign convention). The standalone
+PMOS test and the NMOS-active inverter state both fail, while the PMOS-active inverter
+state (vin=0, tested by inverter_op) now passes.
+
+**Action:** Removed `#[ignore]` from both passing tests. Test count: 619 passing, 20 skipped.
+
+**What NOT to retry:** bsim3soi_pd_pmos_op and bsim3soi_pd_inverter_input_high — both are
+NR non-convergence in PMOS operating conditions, classified as intractable.
