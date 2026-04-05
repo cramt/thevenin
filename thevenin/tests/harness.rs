@@ -59,6 +59,7 @@ fn fail_test(path: &str, phase: Phase, error: &str) -> ! {
         "MISSING_FEATURE"
     } else if error.contains("mismatch")
         || error.contains("expected")
+        || error.contains("Expected")
         || error.contains("Interpolation")
     {
         "NEAR_MISS"
