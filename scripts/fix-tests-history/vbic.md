@@ -188,3 +188,11 @@ coupling stamps are Jacobian entries, not residual components). Correctness impr
 **What NOT to retry:** Comparing companion function formulas (verified correct at converged
 voltages). Forward coupling stamps (history confirms no effect on converged solution).
 The VBIC FO error remains in the intractable category due to 15%+ error growth at high bias.
+
+## Session 122 findings (2026-04-06)
+
+### Tolerance re-measurement
+- vbic/temp: tightened from 2e-2 → 1.8e-2 (fails at 1.7e-2)
+- vbic/CEamp: unchanged at 2e-2 (updated fail threshold: 1.8e-2, previously thought 1.5e-2)
+- vbic/FG: unchanged at 2e-2 (updated fail threshold: 1.8e-2, previously thought 1.5e-2)
+- vbic/FO: still 0.385% at VC=3.75V (first mismatch), growing to 15%+ at high bias (intractable)

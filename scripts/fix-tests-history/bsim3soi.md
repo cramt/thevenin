@@ -650,3 +650,10 @@ t=34.5ps far exceeds any reasonable tolerance. NOT a tolerance override candidat
 **What NOT to retry:** Tolerance overrides for RampVg2 (50%+ transient error).
 The fix requires implementing E-node capacitance derivatives in the companion and
 5th row gc matrix stamps per the previous session's analysis.
+
+## Session 122 findings (2026-04-06)
+
+### Tolerance re-measurement
+- bsim3soidd/inv2: tightened from 3e-3 → 2.6e-3 (fails at 2.5e-3)
+- bsim3soidd/t3: unchanged at 3.5e-2 (updated fail threshold: 3.2e-2, previously 3e-2)
+- bsim3soidd/RampVg2: still 50%+ transient error (intractable)

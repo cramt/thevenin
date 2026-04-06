@@ -6,8 +6,8 @@
 |---|---|---|
 | cpl3_4_line | 0.8%→13.8% cascading | Ignored (tolerance override fails at 50%) |
 | cpl_ibm2 | ~6.4% + sign reversal | Ignored (zero-crossing → tolerance override impossible) |
-| ltra2_2_line | ~0.75% peak (non-slope) | ✅ PASSING with rel_tol=1e-2 (session 115) |
-| txl2_3_line | ~2.4% V(2) at t=16.2ns | ✅ PASSING with rel_tol=3e-2 |
+| ltra2_2_line | ~0.75% peak (non-slope) | ✅ PASSING with rel_tol=8e-3 (tightened session 113) |
+| txl2_3_line | ~2.4% V(2) at t=16.2ns | ✅ PASSING with rel_tol=2.1e-2 (tightened session 122 from 2.5e-2) |
 
 Eigendecomposition FP order differences + accumulated convolution rounding +
 CMOS inverter switching error accumulation through cascaded stages. Extensively
@@ -117,3 +117,11 @@ Set rel_tol=1e-2 (1%) — provides 25% margin above peak error of ~0.75%.
 
 **What NOT to retry:** LTRA convolution code comparison (verified identical). Tolerance
 overrides for cpl_ibm2 (sign reversal) or cpl3_4_line (55% peak error).
+
+## Session 122 findings (2026-04-06)
+
+### Tolerance re-measurement
+- txl2_3_line: tightened from 2.5e-2 → 2.1e-2 (fails at 2e-2)
+- ltra2_2_line: unchanged at 8e-3 (still fails at 7.5e-3)
+- cpl_ibm2: still 6.4% error + sign reversal (intractable)
+- cpl3_4_line: still 0.8%→13.8% cascading (intractable)
