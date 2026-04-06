@@ -12,18 +12,18 @@
 
 # VBIC: companion model FP eval order (~0.2% base error, verified 80+ sessions)
 # CEamp: DC OP FP precision propagates to AC gain rolloff; ~0.9% passband error,
-# 13.5% at 6.2GHz absorbed by slope-aware tolerance. Fails at 1.5e-2.
+# 13.5% at 6.2GHz absorbed by slope-aware tolerance. Passes at 2e-2, fails at 1.8e-2.
 "vbic/CEamp.cir" = { rel_tol = 2e-2 }
 # FG: 3.3% raw peak at Vb=0.89V, but slope-aware tolerance absorbs most of it.
-# Effective non-slope-masked error ~2.2%. Passes at 2e-2, fails at 1.5e-2.
+# Effective non-slope-masked error ~2.2%. Passes at 2e-2, fails at 1.8e-2.
 "vbic/FG.cir" = { rel_tol = 2e-2 }
 # temp: 2.3% raw peak at Vb=0.76V, slope-masked high-bias points.
-# Passes at 2e-2, fails at 1.5e-2.
-"vbic/temp.cir" = { rel_tol = 2e-2 }
+# Passes at 1.8e-2, fails at 1.7e-2. (Tightened from 2e-2 in session 122.)
+"vbic/temp.cir" = { rel_tol = 1.8e-2 }
 
 # Transmission: TXL cascade accumulation (2.4% peak, verified).
-# Passes at 2.5e-2, fails at 2e-2.
-"transmission/txl2_3_line.cir" = { rel_tol = 2.5e-2 }
+# Passes at 2.1e-2, fails at 2e-2. (Tightened from 2.5e-2 in session 122.)
+"transmission/txl2_3_line.cir" = { rel_tol = 2.1e-2 }
 
 # Transmission: LTRA 2-line cascade accumulation (~0.75% peak non-slope-masked error)
 # LTRA convolution code verified against ngspice ltraload.c: all three convolution
@@ -38,7 +38,7 @@
 # Exhaustively verified sessions 99-101: ALL 8 stages of Vbs0t→Vbseff chain match
 # ngspice exactly term-by-term. Error from NR-converged body voltage being 1.5mV
 # different (FP eval order), propagating through analytical chain.
-# Passes at 3.5e-2, fails at 3e-2.
+# Passes at 3.5e-2, fails at 3.2e-2.
 "bsim3soidd/t3.cir" = { rel_tol = 3.5e-2 }
 
 # BSIM3SOI-DD: inv2 floating-body CMOS inverter DC sweep (NMOS + PMOS)
@@ -46,5 +46,5 @@
 # after session 118 PMOS InitJct + ceq sign fixes. 0.2% peak error at Vin=0.85V
 # (transition region), same root cause as t3 (analytical body voltage chain FP
 # eval order in floating-body SOI). Slope-aware tolerance absorbs transition region.
-# Passes at 2.6e-3, fails at 2.5e-3.
-"bsim3soidd/inv2.cir" = { rel_tol = 3e-3 }
+# Passes at 2.6e-3, fails at 2.5e-3. (Tightened from 3e-3 in session 122.)
+"bsim3soidd/inv2.cir" = { rel_tol = 2.6e-3 }

@@ -376,7 +376,7 @@ Append your findings when done.
 
 ## Remaining test summary
 
-**Test counts:** 638 passing (7 with tolerance overrides), 13 harness tests ignored, 0 unit tests ignored.
+**Test counts:** 638 passing (7 with tolerance overrides, 3 tightened in session 122), 13 harness tests ignored, 0 unit tests ignored.
 
 | Category | Tests | Status |
 |---|---|---|
@@ -384,5 +384,5 @@ Append your findings when done.
 | VBIC FP eval order (too large) | 1 | Ignored — FO peaks at 15%+ at high bias |
 | BSIM3SOI body voltage / transient | 1 | Ignored — DD RampVg2 (body collapse in tran) |
 | Transmission line FP / dynamics | 2 | Ignored — CPL cascading errors (setup code verified matching ngspice) |
-| General circuit dynamics | 4 | Ignored — rtlinv/schmitt/mosamp timing/model gaps + HFET wrong OP |
+| General circuit dynamics | 4 | Ignored — rtlinv/schmitt/mosamp timing/model gaps + HFET wrong OP (model verified correct) |
 | Missing infrastructure | 5 | Ignored — .control ×3, BSIM1/2 ×2 |

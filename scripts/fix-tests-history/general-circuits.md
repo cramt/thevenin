@@ -317,3 +317,47 @@ Tightened 5 of 6 tolerance overrides after binary-searching pass boundaries:
 **What NOT to retry:** All 15 ignored tests — exhaustively confirmed in intractable
 categories. MODEINITFIX for HFET (no effect with dense LU). Tolerance overrides for
 any ignored test (errors too large or unbounded).
+
+## Session 122 findings (2026-04-06)
+
+### HFET inverter: confirmed correct model, convergence basin issue
+Thorough line-by-line comparison of HFET1 hfetload.c vs hfet.rs:
+- `leak()` function: identical (both branches: rs>0 diode_fn path and rs=0 exponential)
+- GGR recombination terms: identical
+- `hfeta()` channel function: identical (cdrain, gm, gds, capgs, capgd)
+- **gmg/gmd confirmed zero for gatemod==0**: ngspice hfetload.c line 723-725 explicitly
+  sets gmg=gmd=NULL in else branch of `if(model->HFETAgatemod != 0)`. Our hfeta_full()
+  returning gmg=gmd=0.0 is correct.
+- Stamp: all 10 matrix entries verified identical for gatemod==0 (ggs+ggd diagonal,
+  gds+ggd drain diagonal, gds+gm+ggs source diagonal, all 6 cross-terms).
+- RHS: ceqgd, ceqgs, cdreq all match with gmg=gmd=cgdpp=cgspp=0.
+- Series resistance stamps (drain, source, gate): handled by stamp_conductance.
+- Internal feedback resistances (ri=0, rf=0 for this circuit): no secondary gate nodes.
+- **Conclusion**: Model is 100% correct. Issue is NR convergence to wrong basin in bistable
+  DCFL inverter. ngspice finds V(3)=-0.275V equilibrium (gate-drain forward bias balances
+  channel current); our NR finds V(3)=1.955V (VDD minus leakage). Different convergence
+  path, not model error. Would require homotopy/continuation methods or different initial
+  guess strategy to fix — intractable without architectural NR changes.
+
+### Tolerance tightening (3 tests)
+Re-measured all 7 tolerance overrides after accumulated code improvements:
+- vbic/temp: 2e-2 → 1.8e-2 (fails at 1.7e-2)
+- txl2_3_line: 2.5e-2 → 2.1e-2 (fails at 2e-2)
+- bsim3soidd/inv2: 3e-3 → 2.6e-3 (fails at 2.5e-3)
+- vbic/CEamp: unchanged at 2e-2 (fails at 1.8e-2)
+- vbic/FG: unchanged at 2e-2 (fails at 1.8e-2)
+- ltra2_2_line: unchanged at 8e-3 (fails at 7.5e-3)
+- bsim3soidd/t3: unchanged at 3.5e-2 (fails at 3.2e-2)
+
+### Remaining 13 ignored tests: all intractable
+Verified each test against intractable category list:
+- bsim1/test.cir, bsim2/test.cir: BSIM1/BSIM2 not implemented
+- bsim3soidd/RampVg2: transient dynamics (body voltage 50% too weak)
+- general/rtlinv: transient dynamics (4.3%→89% cascading timing shift)
+- general/mosamp: Level 2 MOSFET not implemented
+- general/schmitt: output oscillation during switching
+- hfet/inverter: NR convergence basin (confirmed model correct, see above)
+- regression/misc/asrc-tc-2, resume-1, model/binning-1: .control scripting
+- transmission/cpl_ibm2: formulas verified, 6.4% + sign reversal
+- transmission/cpl3_4_line: formulas verified, 0.8%→13.8% cascading
+- vbic/FO: FP eval order, 0.4%→15%+ growing with bias
