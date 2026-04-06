@@ -42,9 +42,9 @@
     "summary": "Here's a summary of what was accomplished:"
   },
   {
-    "path": "bsim3soipd/inv2.cir",
-    "outcome": "fixed",
+    "path": "_unknown_",
+    "outcome": "reverted",
     "date": "2026-04-06",
-    "summary": "All 13 remaining tests still fail. These are all in the intractable categories documented in the rules. The fix was successful for PD inv2 specifically because the root cause was a Jacobian bug (missi"
+    "summary": "Now let me summarize what was accomplished and what remains:"
   }
 ]

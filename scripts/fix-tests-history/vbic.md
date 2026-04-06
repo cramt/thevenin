@@ -146,3 +146,45 @@ source stepping InitJct, SINE parser, transient junction charges). Test count: 6
 
 VBIC FO harness test re-checked: first mismatch at x=3.75 with 0.38% error, still
 grows to 15%+ at higher bias. Remains intractable (FP eval order).
+
+## Session 121 findings (2026-04-06)
+
+### VBIC FO: Fresh investigation — confirmed NOT pure FP eval order
+
+**New analysis method:** Compared expected vs actual output at each VC step within the
+VB=0.7V sweep to characterize error growth pattern.
+
+**Key finding: Error grows with VC at constant VB:**
+- VC=0.0: 0.30% (saturation, reverse transport contribution)
+- VC=0.1: 0.023% (forward active begins, error dips)
+- VC=0.5: 0.042%
+- VC=1.0: 0.087%
+- VC=2.0: 0.184%
+- VC=3.0: 0.293%
+- VC=3.75: 0.385% (first tolerance failure)
+
+This VC-dependent growth is NOT consistent with FP eval order (which would produce
+approximately constant relative error at each point). It suggests the error correlates
+with self-heating power (Ith ≈ Ic * Vce ∝ VC) or reverse Vbc voltage.
+
+**Converged state diagnostic at VB=0.7V, VC=3.75V:**
+vbei=0.6999 V, vbci=-3.046 V, vrci=3.32mV, vrbi=-12µV, vrth=62.2mK
+itzf=5.446e-5, qb=1.041, igc=8.95e-7, ibe=5.71e-7
+Output: Ic ≈ itzf + igc = 5.536e-5 vs expected 5.514e-5
+
+The companion function correctly reproduces these values at the converged voltages.
+The error must be in the converged operating point itself (our NR solver converges
+to slightly different internal voltages than ngspice).
+
+**Thermal stamp bug found (FIX 121):**
+Re and Rs reverse-coupling thermal stamps had reversed node directions:
+- Re was `stamp_thermal_branch!(ei, e_ext, ...)` → fixed to `(e_ext, ei, ...)`
+- Rs was `stamp_thermal_branch!(si, s_ext, ...)` → fixed to `(s_ext, si, ...)`
+Matches ngspice vbicload.c lines 1374-1378 (Re: emit→emitEI) and 1406-1410 (Rs: subs→subsSI).
+
+This affects NR convergence behavior but likely not the converged solution (since reverse
+coupling stamps are Jacobian entries, not residual components). Correctness improvement.
+
+**What NOT to retry:** Comparing companion function formulas (verified correct at converged
+voltages). Forward coupling stamps (history confirms no effect on converged solution).
+The VBIC FO error remains in the intractable category due to 15%+ error growth at high bias.

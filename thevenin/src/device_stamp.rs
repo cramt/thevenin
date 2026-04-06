@@ -817,6 +817,7 @@ impl DeviceVoltageState {
 
                 let comp =
                     model.companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
+
                 stamp_vbic_with_voltages(
                     &mut system.matrix,
                     &mut system.rhs,
@@ -997,7 +998,7 @@ impl DeviceVoltageState {
                         let d_irbi = (comp_pert.irbi - comp.irbi) * inv_delta;
                         stamp_thermal_branch!(bx, bi, d_irbi);
 
-                        // 10. Re: ei → e_ext
+                        // 10. Re: e_ext → ei (ngspice: emitNode → emitEINode)
                         if model.re > 0.0 && model.re_t > 0.0 {
                             let i_re = vre / model.re_t;
                             let i_re_pert = if model_pert.re_t > 0.0 {
@@ -1006,7 +1007,7 @@ impl DeviceVoltageState {
                                 0.0
                             };
                             let d_ire = (i_re_pert - i_re) * inv_delta;
-                            stamp_thermal_branch!(ei, e_ext, d_ire);
+                            stamp_thermal_branch!(e_ext, ei, d_ire);
                         }
 
                         // 11. Rbp: bp → cx
@@ -1021,7 +1022,7 @@ impl DeviceVoltageState {
                         let d_iccp = (comp_pert.iccp - comp.iccp) * inv_delta;
                         stamp_thermal_branch!(bx, si, d_iccp);
 
-                        // 14. Rs: si → s_ext
+                        // 14. Rs: s_ext → si (ngspice: subsNode → subsSINode)
                         if model.rs > 0.0 && model.rs_t > 0.0 {
                             let i_rs = vrs / model.rs_t;
                             let i_rs_pert = if model_pert.rs_t > 0.0 {
@@ -1030,7 +1031,7 @@ impl DeviceVoltageState {
                                 0.0
                             };
                             let d_irs = (i_rs_pert - i_rs) * inv_delta;
-                            stamp_thermal_branch!(si, s_ext, d_irs);
+                            stamp_thermal_branch!(s_ext, si, d_irs);
                         }
 
                         // --- Thermal self-derivative: dIth/dVrth ---
