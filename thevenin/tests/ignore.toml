@@ -6,7 +6,7 @@
 "bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
 
 # === BSIM3SOI-DD ===
-"bsim3soidd/RampVg2.cir" = "body voltage responds to gate (~50% of expected magnitude) but E-node charge coupling (cgeb/cbeb/ceeb) not yet implemented — intrinsic 4-terminal charge integration added but body response still ~50% too weak"
+"bsim3soidd/RampVg2.cir" = "DC OP within 0.38% but transient body voltage ~50% too weak (229mV vs 465mV at t=34.5ps): E-node charge coupling (cgeb/cbeb/ceeb) still incomplete"
 
 # === BSIM3SOI-FD === (FD inv2 un-ignored: now passes after gmin/source stepping fixes)
 

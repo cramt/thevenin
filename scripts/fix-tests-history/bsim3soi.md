@@ -629,3 +629,24 @@ in the companion function, and add E-row gc matrix stamps. This would complete t
 transient charge model matching ngspice b3soiddld.c lines 3706-3721.
 
 638 tests pass, 13 skipped, 0 regressions. Clippy clean.
+
+## Session 121 findings (2026-04-06)
+
+### DD RampVg2: Status after upstream 4-terminal charge integration
+
+**Upstream changes** (merged between sessions) added intrinsic 4-terminal charge
+integration to the DD transient model. The DC OP improved significantly:
+- Previous: body voltage collapsed to ~0 at first transient step
+- Now: DC OP within 0.38% (92.01mV vs 91.66mV expected)
+
+**Transient still fails:** Body voltage ramps but reaches only ~50% of expected magnitude
+(229mV vs 465mV at t=34.5ps). This confirms the "~50% too weak" description in the
+updated ignore reason. The missing E-node charge coupling (cgeb/cbeb/ceeb) is still
+needed to complete the body response.
+
+**Tolerance override attempted:** Even at rel_tol=1e-2, the 50.7% transient error at
+t=34.5ps far exceeds any reasonable tolerance. NOT a tolerance override candidate.
+
+**What NOT to retry:** Tolerance overrides for RampVg2 (50%+ transient error).
+The fix requires implementing E-node capacitance derivatives in the companion and
+5th row gc matrix stamps per the previous session's analysis.
