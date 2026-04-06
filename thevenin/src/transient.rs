@@ -824,7 +824,12 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // Compute companion to get mode for dp/sp assignment.
             let (vgs_t, vds_t, vbs_t, ves_t) = inst.terminal_voltages(&solution);
             let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
-                vgs_t, vds_t, vbs_t, ves_t, &inst.size_params, &inst.model,
+                vgs_t,
+                vds_t,
+                vbs_t,
+                ves_t,
+                &inst.size_params,
+                &inst.model,
             );
             // Bulk-referenced voltages with mode-aware dp/sp.
             let (vdp, vsp) = if comp.mode > 0 { (vd, vs) } else { (vs, vd) };
@@ -1620,7 +1625,12 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // Incremental intrinsic charges using capacitance derivatives.
             let (vgs_t, vds_t, vbs_t, ves_t) = inst.terminal_voltages(&solution);
             let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
-                vgs_t, vds_t, vbs_t, ves_t, &inst.size_params, &inst.model,
+                vgs_t,
+                vds_t,
+                vbs_t,
+                ves_t,
+                &inst.size_params,
+                &inst.model,
             );
             let (vdp, vsp) = if comp.mode > 0 { (vd, vs) } else { (vs, vd) };
             let vgb = sign * (vg - vb);
@@ -1635,27 +1645,19 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let qsub = -(qgate + qbody + qdrn); // KCL
             let cqgate = match method {
                 IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / step_h,
-                IntegrationMethod::Trapezoidal => {
-                    2.0 * (qgate - hist.qgate) / step_h - hist.cqgate
-                }
+                IntegrationMethod::Trapezoidal => 2.0 * (qgate - hist.qgate) / step_h - hist.cqgate,
             };
             let cqbody = match method {
                 IntegrationMethod::BackwardEuler => (qbody - hist.qbody) / step_h,
-                IntegrationMethod::Trapezoidal => {
-                    2.0 * (qbody - hist.qbody) / step_h - hist.cqbody
-                }
+                IntegrationMethod::Trapezoidal => 2.0 * (qbody - hist.qbody) / step_h - hist.cqbody,
             };
             let cqdrn = match method {
                 IntegrationMethod::BackwardEuler => (qdrn - hist.qdrn) / step_h,
-                IntegrationMethod::Trapezoidal => {
-                    2.0 * (qdrn - hist.qdrn) / step_h - hist.cqdrn
-                }
+                IntegrationMethod::Trapezoidal => 2.0 * (qdrn - hist.qdrn) / step_h - hist.cqdrn,
             };
             let cqsub = match method {
                 IntegrationMethod::BackwardEuler => (qsub - hist.qsub) / step_h,
-                IntegrationMethod::Trapezoidal => {
-                    2.0 * (qsub - hist.qsub) / step_h - hist.cqsub
-                }
+                IntegrationMethod::Trapezoidal => 2.0 * (qsub - hist.qsub) / step_h - hist.cqsub,
             };
             soidd_charge_histories[di] = Bsim3SoiDdChargeHistory {
                 qgate,
@@ -2576,7 +2578,12 @@ fn solve_timestep(
                 // (a) Intrinsic charge integration from companion.
                 let (vgs, vds, vbs_t, ves) = prev_dd[di];
                 let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
-                    vgs, vds, vbs_t, ves, sp_dd, &inst.model,
+                    vgs,
+                    vds,
+                    vbs_t,
+                    ves,
+                    sp_dd,
+                    &inst.model,
                 );
 
                 let hist = &soidd_charge_histories[di];
@@ -2616,21 +2623,15 @@ fn solve_timestep(
 
                 let cqgate = match method {
                     IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / h,
-                    IntegrationMethod::Trapezoidal => {
-                        2.0 * (qgate - hist.qgate) / h - hist.cqgate
-                    }
+                    IntegrationMethod::Trapezoidal => 2.0 * (qgate - hist.qgate) / h - hist.cqgate,
                 };
                 let cqbody = match method {
                     IntegrationMethod::BackwardEuler => (qbody - hist.qbody) / h,
-                    IntegrationMethod::Trapezoidal => {
-                        2.0 * (qbody - hist.qbody) / h - hist.cqbody
-                    }
+                    IntegrationMethod::Trapezoidal => 2.0 * (qbody - hist.qbody) / h - hist.cqbody,
                 };
                 let cqdrn = match method {
                     IntegrationMethod::BackwardEuler => (qdrn - hist.qdrn) / h,
-                    IntegrationMethod::Trapezoidal => {
-                        2.0 * (qdrn - hist.qdrn) / h - hist.cqdrn
-                    }
+                    IntegrationMethod::Trapezoidal => 2.0 * (qdrn - hist.qdrn) / h - hist.cqdrn,
                 };
 
                 // gc matrix: gc_ij = c_ij * ag0 (capacitance derivative scaled by integration coeff)
@@ -2715,9 +2716,7 @@ fn solve_timestep(
                     if let Some(di2) = dp {
                         system.matrix.add(si, di2, -m * (gcgdb + gcbdb + gcddb));
                     }
-                    system
-                        .matrix
-                        .add(si, si, -m * (gcgsb + gcbsb + gcdsb));
+                    system.matrix.add(si, si, -m * (gcgsb + gcbsb + gcdsb));
                     if let Some(bi) = b {
                         system.matrix.add(
                             si,

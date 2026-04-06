@@ -8,12 +8,7 @@
 # === BSIM3SOI-DD ===
 "bsim3soidd/RampVg2.cir" = "DC OP within 0.38% but transient body voltage ~50% too weak (229mV vs 465mV at t=34.5ps): E-node charge coupling (cgeb/cbeb/ceeb) still incomplete"
 
-# === BSIM3SOI-FD === (FD inv2 un-ignored: now passes after gmin/source stepping fixes)
-
-# === BSIM3SOI-PD ===
-
 # === General circuits ===
-
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
 "general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET not implemented (uses Level 1 fallback; missing velocity saturation/mobility degradation/short-channel effects)"
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag; timing shift in BJT voltage-dependent cap model)"
@@ -25,19 +20,6 @@
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
 "regression/misc/resume-1.cir" = ".control: stop when + resume commands not implemented (requires transient state preservation)"
 
-# === Regression: model ===
-"regression/model/binning-1.cir" = ".control: BSIM4 model binning (nmos_tst.1/.2 bin selection by L/W) not implemented"
-
-# === Regression: parser ===
-
-# === Regression: pz ===
-
-# === Regression: sens ===
-
-
-
-# === Transient ===
-
 # === Transmission lines ===
 "transmission/cpl_ibm2.cir" = "~6.4% error at t=9.65ns, sign reversal at t=12.6ns: CPL 2-line coupling FP accumulation (all code verified)"
 # ltra2_2_line: moved to tolerances.toml (peak error ~0.75%, bounded)
@@ -45,4 +27,3 @@
 
 # === VBIC ===
 "vbic/FO.cir" = "VBIC FO: 0.4%→15%+ error growing monotonically with bias (FP eval order; pnjlim fix verified no effect; all formulas verified 80+ sessions)"
-

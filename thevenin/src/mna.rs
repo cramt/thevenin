@@ -769,6 +769,73 @@ fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
     (nrd, nrs)
 }
 
+/// Extract MOSFET L and W from instance parameters (defaults: 1e-4).
+fn get_mosfet_lw(params: &[thevenin_types::Param]) -> (f64, f64) {
+    let mut l = 1e-4;
+    let mut w = 1e-4;
+    for p in params {
+        if let Expr::Num(v) = &p.value {
+            match p.name.to_uppercase().as_str() {
+                "L" => l = *v,
+                "W" => w = *v,
+                _ => {}
+            }
+        }
+    }
+    (l, w)
+}
+
+/// Extract bin boundary parameters (LMIN, LMAX, WMIN, WMAX) from a model definition.
+fn extract_bin_bounds(mdef: &thevenin_types::ModelDef) -> (f64, f64, f64, f64) {
+    let mut lmin = f64::NEG_INFINITY;
+    let mut lmax = f64::INFINITY;
+    let mut wmin = f64::NEG_INFINITY;
+    let mut wmax = f64::INFINITY;
+    for p in &mdef.params {
+        if let Expr::Num(v) = &p.value {
+            match p.name.to_uppercase().as_str() {
+                "LMIN" => lmin = *v,
+                "LMAX" => lmax = *v,
+                "WMIN" => wmin = *v,
+                "WMAX" => wmax = *v,
+                _ => {}
+            }
+        }
+    }
+    (lmin, lmax, wmin, wmax)
+}
+
+/// Resolve a MOSFET model name, supporting BSIM4-style model binning.
+///
+/// If no exact match for `name` exists in `models`, looks for binned models
+/// (`name.1`, `name.2`, etc.) in `model_bins` and picks the bin whose
+/// LMIN/LMAX/WMIN/WMAX range includes the given device L and W.
+fn resolve_model_with_bins<'a>(
+    models: &BTreeMap<String, &'a thevenin_types::ModelDef>,
+    model_bins: &BTreeMap<String, Vec<&'a thevenin_types::ModelDef>>,
+    name: &str,
+    l: f64,
+    w: f64,
+) -> Option<&'a thevenin_types::ModelDef> {
+    let upper = name.to_uppercase();
+    // Exact match first.
+    if let Some(m) = models.get(&upper) {
+        return Some(m);
+    }
+    // Binned model lookup: find the bin where L ∈ [LMIN, LMAX] and W ∈ [WMIN, WMAX].
+    if let Some(bins) = model_bins.get(&upper) {
+        for mdef in bins {
+            let (lmin, lmax, wmin, wmax) = extract_bin_bounds(mdef);
+            if l >= lmin && l <= lmax && w >= wmin && w <= wmax {
+                return Some(mdef);
+            }
+        }
+        // Fallback: return first bin if no range matched.
+        return bins.first().copied();
+    }
+    None
+}
+
 /// Capacitor indices for a BJT's junction capacitances.
 /// `None` means the cap was zero and not created.
 #[derive(Debug, Clone, Default)]
@@ -1002,6 +1069,27 @@ fn assemble_mna_flat(
         })
         .collect();
 
+    // Build model bin registry for BSIM4-style binned models (e.g. "nmos_tst.1",
+    // "nmos_tst.2"). When a device references "nmos_tst" but only ".1"/".2" bins
+    // exist, we select the bin whose LMIN/LMAX/WMIN/WMAX range matches the device's
+    // L and W.
+    let model_bins: BTreeMap<String, Vec<&thevenin_types::ModelDef>> = {
+        let mut bins: BTreeMap<String, Vec<&thevenin_types::ModelDef>> = BTreeMap::new();
+        for item in &netlist.items {
+            if let thevenin_types::Item::Model(m) = item {
+                let upper = m.name.to_uppercase();
+                if let Some(dot_pos) = upper.rfind('.') {
+                    let suffix = &upper[dot_pos + 1..];
+                    if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+                        let base = upper[..dot_pos].to_string();
+                        bins.entry(base).or_default().push(m);
+                    }
+                }
+            }
+        }
+        bins
+    };
+
     // First pass: collect all nodes and count voltage sources to determine matrix size.
     // Also build a vsource name → offset map for F/H controlled source lookup.
     let mut node_map = NodeMap::new();
@@ -1103,19 +1191,21 @@ fn assemble_mna_flat(
                 if let Some(b) = body {
                     node_map.index(b);
                 }
-                let level = get_mosfet_level(models.get(&model.to_uppercase()), params);
+                let (inst_l, inst_w) = get_mosfet_lw(params);
+                let resolved = resolve_model_with_bins(&models, &model_bins, model, inst_l, inst_w);
+                let level = get_mosfet_level(resolved.as_ref(), params);
                 if level == 8 || level == 49 {
                     // BSIM3
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         Bsim3Model::from_model_def(mdef)
                     } else {
                         Bsim3Model::new(crate::mosfet::MosfetType::Nmos)
                     };
                     let (nrd, nrs) = get_nrd_nrs(params);
                     internal_node_count += bm.internal_node_count(nrd, nrs);
-                } else if level == 14 {
+                } else if level == 14 || level == 54 {
                     // BSIM4
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         Bsim4Model::from_model_def(mdef)
                     } else {
                         Bsim4Model::new(crate::mosfet::MosfetType::Nmos)
@@ -1124,7 +1214,7 @@ fn assemble_mna_flat(
                     internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else if level == 56 {
                     // BSIM3SOI-DD
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         crate::bsim3soi_dd::Bsim3SoiDdModel::from_model_def(mdef)
                     } else {
                         crate::bsim3soi_dd::Bsim3SoiDdModel::new(crate::mosfet::MosfetType::Nmos)
@@ -1133,7 +1223,7 @@ fn assemble_mna_flat(
                     internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else if level == 57 {
                     // BSIM3SOI-PD
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         crate::bsim3soi_pd::Bsim3SoiPdModel::from_model_def(mdef)
                     } else {
                         crate::bsim3soi_pd::Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos)
@@ -1142,7 +1232,7 @@ fn assemble_mna_flat(
                     internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else if level == 55 {
                     // BSIM3SOI-FD
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         crate::bsim3soi_fd::Bsim3SoiFdModel::from_model_def(mdef)
                     } else {
                         crate::bsim3soi_fd::Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos)
@@ -1152,14 +1242,14 @@ fn assemble_mna_flat(
                     internal_node_count += bm.internal_node_count_fd(nrd, nrs, has_body_contact);
                 } else if level == 6 {
                     // MOS6
-                    let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let mm = if let Some(mdef) = resolved {
                         crate::mos6::Mos6Model::from_model_def(mdef)
                     } else {
                         crate::mos6::Mos6Model::new(crate::mosfet::MosfetType::Nmos)
                     };
                     internal_node_count += mm.internal_node_count();
                 } else {
-                    let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let mm = if let Some(mdef) = resolved {
                         MosfetModel::from_model_def(mdef)
                     } else {
                         MosfetModel::new(crate::mosfet::MosfetType::Nmos)
@@ -1680,11 +1770,12 @@ fn assemble_mna_flat(
                     }
                 }
 
-                let level = get_mosfet_level(models.get(&model.to_uppercase()), params);
+                let resolved = resolve_model_with_bins(&models, &model_bins, model, l, w);
+                let level = get_mosfet_level(resolved.as_ref(), params);
 
                 if level == 8 || level == 49 {
                     // BSIM3
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         Bsim3Model::from_model_def(mdef)
                     } else {
                         Bsim3Model::new(crate::mosfet::MosfetType::Nmos)
@@ -1731,9 +1822,9 @@ fn assemble_mna_flat(
                         size_params,
                         model: bm,
                     });
-                } else if level == 14 {
+                } else if level == 14 || level == 54 {
                     // BSIM4
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         Bsim4Model::from_model_def(mdef)
                     } else {
                         Bsim4Model::new(crate::mosfet::MosfetType::Nmos)
@@ -1795,7 +1886,7 @@ fn assemble_mna_flat(
                     });
                 } else if level == 56 {
                     // BSIM3SOI-DD
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         crate::bsim3soi_dd::Bsim3SoiDdModel::from_model_def(mdef)
                     } else {
                         crate::bsim3soi_dd::Bsim3SoiDdModel::new(crate::mosfet::MosfetType::Nmos)
@@ -1858,7 +1949,7 @@ fn assemble_mna_flat(
                     });
                 } else if level == 57 {
                     // BSIM3SOI-PD
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         crate::bsim3soi_pd::Bsim3SoiPdModel::from_model_def(mdef)
                     } else {
                         crate::bsim3soi_pd::Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos)
@@ -1921,7 +2012,7 @@ fn assemble_mna_flat(
                     });
                 } else if level == 55 {
                     // BSIM3SOI-FD
-                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let bm = if let Some(mdef) = resolved {
                         crate::bsim3soi_fd::Bsim3SoiFdModel::from_model_def(mdef)
                     } else {
                         crate::bsim3soi_fd::Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos)
@@ -1993,7 +2084,7 @@ fn assemble_mna_flat(
                     });
                 } else if level == 6 {
                     // MOS6
-                    let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let mm = if let Some(mdef) = resolved {
                         crate::mos6::Mos6Model::from_model_def(mdef)
                     } else {
                         crate::mos6::Mos6Model::new(crate::mosfet::MosfetType::Nmos)
@@ -2059,7 +2150,7 @@ fn assemble_mna_flat(
                         m_mult,
                     );
                 } else {
-                    let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    let mm = if let Some(mdef) = resolved {
                         MosfetModel::from_model_def(mdef)
                     } else {
                         MosfetModel::new(crate::mosfet::MosfetType::Nmos)

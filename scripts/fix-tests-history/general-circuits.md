@@ -349,7 +349,7 @@ Re-measured all 7 tolerance overrides after accumulated code improvements:
 - ltra2_2_line: unchanged at 8e-3 (fails at 7.5e-3)
 - bsim3soidd/t3: unchanged at 3.5e-2 (fails at 3.2e-2)
 
-### Remaining 13 ignored tests: all intractable
+### Remaining 12 ignored tests: all intractable (session 123 fixed binning-1)
 Verified each test against intractable category list:
 - bsim1/test.cir, bsim2/test.cir: BSIM1/BSIM2 not implemented
 - bsim3soidd/RampVg2: transient dynamics (body voltage 50% too weak)
@@ -357,7 +357,7 @@ Verified each test against intractable category list:
 - general/mosamp: Level 2 MOSFET not implemented
 - general/schmitt: output oscillation during switching
 - hfet/inverter: NR convergence basin (confirmed model correct, see above)
-- regression/misc/asrc-tc-2, resume-1, model/binning-1: .control scripting
+- regression/misc/asrc-tc-2, resume-1: .control scripting / missing features
 - transmission/cpl_ibm2: formulas verified, 6.4% + sign reversal
 - transmission/cpl3_4_line: formulas verified, 0.8%→13.8% cascading
 - vbic/FO: FP eval order, 0.4%→15%+ growing with bias

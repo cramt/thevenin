@@ -60,8 +60,13 @@ AC sensitivity analysis path needs to be implemented.
 
 **Result:** Both sens-ac-1 and sens-ac-2 pass. 634 tests pass, 17 skipped, 0 failures.
 
-### binning-1: Confirmed BSIM4 model binning issue, not .control
+### binning-1: ✅ FIXED (session 123) — BSIM4 model binning implemented
 
-The .control interpreter runs correctly (executes `op` command). The failure is from BSIM4
+The .control interpreter runs correctly (executes `op` command). The failure was from BSIM4
 model binning (`.1`/`.2` suffix bin selection by L/W) not being implemented in the model
 parameter lookup code. Not a .control issue.
+
+**Fix:** Added model bin registry in `build_mna()` that detects models with `.N` suffixes,
+groups them by base name, and resolves device model references using LMIN/LMAX/WMIN/WMAX
+range matching against the device's L and W instance parameters. Also added level=54 → BSIM4
+mapping (ngspice maps both level=14 and level=54 to BSIM4). Test now passes: 639 tests, 12 skipped.

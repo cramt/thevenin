@@ -376,7 +376,7 @@ Append your findings when done.
 
 ## Remaining test summary
 
-**Test counts:** 638 passing (7 with tolerance overrides, 3 tightened in session 122), 13 harness tests ignored, 0 unit tests ignored.
+**Test counts:** 639 passing (7 with tolerance overrides), 12 harness tests ignored, 0 unit tests ignored.
 
 | Category | Tests | Status |
 |---|---|---|
@@ -385,4 +385,4 @@ Append your findings when done.
 | BSIM3SOI body voltage / transient | 1 | Ignored — DD RampVg2 (body collapse in tran) |
 | Transmission line FP / dynamics | 2 | Ignored — CPL cascading errors (setup code verified matching ngspice) |
 | General circuit dynamics | 4 | Ignored — rtlinv/schmitt/mosamp timing/model gaps + HFET wrong OP (model verified correct) |
-| Missing infrastructure | 5 | Ignored — .control ×3, BSIM1/2 ×2 |
+| Missing infrastructure | 4 | Ignored — .control ×2, BSIM1/2 ×2 |
