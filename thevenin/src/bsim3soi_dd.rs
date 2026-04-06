@@ -451,6 +451,12 @@ pub struct Bsim3SoiDdCompanion {
     pub capbs: f64,
     pub qinv: f64,
 
+    // Terminal charges for transient integration (ngspice b3soiddld.c lines 3688-3692)
+    pub qgate: f64,
+    pub qbody: f64,
+    pub qdrn: f64,
+    pub qsub: f64,
+
     // DD-computed body-source voltage (for body node feedback in floating body)
     pub vbs_dd: f64,
 }
@@ -2825,7 +2831,7 @@ pub fn bsim3soi_dd_companion(
     let dqsubs2_dvc = t2_qs2 * dxc_dvc - cox_wl * (1.0 - xc) * (abulk_cv - 1.0);
 
     // Qbf: total front-gate body charge (ngspice b3soiddld.c lines 2876-2886)
-    let _qbf = qac0 + qsub0 + qsubs1 + qsubs2;
+    let qbf = qac0 + qsub0 + qsubs1 + qsubs2;
     let dqbf_dvrg = dqac0_dvrg + dqsub0_dvrg;
     let dqbf_dvg = dqsub0_dvg + dqsubs1_dvg + dqsubs2_dvg;
     let dqbf_dvd = dqac0_dvd + dqsub0_dvd + dqsubs1_dvd + dqsubs2_dvd;
@@ -2840,7 +2846,7 @@ pub fn bsim3soi_dd_companion(
     let t2_bk1 = (phi - vbs0t).abs().sqrt();
     let t3_bk1 = phi + sp.k1 * t2_bk1 - vbs0t;
     let t4_bk1 = (t0_bk * t0_bk + t3_bk1).sqrt();
-    let _qsicv = sp.k1 * cox_wl * (t0_bk - t4_bk1);
+    let qsicv = sp.k1 * cox_wl * (t0_bk - t4_bk1);
 
     let t2_bk2 = (phi - vbs0mos).abs().sqrt();
     let t3_bk2 = phi + sp.k1 * t2_bk2 - vbs0mos;
@@ -2852,7 +2858,7 @@ pub fn bsim3soi_dd_companion(
     // Qe1 (ngspice b3soiddld.c lines 3249-3264)
     let t5_e1 = -cbox_wl * (vbsdio - vbs0);
     let t6_e1 = cbox_wl * xc;
-    let _qe1 = -_qsicv + qbf0 + t5_e1 * xc;
+    let qe1 = -qsicv + qbf0 + t5_e1 * xc;
     let dqe1_dvg = t5_e1 * (dxc_dvg * dvgsteff_dvg + dxc_dvb * dvbseff_dvg + dxc_dvc * dvcs_dvg)
         - t6_e1 * dvbsdio_dvg;
     let dqe1_dvb = t5_e1 * (dxc_dvg * dvgsteff_dvb + dxc_dvb * dvbseff_dvb + dxc_dvc * dvcs_dvb)
@@ -2866,7 +2872,7 @@ pub fn bsim3soi_dd_companion(
     let t2_e2 = -model.cboxt * sp.weff_cv * sp.leff_cv;
     let t3_e2 = t2_e2 * 0.5 * (1.0 - xc);
     let t4_e2 = t2_e2 * 0.5 * (vds_cv - vcs_cv);
-    let _qe2 = t2_e2 * 0.5 * (1.0 - xc) * (vds_cv - vcs_cv);
+    let qe2 = t2_e2 * 0.5 * (1.0 - xc) * (vds_cv - vcs_cv);
 
     // T10=dVgsteff, T11=dVbseff, T12=dVcs transform
     let t10_e2 = t3_e2 * (dvds_cv_dvg - dvcs_cv_dvg) - t4_e2 * dxc_dvg;
@@ -2892,7 +2898,7 @@ pub fn bsim3soi_dd_companion(
     // Qex (external charge, ngspice b3soiddld.c lines 3378-3385)
     const QEX_FACT: f64 = 20.0;
     let t0_ex = QEX_FACT * sp.k1 * cox_wl;
-    let _qex = t0_ex * (vbs_i - vbsdio);
+    let qex = t0_ex * (vbs_i - vbsdio);
     let dqex_dvg = -t0_ex * dvbsdio_dvg;
     let dqex_dvb = t0_ex * (1.0 - dvbsdio_dvb);
     let dqex_dvd = -t0_ex * dvbsdio_dvd;
@@ -2943,6 +2949,15 @@ pub fn bsim3soi_dd_companion(
     let cddb = -(cgd + cbd + csd);
     let cdsb = (cgg + cgd + cgb_cv + cge + cbg + cbd + cbb + cbe + csg + csd + csb + cse);
 
+    // Assemble terminal charges (ngspice b3soiddld.c lines 3688-3692)
+    let qgate_total = qinv - (qbf0 + qe2);
+    let qbody_total = qbf0 - qe1 + qex;
+    let qsub_total = qe1 + qe2 - qex;
+    let qdrn_total = -(qinv + qsrc);
+
+    // Suppress unused-variable warnings for charge components used only above
+    let _ = (qbf, qsicv);
+
     Bsim3SoiDdCompanion {
         ids: ids / sp.nseg,
         gm: gm / sp.nseg,
@@ -2987,6 +3002,10 @@ pub fn bsim3soi_dd_companion(
         capbd: 0.0,
         capbs: 0.0,
         qinv,
+        qgate: qgate_total,
+        qbody: qbody_total,
+        qdrn: qdrn_total,
+        qsub: qsub_total,
         vbs_dd,
     }
 }

@@ -579,3 +579,53 @@ coupled to the source, causing Jacobian ill-conditioning and NR divergence.
 
 **Result:** PD inv2 now passes cleanly (0 error, exact match). 638 tests pass, 13 skipped.
 No regressions. Clippy clean.
+
+## Session 121 findings (2026-04-06)
+
+### DD RampVg2: Intrinsic 4-terminal charge integration (IMPLEMENTED)
+
+**Implemented:** Full intrinsic charge integration for BSIM3SOI-DD transient analysis.
+Previously, only a simplified CboxWL (buried oxide body-to-backgate) capacitor was
+integrated. Now the full 4-terminal charge model (gate, body, drain, source by KCL) is
+integrated using the incremental approach (Q_new = Q_old + C*ΔV) matching the MOSFET
+Meyer cap pattern.
+
+Changes:
+1. **bsim3soi_dd.rs:** Added `qgate`, `qbody`, `qdrn`, `qsub` fields to companion struct.
+   Assembles terminal charges from existing components: qgate = qinv - (qbf0 + qe2),
+   qbody = qbf0 - qe1 + qex, qsub = qe1 + qe2 - qex, qdrn = -(qinv + qsrc).
+   Removed `_` prefix from charge variables (qbf→qbf, qe1→qe1, etc.).
+
+2. **transient.rs:** Expanded `Bsim3SoiDdChargeHistory` with 4 intrinsic charges + charge
+   currents + reference voltages. Initialization from DC OP, history update after accepted
+   timestep, and full gc matrix stamp (4×4 G/D'/S'/B with mode-aware dp/sp swap).
+
+3. **Removed CboxWL double-count:** CboxWL is already included in the intrinsic charge
+   model through Qe1. Separate CboxWL stamp was causing double-counting, weakening the
+   body voltage response by ~15%.
+
+**Result:** Body voltage NOW responds to gate ramp! Previously completely flat at DC OP
+(9.201e-2), now rises to ~0.26V during gate pulse. However, response is still ~50% weaker
+than ngspice (~0.45V expected).
+
+Error analysis:
+- DC OP: 0.38% (same as before, from analytical body voltage chain FP eval order)
+- Peak transient: ~50% weaker body coupling (0.26V vs 0.45V expected)
+- Qualitative behavior correct: Vbs rises with gate ramp, then decays
+
+**Root cause of remaining 50% gap:** The incremental charge uses the intrinsic capacitance
+matrix (cbgb, cbdb, cbsb etc.) which includes the front-gate depletion charge derivatives.
+However, the E-node charge coupling (cgeb, cdeb, cbeb, ceeb, cegb, cedb, cesb) is NOT
+computed or stamped. Without the E-row gc stamps, the substrate charge dynamics are
+incomplete, reducing the body-gate coupling. The E-node derivatives require additional
+computation in the companion (~100 LOC) and a 5th row in the gc matrix stamp.
+
+**What NOT to retry:** Total charge approach (qbody = Qbf0 - Qe1 + Qex gave ~4× too weak
+response because Qbf0 is back-gate charge, not front-gate depletion charge). CboxWL
+separate stamp (causes double-counting with intrinsic charge model).
+
+**What to try next:** Implement E-node capacitance derivatives (cgeb, cbeb, ceeb etc.)
+in the companion function, and add E-row gc matrix stamps. This would complete the 5×5
+transient charge model matching ngspice b3soiddld.c lines 3706-3721.
+
+638 tests pass, 13 skipped, 0 regressions. Clippy clean.

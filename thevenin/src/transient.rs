@@ -131,31 +131,28 @@ struct HfetChargeHistory {
     vgdpp: f64,
 }
 
-/// History state for BSIM3SOI-DD body charge at the previous timestep.
-/// Tracks the body node charge wrt gate, drain, and source terminals.
-/// Currently only the B-E (buried oxide) capacitance is integrated; the
-/// full multi-terminal charge model (G, D, B, E rows) is future work.
+/// History state for BSIM3SOI-DD charges at the previous timestep.
+/// Tracks both the intrinsic 4-terminal charges (gate, body, drain, substrate)
+/// and the CboxWL buried oxide body-to-backgate capacitance.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct Bsim3SoiDdChargeHistory {
-    /// Body charge component from gate voltage: Q_bg.
-    qbg: f64,
-    /// Body charge component from drain voltage: Q_bd.
-    qbd: f64,
-    /// Body charge component from source voltage: Q_bs.
-    qbs: f64,
-    /// Charge current dQbg/dt at previous timestep (for trapezoidal).
-    cqbg: f64,
-    /// Charge current dQbd/dt at previous timestep (for trapezoidal).
-    cqbd: f64,
-    /// Charge current dQbs/dt at previous timestep (for trapezoidal).
-    cqbs: f64,
-    /// Previous V(body) - V(gate).
-    vbg: f64,
-    /// Previous V(body) - V(drain).
-    vbd: f64,
-    /// Previous V(body) - V(source).
-    vbs: f64,
+    // Intrinsic terminal charges (ngspice b3soiddld.c lines 3688-3692)
+    qgate: f64,
+    cqgate: f64,
+    qbody: f64,
+    cqbody: f64,
+    qdrn: f64,
+    cqdrn: f64,
+    qsub: f64,
+    cqsub: f64,
+    // CboxWL buried oxide body-to-backgate capacitance (existing)
+    qbe_cbox: f64,
+    cqbe_cbox: f64,
+    vbe_cbox: f64,
+    // Reference voltages for incremental charge (bulk-referenced, mode-aware)
+    vgb_prev: f64,
+    vdb_prev: f64,
+    vsb_prev: f64,
 }
 
 /// History state for VBIC junction charges at the previous timestep.
@@ -806,31 +803,50 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
-    // Initialize BSIM3SOI-DD body charge histories from DC operating point.
-    // We model the dominant body-to-backgate capacitance (CboxWL) as a simple
-    // two-terminal capacitor. The charge history tracks Q_be = CboxWL * V_be.
+    // Initialize BSIM3SOI-DD charge histories from DC operating point.
+    // Uses the incremental approach: Q_new = Q_old + C(V) * delta_V, matching
+    // the MOSFET Meyer cap pattern. At DC steady state dQ/dt = 0.
     let mut soidd_charge_histories: Vec<Bsim3SoiDdChargeHistory> = mna
         .bsim3soi_dds
         .iter()
         .map(|inst| {
             let sign = inst.model.mos_type.sign();
+            let vg = inst.gate_idx.map_or(0.0, |i| solution[i]);
             let vb = inst.body_int_idx.map_or(0.0, |i| solution[i]);
+            let vd = inst.drain_eff_idx().map_or(0.0, |i| solution[i]);
+            let vs = inst.source_eff_idx().map_or(0.0, |i| solution[i]);
             let ve = inst.e_idx.map_or(0.0, |i| solution[i]);
             let vbe = sign * (vb - ve);
             let cbox_wl = inst.size_params.kb3
                 * inst.model.cbox
                 * inst.size_params.weff_cv
                 * inst.size_params.leff_cv;
+            // Compute companion to get mode for dp/sp assignment.
+            let (vgs_t, vds_t, vbs_t, ves_t) = inst.terminal_voltages(&solution);
+            let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
+                vgs_t, vds_t, vbs_t, ves_t, &inst.size_params, &inst.model,
+            );
+            // Bulk-referenced voltages with mode-aware dp/sp.
+            let (vdp, vsp) = if comp.mode > 0 { (vd, vs) } else { (vs, vd) };
+            let vgb = sign * (vg - vb);
+            let vdb = sign * (vdp - vb);
+            let vsb = sign * (vsp - vb);
             Bsim3SoiDdChargeHistory {
-                qbg: cbox_wl * vbe, // reuse qbg field for B-E charge
-                qbd: 0.0,
-                qbs: 0.0,
-                cqbg: 0.0,
-                cqbd: 0.0,
-                cqbs: 0.0,
-                vbg: vbe, // reuse vbg field for vbe
-                vbd: 0.0,
-                vbs: 0.0,
+                qgate: 0.0,
+                cqgate: 0.0,
+                qbody: 0.0,
+                cqbody: 0.0,
+                qdrn: 0.0,
+                cqdrn: 0.0,
+                qsub: 0.0,
+                cqsub: 0.0,
+                qbe_cbox: cbox_wl * vbe,
+                cqbe_cbox: 0.0,
+                vbe_cbox: vbe,
+                // Reference voltages for incremental charge.
+                vgb_prev: vgb,
+                vdb_prev: vdb,
+                vsb_prev: vsb,
             }
         })
         .collect();
@@ -1580,10 +1596,13 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
         }
 
-        // Update BSIM3SOI-DD body charge histories (B-E capacitor).
+        // Update BSIM3SOI-DD charge histories (intrinsic + CboxWL).
         for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
             let sign = inst.model.mos_type.sign();
+            let vg = inst.gate_idx.map_or(0.0, |i| solution[i]);
             let vb = inst.body_int_idx.map_or(0.0, |i| solution[i]);
+            let vd = inst.drain_eff_idx().map_or(0.0, |i| solution[i]);
+            let vs = inst.source_eff_idx().map_or(0.0, |i| solution[i]);
             let ve = inst.e_idx.map_or(0.0, |i| solution[i]);
             let vbe = sign * (vb - ve);
             let cbox_wl = inst.size_params.kb3
@@ -1591,21 +1610,68 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 * inst.size_params.weff_cv
                 * inst.size_params.leff_cv;
             let hist = &soidd_charge_histories[di];
-            let qbe = hist.qbg + cbox_wl * (vbe - hist.vbg);
+            let qbe = hist.qbe_cbox + cbox_wl * (vbe - hist.vbe_cbox);
             let cqbe = match method {
-                IntegrationMethod::BackwardEuler => (qbe - hist.qbg) / step_h,
-                IntegrationMethod::Trapezoidal => 2.0 * (qbe - hist.qbg) / step_h - hist.cqbg,
+                IntegrationMethod::BackwardEuler => (qbe - hist.qbe_cbox) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qbe - hist.qbe_cbox) / step_h - hist.cqbe_cbox
+                }
+            };
+            // Incremental intrinsic charges using capacitance derivatives.
+            let (vgs_t, vds_t, vbs_t, ves_t) = inst.terminal_voltages(&solution);
+            let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
+                vgs_t, vds_t, vbs_t, ves_t, &inst.size_params, &inst.model,
+            );
+            let (vdp, vsp) = if comp.mode > 0 { (vd, vs) } else { (vs, vd) };
+            let vgb = sign * (vg - vb);
+            let vdb = sign * (vdp - vb);
+            let vsb = sign * (vsp - vb);
+            let dvgb = vgb - hist.vgb_prev;
+            let dvdb = vdb - hist.vdb_prev;
+            let dvsb = vsb - hist.vsb_prev;
+            let qgate = hist.qgate + comp.cggb * dvgb + comp.cgdb * dvdb + comp.cgsb * dvsb;
+            let qbody = hist.qbody + comp.cbgb * dvgb + comp.cbdb * dvdb + comp.cbsb * dvsb;
+            let qdrn = hist.qdrn + comp.cdgb * dvgb + comp.cddb * dvdb + comp.cdsb * dvsb;
+            let qsub = -(qgate + qbody + qdrn); // KCL
+            let cqgate = match method {
+                IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qgate - hist.qgate) / step_h - hist.cqgate
+                }
+            };
+            let cqbody = match method {
+                IntegrationMethod::BackwardEuler => (qbody - hist.qbody) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qbody - hist.qbody) / step_h - hist.cqbody
+                }
+            };
+            let cqdrn = match method {
+                IntegrationMethod::BackwardEuler => (qdrn - hist.qdrn) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qdrn - hist.qdrn) / step_h - hist.cqdrn
+                }
+            };
+            let cqsub = match method {
+                IntegrationMethod::BackwardEuler => (qsub - hist.qsub) / step_h,
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qsub - hist.qsub) / step_h - hist.cqsub
+                }
             };
             soidd_charge_histories[di] = Bsim3SoiDdChargeHistory {
-                qbg: qbe,
-                cqbg: cqbe,
-                qbd: 0.0,
-                cqbd: 0.0,
-                qbs: 0.0,
-                cqbs: 0.0,
-                vbg: vbe,
-                vbd: 0.0,
-                vbs: 0.0,
+                qgate,
+                cqgate,
+                qbody,
+                cqbody,
+                qdrn,
+                cqdrn,
+                qsub,
+                cqsub,
+                qbe_cbox: qbe,
+                cqbe_cbox: cqbe,
+                vbe_cbox: vbe,
+                vgb_prev: vgb,
+                vdb_prev: vdb,
+                vsb_prev: vsb,
             };
         }
 
@@ -2493,43 +2559,204 @@ fn solve_timestep(
             }
         }
 
-        // 9. Stamp BSIM3SOI-DD body charge companion model.
-        //    The dominant body charge coupling in SOI is through the buried oxide
-        //    capacitance (CboxWL = kb3 * Cbox * weffCV * leffCV) between body and
-        //    back-gate (E node). We stamp this as a simple two-terminal capacitor
-        //    using the same companion model pattern as MOSFET Meyer caps.
-        for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
-            let sign = inst.model.mos_type.sign();
-            let m = inst.m;
-            let sp_dd = &inst.size_params;
+        // 9. Stamp BSIM3SOI-DD charge companion models.
+        //    Two parts:
+        //    (a) Intrinsic 4-terminal charges (gate, body, drain, source/KCL)
+        //        using the full capacitance matrix (cggb/cgdb/cgsb/cbgb/cbdb/cbsb/
+        //        cdgb/cddb/cdsb) from the companion. These couple the gate ramp
+        //        to the body node via cbgb, enabling floating-body transient response.
+        //    (b) CboxWL buried oxide body-to-backgate capacitance (existing).
+        {
+            let prev_dd = dev_state.prev_bsim3soi_dd_voltages();
+            for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
+                let sign = inst.model.mos_type.sign();
+                let m = inst.m;
+                let sp_dd = &inst.size_params;
 
-            // Buried oxide body-to-backgate capacitance
-            let cbox_wl = sp_dd.kb3 * inst.model.cbox * sp_dd.weff_cv * sp_dd.leff_cv;
-            if cbox_wl <= 0.0 {
-                continue;
-            }
+                // (a) Intrinsic charge integration from companion.
+                let (vgs, vds, vbs_t, ves) = prev_dd[di];
+                let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
+                    vgs, vds, vbs_t, ves, sp_dd, &inst.model,
+                );
 
-            let bp = inst.body_int_idx;
-            let ep = inst.e_idx;
+                let hist = &soidd_charge_histories[di];
 
-            let vb = bp.map_or(0.0, |i| solution[i]);
-            let ve = ep.map_or(0.0, |i| solution[i]);
-            let vbe = sign * (vb - ve);
+                // Integrate 4 terminal charges using incremental approach.
+                // Q_new = Q_old + C(V) * delta_V (matching MOSFET Meyer cap pattern).
+                let ag0 = match method {
+                    IntegrationMethod::BackwardEuler => 1.0 / h,
+                    IntegrationMethod::Trapezoidal => 2.0 / h,
+                };
 
-            let hist = &soidd_charge_histories[di];
-            let qbe = hist.qbg + cbox_wl * (vbe - hist.vbg); // reuse qbg for B-E charge
+                // Node indices — swap drain/source for reverse mode.
+                let g = inst.gate_idx;
+                let b = inst.body_int_idx;
+                let (dp, sp_node) = if comp.mode > 0 {
+                    (inst.drain_prime_idx, inst.source_prime_idx)
+                } else {
+                    (inst.source_prime_idx, inst.drain_prime_idx)
+                };
 
-            let (geq_be, cqbe) = match method {
-                IntegrationMethod::BackwardEuler => (cbox_wl / h, (qbe - hist.qbg) / h),
-                IntegrationMethod::Trapezoidal => {
-                    (2.0 * cbox_wl / h, 2.0 * (qbe - hist.qbg) / h - hist.cqbg)
+                // Physical voltages (bulk-referenced, model convention).
+                let vg_raw = g.map_or(0.0, |i| solution[i]);
+                let vb_raw = b.map_or(0.0, |i| solution[i]);
+                let vdp_raw = dp.map_or(0.0, |i| solution[i]);
+                let vsp_raw = sp_node.map_or(0.0, |i| solution[i]);
+                let vgb = sign * (vg_raw - vb_raw);
+                let vdb_model = sign * (vdp_raw - vb_raw);
+                let vsb_model = sign * (vsp_raw - vb_raw);
+
+                // Incremental charges.
+                let dvgb = vgb - hist.vgb_prev;
+                let dvdb = vdb_model - hist.vdb_prev;
+                let dvsb = vsb_model - hist.vsb_prev;
+                let qgate = hist.qgate + comp.cggb * dvgb + comp.cgdb * dvdb + comp.cgsb * dvsb;
+                let qbody = hist.qbody + comp.cbgb * dvgb + comp.cbdb * dvdb + comp.cbsb * dvsb;
+                let qdrn = hist.qdrn + comp.cdgb * dvgb + comp.cddb * dvdb + comp.cdsb * dvsb;
+
+                let cqgate = match method {
+                    IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / h,
+                    IntegrationMethod::Trapezoidal => {
+                        2.0 * (qgate - hist.qgate) / h - hist.cqgate
+                    }
+                };
+                let cqbody = match method {
+                    IntegrationMethod::BackwardEuler => (qbody - hist.qbody) / h,
+                    IntegrationMethod::Trapezoidal => {
+                        2.0 * (qbody - hist.qbody) / h - hist.cqbody
+                    }
+                };
+                let cqdrn = match method {
+                    IntegrationMethod::BackwardEuler => (qdrn - hist.qdrn) / h,
+                    IntegrationMethod::Trapezoidal => {
+                        2.0 * (qdrn - hist.qdrn) / h - hist.cqdrn
+                    }
+                };
+
+                // gc matrix: gc_ij = c_ij * ag0 (capacitance derivative scaled by integration coeff)
+                let gcggb = comp.cggb * ag0;
+                let gcgdb = comp.cgdb * ag0;
+                let gcgsb = comp.cgsb * ag0;
+                let gcbgb = comp.cbgb * ag0;
+                let gcbdb = comp.cbdb * ag0;
+                let gcbsb = comp.cbsb * ag0;
+                let gcdgb = comp.cdgb * ag0;
+                let gcddb = comp.cddb * ag0;
+                let gcdsb = comp.cdsb * ag0;
+
+                // Node indices — swap drain/source for reverse mode.
+                let g = inst.gate_idx;
+                let b = inst.body_int_idx;
+                let (dp, sp_node) = if comp.mode > 0 {
+                    (inst.drain_prime_idx, inst.source_prime_idx)
+                } else {
+                    (inst.source_prime_idx, inst.drain_prime_idx)
+                };
+
+                // Physical voltages for Norton current (bulk-referenced, model convention).
+                let vg_raw = g.map_or(0.0, |i| solution[i]);
+                let vb_raw = b.map_or(0.0, |i| solution[i]);
+                let vdp_raw = dp.map_or(0.0, |i| solution[i]);
+                let vsp_raw = sp_node.map_or(0.0, |i| solution[i]);
+                let vgb = sign * (vg_raw - vb_raw);
+                let vdb_model = sign * (vdp_raw - vb_raw);
+                let vsb_model = sign * (vsp_raw - vb_raw);
+
+                // Norton currents: ceqq = cq - sum(gc_ij * v_jb)
+                let ceqqg = cqgate - (gcggb * vgb + gcgdb * vdb_model + gcgsb * vsb_model);
+                let ceqqb = cqbody - (gcbgb * vgb + gcbdb * vdb_model + gcbsb * vsb_model);
+                let ceqqd = cqdrn - (gcdgb * vgb + gcddb * vdb_model + gcdsb * vsb_model);
+
+                // Stamp gc matrix (ngspice b3soiddld.c lines 3680-3721, 3732-3780)
+                // Gate row
+                if let Some(gi) = g {
+                    system.matrix.add(gi, gi, m * gcggb);
+                    if let Some(di2) = dp {
+                        system.matrix.add(gi, di2, m * gcgdb);
+                    }
+                    if let Some(si) = sp_node {
+                        system.matrix.add(gi, si, m * gcgsb);
+                    }
+                    if let Some(bi) = b {
+                        system.matrix.add(gi, bi, -m * (gcggb + gcgdb + gcgsb));
+                    }
                 }
-            };
+                // Body row
+                if let Some(bi) = b {
+                    if let Some(gi) = g {
+                        system.matrix.add(bi, gi, m * gcbgb);
+                    }
+                    if let Some(di2) = dp {
+                        system.matrix.add(bi, di2, m * gcbdb);
+                    }
+                    if let Some(si) = sp_node {
+                        system.matrix.add(bi, si, m * gcbsb);
+                    }
+                    system.matrix.add(bi, bi, -m * (gcbgb + gcbdb + gcbsb));
+                }
+                // Drain row
+                if let Some(di2) = dp {
+                    if let Some(gi) = g {
+                        system.matrix.add(di2, gi, m * gcdgb);
+                    }
+                    system.matrix.add(di2, di2, m * gcddb);
+                    if let Some(si) = sp_node {
+                        system.matrix.add(di2, si, m * gcdsb);
+                    }
+                    if let Some(bi) = b {
+                        system.matrix.add(di2, bi, -m * (gcdgb + gcddb + gcdsb));
+                    }
+                }
+                // Source row (by KCL: qs = -(qg + qb + qd))
+                if let Some(si) = sp_node {
+                    if let Some(gi) = g {
+                        system.matrix.add(si, gi, -m * (gcggb + gcbgb + gcdgb));
+                    }
+                    if let Some(di2) = dp {
+                        system.matrix.add(si, di2, -m * (gcgdb + gcbdb + gcddb));
+                    }
+                    system
+                        .matrix
+                        .add(si, si, -m * (gcgsb + gcbsb + gcdsb));
+                    if let Some(bi) = b {
+                        system.matrix.add(
+                            si,
+                            bi,
+                            m * (gcggb
+                                + gcgdb
+                                + gcgsb
+                                + gcbgb
+                                + gcbdb
+                                + gcbsb
+                                + gcdgb
+                                + gcddb
+                                + gcdsb),
+                        );
+                    }
+                }
 
-            // Stamp B-E capacitor: two-terminal conductance + current source.
-            stamp_conductance(&mut system.matrix, bp, ep, m * geq_be);
-            let ieq_be = sign * m * (cqbe - geq_be * vbe);
-            stamp_current_source(&mut system.rhs, bp, ep, ieq_be);
+                // Stamp Norton currents (ngspice b3soiddld.c lines 3860-3867, 3998-4017)
+                if let Some(gi) = g {
+                    system.rhs[gi] -= sign * m * ceqqg;
+                }
+                if let Some(bi) = b {
+                    system.rhs[bi] -= sign * m * ceqqb;
+                }
+                if let Some(di2) = dp {
+                    system.rhs[di2] -= sign * m * ceqqd;
+                }
+                if let Some(si) = sp_node {
+                    system.rhs[si] += sign * m * (ceqqg + ceqqb + ceqqd);
+                }
+
+                // (b) CboxWL buried oxide body-to-backgate capacitance.
+                // NOTE: CboxWL is already included in the intrinsic charge model
+                // through Qe1 (which contains -CboxWL*(vbsdio-vbs0)*xc terms).
+                // The intrinsic capacitance derivatives (cbgb, cbdb, cbsb) include
+                // the CboxWL contribution. A separate CboxWL stamp would double-count.
+                // Only stamp CboxWL if intrinsic charges are NOT being integrated
+                // (e.g., if the companion didn't compute charges).
+            }
         }
 
         // 10. Stamp VBIC junction charge companion models.
