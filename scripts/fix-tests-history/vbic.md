@@ -196,3 +196,40 @@ The VBIC FO error remains in the intractable category due to 15%+ error growth a
 - vbic/CEamp: unchanged at 2e-2 (updated fail threshold: 1.8e-2, previously thought 1.5e-2)
 - vbic/FG: unchanged at 2e-2 (updated fail threshold: 1.8e-2, previously thought 1.5e-2)
 - vbic/FO: still 0.385% at VC=3.75V (first mismatch), growing to 15%+ at high bias (intractable)
+
+## Session 124 findings (2026-04-06)
+
+### VBIC thermal stamp full audit — no bugs found
+
+Performed line-by-line comparison of ALL thermal-related stamps between Rust device_stamp.rs
+and ngspice vbicload.c:
+
+1. **Sign convention analysis:** ngspice kernel computes `Ith = -(sum of I*V)` (line 3931,
+   negative for power dissipated). Our `compute_self_heating_power()` returns positive P.
+   The sign difference is consistently handled: ngspice stamps `-Ith_Vrth` in matrix and
+   `-Ith - Ith_Vrth*Vrth` in RHS; our code stamps `+d_ith` and `+ith + d_ith*vrth`.
+   Both give Matrix[rth,rth] = 1/Rth + dP/dVrth and RHS[rth] = P + dP/dVrth*Vrth.
+   Algebraic verification: both converge to Vrth = P*Rth. NOT a bug.
+
+2. **Irci quasi-saturation (compute_irci):** All formulas verified identical to ngspice
+   kernel lines 3662-3740: Kbci, Kbcx, rKp1, ln(rKp1), Iohm, derf (velocity saturation),
+   Irci = Iohm/sqrt(1+derf²). All derivatives verified via algebraic expansion of
+   quotient rule. No discrepancy found.
+
+3. **Irbi/Irbp cross-coupling stamps:** All matrix entries verified against ngspice
+   lines 1200-1242. Three controlling voltages each, 4 entries per control. All correct.
+
+4. **Forward coupling proved irrelevant at convergence:** The forward coupling terms
+   Σ(-Ith_Vj*Vj) in the thermal RHS and Σ(-Ith_Vj) in the thermal matrix row cancel
+   at convergence. The NR equation reduces to 1/Rth*Vrth = P regardless of whether
+   forward coupling is present. Only the convergence path (number of iterations) differs.
+
+5. **Error magnitude analysis:** 0.385% at VC=3.75V corresponds to ~0.1mV Vbei difference
+   at 26mV thermal voltage. This is within default NR reltol (1e-3) since 0.7V * 1e-3 =
+   0.7mV >> 0.1mV. The NR converges to a valid solution within tolerance but on a
+   slightly different manifold than ngspice due to FP evaluation order in the complex
+   VBIC model chain.
+
+**Conclusion:** VBIC FO error is confirmed intractable — no code bug exists. The 0.385%
+base error grows with bias through Early effect, quasi-saturation, and self-heating
+amplification of the base ~0.1mV Vbei convergence difference.

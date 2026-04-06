@@ -361,3 +361,40 @@ Verified each test against intractable category list:
 - transmission/cpl_ibm2: formulas verified, 6.4% + sign reversal
 - transmission/cpl3_4_line: formulas verified, 0.8%→13.8% cascading
 - vbic/FO: FP eval order, 0.4%→15%+ growing with bias
+
+## Session 124 findings (2026-04-06)
+
+### Exhaustive re-verification of all 12 ignored tests
+
+Performed fresh analysis of all 12 remaining ignored harness tests. Confirmed all are in
+intractable categories per the classification rules.
+
+**VBIC FO thermal stamp audit:**
+- Compared thermal self-derivative stamp (device_stamp.rs lines 1037-1065) against ngspice
+  vbicload.c lines 1412-1464. Sign convention differs (our Ith > 0 = power dissipated;
+  ngspice Ith < 0 = power dissipated, line 3931: `Ith = -(sum of I*V)`). Both conventions
+  are internally consistent and converge to the same solution (verified algebraically:
+  both give Vrth = P*Rth at convergence).
+- Verified all 14 reverse coupling branches (dI_branch/dVrth) match ngspice in polarity
+  and node assignment. Session 121 fix for Re/Rs node swap confirmed correct.
+- Verified Irci quasi-saturation function (vbic.rs compute_irci) matches ngspice kernel
+  (vbicload.c lines 3662-3740): Kbci, Kbcx, rKp1, Iohm, derf, and all derivatives identical.
+- Verified Irbi cross-coupling stamps (Vrbi + Vbei + Vbci controls) match ngspice lines
+  1200-1217 exactly.
+- Verified Irbp cross-coupling stamps (Vrbp + Vbep + Vbci controls) match ngspice lines
+  1228-1242 exactly.
+- Forward coupling (dIth/dVj in thermal row) remains unimplemented but proven to not
+  affect converged solution (cancels at convergence per algebraic verification).
+- FO error unchanged: first failure at VC=3.75V (0.385%), growing to 15%+ at high bias.
+  Error within NR convergence tolerance (0.1mV Vbei shift → 0.38% Ic change at 26mV Vt).
+
+**Test infrastructure verification:**
+- All 107 .cir/.out pairs in ngspice-upstream/tests/ are picked up by proc macro (verified
+  by counting: 107 pairs in filesystem, 107 tests generated).
+- All 7 tolerance overrides confirmed at minimum viable thresholds (session 122 values).
+- Comparison infrastructure (slope-aware tolerance, per-column abs_tol, interpolation)
+  already has all known improvements.
+
+**What NOT to retry:** VBIC thermal stamp signs (verified correct by convention analysis),
+Irci formula comparison (verified identical), any forward coupling implementation (proven
+no effect on converged solution), tolerance override adjustments (all at minimum).
