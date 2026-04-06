@@ -892,9 +892,11 @@ impl Bsim3SoiDdModel {
         // Back-gate flat-band voltage: vfbb = -type * Vtm * ln(npeak / nsub)
         // Matches ngspice b3soiddtemp.c line 587.
         self.vfbb = -self.mos_type.sign() * self.vtm * (npeak / nsub).ln();
-        // Processed adice: adice0 / (1 + Cboxt/Cox)
-        self.cboxt = self.cbox * self.csi / (self.cbox + self.csi);
-        self.adice = self.adice0 / (1.0 + self.cboxt / self.cox);
+        // adice uses local Cboxt = cbox*csi/(cbox+csi) (ngspice b3soiddset.c line 973, 997)
+        let cboxt_local = self.cbox * self.csi / (self.cbox + self.csi);
+        self.adice = self.adice0 / (1.0 + cboxt_local / self.cox);
+        // Stored cboxt uses csieff (VBSA-adjusted), for Qe2 charge (ngspice line 994)
+        self.cboxt = 1.0 / (1.0 / self.cbox + 1.0 / self.csieff);
     }
 
     /// Number of internal nodes this model creates.

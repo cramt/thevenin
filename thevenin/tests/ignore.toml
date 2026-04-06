@@ -7,7 +7,6 @@
 
 # === BSIM3SOI-DD ===
 "bsim3soidd/RampVg2.cir" = "body charge model computed but transient needs full 4-row charge integration (G/D/B/E) — simplified B-E cap prevents collapse but body doesn't respond to gate"
-"bsim3soidd/inv2.cir" = "DC OP: new_gmin stuck at dev_gmin≈3.36e-4 (body voltage bifurcation in floating-body DD inverter — device model Jacobian issue, not solver infrastructure)"
 
 # === BSIM3SOI-FD === (FD inv2 un-ignored: now passes after gmin/source stepping fixes)
 
