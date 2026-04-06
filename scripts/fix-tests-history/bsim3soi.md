@@ -1,14 +1,14 @@
 # BSIM3SOI Test History
 
-## Current status (3 tolerance overrides, FD inv2 un-ignored session 113, DD inv2 session 119)
+## Current status (3 tolerance overrides, FD inv2 un-ignored session 113, DD inv2 session 119, PD inv2 session 120)
 
 | Test | Status |
 |---|---|
 | DD t3 | ✅ PASSING with rel_tol=3.5e-2 (session 102). Exhaustively verified sessions 99-101. |
 | DD inv2 | ✅ PASSING with rel_tol=3e-3 (session 119). PMOS InitJct + ceq fixes resolved convergence. |
 | FD inv2 | ✅ PASSING (un-ignored session 113). Previous gmin/source stepping fixes resolved convergence. |
+| PD inv2 | ✅ PASSING (un-ignored session 120). Combined derivative stamps with KCL balance. |
 | DD RampVg2 | Body voltage collapses from 92mV to ~0 at first transient step (DC OP correct) |
-| PD inv2 | NR non-convergence (63 iters; body voltage bifurcation) |
 
 ## DD fixes
 
@@ -535,9 +535,47 @@ This only affects transient Qe2 (zero in DC) but is a correctness improvement.
 
 **Result:** 637 tests pass, 14 skipped (was 636/15). No regressions. Clippy clean.
 
-**PD inv2:** Still fails with NR non-convergence (63 iterations). The PMOS fixes helped DD
-(which uses analytical body voltage) but not PD (which has a physical body node that becomes
-singular when gmin drops below ~4e-4).
+**PD inv2:** NOW PASSES — see session 120 findings below.
 
-**What NOT to retry:** PD inv2 convergence (still at gmin cliff).
+**What NOT to retry:**
 DD inv2 model comparison (same root cause as t3, verified sessions 99-101).
+
+## Session 120 findings (2026-04-06)
+
+### PD inv2: NOW PASSES — combined derivative stamps fix (FIX 114)
+
+**Root cause found:** The PD stamp function was missing KCL-balanced source-prime (SP)
+entries for junction / impact ionization / GIDL combined derivatives. The junction,
+Iii, and GIDL terms were stamped separately at the drain and body rows, but the
+source-prime column entries were not adjusted via KCL balance. This meant:
+
+1. **Body row B,SP** was missing Iii/GIDL feedback terms — the body equation didn't
+   properly account for how body current changes with source voltage changes
+2. **Drain row DP,SP** was missing junction/Iii/GIDL feedback — only had channel terms
+3. **Source row SP,SP** was missing junction GIDL self-conductance from KCL
+
+The DD model (bsim3soi_dd.rs) already had correct combined derivative stamps (gddp*,
+gssp*, gbb* with KCL-computed SP entries) since session 99. The PD model was the only
+one still using separate stamp_conductance + individual Iii/GIDL stamps.
+
+**Fix:** Restructured `stamp_bsim3soi_pd()` to use combined derivative stamps matching
+the DD model pattern and ngspice b3soipdld.c lines 3894-3911, 4054-4059:
+
+1. Removed separate `stamp_conductance(B, D, gbd)` and `stamp_conductance(B, S, gbs)`
+2. Removed separate Iii and GIDL stamp sections (lines 2252-2305)
+3. Added combined `gddp*` stamps (drain junction + Iii + GIDL with KCL)
+4. Added combined `gssp*` stamps (source junction + SGIDL with KCL)
+5. Added combined `gbb*` stamps (body current with KCL)
+6. Added gate-drain CKTgmin conductance (ngspice lines 4062-4063)
+7. Simplified body_gmin application using stamp_conductance
+
+For PD model: Gjsd=0 (no Vds dependence of source junction), Gjdd=-Gjdb
+(all junction components depend on Vbd only), so the combined stamps simplify.
+
+**Key insight:** The separate stamps produced correct NET matrix entries at G, DP, and B
+columns, but the SP column was incorrect because KCL balance was not enforced. When gmin
+dropped below ~4e-4, the incomplete SP entries left the floating body node insufficiently
+coupled to the source, causing Jacobian ill-conditioning and NR divergence.
+
+**Result:** PD inv2 now passes cleanly (0 error, exact match). 638 tests pass, 13 skipped.
+No regressions. Clippy clean.

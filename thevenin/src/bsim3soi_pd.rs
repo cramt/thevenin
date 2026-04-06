@@ -2191,9 +2191,6 @@ pub fn stamp_bsim3soi_pd(
     let gm_eff = m * (comp.gm * xnrm + comp.gds * xrev);
     let gds_eff = m * (comp.gds * xnrm + comp.gm * xrev);
     let gmbs_eff = m * comp.gmbs;
-    let gbd = m * comp.gbd_jct;
-    let gbs = m * comp.gbs_jct;
-
     // Channel current: asymmetric VCCS stamps (must use matrix.add, not stamp_conductance)
     if let Some(d) = dp {
         matrix.add(d, d, gds_eff);
@@ -2220,86 +2217,97 @@ pub fn stamp_bsim3soi_pd(
         }
     }
 
-    // BD/BS junctions: symmetric two-terminal stamps (correct use of stamp_conductance)
-    crate::stamp_conductance(matrix, b, dp, gbd);
-    crate::stamp_conductance(matrix, b, sp, gbs);
+    // Gate-drain gmin (ngspice b3soipdld.c lines 4062-4063: CKTgmin between G and DP)
+    crate::stamp_conductance(matrix, g, dp, m * gmin);
 
     // Floating-body stability: add Gmin body-to-source coupling (matching ngspice
     // b3soipdld.c line 4038: Gmin = CKTgmin * 1e-6).  ngspice uses a much smaller
     // Gmin at the body node than the circuit-level gmin to avoid dominating the
     // extremely small floating-body junction currents.
-    // When source is ground (sp=None), stamp_conductance only adds to body diagonal,
-    // which is equivalent to body-to-ground coupling.
     // Floor at 1e-20 so circuits with very small gmin (e.g. 1e-25) still
     // have enough body-source coupling to keep the Jacobian non-singular.
     let body_gmin = (gmin * 1e-6).max(1e-20);
-    if inst.body_idx.is_none()
-        && let Some(bi) = b
+    if inst.body_idx.is_none() {
+        crate::stamp_conductance(matrix, b, sp, body_gmin);
+    }
+
+    // --- Combined junction / Iii / GIDL derivative stamps (matching ngspice) ---
+    //
+    // Instead of stamping junction, Iii, and GIDL terms separately (which breaks
+    // KCL at the source-prime column), use combined derivative stamps with
+    // KCL-computed SP entries.  This matches ngspice b3soipdld.c lines 3894-3911
+    // and 4040-4059, and the DD model pattern (bsim3soi_dd.rs lines 3085-3159).
+    //
+    // For PD model: Gjsd = 0 (no Vds dependence of source junction current)
+    // and Gjdd = -Gjdb (all junction components depend on Vbd = Vbs - Vds only),
+    // so the combined stamps simplify accordingly.
+
+    // Drain-junction combined derivatives (ngspice gjd*: lines 2705-2714)
+    // gddp* = negated stored_gjd* stamps.
+    // stored_gjdb = Gjdb - Giib, stored_gjdd = Gjdd - (Giid+Gdgidld),
+    // stored_gjdg = -(Giig+Gdgidlg)
     {
-        // Body-source coupling: conductance pair between body and source.
-        // When sp=None (source=ground), this reduces to body-to-ground conductance.
-        matrix.add(bi, bi, body_gmin);
-        if let Some(s) = sp {
-            matrix.add(bi, s, -body_gmin);
-            matrix.add(s, bi, -body_gmin);
-            matrix.add(s, s, body_gmin);
-        }
-    }
+        let gddpg = m * (comp.gii_g + comp.ggidl_g);
+        let gddpdp = m * (comp.gii_d + comp.ggidl_d + comp.gbd_jct);
+        let gddpb = m * (comp.gii_b - comp.gbd_jct);
+        let gddpsp = -(gddpg + gddpdp + gddpb); // KCL balance
 
-    // Impact ionization: Iii flows drain→body (OUT of drain, INTO body).
-    // Body row: incoming current → negative conductance entries.
-    // Drain row: outgoing current → positive conductance entries.
-    if comp.iii != 0.0 {
-        let gii_d = m * comp.gii_d;
-        let gii_g = m * comp.gii_g;
-        let gii_b = m * comp.gii_b;
-        if let (Some(d), Some(bi)) = (dp, b) {
-            matrix.add(d, d, gii_d);
-            matrix.add(bi, d, -gii_d);
-        }
-        if let Some(gate) = g {
-            if let Some(d) = dp {
-                matrix.add(d, gate, gii_g);
+        if let Some(d) = dp {
+            matrix.add(d, d, gddpdp);
+            if let Some(gate) = g {
+                matrix.add(d, gate, gddpg);
             }
             if let Some(bi) = b {
-                matrix.add(bi, gate, -gii_g);
+                matrix.add(d, bi, gddpb);
             }
-        }
-        if let Some(bi) = b {
-            matrix.add(bi, bi, -gii_b);
-            if let Some(d) = dp {
-                matrix.add(d, bi, gii_b);
-            }
-        }
-    }
-
-    // GIDL drain-side: Igidl flows drain→body.
-    if comp.igidl != 0.0 {
-        let ggidl_d = m * comp.ggidl_d;
-        let ggidl_g = m * comp.ggidl_g;
-        if let (Some(d), Some(bi)) = (dp, b) {
-            matrix.add(d, d, ggidl_d);
-            matrix.add(bi, d, -ggidl_d);
-        }
-        if let Some(gate) = g {
-            if let Some(d) = dp {
-                matrix.add(d, gate, ggidl_g);
-            }
-            if let Some(bi) = b {
-                matrix.add(bi, gate, -ggidl_g);
-            }
-        }
-    }
-
-    // GIDL source-side: Isgidl flows source→body.
-    if comp.isgidl != 0.0 {
-        let gsgidl_g = m * comp.gsgidl_g;
-        if let Some(gate) = g {
             if let Some(s) = sp {
-                matrix.add(s, gate, gsgidl_g);
+                matrix.add(d, s, gddpsp);
+            }
+        }
+    }
+
+    // Source-junction combined derivatives (ngspice gjs*: lines 2716-2725)
+    // gssp* stamps: current flowing into source-prime from body junction paths
+    {
+        let gsspg = m * comp.gsgidl_g;
+        let gsspdp = 0.0_f64; // Gjsd = 0 for PD model
+        let gsspb = m * (-comp.gbs_jct);
+        let gsspsp = -(gsspg + gsspdp + gsspb); // KCL balance
+
+        if let Some(s) = sp {
+            if let Some(gate) = g {
+                matrix.add(s, gate, gsspg);
+            }
+            if let Some(d) = dp {
+                matrix.add(s, d, gsspdp);
             }
             if let Some(bi) = b {
-                matrix.add(bi, gate, -gsgidl_g);
+                matrix.add(s, bi, gsspb);
+            }
+            matrix.add(s, s, gsspsp);
+        }
+    }
+
+    // Body node combined derivatives (ngspice gbb*: lines 2727-2731)
+    // These are the NEGATED body current derivatives (since rhs -= ceqbody)
+    // gbbs = Giib - Gjsb - Gjdb, gbgs = Giig + Gdgidlg + Gsgidlg,
+    // gbds = Giid + Gdgidld + Gjdb (since Gjsd=0, Gjdd=-Gjdb)
+    {
+        let gbbg = m * (-(comp.gii_g + comp.ggidl_g + comp.gsgidl_g));
+        let gbbdp = m * (-(comp.gii_d + comp.ggidl_d + comp.gbd_jct));
+        let gbbb = m * (-comp.gii_b + comp.gbs_jct + comp.gbd_jct);
+        let gbbsp = -(gbbg + gbbdp + gbbb); // KCL balance
+
+        if let Some(bi) = b {
+            if let Some(gate) = g {
+                matrix.add(bi, gate, gbbg);
+            }
+            if let Some(d) = dp {
+                matrix.add(bi, d, gbbdp);
+            }
+            matrix.add(bi, bi, gbbb);
+            if let Some(s) = sp {
+                matrix.add(bi, s, gbbsp);
             }
         }
     }

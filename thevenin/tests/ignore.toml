@@ -11,7 +11,6 @@
 # === BSIM3SOI-FD === (FD inv2 un-ignored: now passes after gmin/source stepping fixes)
 
 # === BSIM3SOI-PD ===
-"bsim3soipd/inv2.cir" = "DC OP: new_gmin stuck at dev_gmin≈3.36e-4 (body voltage bifurcation in floating-body PD inverter — device model Jacobian issue)"
 
 # === General circuits ===
 
