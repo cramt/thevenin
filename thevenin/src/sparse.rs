@@ -1,6 +1,6 @@
 use faer::Mat;
-use faer::linalg::solvers::FullPivLu;
-use faer::prelude::Solve;
+use faer::linalg::solvers::{PartialPivLu, Solve};
+use faer::sparse::{SparseColMat, Triplet as FaerTriplet};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -14,6 +14,10 @@ pub enum SparseMatrixError {
     )]
     DimensionMismatch { matrix_dim: usize, rhs_len: usize },
 }
+
+/// Dimension threshold: systems smaller than this use dense partial-pivoting LU;
+/// larger systems use sparse LU for O(nnz) instead of O(n^3).
+const SPARSE_THRESHOLD: usize = 48;
 
 /// A triplet (row, col, value) for assembling a sparse matrix.
 #[derive(Debug, Clone, Copy)]
@@ -78,6 +82,21 @@ impl SparseMatrix {
         mat
     }
 
+    /// Convert to a faer sparse column matrix (CSC format).
+    ///
+    /// Duplicate entries at the same (row, col) are summed automatically by
+    /// faer's `try_new_from_triplets`, matching MNA stamp accumulation semantics.
+    fn to_sparse_col(&self) -> Result<SparseColMat<usize, f64>, SparseMatrixError> {
+        let triplets: Vec<FaerTriplet<usize, usize, f64>> = self
+            .triplets
+            .iter()
+            .map(|t| FaerTriplet::new(t.row, t.col, t.value))
+            .collect();
+        SparseColMat::try_new_from_triplets(self.dim, self.dim, &triplets).map_err(|e| {
+            SparseMatrixError::SingularMatrix(format!("sparse matrix construction failed: {e}"))
+        })
+    }
+
     /// Clear all entries, keeping the dimension.
     pub fn clear(&mut self) {
         self.triplets.clear();
@@ -118,6 +137,10 @@ impl LinearSystem {
 
     /// Solve the system using LU factorization.
     /// Returns the solution vector x such that Ax = b.
+    ///
+    /// For small systems (< 48 unknowns), uses dense partial-pivoting LU.
+    /// For larger systems, uses sparse LU which exploits the O(N) sparsity
+    /// pattern typical of MNA circuit matrices.
     pub fn solve(&self) -> Result<Vec<f64>, SparseMatrixError> {
         let dim = self.matrix.dim();
         if self.rhs.len() != dim {
@@ -131,24 +154,37 @@ impl LinearSystem {
             return Ok(vec![]);
         }
 
-        let a = self.matrix.to_dense();
-        let lu = FullPivLu::new(a.as_ref());
-
-        // Build faer column vector from rhs
+        // Build faer column vector from rhs.
         let mut b = Mat::zeros(dim, 1);
         for (i, &val) in self.rhs.iter().enumerate() {
             b[(i, 0)] = val;
         }
 
-        let x = lu.solve(&b);
-
-        // Check for NaN (indicates singular matrix)
-        let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
-        if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {
-            return Err(SparseMatrixError::Singular);
+        if dim < SPARSE_THRESHOLD {
+            // Dense path: partial pivoting is cheaper than full pivoting
+            // (~1.5-2x) and sufficient for well-conditioned MNA matrices.
+            let a = self.matrix.to_dense();
+            let lu = PartialPivLu::new(a.as_ref());
+            let x = lu.solve(&b);
+            let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+            if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {
+                return Err(SparseMatrixError::Singular);
+            }
+            Ok(result)
+        } else {
+            // Sparse path: exploits O(N) nonzero structure of circuit matrices.
+            // For 500+ node circuits this is 10-100x faster than dense LU.
+            let sparse_mat = self.matrix.to_sparse_col()?;
+            let lu = sparse_mat.sp_lu().map_err(|e| {
+                SparseMatrixError::SingularMatrix(format!("sparse LU factorization failed: {e}"))
+            })?;
+            let x = lu.solve(&b);
+            let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+            if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {
+                return Err(SparseMatrixError::Singular);
+            }
+            Ok(result)
         }
-
-        Ok(result)
     }
 }
 
@@ -161,7 +197,7 @@ pub struct ComplexLinearSystem {
     dim: usize,
     /// Real part of the matrix (conductance G).
     pub real: SparseMatrix,
-    /// Imaginary part of the matrix (susceptance B = ωC etc.).
+    /// Imaginary part of the matrix (susceptance B = wC etc.).
     pub imag: SparseMatrix,
     /// Real part of the RHS vector.
     pub rhs_real: Vec<f64>,
@@ -186,31 +222,66 @@ impl ComplexLinearSystem {
         self.dim
     }
 
-    /// Solve the complex system (G + jB)x = (rhs_real + j*rhs_imag).
-    /// Returns pairs of (real, imag) for each unknown.
-    pub fn solve(&self) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
+    /// Build a combined complex faer sparse matrix from real + imaginary triplets.
+    fn to_complex_sparse_col(
+        &self,
+        transpose: bool,
+    ) -> Result<SparseColMat<usize, faer::c64>, SparseMatrixError> {
         use faer::c64;
 
-        if self.dim == 0 {
-            return Ok(vec![]);
+        let mut triplets: Vec<FaerTriplet<usize, usize, c64>> =
+            Vec::with_capacity(self.real.triplets().len() + self.imag.triplets().len());
+
+        if transpose {
+            for t in self.real.triplets() {
+                triplets.push(FaerTriplet::new(t.col, t.row, c64::new(t.value, 0.0)));
+            }
+            for t in self.imag.triplets() {
+                triplets.push(FaerTriplet::new(t.col, t.row, c64::new(0.0, t.value)));
+            }
+        } else {
+            for t in self.real.triplets() {
+                triplets.push(FaerTriplet::new(t.row, t.col, c64::new(t.value, 0.0)));
+            }
+            for t in self.imag.triplets() {
+                triplets.push(FaerTriplet::new(t.row, t.col, c64::new(0.0, t.value)));
+            }
         }
 
-        // Build complex dense matrix from real + j*imag triplets.
+        SparseColMat::try_new_from_triplets(self.dim, self.dim, &triplets).map_err(|e| {
+            SparseMatrixError::SingularMatrix(format!(
+                "complex sparse matrix construction failed: {e}"
+            ))
+        })
+    }
+
+    /// Solve the complex system using dense LU (for small systems).
+    fn solve_dense(&self, transpose: bool) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
+        use faer::c64;
+
         let mut mat = Mat::<c64>::zeros(self.dim, self.dim);
-        for t in self.real.triplets() {
-            mat[(t.row, t.col)] += c64::new(t.value, 0.0);
-        }
-        for t in self.imag.triplets() {
-            mat[(t.row, t.col)] += c64::new(0.0, t.value);
+        if transpose {
+            for t in self.real.triplets() {
+                mat[(t.col, t.row)] += c64::new(t.value, 0.0);
+            }
+            for t in self.imag.triplets() {
+                mat[(t.col, t.row)] += c64::new(0.0, t.value);
+            }
+        } else {
+            for t in self.real.triplets() {
+                mat[(t.row, t.col)] += c64::new(t.value, 0.0);
+            }
+            for t in self.imag.triplets() {
+                mat[(t.row, t.col)] += c64::new(0.0, t.value);
+            }
         }
 
-        // Build complex RHS vector.
         let mut b = Mat::<c64>::zeros(self.dim, 1);
         for i in 0..self.dim {
             b[(i, 0)] = c64::new(self.rhs_real[i], self.rhs_imag[i]);
         }
 
-        let lu = FullPivLu::new(mat.as_ref());
+        let lu = PartialPivLu::new(mat.as_ref());
         let x = lu.solve(&b);
 
         let result: Vec<(f64, f64)> = (0..self.dim)
@@ -227,31 +298,22 @@ impl ComplexLinearSystem {
         Ok(result)
     }
 
-    /// Solve the adjoint (transposed) complex system (G + jB)^T x = rhs.
-    /// Returns pairs of (real, imag) for each unknown.
-    pub fn solve_transpose(&self) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
+    /// Solve the complex system using sparse LU (for larger systems).
+    fn solve_sparse(&self, transpose: bool) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
         use faer::c64;
 
-        if self.dim == 0 {
-            return Ok(vec![]);
-        }
+        let sparse_mat = self.to_complex_sparse_col(transpose)?;
+        let lu = sparse_mat.sp_lu().map_err(|e| {
+            SparseMatrixError::SingularMatrix(format!(
+                "complex sparse LU factorization failed: {e}"
+            ))
+        })?;
 
-        // Build complex dense matrix from real + j*imag triplets (transposed).
-        let mut mat = Mat::<c64>::zeros(self.dim, self.dim);
-        for t in self.real.triplets() {
-            mat[(t.col, t.row)] += c64::new(t.value, 0.0); // transpose: swap row/col
-        }
-        for t in self.imag.triplets() {
-            mat[(t.col, t.row)] += c64::new(0.0, t.value); // transpose: swap row/col
-        }
-
-        // Build complex RHS vector.
         let mut b = Mat::<c64>::zeros(self.dim, 1);
         for i in 0..self.dim {
             b[(i, 0)] = c64::new(self.rhs_real[i], self.rhs_imag[i]);
         }
 
-        let lu = FullPivLu::new(mat.as_ref());
         let x = lu.solve(&b);
 
         let result: Vec<(f64, f64)> = (0..self.dim)
@@ -266,6 +328,37 @@ impl ComplexLinearSystem {
         }
 
         Ok(result)
+    }
+
+    /// Solve the complex system (G + jB)x = (rhs_real + j*rhs_imag).
+    /// Returns pairs of (real, imag) for each unknown.
+    ///
+    /// Uses dense partial-pivoting LU for small systems and sparse LU
+    /// for larger systems.
+    pub fn solve(&self) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
+        if self.dim == 0 {
+            return Ok(vec![]);
+        }
+
+        if self.dim < SPARSE_THRESHOLD {
+            self.solve_dense(false)
+        } else {
+            self.solve_sparse(false)
+        }
+    }
+
+    /// Solve the adjoint (transposed) complex system (G + jB)^T x = rhs.
+    /// Returns pairs of (real, imag) for each unknown.
+    pub fn solve_transpose(&self) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
+        if self.dim == 0 {
+            return Ok(vec![]);
+        }
+
+        if self.dim < SPARSE_THRESHOLD {
+            self.solve_dense(true)
+        } else {
+            self.solve_sparse(true)
+        }
     }
 }
 
@@ -369,7 +462,7 @@ mod tests {
     #[test]
     fn test_complex_system_solve() {
         // Solve (1+j)*x = 2+j
-        // x = (2+j)/(1+j) = (2+j)(1-j)/((1+j)(1-j)) = (2+j-2j-j²)/(1+1) = (3-j)/2
+        // x = (2+j)/(1+j) = (2+j)(1-j)/((1+j)(1-j)) = (2+j-2j-j^2)/(1+1) = (3-j)/2
         // x = 1.5 - 0.5j
         let mut sys = ComplexLinearSystem::new(1);
         sys.real.add(0, 0, 1.0);
@@ -380,5 +473,37 @@ mod tests {
         let result = sys.solve().unwrap();
         assert_abs_diff_eq!(result[0].0, 1.5, epsilon = 1e-12);
         assert_abs_diff_eq!(result[0].1, -0.5, epsilon = 1e-12);
+    }
+
+    /// Ensure sparse LU path works for systems above the threshold.
+    #[test]
+    fn test_large_system_sparse_lu() {
+        // Build a 64x64 tridiagonal system (above SPARSE_THRESHOLD).
+        // -2 on diagonal, 1 on sub/super-diagonals (discretized Laplacian).
+        let n = 64;
+        let mut sys = LinearSystem::new(n);
+        for i in 0..n {
+            sys.matrix.add(i, i, -2.0);
+            if i > 0 {
+                sys.matrix.add(i, i - 1, 1.0);
+            }
+            if i + 1 < n {
+                sys.matrix.add(i, i + 1, 1.0);
+            }
+            sys.rhs[i] = 1.0;
+        }
+
+        let x = sys.solve().unwrap();
+        // Verify by checking residual: Ax - b should be near zero.
+        for i in 0..n {
+            let mut ax_i = -2.0 * x[i];
+            if i > 0 {
+                ax_i += x[i - 1];
+            }
+            if i + 1 < n {
+                ax_i += x[i + 1];
+            }
+            assert_abs_diff_eq!(ax_i, 1.0, epsilon = 1e-10);
+        }
     }
 }

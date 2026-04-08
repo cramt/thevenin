@@ -71,12 +71,13 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .collect();
 
     // Sweep each frequency point.
-    for &freq in &frequencies {
-        let omega = 2.0 * PI * freq;
+    // On native targets, frequency points are solved in parallel using rayon
+    // since each point is completely independent (same linearized circuit).
+    let gmin = nr_opts.gmin;
+    let ac_results = solve_ac_frequencies(&frequencies, &mna, &op_solution, netlist, gmin)?;
 
-        // Build and solve the complex MNA system at this frequency.
-        let solution = solve_ac_point(&mna, &op_solution, omega, netlist, nr_opts.gmin)?;
-
+    let num_nodes = mna.total_num_nodes();
+    for (freq, solution) in ac_results {
         freq_vec.data.as_real_mut().push(freq);
 
         // Collect node voltages (complex).
@@ -86,7 +87,6 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
         }
 
         // Collect branch currents (complex).
-        let num_nodes = mna.total_num_nodes();
         for (i, _vsrc) in mna.vsource_names.iter().enumerate() {
             let idx = num_nodes + i;
             let (re, im) = solution[idx];
@@ -107,6 +107,79 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
             vecs,
         }],
     })
+}
+
+/// Per-frequency AC solution: (frequency, complex solution vector).
+type AcFreqResult = (f64, Vec<(f64, f64)>);
+
+/// Solve all AC frequency points, using rayon on native targets.
+///
+/// Each frequency point is independent — the linearized circuit from the DC operating
+/// point does not change between frequencies. On native targets this distributes
+/// frequency points across CPU cores via rayon, giving roughly Nx speedup for N cores.
+///
+/// # Safety of the Sync wrapper
+///
+/// `MnaSystem` is not `Sync` because `XspiceInstance` contains `RefCell<Box<dyn Any>>`.
+/// AC analysis is purely read-only on the MNA system (it only reads base matrix
+/// triplets, device instance parameters, and node maps). The `RefCell` state is only
+/// mutated during nonlinear NR iteration, never during AC stamping. Therefore it is
+/// sound to share `&MnaSystem` across threads for AC analysis.
+fn solve_ac_frequencies(
+    frequencies: &[f64],
+    mna: &MnaSystem,
+    op_solution: &[f64],
+    netlist: &Netlist,
+    gmin: f64,
+) -> Result<Vec<AcFreqResult>, MnaError> {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        // MnaSystem is !Sync because XspiceInstance contains RefCell<Box<dyn Any>>.
+        // AC analysis is provably read-only: stamp_ac_devices and apply_ac_excitation
+        // only read device parameters, base matrix triplets, and node maps. No
+        // RefCell::borrow_mut occurs during AC stamping (that only happens in NR
+        // iteration for nonlinear device evaluation). Therefore sharing &MnaSystem
+        // across threads is sound for AC analysis.
+        struct SendSyncRef<'a>(&'a MnaSystem);
+        // SAFETY: AC stamping is read-only; no interior-mutable state is accessed.
+        unsafe impl Send for SendSyncRef<'_> {}
+        unsafe impl Sync for SendSyncRef<'_> {}
+
+        let mna_ref = SendSyncRef(mna);
+
+        use std::sync::Mutex;
+        let results: Vec<Mutex<Option<Result<AcFreqResult, MnaError>>>> =
+            (0..frequencies.len()).map(|_| Mutex::new(None)).collect();
+
+        rayon::scope(|s| {
+            for (idx, &freq) in frequencies.iter().enumerate() {
+                let slot = &results[idx];
+                let mna_ref = &mna_ref;
+                s.spawn(move |_| {
+                    let omega = 2.0 * PI * freq;
+                    let result = solve_ac_point(mna_ref.0, op_solution, omega, netlist, gmin)
+                        .map(|sol| (freq, sol));
+                    *slot.lock().unwrap() = Some(result);
+                });
+            }
+        });
+
+        results
+            .into_iter()
+            .map(|m| m.into_inner().unwrap().unwrap())
+            .collect()
+    }
+
+    #[cfg(target_family = "wasm")]
+    {
+        frequencies
+            .iter()
+            .map(|&freq| {
+                let omega = 2.0 * PI * freq;
+                solve_ac_point(mna, op_solution, omega, netlist, gmin).map(|sol| (freq, sol))
+            })
+            .collect()
+    }
 }
 
 /// Solve the AC MNA system at a single frequency point.

@@ -1645,10 +1645,26 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let dvdb = vdb - hist.vdb_prev;
             let dvsb = vsb - hist.vsb_prev;
             let dveb = veb - hist.veb_prev;
-            let qgate = hist.qgate + comp.cggb * dvgb + comp.cgdb * dvdb + comp.cgsb * dvsb + comp.cgeb * dveb;
-            let qbody = hist.qbody + comp.cbgb * dvgb + comp.cbdb * dvdb + comp.cbsb * dvsb + comp.cbeb * dveb;
-            let qdrn = hist.qdrn + comp.cdgb * dvgb + comp.cddb * dvdb + comp.cdsb * dvsb + comp.cdeb * dveb;
-            let qsub = hist.qsub + comp.cegb * dvgb + comp.cedb * dvdb + comp.cesb * dvsb + comp.ceeb * dveb;
+            let qgate = hist.qgate
+                + comp.cggb * dvgb
+                + comp.cgdb * dvdb
+                + comp.cgsb * dvsb
+                + comp.cgeb * dveb;
+            let qbody = hist.qbody
+                + comp.cbgb * dvgb
+                + comp.cbdb * dvdb
+                + comp.cbsb * dvsb
+                + comp.cbeb * dveb;
+            let qdrn = hist.qdrn
+                + comp.cdgb * dvgb
+                + comp.cddb * dvdb
+                + comp.cdsb * dvsb
+                + comp.cdeb * dveb;
+            let qsub = hist.qsub
+                + comp.cegb * dvgb
+                + comp.cedb * dvdb
+                + comp.cesb * dvsb
+                + comp.ceeb * dveb;
             let cqgate = match method {
                 IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / step_h,
                 IntegrationMethod::Trapezoidal => 2.0 * (qgate - hist.qgate) / step_h - hist.cqgate,
@@ -2625,10 +2641,26 @@ fn solve_timestep(
                 let dvdb = vdb_model - hist.vdb_prev;
                 let dvsb = vsb_model - hist.vsb_prev;
                 let dveb = veb_model - hist.veb_prev;
-                let qgate = hist.qgate + comp.cggb * dvgb + comp.cgdb * dvdb + comp.cgsb * dvsb + comp.cgeb * dveb;
-                let qbody = hist.qbody + comp.cbgb * dvgb + comp.cbdb * dvdb + comp.cbsb * dvsb + comp.cbeb * dveb;
-                let qdrn = hist.qdrn + comp.cdgb * dvgb + comp.cddb * dvdb + comp.cdsb * dvsb + comp.cdeb * dveb;
-                let qsub = hist.qsub + comp.cegb * dvgb + comp.cedb * dvdb + comp.cesb * dvsb + comp.ceeb * dveb;
+                let qgate = hist.qgate
+                    + comp.cggb * dvgb
+                    + comp.cgdb * dvdb
+                    + comp.cgsb * dvsb
+                    + comp.cgeb * dveb;
+                let qbody = hist.qbody
+                    + comp.cbgb * dvgb
+                    + comp.cbdb * dvdb
+                    + comp.cbsb * dvsb
+                    + comp.cbeb * dveb;
+                let qdrn = hist.qdrn
+                    + comp.cdgb * dvgb
+                    + comp.cddb * dvdb
+                    + comp.cdsb * dvsb
+                    + comp.cdeb * dveb;
+                let qsub = hist.qsub
+                    + comp.cegb * dvgb
+                    + comp.cedb * dvdb
+                    + comp.cesb * dvsb
+                    + comp.ceeb * dveb;
 
                 let cqgate = match method {
                     IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / h,
@@ -2673,10 +2705,14 @@ fn solve_timestep(
                 let gcebb = -(gcegb + gcedb + gcesb + gceeb);
 
                 // Norton currents: ceqq = cq - sum(gc_ij * v_jb) for 5 terminals
-                let ceqqg = cqgate - (gcggb * vgb + gcgdb * vdb_model + gcgsb * vsb_model + gcgeb * veb_model);
-                let ceqqb = cqbody - (gcbgb * vgb + gcbdb * vdb_model + gcbsb * vsb_model + gcbeb * veb_model);
-                let ceqqd = cqdrn - (gcdgb * vgb + gcddb * vdb_model + gcdsb * vsb_model + gcdeb * veb_model);
-                let ceqqe = cqsub - (gcegb * vgb + gcedb * vdb_model + gcesb * vsb_model + gceeb * veb_model);
+                let ceqqg = cqgate
+                    - (gcggb * vgb + gcgdb * vdb_model + gcgsb * vsb_model + gcgeb * veb_model);
+                let ceqqb = cqbody
+                    - (gcbgb * vgb + gcbdb * vdb_model + gcbsb * vsb_model + gcbeb * veb_model);
+                let ceqqd = cqdrn
+                    - (gcdgb * vgb + gcddb * vdb_model + gcdsb * vsb_model + gcdeb * veb_model);
+                let ceqqe = cqsub
+                    - (gcegb * vgb + gcedb * vdb_model + gcesb * vsb_model + gceeb * veb_model);
 
                 // Stamp gc matrix (ngspice b3soiddld.c lines 3680-3721, 3732-3780)
                 // Gate row: G,G + G,D + G,S + G,E + G,B(KCL)
@@ -2746,21 +2782,27 @@ fn solve_timestep(
                 // Source row (by KCL: qs = -(qg + qb + qd + qe))
                 if let Some(si) = sp_node {
                     if let Some(gi) = g {
-                        system.matrix.add(si, gi, -m * (gcggb + gcbgb + gcdgb + gcegb));
+                        system
+                            .matrix
+                            .add(si, gi, -m * (gcggb + gcbgb + gcdgb + gcegb));
                     }
                     if let Some(di2) = dp {
-                        system.matrix.add(si, di2, -m * (gcgdb + gcbdb + gcddb + gcedb));
+                        system
+                            .matrix
+                            .add(si, di2, -m * (gcgdb + gcbdb + gcddb + gcedb));
                     }
-                    system.matrix.add(si, si, -m * (gcgsb + gcbsb + gcdsb + gcesb));
+                    system
+                        .matrix
+                        .add(si, si, -m * (gcgsb + gcbsb + gcdsb + gcesb));
                     if let Some(ei) = e {
-                        system.matrix.add(si, ei, -m * (gcgeb + gcbeb + gcdeb + gceeb));
+                        system
+                            .matrix
+                            .add(si, ei, -m * (gcgeb + gcbeb + gcdeb + gceeb));
                     }
                     if let Some(bi) = b {
-                        system.matrix.add(
-                            si,
-                            bi,
-                            -m * (gcgbb + gcbbb + gcdbb + gcebb),
-                        );
+                        system
+                            .matrix
+                            .add(si, bi, -m * (gcgbb + gcbbb + gcdbb + gcebb));
                     }
                 }
 

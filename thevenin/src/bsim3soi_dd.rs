@@ -2973,8 +2973,7 @@ pub fn bsim3soi_dd_companion(
     // cedb = dQsub/dVd = Ce1d + Ce2d - dQex/dVd
     let cedb = dqe1_dvd + dqe2_dvd - dqex_dvd;
     // cesb = dQsub/dVs (by KCL: sum of all 5 terminal derivatives = 0)
-    let cesb = -(cegb + cedb + ceeb
-        + (dqe1_dvb + dqe2_dvb - dqex_dvb));
+    let cesb = -(cegb + cedb + ceeb + (dqe1_dvb + dqe2_dvb - dqex_dvb));
 
     // Assemble terminal charges (ngspice b3soiddld.c lines 3688-3692)
     let qgate_total = qinv - (qbf0 + qe2);
