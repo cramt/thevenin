@@ -2955,7 +2955,7 @@ pub fn bsim3soi_dd_companion(
     let qsub_total = qe1 + qe2 - qex;
     let qdrn_total = -(qinv + qsrc);
 
-    // Suppress unused-variable warnings for charge components used only above
+    // qbf and qsicv are intermediate charge components consumed by qbody_total/qsub_total above.
     let _ = (qbf, qsicv);
 
     Bsim3SoiDdCompanion {

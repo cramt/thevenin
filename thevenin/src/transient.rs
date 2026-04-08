@@ -143,8 +143,6 @@ struct Bsim3SoiDdChargeHistory {
     cqbody: f64,
     qdrn: f64,
     cqdrn: f64,
-    qsub: f64,
-    cqsub: f64,
     // CboxWL buried oxide body-to-backgate capacitance (existing)
     qbe_cbox: f64,
     cqbe_cbox: f64,
@@ -277,7 +275,7 @@ impl BreakpointTable {
             }
         }
 
-        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        times.sort_by(|a, b| a.total_cmp(b));
         times.dedup_by(|a, b| (*a - *b).abs() < 1e-15);
 
         let min_break = tran.tstep * 5e-5;
@@ -843,8 +841,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 cqbody: 0.0,
                 qdrn: 0.0,
                 cqdrn: 0.0,
-                qsub: 0.0,
-                cqsub: 0.0,
                 qbe_cbox: cbox_wl * vbe,
                 cqbe_cbox: 0.0,
                 vbe_cbox: vbe,
@@ -1642,7 +1638,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let qgate = hist.qgate + comp.cggb * dvgb + comp.cgdb * dvdb + comp.cgsb * dvsb;
             let qbody = hist.qbody + comp.cbgb * dvgb + comp.cbdb * dvdb + comp.cbsb * dvsb;
             let qdrn = hist.qdrn + comp.cdgb * dvgb + comp.cddb * dvdb + comp.cdsb * dvsb;
-            let qsub = -(qgate + qbody + qdrn); // KCL
             let cqgate = match method {
                 IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / step_h,
                 IntegrationMethod::Trapezoidal => 2.0 * (qgate - hist.qgate) / step_h - hist.cqgate,
@@ -1655,10 +1650,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 IntegrationMethod::BackwardEuler => (qdrn - hist.qdrn) / step_h,
                 IntegrationMethod::Trapezoidal => 2.0 * (qdrn - hist.qdrn) / step_h - hist.cqdrn,
             };
-            let cqsub = match method {
-                IntegrationMethod::BackwardEuler => (qsub - hist.qsub) / step_h,
-                IntegrationMethod::Trapezoidal => 2.0 * (qsub - hist.qsub) / step_h - hist.cqsub,
-            };
             soidd_charge_histories[di] = Bsim3SoiDdChargeHistory {
                 qgate,
                 cqgate,
@@ -1666,8 +1657,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 cqbody,
                 qdrn,
                 cqdrn,
-                qsub,
-                cqsub,
                 qbe_cbox: qbe,
                 cqbe_cbox: cqbe,
                 vbe_cbox: vbe,
@@ -2644,24 +2633,6 @@ fn solve_timestep(
                 let gcdgb = comp.cdgb * ag0;
                 let gcddb = comp.cddb * ag0;
                 let gcdsb = comp.cdsb * ag0;
-
-                // Node indices — swap drain/source for reverse mode.
-                let g = inst.gate_idx;
-                let b = inst.body_int_idx;
-                let (dp, sp_node) = if comp.mode > 0 {
-                    (inst.drain_prime_idx, inst.source_prime_idx)
-                } else {
-                    (inst.source_prime_idx, inst.drain_prime_idx)
-                };
-
-                // Physical voltages for Norton current (bulk-referenced, model convention).
-                let vg_raw = g.map_or(0.0, |i| solution[i]);
-                let vb_raw = b.map_or(0.0, |i| solution[i]);
-                let vdp_raw = dp.map_or(0.0, |i| solution[i]);
-                let vsp_raw = sp_node.map_or(0.0, |i| solution[i]);
-                let vgb = sign * (vg_raw - vb_raw);
-                let vdb_model = sign * (vdp_raw - vb_raw);
-                let vsb_model = sign * (vsp_raw - vb_raw);
 
                 // Norton currents: ceqq = cq - sum(gc_ij * v_jb)
                 let ceqqg = cqgate - (gcggb * vgb + gcgdb * vdb_model + gcgsb * vsb_model);

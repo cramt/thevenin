@@ -191,17 +191,12 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
     // Check DC vs AC.
     let is_ac = sens_output.len() > 1 && sens_output[1].eq_ignore_ascii_case("ac");
-    let is_dc = !is_ac;
-
-    // Skip "dc" keyword if present (output[1] = "dc").
-    let _dc_keyword = sens_output.len() > 1 && sens_output[1].eq_ignore_ascii_case("dc");
 
     if is_ac {
         return simulate_ac_sens(netlist, output_var, &sens_output[2..]);
     }
 
-    // ---------- DC sensitivity path (unchanged below) ----------
-    let _ = is_dc;
+    // ---------- DC sensitivity path ----------
 
     // Assemble MNA and solve DC OP.
     // Use diag_gmin = 0 to match ngspice's CKTdiagGmin = 0 for DC analysis.
@@ -759,6 +754,9 @@ fn simulate_ac_sens(
             .collect();
 
         // Helper to record a sensitivity value.
+        // On the first frequency (fi == 0) we build param_names/param_values;
+        // on subsequent frequencies we append to existing entries by index.
+        let expected_params = param_values.len();
         let mut sens_idx = 0usize;
         let mut record = |name: String, val: (f64, f64)| {
             let c = Complex {
@@ -773,6 +771,11 @@ fn simulate_ac_sens(
                     v
                 });
             } else {
+                assert!(
+                    sens_idx < expected_params,
+                    "AC sensitivity: more parameters at freq index {fi} ({sens_idx}) \
+                     than at freq index 0 ({expected_params})"
+                );
                 param_values[sens_idx].push(c);
             }
             sens_idx += 1;
@@ -863,6 +866,13 @@ fn simulate_ac_sens(
             let delta_e = solve_complex_forward(&lu, &z);
             let s = extract_complex_output(&delta_e, out_pos, out_neg);
             record(format!("{name}_acmag"), s);
+        }
+        if fi > 0 {
+            assert_eq!(
+                sens_idx, expected_params,
+                "AC sensitivity: fewer parameters at freq index {fi} ({sens_idx}) \
+                 than at freq index 0 ({expected_params})"
+            );
         }
     }
 
