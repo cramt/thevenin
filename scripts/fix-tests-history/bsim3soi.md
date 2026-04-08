@@ -657,3 +657,38 @@ The fix requires implementing E-node capacitance derivatives in the companion an
 - bsim3soidd/inv2: tightened from 3e-3 → 2.6e-3 (fails at 2.5e-3)
 - bsim3soidd/t3: unchanged at 3.5e-2 (updated fail threshold: 3.2e-2, previously 3e-2)
 - bsim3soidd/RampVg2: still 50%+ transient error (intractable)
+
+## Session 125 findings (2026-04-08)
+
+### DD RampVg2: E-node charge coupling IMPLEMENTED (partial fix)
+
+**Implemented:** Full 5-terminal transient charge coupling for BSIM3SOI-DD:
+1. Added cgeb, cbeb, cdeb, ceeb, cegb, cedb, cesb fields to `Bsim3SoiDdCompanion`
+2. Computed from existing intermediate derivatives (dqe1_dve, dqe2_dve, dqex_dve, etc.)
+3. Added qsub charge integration in transient (history + incremental update)
+4. Added veb_prev tracking for incremental Ve coupling
+5. Full 5-terminal gc matrix stamps in transient load: E-row, E-column entries for all
+   terminals, corrected body column KCL (now -(G+D+S+E) instead of -(G+D+S))
+6. E-node Norton current (ceqqe) stamped with KCL balance at source node
+
+**Result: Charge-up fixed, decay broken:**
+- Body voltage now rises correctly during gate ramp: ~549mV peak vs expected ~553mV (was 229mV)
+- BUT body voltage doesn't decay after ramp: 549mV vs expected 275mV at t=122.5ps
+- Passes at rel_tol=50%, fails at 45% — still too large for tolerance override
+- No regressions: all 639 existing tests pass, clippy clean
+
+**Analysis:** The E-node coupling fixes the capacitive charge-up (dQbody/dVg through
+cbgb+cbeb gate-body-substrate coupling chain). The body correctly absorbs charge during
+the gate ramp. However, the body charge doesn't drain fast enough after the ramp because:
+- Junction recombination currents (Ibs, Ibd) may be too weak to drain ~50pC of body charge
+  within ~65ps (from peak at ~58ps to expected 275mV at 122.5ps)
+- The analytical body voltage chain (Vbs0t→Vbseff) may not properly reflect the transient
+  body charge state — it's designed for DC equilibrium, not for transient decay
+- Possible missing: CAPMOD=3 charge model (our code uses CAPMOD=2 formulas; model card
+  specifies CAPMOD=3), source/drain-to-substrate interface capacitances (gcse/gcde from
+  csbox/cdbox parameters)
+
+**What NOT to retry:** Tolerance overrides for RampVg2 (50%+ error during decay).
+The E-node coupling code is correct and should be kept (no regressions). Future work
+should investigate the transient body charge decay mechanism (junction currents vs
+analytical chain interaction during transient).

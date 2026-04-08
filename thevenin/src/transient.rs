@@ -143,6 +143,9 @@ struct Bsim3SoiDdChargeHistory {
     cqbody: f64,
     qdrn: f64,
     cqdrn: f64,
+    // Substrate (E-node) charge for 5-terminal transient coupling
+    qsub: f64,
+    cqsub: f64,
     // CboxWL buried oxide body-to-backgate capacitance (existing)
     qbe_cbox: f64,
     cqbe_cbox: f64,
@@ -151,6 +154,7 @@ struct Bsim3SoiDdChargeHistory {
     vgb_prev: f64,
     vdb_prev: f64,
     vsb_prev: f64,
+    veb_prev: f64, // Ve - Vb for E-node coupling
 }
 
 /// History state for VBIC junction charges at the previous timestep.
@@ -834,6 +838,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let vgb = sign * (vg - vb);
             let vdb = sign * (vdp - vb);
             let vsb = sign * (vsp - vb);
+            let veb = sign * (ve - vb);
             Bsim3SoiDdChargeHistory {
                 qgate: 0.0,
                 cqgate: 0.0,
@@ -841,6 +846,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 cqbody: 0.0,
                 qdrn: 0.0,
                 cqdrn: 0.0,
+                qsub: 0.0,
+                cqsub: 0.0,
                 qbe_cbox: cbox_wl * vbe,
                 cqbe_cbox: 0.0,
                 vbe_cbox: vbe,
@@ -848,6 +855,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 vgb_prev: vgb,
                 vdb_prev: vdb,
                 vsb_prev: vsb,
+                veb_prev: veb,
             }
         })
         .collect();
@@ -1632,12 +1640,15 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let vgb = sign * (vg - vb);
             let vdb = sign * (vdp - vb);
             let vsb = sign * (vsp - vb);
+            let veb = sign * (ve - vb);
             let dvgb = vgb - hist.vgb_prev;
             let dvdb = vdb - hist.vdb_prev;
             let dvsb = vsb - hist.vsb_prev;
-            let qgate = hist.qgate + comp.cggb * dvgb + comp.cgdb * dvdb + comp.cgsb * dvsb;
-            let qbody = hist.qbody + comp.cbgb * dvgb + comp.cbdb * dvdb + comp.cbsb * dvsb;
-            let qdrn = hist.qdrn + comp.cdgb * dvgb + comp.cddb * dvdb + comp.cdsb * dvsb;
+            let dveb = veb - hist.veb_prev;
+            let qgate = hist.qgate + comp.cggb * dvgb + comp.cgdb * dvdb + comp.cgsb * dvsb + comp.cgeb * dveb;
+            let qbody = hist.qbody + comp.cbgb * dvgb + comp.cbdb * dvdb + comp.cbsb * dvsb + comp.cbeb * dveb;
+            let qdrn = hist.qdrn + comp.cdgb * dvgb + comp.cddb * dvdb + comp.cdsb * dvsb + comp.cdeb * dveb;
+            let qsub = hist.qsub + comp.cegb * dvgb + comp.cedb * dvdb + comp.cesb * dvsb + comp.ceeb * dveb;
             let cqgate = match method {
                 IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / step_h,
                 IntegrationMethod::Trapezoidal => 2.0 * (qgate - hist.qgate) / step_h - hist.cqgate,
@@ -1650,6 +1661,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 IntegrationMethod::BackwardEuler => (qdrn - hist.qdrn) / step_h,
                 IntegrationMethod::Trapezoidal => 2.0 * (qdrn - hist.qdrn) / step_h - hist.cqdrn,
             };
+            let cqsub = match method {
+                IntegrationMethod::BackwardEuler => (qsub - hist.qsub) / step_h,
+                IntegrationMethod::Trapezoidal => 2.0 * (qsub - hist.qsub) / step_h - hist.cqsub,
+            };
             soidd_charge_histories[di] = Bsim3SoiDdChargeHistory {
                 qgate,
                 cqgate,
@@ -1657,12 +1672,15 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 cqbody,
                 qdrn,
                 cqdrn,
+                qsub,
+                cqsub,
                 qbe_cbox: qbe,
                 cqbe_cbox: cqbe,
                 vbe_cbox: vbe,
                 vgb_prev: vgb,
                 vdb_prev: vdb,
                 vsb_prev: vsb,
+                veb_prev: veb,
             };
         }
 
@@ -2551,12 +2569,9 @@ fn solve_timestep(
         }
 
         // 9. Stamp BSIM3SOI-DD charge companion models.
-        //    Two parts:
-        //    (a) Intrinsic 4-terminal charges (gate, body, drain, source/KCL)
-        //        using the full capacitance matrix (cggb/cgdb/cgsb/cbgb/cbdb/cbsb/
-        //        cdgb/cddb/cdsb) from the companion. These couple the gate ramp
-        //        to the body node via cbgb, enabling floating-body transient response.
-        //    (b) CboxWL buried oxide body-to-backgate capacitance (existing).
+        //    Full 5-terminal charge coupling (gate, body, drain, source/KCL, substrate/E)
+        //    using the complete capacitance matrix including E-node derivatives
+        //    (cgeb/cbeb/cdeb/ceeb/cegb/cedb/cesb) for floating-body transient response.
         {
             let prev_dd = dev_state.prev_bsim3soi_dd_voltages();
             for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
@@ -2587,6 +2602,7 @@ fn solve_timestep(
                 // Node indices — swap drain/source for reverse mode.
                 let g = inst.gate_idx;
                 let b = inst.body_int_idx;
+                let e = inst.e_idx;
                 let (dp, sp_node) = if comp.mode > 0 {
                     (inst.drain_prime_idx, inst.source_prime_idx)
                 } else {
@@ -2598,17 +2614,21 @@ fn solve_timestep(
                 let vb_raw = b.map_or(0.0, |i| solution[i]);
                 let vdp_raw = dp.map_or(0.0, |i| solution[i]);
                 let vsp_raw = sp_node.map_or(0.0, |i| solution[i]);
+                let ve_raw = e.map_or(0.0, |i| solution[i]);
                 let vgb = sign * (vg_raw - vb_raw);
                 let vdb_model = sign * (vdp_raw - vb_raw);
                 let vsb_model = sign * (vsp_raw - vb_raw);
+                let veb_model = sign * (ve_raw - vb_raw);
 
-                // Incremental charges.
+                // Incremental charges (5-terminal: include Ve contribution).
                 let dvgb = vgb - hist.vgb_prev;
                 let dvdb = vdb_model - hist.vdb_prev;
                 let dvsb = vsb_model - hist.vsb_prev;
-                let qgate = hist.qgate + comp.cggb * dvgb + comp.cgdb * dvdb + comp.cgsb * dvsb;
-                let qbody = hist.qbody + comp.cbgb * dvgb + comp.cbdb * dvdb + comp.cbsb * dvsb;
-                let qdrn = hist.qdrn + comp.cdgb * dvgb + comp.cddb * dvdb + comp.cdsb * dvsb;
+                let dveb = veb_model - hist.veb_prev;
+                let qgate = hist.qgate + comp.cggb * dvgb + comp.cgdb * dvdb + comp.cgsb * dvsb + comp.cgeb * dveb;
+                let qbody = hist.qbody + comp.cbgb * dvgb + comp.cbdb * dvdb + comp.cbsb * dvsb + comp.cbeb * dveb;
+                let qdrn = hist.qdrn + comp.cdgb * dvgb + comp.cddb * dvdb + comp.cdsb * dvsb + comp.cdeb * dveb;
+                let qsub = hist.qsub + comp.cegb * dvgb + comp.cedb * dvdb + comp.cesb * dvsb + comp.ceeb * dveb;
 
                 let cqgate = match method {
                     IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / h,
@@ -2622,25 +2642,44 @@ fn solve_timestep(
                     IntegrationMethod::BackwardEuler => (qdrn - hist.qdrn) / h,
                     IntegrationMethod::Trapezoidal => 2.0 * (qdrn - hist.qdrn) / h - hist.cqdrn,
                 };
+                let cqsub = match method {
+                    IntegrationMethod::BackwardEuler => (qsub - hist.qsub) / h,
+                    IntegrationMethod::Trapezoidal => 2.0 * (qsub - hist.qsub) / h - hist.cqsub,
+                };
 
                 // gc matrix: gc_ij = c_ij * ag0 (capacitance derivative scaled by integration coeff)
+                // 5-terminal: G, D, S, B, E
                 let gcggb = comp.cggb * ag0;
                 let gcgdb = comp.cgdb * ag0;
                 let gcgsb = comp.cgsb * ag0;
+                let gcgeb = comp.cgeb * ag0;
                 let gcbgb = comp.cbgb * ag0;
                 let gcbdb = comp.cbdb * ag0;
                 let gcbsb = comp.cbsb * ag0;
+                let gcbeb = comp.cbeb * ag0;
                 let gcdgb = comp.cdgb * ag0;
                 let gcddb = comp.cddb * ag0;
                 let gcdsb = comp.cdsb * ag0;
+                let gcdeb = comp.cdeb * ag0;
+                let gcegb = comp.cegb * ag0;
+                let gcedb = comp.cedb * ag0;
+                let gcesb = comp.cesb * ag0;
+                let gceeb = comp.ceeb * ag0;
 
-                // Norton currents: ceqq = cq - sum(gc_ij * v_jb)
-                let ceqqg = cqgate - (gcggb * vgb + gcgdb * vdb_model + gcgsb * vsb_model);
-                let ceqqb = cqbody - (gcbgb * vgb + gcbdb * vdb_model + gcbsb * vsb_model);
-                let ceqqd = cqdrn - (gcdgb * vgb + gcddb * vdb_model + gcdsb * vsb_model);
+                // Body column by KCL: gc_xb = -(gc_xg + gc_xd + gc_xs + gc_xe)
+                let gcgbb = -(gcggb + gcgdb + gcgsb + gcgeb);
+                let gcbbb = -(gcbgb + gcbdb + gcbsb + gcbeb);
+                let gcdbb = -(gcdgb + gcddb + gcdsb + gcdeb);
+                let gcebb = -(gcegb + gcedb + gcesb + gceeb);
+
+                // Norton currents: ceqq = cq - sum(gc_ij * v_jb) for 5 terminals
+                let ceqqg = cqgate - (gcggb * vgb + gcgdb * vdb_model + gcgsb * vsb_model + gcgeb * veb_model);
+                let ceqqb = cqbody - (gcbgb * vgb + gcbdb * vdb_model + gcbsb * vsb_model + gcbeb * veb_model);
+                let ceqqd = cqdrn - (gcdgb * vgb + gcddb * vdb_model + gcdsb * vsb_model + gcdeb * veb_model);
+                let ceqqe = cqsub - (gcegb * vgb + gcedb * vdb_model + gcesb * vsb_model + gceeb * veb_model);
 
                 // Stamp gc matrix (ngspice b3soiddld.c lines 3680-3721, 3732-3780)
-                // Gate row
+                // Gate row: G,G + G,D + G,S + G,E + G,B(KCL)
                 if let Some(gi) = g {
                     system.matrix.add(gi, gi, m * gcggb);
                     if let Some(di2) = dp {
@@ -2649,11 +2688,14 @@ fn solve_timestep(
                     if let Some(si) = sp_node {
                         system.matrix.add(gi, si, m * gcgsb);
                     }
+                    if let Some(ei) = e {
+                        system.matrix.add(gi, ei, m * gcgeb);
+                    }
                     if let Some(bi) = b {
-                        system.matrix.add(gi, bi, -m * (gcggb + gcgdb + gcgsb));
+                        system.matrix.add(gi, bi, m * gcgbb);
                     }
                 }
-                // Body row
+                // Body row: B,G + B,D + B,S + B,E + B,B(KCL)
                 if let Some(bi) = b {
                     if let Some(gi) = g {
                         system.matrix.add(bi, gi, m * gcbgb);
@@ -2664,9 +2706,12 @@ fn solve_timestep(
                     if let Some(si) = sp_node {
                         system.matrix.add(bi, si, m * gcbsb);
                     }
-                    system.matrix.add(bi, bi, -m * (gcbgb + gcbdb + gcbsb));
+                    if let Some(ei) = e {
+                        system.matrix.add(bi, ei, m * gcbeb);
+                    }
+                    system.matrix.add(bi, bi, m * gcbbb);
                 }
-                // Drain row
+                // Drain row: D,G + D,D + D,S + D,E + D,B(KCL)
                 if let Some(di2) = dp {
                     if let Some(gi) = g {
                         system.matrix.add(di2, gi, m * gcdgb);
@@ -2675,32 +2720,46 @@ fn solve_timestep(
                     if let Some(si) = sp_node {
                         system.matrix.add(di2, si, m * gcdsb);
                     }
+                    if let Some(ei) = e {
+                        system.matrix.add(di2, ei, m * gcdeb);
+                    }
                     if let Some(bi) = b {
-                        system.matrix.add(di2, bi, -m * (gcdgb + gcddb + gcdsb));
+                        system.matrix.add(di2, bi, m * gcdbb);
                     }
                 }
-                // Source row (by KCL: qs = -(qg + qb + qd))
-                if let Some(si) = sp_node {
+                // E (substrate) row: E,G + E,D + E,S + E,E + E,B(KCL)
+                if let Some(ei) = e {
                     if let Some(gi) = g {
-                        system.matrix.add(si, gi, -m * (gcggb + gcbgb + gcdgb));
+                        system.matrix.add(ei, gi, m * gcegb);
                     }
                     if let Some(di2) = dp {
-                        system.matrix.add(si, di2, -m * (gcgdb + gcbdb + gcddb));
+                        system.matrix.add(ei, di2, m * gcedb);
                     }
-                    system.matrix.add(si, si, -m * (gcgsb + gcbsb + gcdsb));
+                    if let Some(si) = sp_node {
+                        system.matrix.add(ei, si, m * gcesb);
+                    }
+                    system.matrix.add(ei, ei, m * gceeb);
+                    if let Some(bi) = b {
+                        system.matrix.add(ei, bi, m * gcebb);
+                    }
+                }
+                // Source row (by KCL: qs = -(qg + qb + qd + qe))
+                if let Some(si) = sp_node {
+                    if let Some(gi) = g {
+                        system.matrix.add(si, gi, -m * (gcggb + gcbgb + gcdgb + gcegb));
+                    }
+                    if let Some(di2) = dp {
+                        system.matrix.add(si, di2, -m * (gcgdb + gcbdb + gcddb + gcedb));
+                    }
+                    system.matrix.add(si, si, -m * (gcgsb + gcbsb + gcdsb + gcesb));
+                    if let Some(ei) = e {
+                        system.matrix.add(si, ei, -m * (gcgeb + gcbeb + gcdeb + gceeb));
+                    }
                     if let Some(bi) = b {
                         system.matrix.add(
                             si,
                             bi,
-                            m * (gcggb
-                                + gcgdb
-                                + gcgsb
-                                + gcbgb
-                                + gcbdb
-                                + gcbsb
-                                + gcdgb
-                                + gcddb
-                                + gcdsb),
+                            -m * (gcgbb + gcbbb + gcdbb + gcebb),
                         );
                     }
                 }
@@ -2715,17 +2774,12 @@ fn solve_timestep(
                 if let Some(di2) = dp {
                     system.rhs[di2] -= sign * m * ceqqd;
                 }
-                if let Some(si) = sp_node {
-                    system.rhs[si] += sign * m * (ceqqg + ceqqb + ceqqd);
+                if let Some(ei) = e {
+                    system.rhs[ei] -= sign * m * ceqqe;
                 }
-
-                // (b) CboxWL buried oxide body-to-backgate capacitance.
-                // NOTE: CboxWL is already included in the intrinsic charge model
-                // through Qe1 (which contains -CboxWL*(vbsdio-vbs0)*xc terms).
-                // The intrinsic capacitance derivatives (cbgb, cbdb, cbsb) include
-                // the CboxWL contribution. A separate CboxWL stamp would double-count.
-                // Only stamp CboxWL if intrinsic charges are NOT being integrated
-                // (e.g., if the companion didn't compute charges).
+                if let Some(si) = sp_node {
+                    system.rhs[si] += sign * m * (ceqqg + ceqqb + ceqqd + ceqqe);
+                }
             }
         }
 

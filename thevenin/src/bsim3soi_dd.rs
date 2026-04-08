@@ -451,6 +451,16 @@ pub struct Bsim3SoiDdCompanion {
     pub capbs: f64,
     pub qinv: f64,
 
+    // E-node (substrate) capacitance derivatives for 5-terminal transient coupling
+    // (ngspice b3soiddld.c lines 3400-3421)
+    pub cgeb: f64, // dQgate/dVe
+    pub cbeb: f64, // dQbody/dVe
+    pub cdeb: f64, // dQdrn/dVe
+    pub ceeb: f64, // dQsub/dVe (substrate self-coupling)
+    pub cegb: f64, // dQsub/dVg
+    pub cedb: f64, // dQsub/dVd
+    pub cesb: f64, // dQsub/dVs (by KCL constraint)
+
     // Terminal charges for transient integration (ngspice b3soiddld.c lines 3688-3692)
     pub qgate: f64,
     pub qbody: f64,
@@ -2949,6 +2959,23 @@ pub fn bsim3soi_dd_companion(
     let cddb = -(cgd + cbd + csd);
     let cdsb = (cgg + cgd + cgb_cv + cge + cbg + cbd + cbb + cbe + csg + csd + csb + cse);
 
+    // E-node (substrate) capacitance derivatives (ngspice b3soiddld.c lines 3400-3424)
+    // cgeb = dQgate/dVe = Cge - Ce2e
+    let cgeb = cge - dqe2_dve;
+    // cbeb = dQbody/dVe = Cbe - Ce1e + dQex/dVe
+    let cbeb = cbe - dqe1_dve + dqex_dve;
+    // cdeb = dQdrn/dVe = -(Cge + Cbe + Cse) (by qdrn = -(qinv+qsrc), no direct Ve dep)
+    let cdeb = -(cge + cbe + cse);
+    // ceeb = dQsub/dVe = Ce1e + Ce2e - dQex/dVe
+    let ceeb = dqe1_dve + dqe2_dve - dqex_dve;
+    // cegb = dQsub/dVg = Ce1g + Ce2g - dQex/dVg
+    let cegb = dqe1_dvg + dqe2_dvg - dqex_dvg;
+    // cedb = dQsub/dVd = Ce1d + Ce2d - dQex/dVd
+    let cedb = dqe1_dvd + dqe2_dvd - dqex_dvd;
+    // cesb = dQsub/dVs (by KCL: sum of all 5 terminal derivatives = 0)
+    let cesb = -(cegb + cedb + ceeb
+        + (dqe1_dvb + dqe2_dvb - dqex_dvb));
+
     // Assemble terminal charges (ngspice b3soiddld.c lines 3688-3692)
     let qgate_total = qinv - (qbf0 + qe2);
     let qbody_total = qbf0 - qe1 + qex;
@@ -3002,6 +3029,13 @@ pub fn bsim3soi_dd_companion(
         capbd: 0.0,
         capbs: 0.0,
         qinv,
+        cgeb,
+        cbeb,
+        cdeb,
+        ceeb,
+        cegb,
+        cedb,
+        cesb,
         qgate: qgate_total,
         qbody: qbody_total,
         qdrn: qdrn_total,
