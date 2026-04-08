@@ -47,3 +47,16 @@ updates:
     commit-message:
       prefix: "deps(submodule):"
     open-pull-requests-limit: 5
+
+  - package-ecosystem: nix
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "deps(nix):"
+    groups:
+      nix-inputs:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
