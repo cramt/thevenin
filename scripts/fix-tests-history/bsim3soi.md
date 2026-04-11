@@ -692,3 +692,50 @@ the gate ramp. However, the body charge doesn't drain fast enough after the ramp
 The E-node coupling code is correct and should be kept (no regressions). Future work
 should investigate the transient body charge decay mechanism (junction currents vs
 analytical chain interaction during transient).
+
+## Session 126 findings (2026-04-11)
+
+### Full audit of all 12 remaining ignored tests
+
+Ran all 12 ignored tests and all 95 non-ignored tests. Results: 640 pass, 12 skip, 0 fail.
+No regressions. Clippy clean.
+
+### DD RampVg2: csbox/cdbox investigation (DEAD END)
+
+**Investigated:** Session 125 mentioned "source/drain-to-substrate interface capacitances
+(gcse/gcde from csbox/cdbox parameters)" as a possible missing discharge path. Verified
+that csbox/cdbox are completely missing from bsim3soi_dd.rs.
+
+**However:** The RampVg2 circuit (`m1 d g s e b N1 W=10u L=0.25u`) does NOT specify
+AS/AD (source/drain area). In ngspice b3soiddset.c lines 884-913, unspecified AS/AD
+default to 0.0. Therefore:
+- `csbox = cbox * sourceArea = cbox * 0.0 = 0.0`
+- `cdbox = cbox * drainArea = cbox * 0.0 = 0.0`
+- `gcse = 0`, `gcde = 0`
+
+Implementing csbox/cdbox would NOT affect RampVg2 (they're zero for this test).
+It would be a correctness improvement for tests that specify AS/AD, but no such
+BSIM3SOI-DD tests currently exist in the harness.
+
+### DD RampVg2: CAPMOD=3 assessment
+
+The model card specifies CAPMOD=3 but our code only implements CAPMOD=2. CAPMOD=3
+has a fundamentally different VdsatCV formula (surface-potential-based using IV Vdsat).
+However:
+- Charge-up phase is ALREADY correct with CAPMOD=2 (549mV vs 553mV expected)
+- The decay issue is from body charge not discharging after the ramp
+- CAPMOD only affects charge VALUES, not discharge MECHANISMS
+- Implementing CAPMOD=3 requires ~300+ LOC of porting (lines 2888-3224 of b3soiddld.c)
+- Low probability of fixing the decay issue
+
+**What NOT to retry:**
+- csbox/cdbox for RampVg2 (AS/AD=0, so capacitances are zero)
+- CAPMOD=3 for decay fix (charge model changes values, not discharge mechanisms)
+- Tolerance overrides (50%+ error during decay, confirmed session 125)
+
+**Remaining viable approach (not attempted — requires architectural understanding):**
+The body charge decay requires the transient companion model to allow body voltage to
+equilibrate through junction/channel current paths. The analytical Vbs0t→Vbseff chain
+may be overriding the NR body voltage during transient, preventing the companion-based
+charge dynamics from working properly. Understanding and fixing this interplay between
+the analytical chain and NR body node during transient is the remaining path forward.
