@@ -233,3 +233,28 @@ and ngspice vbicload.c:
 **Conclusion:** VBIC FO error is confirmed intractable — no code bug exists. The 0.385%
 base error grows with bias through Early effect, quasi-saturation, and self-heating
 amplification of the base ~0.1mV Vbei convergence difference.
+
+## Session 130 findings (2026-04-12)
+
+### Fresh thermal power audit — no new bugs found
+
+Performed independent agent-assisted audit of compute_self_heating_power() vs ngspice
+vbicload.c line 3931. All 14 Ith power terms verified identical (Ibe*Vbei, Ibc*Vbci,
+(Itzf-Itzr)*Vcei, Ibex*Vbex, Ibep*Vbep, Irs*Vrs, Ibcp*Vbcp, Iccp*Vcep, Ircx*Vrcx,
+Irci*Vrci, Irbx*Vrbx, Irbi*Vrbi, Ire*Vre, Irbp*Vrbp). Sign convention difference
+(Rust positive, ngspice negative) correctly handled in stamping.
+
+One minor difference found: gmin is included in Ith branch currents in Rust (companion
+stores gmin-adjusted ibe/ibc) while ngspice computes Ith before gmin addition
+(vbicload.c line 3931 uses pre-gmin kernel values). Impact: ~gmin*sum(Vj²) ≈ 5e-13 W
+vs milliwatt-level dissipation. Completely negligible, not worth fixing.
+
+Forward coupling (dIth/dV_j) remains the only structural difference but was already
+tried in session 74 (NR divergence with full coupling, accuracy worse with RHS-only).
+Sparse LU solver (commit a570cd6) could in theory improve conditioning for full coupling,
+but session 80+ proved "tightening NR tolerance 100× produces identical results" — the
+error is in the converged fixed point, not convergence quality.
+
+**What NOT to retry:** Thermal power formula comparison (verified session 124 + 130),
+forward coupling with any solver (proven no effect on converged solution), gmin-in-Ith
+correction (negligible impact).
