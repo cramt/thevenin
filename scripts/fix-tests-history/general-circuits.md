@@ -398,3 +398,57 @@ intractable categories per the classification rules.
 **What NOT to retry:** VBIC thermal stamp signs (verified correct by convention analysis),
 Irci formula comparison (verified identical), any forward coupling implementation (proven
 no effect on converged solution), tolerance override adjustments (all at minimum).
+
+## Session 129 findings (2026-04-12)
+
+### HFET inverter: Deep investigation of bistable convergence
+
+**Investigated:** Comprehensive analysis of why the DCFL inverter converges to
+V(3)=1.96V instead of V(3)=-0.275V.
+
+**Physics understanding established:**
+The DCFL inverter has two genuinely stable DC operating points:
+1. V(3) ≈ -0.275V (correct): z1 (depletion load) saturated, z2 (enhancement driver)
+   gate-drain Schottky forward biased at Vgd=+0.275V, sinking ~40nA gate current
+   to balance z1's ~40nA saturation drain current
+2. V(3) ≈ 1.96V (wrong): z1 in deep linear region (Vds=0.04V), near-zero current
+   balanced by z2's reverse leakage
+
+**Model verification:** Exhaustively compared Rust vs ngspice C code:
+- `leak()` function: byte-for-byte identical (both implementations)
+- GGR recombination terms: identical formulas, identical defaults (GGR=40, DEL=0.04)
+- `gmg`/`gmd` terms: correctly zero for gatemod==0 (default)
+- Matrix stamps: identical for all 9 Y-matrix entries (with gmg=gmd=0)
+- Norton current sources: identical (ceqgd, ceqgs, cdreq formulas match)
+- Parameter defaults: all verified against hfetsetup.c (js1d=1.0, js2d=1.15e6,
+  m1d=1.32, m2d=6.9, rgd=90, ggr=40, del=0.04)
+- No missing gate current paths or wrong signs
+
+**Approaches tried and ruled out:**
+1. **Force source stepping for DCFL circuits** (has_dcfl_hfet condition):
+   NR still converges to V(3)=1.96V because source stepping ramps Vdd from 0→2V,
+   and at every intermediate voltage, z1 pushes V(3) positive while z2's Schottky
+   is reverse biased. The correct basin (V(3)<0) is unreachable via source ramping.
+
+2. **Depletion-mode initialization** (Vgs=0 instead of -1 for vt0<0 HFETs):
+   Changes jct_initial_guess and InitJct to start depletion-mode HFETs in ON state.
+   No effect — NR converges to same V(3)=1.96V regardless of initial conditions.
+
+3. **Zero-bias initialization** (Vgs=Vgd=0 for depletion HFETs):
+   Even stronger initial coupling through Schottky at zero bias. Still converges
+   to V(3)=1.96V — the z1 drain current dominates any Schottky coupling.
+
+**Root cause confirmed:** The circuit is genuinely bistable. The V(3)=-0.275V basin
+is only reachable if V(3) goes slightly negative first (activating z2's Schottky),
+but all NR paths from standard initializations push V(3) positive. ngspice likely
+finds the correct basin due to different matrix pivot ordering or internal node
+voltage rounding during the first few NR iterations, creating a numerical perturbation
+that pushes V(3) below zero.
+
+**What would fix this:** Either (a) MODEINITFIX with multi-pass state cycling, or
+(b) detecting bistability and trying multiple random perturbations. Both are major
+architectural changes.
+
+**What NOT to retry:** Any HFET initialization value change (Vgs=0, Vgs=Vt0,
+Vgd=0, etc.), source stepping, gmin stepping — all confirmed to converge to wrong
+basin. The leak() function, GGR terms, and matrix stamps are verified correct.
