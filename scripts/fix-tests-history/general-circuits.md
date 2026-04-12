@@ -520,3 +520,63 @@ during switching.
 missing feature (BSIM1/2, Level 2 MOSFET, CAPMOD=3, .control) or architectural change
 (MODEINITFIX, timestep algorithm matching). Tolerance overrides are impossible for all
 (errors either unbounded relative or involve sign reversals).
+
+## Session 134 findings (2026-04-12)
+
+### Sparse LU solver experiment for HFET inverter (NEW APPROACH, FAILED)
+
+**Hypothesis:** Since commit a570cd6 added a sparse LU solver (faer `sp_lu()`), and the
+HFET inverter's wrong-basin convergence was attributed to pivot ordering differences between
+ngspice's sparse solver and our dense LU, forcing the sparse solver might change the NR
+numerical path enough to find the correct V(3)=-0.275V basin.
+
+**Experiment:** Temporarily set SPARSE_THRESHOLD=0 (from 48) in sparse.rs to force all
+circuits through the sparse LU path, including the ~20-node HFET inverter circuit.
+
+**Result:** V(3)=1.955693V — identical to the dense solver result. Sparse LU did NOT change
+the convergence basin. faer's `sp_lu()` internal reordering (likely supernodal with AMD
+column ordering) produces effectively the same numerical path as dense partial-pivoting LU
+for this small circuit.
+
+**Analysis:** The hypothesis was that ANY sparse solver reordering would change the numerical
+path. In practice, faer's sparse LU uses a different reordering strategy than ngspice's
+`spSolve` (Markowitz-based with threshold pivoting). Both produce valid factorizations but
+the specific pivot perturbation that pushes ngspice into the V(3)<0 basin is an artifact of
+Markowitz ordering, not a general property of sparse solvers. Matching ngspice's exact pivot
+sequence would require implementing Markowitz ordering, which is a substantial effort.
+
+### Tolerance override re-verification (all at minimum thresholds)
+
+Re-tested all 10 tolerance overrides at one step tighter than current values:
+- vbic/CEamp: 2e-2 → 1.8e-2: FAIL
+- vbic/FG: 2e-2 → 1.8e-2: FAIL
+- vbic/temp: 1.8e-2 → 1.7e-2: FAIL
+- vbic/FO: 4e-1 → 3.5e-1: FAIL
+- transmission/txl2_3_line: 2.1e-2 → 2e-2: FAIL
+- transmission/ltra2_2_line: 8e-3 → 7.5e-3: FAIL
+- transmission/cpl_ibm2: abs_tol=1.5e-4 (unchanged, at minimum)
+- transmission/cpl3_4_line: abs_tol=5.5e-2 (unchanged, at minimum)
+- bsim3soidd/t3: 3.5e-2 → 3.2e-2: FAIL
+- bsim3soidd/inv2: 2.6e-3 → 2.5e-3: FAIL
+
+All tolerance overrides remain at their minimum viable thresholds from sessions 117/122.
+No accumulated code improvements since then have reduced FP eval order errors.
+
+### Full suite verification
+
+643 tests pass, 9 skipped, 0 failures. Clippy clean. All 9 ignored tests confirmed in
+intractable categories:
+1. bsim1/test.cir → BSIM1/BSIM2 (model not implemented)
+2. bsim2/test.cir → BSIM1/BSIM2 (model not implemented)
+3. bsim3soidd/RampVg2 → transient dynamics (body decay 50% too slow, needs CAPMOD=3)
+4. general/mosamp → Level 2 MOSFET not implemented (35% DC OP error)
+5. general/rtlinv → transient dynamics (4.3%→89% cascading timing shift)
+6. general/schmitt → output oscillation during switching (31% at t=293ns)
+7. hfet/inverter → wrong NR convergence basin (sparse LU also fails, see above)
+8. regression/misc/asrc-tc-2 → .control scripting + parameter expressions
+9. regression/misc/resume-1 → .control resume command
+
+**What NOT to retry:**
+- Sparse solver threshold changes for HFET (confirmed no effect with SPARSE_THRESHOLD=0)
+- Tolerance tightening on any override test (all at minimum viable thresholds)
+- Any of the 9 ignored tests without implementing missing models/features/architecture
