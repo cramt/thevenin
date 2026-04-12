@@ -340,6 +340,70 @@ impl DeviceVoltageState {
                 prev[i] = bsim.terminal_voltages(solution);
             }
         }
+        // Reset diode prev voltages
+        {
+            let mut prev = self.prev_jct.borrow_mut();
+            for (di, diode) in mna.diodes.iter().enumerate() {
+                let (ja, jc) = if diode.internal_idx.is_some() {
+                    (diode.internal_idx, diode.cathode_idx)
+                } else {
+                    (diode.anode_idx, diode.cathode_idx)
+                };
+                let va = ja.map(|i| solution[i]).unwrap_or(0.0);
+                let vc = jc.map(|i| solution[i]).unwrap_or(0.0);
+                prev[di] = va - vc;
+            }
+        }
+        // Reset MOS6 prev voltages (von reset to 0.0 for fresh NR sequence)
+        {
+            let mut prev = self.prev_mos6.borrow_mut();
+            for (i, mos) in mna.mos6s.iter().enumerate() {
+                let (vgs, vds, vbs) = mos.terminal_voltages(solution);
+                prev[i] = (vgs, vds, vbs, 0.0);
+            }
+        }
+        // Reset JFET prev voltages
+        {
+            let mut prev = self.prev_jfet.borrow_mut();
+            for (i, jfet) in mna.jfets.iter().enumerate() {
+                prev[i] = jfet.junction_voltages(solution);
+            }
+        }
+        // Reset BSIM3v3 prev voltages
+        {
+            let mut prev = self.prev_bsim3.borrow_mut();
+            for (i, bsim) in mna.bsim3s.iter().enumerate() {
+                prev[i] = bsim.terminal_voltages(solution);
+            }
+        }
+        // Reset BSIM4 prev voltages
+        {
+            let mut prev = self.prev_bsim4.borrow_mut();
+            for (i, bsim) in mna.bsim4s.iter().enumerate() {
+                prev[i] = bsim.terminal_voltages(solution);
+            }
+        }
+        // Reset MESA prev voltages
+        {
+            let mut prev = self.prev_mesa.borrow_mut();
+            for (i, mesa) in mna.mesas.iter().enumerate() {
+                prev[i] = mesa.junction_voltages(solution);
+            }
+        }
+        // Reset MESFET prev voltages
+        {
+            let mut prev = self.prev_mesfet.borrow_mut();
+            for (i, mesfet) in mna.mesfets.iter().enumerate() {
+                prev[i] = mesfet.junction_voltages(solution);
+            }
+        }
+        // Reset HFET prev voltages
+        {
+            let mut prev = self.prev_hfet.borrow_mut();
+            for (i, hfet) in mna.hfets.iter().enumerate() {
+                prev[i] = hfet.junction_voltages(solution);
+            }
+        }
     }
 
     /// Stamp all nonlinear device companion models into the MNA system.
