@@ -2358,11 +2358,13 @@ pub fn compare_filtered(
     expected: &str,
     actual: &str,
     rel_tol_override: Option<f64>,
+    abs_tol_override: Option<f64>,
 ) -> Result<(), String> {
     let expected_filtered = filter_output(expected);
     let actual_filtered = filter_output(actual);
 
     let rel_tol = rel_tol_override.unwrap_or(HARNESS_REL_TOL);
+    let abs_tol = abs_tol_override.unwrap_or(HARNESS_ABS_TOL);
 
     let norm_expected = normalize_for_diff(&expected_filtered);
     let norm_actual = normalize_for_diff(&actual_filtered);
@@ -2400,14 +2402,14 @@ pub fn compare_filtered(
         let all_match = norm_expected
             .iter()
             .zip(norm_actual.iter())
-            .all(|(e, a)| lines_match_approx(e, a, rel_tol));
+            .all(|(e, a)| lines_match_approx(e, a, rel_tol, abs_tol));
         if all_match {
             return Ok(());
         }
     }
 
     // Fall back to interpolation-aware comparison.
-    compare_with_interpolation(&norm_expected, &norm_actual, rel_tol)
+    compare_with_interpolation(&norm_expected, &norm_actual, rel_tol, abs_tol)
 }
 
 /// Check if a normalized line looks like a data row: starts with an integer index
@@ -2480,6 +2482,7 @@ fn compare_with_interpolation(
     norm_expected: &[String],
     norm_actual: &[String],
     harness_rel_tol: f64,
+    base_abs_tol: f64,
 ) -> Result<(), String> {
     // Extract text lines that appear BETWEEN data rows (skip header/footer text like
     // "Initial Transient Solution", circuit listings, and .plot ASCII art).
@@ -2504,7 +2507,7 @@ fn compare_with_interpolation(
         return Err(format_diff(norm_expected, norm_actual));
     }
     for (e, a) in exp_text.iter().zip(act_text.iter()) {
-        if !lines_match_approx(e, a, harness_rel_tol) {
+        if !lines_match_approx(e, a, harness_rel_tol, base_abs_tol) {
             return Err(format_diff(norm_expected, norm_actual));
         }
     }
@@ -2555,7 +2558,7 @@ fn compare_with_interpolation(
                     .iter()
                     .map(|(_, _, deps)| deps[c].abs())
                     .fold(0.0_f64, f64::max);
-                HARNESS_ABS_TOL.max(col_max * COLUMN_ABS_SCALE)
+                base_abs_tol.max(col_max * COLUMN_ABS_SCALE)
             })
             .collect();
 
@@ -2743,7 +2746,7 @@ fn parse_token_f64(s: &str) -> Option<f64> {
         .or_else(|| s.strip_suffix(',').and_then(|s| s.parse::<f64>().ok()))
 }
 
-fn lines_match_approx(expected: &str, actual: &str, harness_rel_tol: f64) -> bool {
+fn lines_match_approx(expected: &str, actual: &str, harness_rel_tol: f64, abs_tol: f64) -> bool {
     let exp_tokens: Vec<&str> = expected.split_whitespace().collect();
     let act_tokens: Vec<&str> = actual.split_whitespace().collect();
 
@@ -2759,7 +2762,7 @@ fn lines_match_approx(expected: &str, actual: &str, harness_rel_tol: f64) -> boo
             (Some(ev), Some(av)) => {
                 let abs_diff = (ev - av).abs();
                 let rel_tol = harness_rel_tol * ev.abs().max(av.abs());
-                if abs_diff > rel_tol + HARNESS_ABS_TOL {
+                if abs_diff > rel_tol + abs_tol {
                     return false;
                 }
             }
@@ -2821,14 +2824,14 @@ mod tests {
     fn test_compare_filtered_matching() {
         let a = "Circuit: test\n0\t1.000000e+00\t";
         let b = "Circuit: test\n0\t1.000000e+00\t";
-        assert!(compare_filtered(a, b, None).is_ok());
+        assert!(compare_filtered(a, b, None, None).is_ok());
     }
 
     #[test]
     fn test_compare_filtered_ignores_blanks_and_whitespace() {
         let a = "0\t1.000000e+00\n\n";
         let b = "0  1.000000e+00\n";
-        assert!(compare_filtered(a, b, None).is_ok());
+        assert!(compare_filtered(a, b, None, None).is_ok());
     }
 
     #[test]

@@ -103,6 +103,7 @@ fn run_embedded_test(
     out: &str,
     aux_files: &[(&str, &str)],
     rel_tol_override: Option<f64>,
+    abs_tol_override: Option<f64>,
 ) {
     // Parse the netlist (includes already resolved at compile time)
     let mut netlists = match Netlist::parse(cir) {
@@ -162,7 +163,7 @@ fn run_embedded_test(
 
         // Format output in ngspice batch mode and compare
         let actual_output = format_batch_output_multi(&netlists, &result);
-        if let Err(e) = compare_filtered(out, &actual_output, rel_tol_override) {
+        if let Err(e) = compare_filtered(out, &actual_output, rel_tol_override, abs_tol_override) {
             fail_test(path, Phase::Compare, &e);
         }
     }

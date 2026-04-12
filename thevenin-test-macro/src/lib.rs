@@ -18,6 +18,8 @@ use quote::{format_ident, quote};
 #[derive(Debug, Facet)]
 struct ToleranceOverride {
     rel_tol: f64,
+    #[facet(default)]
+    abs_tol: Option<f64>,
 }
 
 /// Generates integration tests for all `.cir` files in `ngspice-upstream/tests/`.
@@ -319,6 +321,14 @@ fn generate_test_fn(
         None => quote! { None },
     };
 
+    let abs_tol_arg = match tol_override.and_then(|t| t.abs_tol) {
+        Some(val) => {
+            let lit = Literal::f64_unsuffixed(val);
+            quote! { Some(#lit) }
+        }
+        None => quote! { None },
+    };
+
     quote! {
         #[test]
         #ignore_attr
@@ -329,6 +339,7 @@ fn generate_test_fn(
                 #out_lit,
                 &[#( (#aux_names, #aux_contents) ),*],
                 #rel_tol_arg,
+                #abs_tol_arg,
             );
         }
     }

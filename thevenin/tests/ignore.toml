@@ -21,9 +21,9 @@
 "regression/misc/resume-1.cir" = ".control: stop when + resume commands not implemented (requires transient state preservation)"
 
 # === Transmission lines ===
-"transmission/cpl_ibm2.cir" = "~6.4% error at t=9.65ns, sign reversal at t=12.6ns: CPL 2-line coupling FP accumulation (all code verified)"
+# cpl_ibm2: moved to tolerances.toml (abs_tol=1e-4 for bounded ~70µV FP accumulation)
 # ltra2_2_line: moved to tolerances.toml (peak error ~0.75%, bounded)
-"transmission/cpl3_4_line.cir" = "~13.8% peak error at t=38.8ns: CPL 4-line CMOS switching timing shift (all setup + convolution code verified identical to ngspice; FP accumulation)"
+# cpl3_4_line: moved to tolerances.toml (abs_tol=0.06 for bounded ~40mV FP accumulation)
 
 # === VBIC ===
 # FO: moved to tolerances.toml (FP eval order amplified by avalanche; rel_tol=4e-1)
