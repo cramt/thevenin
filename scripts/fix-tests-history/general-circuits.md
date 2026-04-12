@@ -483,3 +483,40 @@ First mismatch at t=293ns, col 1: expected -0.302V, got -0.396V (31% error). No 
 - HFET: wrong NR basin, requires MODEINITFIX or multi-pass cycling
 - rtlinv: transient timing cascade, requires exact timestep algorithm match
 - schmitt: BJT voltage-dependent cap timing, same root cause as rtlinv
+
+## Session 133 findings (2026-04-12)
+
+### Comprehensive re-investigation of all 11 remaining ignored tests
+
+Ran all 107 harness tests: 96 pass, 11 skip, 0 fail. All tolerance override tests pass.
+Full workspace: 641 pass, 11 skip, 0 fail. Clippy clean.
+
+**HFET inverter: ngspice NR algorithm deep-dive**
+Compared ngspice's 3-phase NR (MODEINITJCT → MODEINITFIX → MODEFLOAT, niiter.c 336-342)
+against our 2-phase (InitJct → Float). Key finding: for ON devices (HFETAoff=0), MODEINITFIX
+behaves identically to MODEFLOAT — both read voltages from solution and apply fetlim. The
+only ngspice-specific difference is NISHOULDREORDER (sparse matrix pivot reselection), which
+doesn't apply to our dense LU solver. Confirmed MODEINITFIX implementation would NOT change
+convergence behavior for the HFET inverter.
+
+Also verified: schmitt DC OP is correct (expected and actual match at t=0:
+V(1)=-1.600, V(4)=-0.260, V(5)=-1.221). Error is purely in transient dynamics at t=293ns
+during switching.
+
+**All 11 ignored tests mapped to intractable categories:**
+1. bsim1/test.cir → BSIM1/BSIM2 (model not implemented)
+2. bsim2/test.cir → BSIM1/BSIM2 (model not implemented)
+3. bsim3soidd/RampVg2 → transient dynamics + CAPMOD=3 not implemented
+4. general/mosamp → Level 2 MOSFET not implemented
+5. general/rtlinv → transient dynamics (4.3%→89% cascade)
+6. general/schmitt → output oscillation during switching (31% at t=293ns)
+7. hfet/inverter → NR convergence to wrong basin
+8. regression/misc/asrc-tc-2 → .control scripting
+9. regression/misc/resume-1 → .control resume command
+10. transmission/cpl3_4_line → FP accumulation in convolution (bounded absolute, unbounded relative)
+11. transmission/cpl_ibm2 → FP accumulation + sign reversal
+
+**What NOT to retry:** Any of these 11 tests without implementing the corresponding
+missing feature (BSIM1/2, Level 2 MOSFET, CAPMOD=3, .control) or architectural change
+(MODEINITFIX, timestep algorithm matching). Tolerance overrides are impossible for all
+(errors either unbounded relative or involve sign reversals).

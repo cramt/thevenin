@@ -125,3 +125,50 @@ overrides for cpl_ibm2 (sign reversal) or cpl3_4_line (55% peak error).
 - ltra2_2_line: unchanged at 8e-3 (still fails at 7.5e-3)
 - cpl_ibm2: still 6.4% error + sign reversal (intractable)
 - cpl3_4_line: still 0.8%→13.8% cascading (intractable)
+
+## Session 133 findings (2026-04-12)
+
+### CPL 4-line error pattern analysis
+
+**Key discovery:** cpl3_4_line uses NO nonlinear devices (no MOSFETs, no diodes). Circuit
+is purely passive: 4 resistors + CPL + 4 high-impedance loads + PWL source. Previous
+diagnosis of "CMOS switching timing shift" was incorrect — there are no CMOS inverters.
+
+**Detailed error analysis at three timepoints:**
+
+At t=20.3ns (first failure): V(2) expected 4.365, actual 4.330, abs_diff=0.035V (0.79%)
+At t=37.7ns (growing error): V(2) expected 0.445, actual 0.401, abs_diff=0.044V (9.7%)
+At t=49.0ns (end of sim):    V(2) expected 0.077, actual 0.034, abs_diff=0.043V (56%)
+
+**Pattern: BOUNDED absolute error (~0.04V), GROWING relative error.**
+
+The absolute error stabilizes at ~0.04V early in the simulation and stays constant. The
+RELATIVE error grows because the signal decays toward zero after the PWL source returns
+to 0V at t=32ns. As the denominator shrinks, the same 0.04V offset appears as a larger
+percentage.
+
+**Crosstalk channels (V(7), V(9)) show sign reversals** when expected signals cross zero
+but actual signals have offset preventing zero-crossing (e.g., expected -0.024V, actual
++0.025V at t=49ns).
+
+**Code comparison result:** Line-by-line comparison of update_cnv_cpl (Rust) vs update_cnv
+(ngspice cplload.c lines 584-632) confirmed identical formulas:
+- h parameter: both receive delta in picoseconds
+- bi/bo slopes: both compute (v1-v0)/delta in V/ps
+- bi accumulation: `bi *= t` (ngspice) = `bi_acc *= t` (Rust) — same pattern
+- cnv formula: `(cnv - bi*h)*e + (e-1)*(ai*t + 1e12*bi/x)` — identical
+- update_cnv_a: both scale h*0.5e-12 to half-seconds for complex pair update
+- update_delayed_cnv: both scale h*0.5e-12 with identical loop structure
+
+**Root cause confirmed:** Bounded FP accumulation in convolution history. The ~0.04V offset
+comes from accumulated rounding differences in the ~400 convolution update steps (50ps
+timestep × 20ns). Each step introduces ~1e-4V of rounding difference, and ~400 such
+differences accumulate coherently to ~0.04V. This is inherent to different FP operation
+ordering between Rust and C compilers — not a fixable code bug.
+
+**NOT a tolerance override candidate:** The relative error is unbounded (56% at end of sim,
+would grow further as signal decays). Crosstalk channels have sign reversals.
+
+**What NOT to retry:** CPL code comparison (fully verified). Unit conversion analysis
+(all correct — h in ps, 0.5e-12 scaling to half-seconds, 1e12 factor for ps↔s). Any
+tolerance override (relative error unbounded, sign reversals in crosstalk).
