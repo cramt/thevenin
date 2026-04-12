@@ -2695,7 +2695,7 @@ pub fn bsim3soi_dd_companion(
     let abulk_cv = abulk0 * sp.abulk_cv_factor;
     let dabulk_cv_dvb = dabulk0_dvb * sp.abulk_cv_factor;
 
-    // VdsatCV (ngspice b3soiddld.c lines 2743-2746)
+    // VdsatCV for CAPMOD=2 (also used as shared VdsatCV in CAPMOD=3 for VcsCV clamping)
     let vdsat_cv = vgsteff_cv / abulk_cv + 1e-5;
     let dvdsat_cv_dvg = 1.0 / abulk_cv;
     let dvdsat_cv_dvb = -(vdsat_cv - 1e-5) * dabulk_cv_dvb / abulk_cv;
@@ -2709,145 +2709,504 @@ pub fn bsim3soi_dd_companion(
     let t3_cv = (1.0 - t1_cv - t2_cv) / abulk_cv;
     let dvdseff_cv_dvg = t3_cv;
     let dvdseff_cv_dvd = t1_cv;
-    let dvdseff_cv_dvb = -t3_cv * (vdsat_cv - 1e-5) * dabulk_cv_dvb; // using VdsatCV before +1e-5
+    let dvdseff_cv_dvb = -t3_cv * (vdsat_cv - 1e-5) * dabulk_cv_dvb;
 
-    // VdsCV = VdseffCV for capMod=2 (ngspice b3soiddld.c lines 2761-2769)
-    let mut vds_cv = vdseff_cv + 1e-5;
-    if vds_cv > vdsat_cv - 1e-7 {
-        vds_cv = vdsat_cv - 1e-7;
-    }
-    let dvds_cv_dvg = dvdseff_cv_dvg;
-    let dvds_cv_dvd = dvdseff_cv_dvd;
-    let dvds_cv_dvb = dvdseff_cv_dvb;
+    // dPhis/dVb = -1 (since phis = phi - vbseff and dvbseff/dvb = 1)
+    let dphis_dvb: f64 = -1.0;
 
-    // VcsCV calculation (ngspice b3soiddld.c lines 2772-2796)
-    const DELTA_VCSCV: f64 = 1e-5;
-    let t1_vcscv = vds_cv - vcs - vds_cv * vds_cv * DELTA_VCSCV;
-    let t5_vcscv = 2.0 * DELTA_VCSCV;
-    let t2_vcscv = (t1_vcscv * t1_vcscv + t5_vcscv * vds_cv * vds_cv).sqrt();
+    // Outputs from the capMod branch, consumed by downstream Qe1/Qe2/capacitance code.
+    let qbf: f64;
+    let dqbf_dvrg: f64;
+    let dqbf_dvg: f64;
+    let dqbf_dvd: f64;
+    let dqbf_dvb: f64;
+    let dqbf_dvc: f64;
+    let dqbf_dve: f64;
+    let xc: f64;
+    let dxc_dvb: f64;
+    let dxc_dvg: f64;
+    let dxc_dvd: f64;
+    let dxc_dvc: f64;
+    let vds_cv: f64;
+    let dvds_cv_dvg: f64;
+    let dvds_cv_dvd: f64;
+    let dvds_cv_dvb: f64;
+    let dvds_cv_dvc: f64;
+    let vcs_cv: f64;
+    let dvcs_cv_dvb: f64;
+    let dvcs_cv_dvg: f64;
+    let dvcs_cv_dvd: f64;
+    let dvcs_cv_dvc: f64;
 
-    let dt1_vcscv_dvb = dvds_cv_dvb * (1.0 - 2.0 * vds_cv * DELTA_VCSCV);
-    let dt2_vcscv_dvb = (t1_vcscv * dt1_vcscv_dvb + t5_vcscv * vds_cv * dvds_cv_dvb) / t2_vcscv;
-    let dt1_vcscv_dvd = dvds_cv_dvd * (1.0 - 2.0 * vds_cv * DELTA_VCSCV);
-    let dt2_vcscv_dvd = (t1_vcscv * dt1_vcscv_dvd + t5_vcscv * vds_cv * dvds_cv_dvd) / t2_vcscv;
-    let dt1_vcscv_dvg = dvds_cv_dvg * (1.0 - 2.0 * vds_cv * DELTA_VCSCV);
-    let dt2_vcscv_dvg = (t1_vcscv * dt1_vcscv_dvg + t5_vcscv * vds_cv * dvds_cv_dvg) / t2_vcscv;
-    let dt1_vcscv_dvc: f64 = -1.0;
-    let dt2_vcscv_dvc = t1_vcscv * dt1_vcscv_dvc / t2_vcscv;
+    if model.cap_mod == 3 {
+        // ========== CAPMOD=3 (ngspice b3soiddld.c lines 2888-3224) ==========
+        const CONST_2OV3: f64 = 2.0 / 3.0;
 
-    let mut vcs_cv = vcs + 0.5 * (t1_vcscv - t2_vcscv);
-    let mut dvcs_cv_dvb = 0.5 * (dt1_vcscv_dvb - dt2_vcscv_dvb);
-    let mut dvcs_cv_dvg = 0.5 * (dt1_vcscv_dvg - dt2_vcscv_dvg);
-    let mut dvcs_cv_dvd = 0.5 * (dt1_vcscv_dvd - dt2_vcscv_dvd);
-    let mut dvcs_cv_dvc = 1.0 + 0.5 * (dt1_vcscv_dvc - dt2_vcscv_dvc);
-    if vcs_cv < 0.0 {
-        vcs_cv = 0.0;
-        dvcs_cv_dvb = 0.0;
-        dvcs_cv_dvg = 0.0;
-        dvcs_cv_dvd = 0.0;
-        dvcs_cv_dvc = 0.0;
-    } else if vcs_cv > vds_cv {
-        vcs_cv = vds_cv;
-        dvcs_cv_dvb = dvds_cv_dvb;
-        dvcs_cv_dvg = dvds_cv_dvg;
-        dvcs_cv_dvd = dvds_cv_dvd;
-        dvcs_cv_dvc = 0.0;
-    }
+        // VdssatCV: redefined for CAPMOD=3 (ngspice lines 2893-2904)
+        let t1_cm3 = vgsteff + sp.k1 * sqrt_phis + 0.5 * sp.k1 * sp.k1;
+        let t2_cm3 = vgsteff + sp.k1 * sqrt_phis + phis + 0.25 * sp.k1 * sp.k1;
+        let dt1_cm3_dvb = sp.k1 * dsqrt_phis_dvb;
+        let dt2_cm3_dvb = dt1_cm3_dvb + dphis_dvb;
+        let sqrt_t2_cm3 = t2_cm3.abs().max(1e-30).sqrt();
+        let vdsat_cv3 = t1_cm3 - sp.k1 * sqrt_t2_cm3;
+        let dvdsat_cv3_dvb = dt1_cm3_dvb - sp.k1 / (2.0 * sqrt_t2_cm3) * dt2_cm3_dvb;
+        let dvdsat_cv3_dvg = 1.0 - sp.k1 / (2.0 * sqrt_t2_cm3); // dT1/dVg = dT2/dVg = 1
 
-    // Xc calculation (cross-section parameter, ngspice b3soiddld.c lines 2798-2823)
-    let t3_xc = 2.0 * vdsat_cv - vcs_cv;
-    let t4_xc = 2.0 * vdsat_cv - vds_cv;
-    let dt4_xc_dvg = 2.0 * dvdsat_cv_dvg - dvds_cv_dvg;
-    let dt4_xc_dvd = -dvds_cv_dvd;
-    let dt4_xc_dvb = 2.0 * dvdsat_cv_dvb - dvds_cv_dvb;
-    let t0_xc = t3_xc * vcs_cv;
-    let t1_xc = t4_xc * vds_cv;
-    let xc = if t1_xc.abs() > 1e-30 {
-        t0_xc / t1_xc
+        // VdsCV: nonlinear mapping using IV-model Vdsat (ngspice lines 2906-2978)
+        let t1_vdscv = vdsat_cv3 - vdsat;
+        let dt1_vdscv_dvg = dvdsat_cv3_dvg - dvdsat_dvg;
+        let dt1_vdscv_dvb = dvdsat_cv3_dvb - dvdsat_dvb;
+        let dt1_vdscv_dvd = -dvdsat_dvd;
+        let dt1_vdscv_dvc = -dvdsat_dvc;
+
+        let (vds_cv_raw, dvds_cv_dvg_r, dvds_cv_dvd_r, dvds_cv_dvb_r, dvds_cv_dvc_r) =
+            if t1_vdscv != 0.0 {
+                let t3_vm = -0.5 * vdsat / t1_vdscv; // Vdsmax
+                let t2_vm = t3_vm * vdsat;
+                let t4_vm = t2_vm + t1_vdscv * t3_vm * t3_vm; // fmax
+                if vdseff > t2_vm && t1_vdscv < 0.0 {
+                    // Saturation branch: VdsCV = fmax (flat top)
+                    let t5_vm = -0.5 / (t1_vdscv * t1_vdscv);
+                    let dt3_dvg = t5_vm * (t1_vdscv * dvdsat_dvg - vdsat * dt1_vdscv_dvg);
+                    let dt3_dvb = t5_vm * (t1_vdscv * dvdsat_dvb - vdsat * dt1_vdscv_dvb);
+                    let dt3_dvd = t5_vm * (t1_vdscv * dvdsat_dvd - vdsat * dt1_vdscv_dvd);
+                    let dt3_dvc = t5_vm * (t1_vdscv * dvdsat_dvc - vdsat * dt1_vdscv_dvc);
+                    (
+                        t4_vm,
+                        t3_vm * dvdsat_dvg
+                            + vdsat * dt3_dvg
+                            + t3_vm * (2.0 * t1_vdscv * dt3_dvg + t3_vm * dt1_vdscv_dvg),
+                        t3_vm * dvdsat_dvd
+                            + vdsat * dt3_dvd
+                            + t3_vm * (2.0 * t1_vdscv * dt3_dvd + t3_vm * dt1_vdscv_dvd),
+                        t3_vm * dvdsat_dvb
+                            + vdsat * dt3_dvb
+                            + t3_vm * (2.0 * t1_vdscv * dt3_dvb + t3_vm * dt1_vdscv_dvb),
+                        t3_vm * dvdsat_dvc
+                            + vdsat * dt3_dvc
+                            + t3_vm * (2.0 * t1_vdscv * dt3_dvc + t3_vm * dt1_vdscv_dvc),
+                    )
+                } else {
+                    // Parabolic branch: VdsCV = Vdseff + T1*(Vdseff/Vdsat)^2
+                    let t5_vm = vdseff / vdsat;
+                    let t6_vm = t5_vm * t5_vm;
+                    let t8_vm = 2.0 * t1_vdscv * t5_vm / (vdsat * vdsat);
+                    (
+                        vdseff + t1_vdscv * t6_vm,
+                        dvdseff_dvg
+                            + t8_vm * (vdsat * dvdseff_dvg - vdseff * dvdsat_dvg)
+                            + t6_vm * dt1_vdscv_dvg,
+                        dvdseff_dvd
+                            + t8_vm * (vdsat * dvdseff_dvd - vdseff * dvdsat_dvd)
+                            + t6_vm * dt1_vdscv_dvd,
+                        dvdseff_dvb
+                            + t8_vm * (vdsat * dvdseff_dvb - vdseff * dvdsat_dvb)
+                            + t6_vm * dt1_vdscv_dvb,
+                        dvdseff_dvc
+                            + t8_vm * (vdsat * dvdseff_dvc - vdseff * dvdsat_dvc)
+                            + t6_vm * dt1_vdscv_dvc,
+                    )
+                }
+            } else {
+                // T1 == 0: VdsCV = Vdseff passthrough
+                (vdseff, dvdseff_dvg, dvdseff_dvd, dvdseff_dvb, dvdseff_dvc)
+            };
+
+        // Clamp VdsCV (ngspice lines 2977-2982)
+        // ngspice clamps the value but leaves derivatives unchanged
+        let mut vds_cv_m = vds_cv_raw.max(0.0) + 1e-4;
+        let dvds_cv_dvg_m = dvds_cv_dvg_r;
+        let dvds_cv_dvd_m = dvds_cv_dvd_r;
+        let dvds_cv_dvb_m = dvds_cv_dvb_r;
+        let dvds_cv_dvc_m = dvds_cv_dvc_r;
+        if vds_cv_m > vdsat_cv3 - 1e-7 {
+            vds_cv_m = vdsat_cv3 - 1e-7;
+        }
+
+        // Surface potentials (ngspice lines 2984-3036)
+        let phisd = phis + vds_cv_m;
+        let dphisd_dvb = dphis_dvb + dvds_cv_dvb_m;
+        let dphisd_dvd = dvds_cv_dvd_m;
+        let dphisd_dvg = dvds_cv_dvg_m;
+        let dphisd_dvc = dvds_cv_dvc_m;
+        let sqrt_phisd = phisd.abs().max(1e-30).sqrt();
+
+        // Qdep0: depletion charge at Vgs=Vth (ngspice lines 2992-2995)
+        let t10_qdep = cox_wl * sp.k1;
+        let qdep0 = t10_qdep * sqrt_phis;
+        let dqdep0_dvb = t10_qdep * dsqrt_phis_dvb;
+
+        // VcsCV for CAPMOD=3 (ngspice lines 2997-3036)
+        const DELTA_VCSCV: f64 = 1e-5;
+        let t5_vcscv = 2.0 * DELTA_VCSCV;
+        let t1_vcscv3 = vds_cv_m - vcs - vds_cv_m * vds_cv_m * DELTA_VCSCV;
+        let t2_vcscv3 = (t1_vcscv3 * t1_vcscv3 + t5_vcscv * vds_cv_m * vds_cv_m).sqrt();
+
+        let factor_vcscv = 1.0 - 2.0 * vds_cv_m * DELTA_VCSCV;
+        let dt1v_dvb = dvds_cv_dvb_m * factor_vcscv;
+        let dt2v_dvb = (t1_vcscv3 * dt1v_dvb + t5_vcscv * vds_cv_m * dvds_cv_dvb_m) / t2_vcscv3;
+        let dt1v_dvd = dvds_cv_dvd_m * factor_vcscv;
+        let dt2v_dvd = (t1_vcscv3 * dt1v_dvd + t5_vcscv * vds_cv_m * dvds_cv_dvd_m) / t2_vcscv3;
+        let dt1v_dvg = dvds_cv_dvg_m * factor_vcscv;
+        let dt2v_dvg = (t1_vcscv3 * dt1v_dvg + t5_vcscv * vds_cv_m * dvds_cv_dvg_m) / t2_vcscv3;
+        let dt1v_dvc = dvds_cv_dvc_m * factor_vcscv - 1.0; // -1 from dVcs/dVc
+        let dt2v_dvc = (t1_vcscv3 * dt1v_dvc + t5_vcscv * vds_cv_m * dvds_cv_dvc_m) / t2_vcscv3;
+
+        let mut vcs_cv3 = vcs + 0.5 * (t1_vcscv3 - t2_vcscv3);
+        let mut dvcs_cv3_dvb = 0.5 * (dt1v_dvb - dt2v_dvb);
+        let mut dvcs_cv3_dvg = 0.5 * (dt1v_dvg - dt2v_dvg);
+        let mut dvcs_cv3_dvd = 0.5 * (dt1v_dvd - dt2v_dvd);
+        let mut dvcs_cv3_dvc = 1.0 + 0.5 * (dt1v_dvc - dt2v_dvc);
+        if vcs_cv3 < 0.0 {
+            vcs_cv3 = 0.0;
+            dvcs_cv3_dvb = 0.0;
+            dvcs_cv3_dvg = 0.0;
+            dvcs_cv3_dvd = 0.0;
+            dvcs_cv3_dvc = 0.0;
+        } else if vcs_cv3 > vds_cv_m {
+            vcs_cv3 = vds_cv_m;
+            dvcs_cv3_dvb = dvds_cv_dvb_m;
+            dvcs_cv3_dvg = dvds_cv_dvg_m;
+            dvcs_cv3_dvd = dvds_cv_dvd_m;
+            dvcs_cv3_dvc = dvds_cv_dvc_m;
+        }
+
+        let phisc = phis + vcs_cv3;
+        let dphisc_dvb = dphis_dvb + dvcs_cv3_dvb;
+        let dphisc_dvd = dvcs_cv3_dvd;
+        let dphisc_dvg = dvcs_cv3_dvg;
+        let dphisc_dvc = dvcs_cv3_dvc;
+        let sqrt_phisc = phisc.abs().max(1e-30).sqrt();
+
+        // Xc for CAPMOD=3 (ngspice lines 3038-3099)
+        // Uses surface-potential-based charge partition instead of simple voltage ratios
+        let xc_t1 = vgsteff + sp.k1 * sqrt_phis - 0.5 * vds_cv_m;
+        let xc_t2 = CONST_2OV3 * sp.k1 * (phisd * sqrt_phisd - phis * sqrt_phis);
+        let xc_t3 = vgsteff + sp.k1 * sqrt_phis - 0.5 * vcs_cv3;
+        let xc_t4 = CONST_2OV3 * sp.k1 * (phisc * sqrt_phisc - phis * sqrt_phis);
+        let xc_t5 = xc_t1 * vds_cv_m - xc_t2; // Denominator
+        let xc_t6 = xc_t3 * vcs_cv3 - xc_t4; // Numerator
+        let xc3 = if xc_t5.abs() > 1e-30 {
+            xc_t6 / xc_t5
+        } else {
+            0.0
+        };
+
+        // Xc derivatives (ngspice lines 3047-3099)
+        let dxc_t1_dvb = sp.k1 * dsqrt_phis_dvb - 0.5 * dvds_cv_dvb_m;
+        let dxc_t2_dvb = sp.k1 * (sqrt_phisd * dphisd_dvb - sqrt_phis * dphis_dvb);
+        let dxc_t3_dvb = sp.k1 * dsqrt_phis_dvb - 0.5 * dvcs_cv3_dvb;
+        let dxc_t4_dvb = sp.k1 * (sqrt_phisc * dphisc_dvb - sqrt_phis * dphis_dvb);
+
+        let dxc_t1_dvd = -0.5 * dvds_cv_dvd_m;
+        let dxc_t2_dvd = sp.k1 * sqrt_phisd * dphisd_dvd;
+        let dxc_t3_dvd = -0.5 * dvcs_cv3_dvd;
+        let dxc_t4_dvd = sp.k1 * sqrt_phisc * dphisc_dvd;
+
+        let dxc_t1_dvg = 1.0 - 0.5 * dvds_cv_dvg_m;
+        let dxc_t2_dvg = sp.k1 * sqrt_phisd * dphisd_dvg;
+        let dxc_t3_dvg = 1.0 - 0.5 * dvcs_cv3_dvg;
+        let dxc_t4_dvg = sp.k1 * sqrt_phisc * dphisc_dvg;
+
+        let dxc_t1_dvc = -0.5 * dvds_cv_dvc_m;
+        let dxc_t2_dvc = sp.k1 * sqrt_phisd * dphisd_dvc;
+        let dxc_t3_dvc = -0.5 * dvcs_cv3_dvc;
+        let dxc_t4_dvc = sp.k1 * sqrt_phisc * dphisc_dvc;
+
+        let dxc_t5_dvb = xc_t1 * dvds_cv_dvb_m + vds_cv_m * dxc_t1_dvb - dxc_t2_dvb;
+        let dxc_t6_dvb = xc_t3 * dvcs_cv3_dvb + vcs_cv3 * dxc_t3_dvb - dxc_t4_dvb;
+        let dxc_t5_dvd = xc_t1 * dvds_cv_dvd_m + vds_cv_m * dxc_t1_dvd - dxc_t2_dvd;
+        let dxc_t6_dvd = xc_t3 * dvcs_cv3_dvd + vcs_cv3 * dxc_t3_dvd - dxc_t4_dvd;
+        let dxc_t5_dvg = xc_t1 * dvds_cv_dvg_m + vds_cv_m * dxc_t1_dvg - dxc_t2_dvg;
+        let dxc_t6_dvg = xc_t3 * dvcs_cv3_dvg + vcs_cv3 * dxc_t3_dvg - dxc_t4_dvg;
+        let dxc_t5_dvc = xc_t1 * dvds_cv_dvc_m + vds_cv_m * dxc_t1_dvc - dxc_t2_dvc;
+        let dxc_t6_dvc = xc_t3 * dvcs_cv3_dvc + vcs_cv3 * dxc_t3_dvc - dxc_t4_dvc;
+
+        let (dxc3_dvb, dxc3_dvg, dxc3_dvd, dxc3_dvc) = if xc_t5.abs() > 1e-30 {
+            (
+                (dxc_t6_dvb - xc3 * dxc_t5_dvb) / xc_t5,
+                (dxc_t6_dvg - xc3 * dxc_t5_dvg) / xc_t5,
+                (dxc_t6_dvd - xc3 * dxc_t5_dvd) / xc_t5,
+                (dxc_t6_dvc - xc3 * dxc_t5_dvc) / xc_t5,
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+
+        // Qsubs1 for CAPMOD=3 (ngspice lines 3101-3194)
+        // Uses Nomi/Denomi formulation with surface potentials
+        let phis_cubed = phis * sqrt_phis; // Phis^(3/2)
+        let phisc_cubed = phisc * sqrt_phisc; // Phisc^(3/2)
+        let phisd_cubed = phisd * sqrt_phisd; // Phisd^(3/2)
+
+        let qs_t0 = phisc_cubed - phis_cubed;
+        let qs_t1 = vgsteff + sp.k1 * sqrt_phis + phis;
+        let qs_t2 = phisc * phisc_cubed - phis * phis_cubed; // Phi^(5/2) terms
+        let qs_t3 = sp.k1 * vcs_cv3 * (phis + 0.5 * vcs_cv3);
+
+        let dqs_t0_dvb = 1.5 * (sqrt_phisc * dphisc_dvb - sqrt_phis * dphis_dvb);
+        let dqs_t1_dvb = (0.5 * sp.k1 / sqrt_phis.max(1e-30) + 1.0) * dphis_dvb;
+        let dqs_t2_dvb = 2.5 * (phisc_cubed * dphisc_dvb - phis_cubed * dphis_dvb);
+        let dqs_t3_dvb = sp.k1
+            * (vcs_cv3 * (dphis_dvb + 0.5 * dvcs_cv3_dvb) + dvcs_cv3_dvb * (phis + 0.5 * vcs_cv3));
+
+        let dqs_t0_dvd = 1.5 * sqrt_phisc * dphisc_dvd;
+        let dqs_t2_dvd = 2.5 * phisc_cubed * dphisc_dvd;
+        let dqs_t3_dvd = sp.k1 * (phis + vcs_cv3) * dvcs_cv3_dvd;
+
+        let dqs_t0_dvg = 1.5 * sqrt_phisc * dphisc_dvg;
+        let dqs_t2_dvg = 2.5 * phisc_cubed * dphisc_dvg;
+        let dqs_t3_dvg =
+            sp.k1 * (vcs_cv3 * 0.5 * dvcs_cv3_dvg + dvcs_cv3_dvg * (phis + 0.5 * vcs_cv3));
+
+        let dqs_t0_dvc = 1.5 * sqrt_phisc * dphisc_dvc;
+        let dqs_t2_dvc = 2.5 * phisc_cubed * dphisc_dvc;
+        let dqs_t3_dvc =
+            sp.k1 * (vcs_cv3 * 0.5 * dvcs_cv3_dvc + dvcs_cv3_dvc * (phis + 0.5 * vcs_cv3));
+
+        let nomi = sp.k1 * (CONST_2OV3 * qs_t1 * qs_t0 - 0.4 * qs_t2 - qs_t3);
+        let dnomi_dvb = sp.k1
+            * (CONST_2OV3 * (qs_t1 * dqs_t0_dvb + qs_t0 * dqs_t1_dvb)
+                - 0.4 * dqs_t2_dvb
+                - dqs_t3_dvb);
+        let dnomi_dvd = sp.k1 * (CONST_2OV3 * qs_t1 * dqs_t0_dvd - 0.4 * dqs_t2_dvd - dqs_t3_dvd);
+        let dnomi_dvg =
+            sp.k1 * (CONST_2OV3 * (qs_t1 * dqs_t0_dvg + qs_t0) - 0.4 * dqs_t2_dvg - dqs_t3_dvg);
+        let dnomi_dvc = sp.k1 * (CONST_2OV3 * qs_t1 * dqs_t0_dvc - 0.4 * dqs_t2_dvc - dqs_t3_dvc);
+
+        // Denomi (ngspice lines 3155-3184)
+        let den_t4 = vgsteff + sp.k1 * sqrt_phis - 0.5 * vds_cv_m;
+        let den_t5 = CONST_2OV3 * sp.k1 * (phisd * sqrt_phisd - phis_cubed);
+
+        let dden_t4_dvb = sp.k1 * dsqrt_phis_dvb - 0.5 * dvds_cv_dvb_m;
+        let dden_t5_dvb = sp.k1 * (sqrt_phisd * dphisd_dvb - sqrt_phis * dphis_dvb);
+        let dden_t4_dvd = -0.5 * dvds_cv_dvd_m;
+        let dden_t5_dvd = sp.k1 * sqrt_phisd * dphisd_dvd;
+        let dden_t4_dvg = 1.0 - 0.5 * dvds_cv_dvg_m;
+        let dden_t5_dvg = sp.k1 * sqrt_phisd * dphisd_dvg;
+        let dden_t4_dvc = -0.5 * dvds_cv_dvc_m;
+        let dden_t5_dvc = sp.k1 * sqrt_phisd * dphisd_dvc;
+
+        let denomi = den_t4 * vds_cv_m - den_t5;
+        let ddenomi_dvb = vds_cv_m * dden_t4_dvb + den_t4 * dvds_cv_dvb_m - dden_t5_dvb;
+        let ddenomi_dvd = vds_cv_m * dden_t4_dvd + den_t4 * dvds_cv_dvd_m - dden_t5_dvd;
+        let ddenomi_dvg = vds_cv_m * dden_t4_dvg + den_t4 * dvds_cv_dvg_m - dden_t5_dvg;
+        let ddenomi_dvc = vds_cv_m * dden_t4_dvc + den_t4 * dvds_cv_dvc_m - dden_t5_dvc;
+
+        let safe_denomi = if denomi.abs() < 1e-30 {
+            1e-30_f64.copysign(denomi + 1e-40)
+        } else {
+            denomi
+        };
+        let t6_qs1_3 = -cox_wl / safe_denomi;
+        let qsubs1_3 = t6_qs1_3 * nomi;
+        let nomi_over_den = nomi / safe_denomi;
+        let dqsubs1_3_dvb = t6_qs1_3 * (dnomi_dvb - nomi_over_den * ddenomi_dvb);
+        let dqsubs1_3_dvg = t6_qs1_3 * (dnomi_dvg - nomi_over_den * ddenomi_dvg);
+        let dqsubs1_3_dvd = t6_qs1_3 * (dnomi_dvd - nomi_over_den * ddenomi_dvd);
+        let dqsubs1_3_dvc = t6_qs1_3 * (dnomi_dvc - nomi_over_den * ddenomi_dvc);
+
+        // Qsubs2 for CAPMOD=3 (ngspice lines 3196-3210)
+        let t6_qs2 = (1e-4 + phi - vbs0eff_dd).abs().max(1e-30).sqrt();
+        let t7_qs2 = sp.k1 * cox_wl;
+        let t8_qs2 = 1.0 - xc3;
+        let t10_qs2 = t7_qs2 * t6_qs2;
+        let t11_qs2 = t7_qs2 * t8_qs2 * 0.5 / t6_qs2;
+        let qsubs2_3 = -t10_qs2 * t8_qs2;
+        let dqsubs2_3_dvg = t10_qs2 * dxc3_dvg;
+        let dqsubs2_3_dvb = t10_qs2 * dxc3_dvb;
+        let dqsubs2_3_dvd = t10_qs2 * dxc3_dvd + t11_qs2 * dvbs0eff_dvd;
+        let dqsubs2_3_dvc = t10_qs2 * dxc3_dvc;
+        let dqsubs2_3_dve = t11_qs2 * dvbs0eff_dve;
+        let dqsubs2_3_dvrg = t11_qs2 * dvbs0eff_dvg;
+
+        // Qbf for CAPMOD=3: adds Qdep0 (ngspice lines 3212-3224)
+        qbf = qac0 + qsub0 + qsubs1_3 + qsubs2_3 + qdep0;
+        dqbf_dvrg = dqac0_dvrg + dqsub0_dvrg + dqsubs2_3_dvrg;
+        dqbf_dvg = dqsub0_dvg + dqsubs1_3_dvg + dqsubs2_3_dvg;
+        dqbf_dvd = dqac0_dvd + dqsub0_dvd + dqsubs1_3_dvd + dqsubs2_3_dvd;
+        dqbf_dvb = dqac0_dvb + dqsub0_dvb + dqsubs1_3_dvb + dqsubs2_3_dvb + dqdep0_dvb;
+        dqbf_dvc = dqsubs1_3_dvc + dqsubs2_3_dvc;
+        dqbf_dve = dqsubs2_3_dve;
+
+        // Export shared outputs for downstream Qe1/Qe2 code
+        xc = xc3;
+        dxc_dvb = dxc3_dvb;
+        dxc_dvg = dxc3_dvg;
+        dxc_dvd = dxc3_dvd;
+        dxc_dvc = dxc3_dvc;
+        vds_cv = vds_cv_m;
+        dvds_cv_dvg = dvds_cv_dvg_m;
+        dvds_cv_dvd = dvds_cv_dvd_m;
+        dvds_cv_dvb = dvds_cv_dvb_m;
+        dvds_cv_dvc = dvds_cv_dvc_m;
+        vcs_cv = vcs_cv3;
+        dvcs_cv_dvb = dvcs_cv3_dvb;
+        dvcs_cv_dvg = dvcs_cv3_dvg;
+        dvcs_cv_dvd = dvcs_cv3_dvd;
+        dvcs_cv_dvc = dvcs_cv3_dvc;
     } else {
-        0.0
-    };
+        // ========== CAPMOD=2 (ngspice b3soiddld.c lines 2739-2886) ==========
 
-    let dt0_xc_dvb = vcs_cv * (2.0 * dvdsat_cv_dvb - dvcs_cv_dvb) + t3_xc * dvcs_cv_dvb;
-    let dt0_xc_dvg = vcs_cv * (2.0 * dvdsat_cv_dvg - dvcs_cv_dvg) + t3_xc * dvcs_cv_dvg;
-    let dt0_xc_dvd = 2.0 * dvcs_cv_dvd * (vdsat_cv - vcs_cv);
-    let dt0_xc_dvc = 2.0 * dvcs_cv_dvc * (vdsat_cv - vcs_cv);
+        // VdsCV = VdseffCV for capMod=2 (ngspice b3soiddld.c lines 2761-2769)
+        let mut vds_cv2 = vdseff_cv + 1e-5;
+        if vds_cv2 > vdsat_cv - 1e-7 {
+            vds_cv2 = vdsat_cv - 1e-7;
+        }
+        let dvds_cv2_dvg = dvdseff_cv_dvg;
+        let dvds_cv2_dvd = dvdseff_cv_dvd;
+        let dvds_cv2_dvb = dvdseff_cv_dvb;
 
-    let dt1_xc_dvb = vds_cv * dt4_xc_dvb + t4_xc * dvds_cv_dvb;
-    let dt1_xc_dvg = vds_cv * dt4_xc_dvg + t4_xc * dvds_cv_dvg;
-    let dt1_xc_dvd = dvds_cv_dvd * t4_xc + vds_cv * dt4_xc_dvd;
+        // VcsCV calculation (ngspice b3soiddld.c lines 2772-2796)
+        const DELTA_VCSCV: f64 = 1e-5;
+        let t1_vcscv = vds_cv2 - vcs - vds_cv2 * vds_cv2 * DELTA_VCSCV;
+        let t5_vcscv = 2.0 * DELTA_VCSCV;
+        let t2_vcscv = (t1_vcscv * t1_vcscv + t5_vcscv * vds_cv2 * vds_cv2).sqrt();
 
-    let (dxc_dvb, dxc_dvg, dxc_dvd, dxc_dvc) = if t1_xc.abs() > 1e-30 {
-        (
-            (dt0_xc_dvb - dt1_xc_dvb * xc) / t1_xc,
-            (dt0_xc_dvg - dt1_xc_dvg * xc) / t1_xc,
-            (dt0_xc_dvd - dt1_xc_dvd * xc) / t1_xc,
-            dt0_xc_dvc / t1_xc,
-        )
-    } else {
-        (0.0, 0.0, 0.0, 0.0)
-    };
+        let dt1_vcscv_dvb = dvds_cv2_dvb * (1.0 - 2.0 * vds_cv2 * DELTA_VCSCV);
+        let dt2_vcscv_dvb =
+            (t1_vcscv * dt1_vcscv_dvb + t5_vcscv * vds_cv2 * dvds_cv2_dvb) / t2_vcscv;
+        let dt1_vcscv_dvd = dvds_cv2_dvd * (1.0 - 2.0 * vds_cv2 * DELTA_VCSCV);
+        let dt2_vcscv_dvd =
+            (t1_vcscv * dt1_vcscv_dvd + t5_vcscv * vds_cv2 * dvds_cv2_dvd) / t2_vcscv;
+        let dt1_vcscv_dvg = dvds_cv2_dvg * (1.0 - 2.0 * vds_cv2 * DELTA_VCSCV);
+        let dt2_vcscv_dvg =
+            (t1_vcscv * dt1_vcscv_dvg + t5_vcscv * vds_cv2 * dvds_cv2_dvg) / t2_vcscv;
+        let dt1_vcscv_dvc: f64 = -1.0;
+        let dt2_vcscv_dvc = t1_vcscv * dt1_vcscv_dvc / t2_vcscv;
 
-    // Qsubs1 (ngspice b3soiddld.c lines 2825-2866)
-    let t0_qs1 = abulk_cv * vcs_cv;
-    let dt0_qs1_dvb = dabulk_cv_dvb * vcs_cv + dvcs_cv_dvb * abulk_cv;
-    let dt0_qs1_dvg = dvcs_cv_dvg * abulk_cv;
-    let dt0_qs1_dvd = abulk_cv * dvcs_cv_dvd;
-    let dt0_qs1_dvc = abulk_cv * dvcs_cv_dvc;
+        let mut vcs_cv2 = vcs + 0.5 * (t1_vcscv - t2_vcscv);
+        let mut dvcs_cv2_dvb = 0.5 * (dt1_vcscv_dvb - dt2_vcscv_dvb);
+        let mut dvcs_cv2_dvg = 0.5 * (dt1_vcscv_dvg - dt2_vcscv_dvg);
+        let mut dvcs_cv2_dvd = 0.5 * (dt1_vcscv_dvd - dt2_vcscv_dvd);
+        let mut dvcs_cv2_dvc = 1.0 + 0.5 * (dt1_vcscv_dvc - dt2_vcscv_dvc);
+        if vcs_cv2 < 0.0 {
+            vcs_cv2 = 0.0;
+            dvcs_cv2_dvb = 0.0;
+            dvcs_cv2_dvg = 0.0;
+            dvcs_cv2_dvd = 0.0;
+            dvcs_cv2_dvc = 0.0;
+        } else if vcs_cv2 > vds_cv2 {
+            vcs_cv2 = vds_cv2;
+            dvcs_cv2_dvb = dvds_cv2_dvb;
+            dvcs_cv2_dvg = dvds_cv2_dvg;
+            dvcs_cv2_dvd = dvds_cv2_dvd;
+            dvcs_cv2_dvc = 0.0;
+        }
 
-    let t1_qs1 = 12.0 * (vgsteff_cv - 0.5 * t0_qs1 + 1e-20);
-    let dt1_qs1_dvb = -6.0 * dt0_qs1_dvb;
-    let dt1_qs1_dvg = 12.0 * (1.0 - 0.5 * dt0_qs1_dvg);
-    let dt1_qs1_dvd = -6.0 * dt0_qs1_dvd;
-    let dt1_qs1_dvc = -6.0 * dt0_qs1_dvc;
+        // Xc calculation (cross-section parameter, ngspice b3soiddld.c lines 2798-2823)
+        let t3_xc = 2.0 * vdsat_cv - vcs_cv2;
+        let t4_xc = 2.0 * vdsat_cv - vds_cv2;
+        let dt4_xc_dvg = 2.0 * dvdsat_cv_dvg - dvds_cv2_dvg;
+        let dt4_xc_dvd = -dvds_cv2_dvd;
+        let dt4_xc_dvb = 2.0 * dvdsat_cv_dvb - dvds_cv2_dvb;
+        let t0_xc = t3_xc * vcs_cv2;
+        let t1_xc = t4_xc * vds_cv2;
+        let xc2 = if t1_xc.abs() > 1e-30 {
+            t0_xc / t1_xc
+        } else {
+            0.0
+        };
 
-    let t2_qs1 = vcs_cv / t1_qs1;
-    let t4_qs1 = t1_qs1 * t1_qs1;
-    let dt2_qs1_dvb = (dvcs_cv_dvb * t1_qs1 - dt1_qs1_dvb * vcs_cv) / t4_qs1;
-    let dt2_qs1_dvg = (dvcs_cv_dvg * t1_qs1 - dt1_qs1_dvg * vcs_cv) / t4_qs1;
-    let dt2_qs1_dvd = (dvcs_cv_dvd * t1_qs1 - dt1_qs1_dvd * vcs_cv) / t4_qs1;
-    let dt2_qs1_dvc = (dvcs_cv_dvc * t1_qs1 - dt1_qs1_dvc * vcs_cv) / t4_qs1;
+        let dt0_xc_dvb = vcs_cv2 * (2.0 * dvdsat_cv_dvb - dvcs_cv2_dvb) + t3_xc * dvcs_cv2_dvb;
+        let dt0_xc_dvg = vcs_cv2 * (2.0 * dvdsat_cv_dvg - dvcs_cv2_dvg) + t3_xc * dvcs_cv2_dvg;
+        let dt0_xc_dvd = 2.0 * dvcs_cv2_dvd * (vdsat_cv - vcs_cv2);
+        let dt0_xc_dvc = 2.0 * dvcs_cv2_dvc * (vdsat_cv - vcs_cv2);
 
-    let t3_qs1 = t0_qs1 * t2_qs1;
-    let dt3_qs1_dvb = dt0_qs1_dvb * t2_qs1 + dt2_qs1_dvb * t0_qs1;
-    let dt3_qs1_dvg = dt0_qs1_dvg * t2_qs1 + dt2_qs1_dvg * t0_qs1;
-    let dt3_qs1_dvd = dt0_qs1_dvd * t2_qs1 + dt2_qs1_dvd * t0_qs1;
-    let dt3_qs1_dvc = dt0_qs1_dvc * t2_qs1 + dt2_qs1_dvc * t0_qs1;
+        let dt1_xc_dvb = vds_cv2 * dt4_xc_dvb + t4_xc * dvds_cv2_dvb;
+        let dt1_xc_dvg = vds_cv2 * dt4_xc_dvg + t4_xc * dvds_cv2_dvg;
+        let dt1_xc_dvd = dvds_cv2_dvd * t4_xc + vds_cv2 * dt4_xc_dvd;
 
-    let t4_abulk = 1.0 - abulk_cv;
-    let dt4_abulk_dvb = -dabulk_cv_dvb;
+        let (dxc2_dvb, dxc2_dvg, dxc2_dvd, dxc2_dvc) = if t1_xc.abs() > 1e-30 {
+            (
+                (dt0_xc_dvb - dt1_xc_dvb * xc2) / t1_xc,
+                (dt0_xc_dvg - dt1_xc_dvg * xc2) / t1_xc,
+                (dt0_xc_dvd - dt1_xc_dvd * xc2) / t1_xc,
+                dt0_xc_dvc / t1_xc,
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
 
-    let t5_qs1 = 0.5 * vcs_cv - t3_qs1;
-    let dt5_qs1_dvb = 0.5 * dvcs_cv_dvb - dt3_qs1_dvb;
-    let dt5_qs1_dvg = 0.5 * dvcs_cv_dvg - dt3_qs1_dvg;
-    let dt5_qs1_dvd = 0.5 * dvcs_cv_dvd - dt3_qs1_dvd;
-    let dt5_qs1_dvc = 0.5 * dvcs_cv_dvc - dt3_qs1_dvc;
+        // Qsubs1 (ngspice b3soiddld.c lines 2825-2866)
+        let t0_qs1 = abulk_cv * vcs_cv2;
+        let dt0_qs1_dvb = dabulk_cv_dvb * vcs_cv2 + dvcs_cv2_dvb * abulk_cv;
+        let dt0_qs1_dvg = dvcs_cv2_dvg * abulk_cv;
+        let dt0_qs1_dvd = abulk_cv * dvcs_cv2_dvd;
+        let dt0_qs1_dvc = abulk_cv * dvcs_cv2_dvc;
 
-    let t6_qs1 = t4_abulk * t5_qs1 * cox_wl;
-    let t7_qs1 = cox_wl * xc;
+        let t1_qs1 = 12.0 * (vgsteff_cv - 0.5 * t0_qs1 + 1e-20);
+        let dt1_qs1_dvb = -6.0 * dt0_qs1_dvb;
+        let dt1_qs1_dvg = 12.0 * (1.0 - 0.5 * dt0_qs1_dvg);
+        let dt1_qs1_dvd = -6.0 * dt0_qs1_dvd;
+        let dt1_qs1_dvc = -6.0 * dt0_qs1_dvc;
 
-    let qsubs1 = cox_wl * xc * t4_abulk * t5_qs1;
-    let dqsubs1_dvb = t6_qs1 * dxc_dvb + t7_qs1 * (t4_abulk * dt5_qs1_dvb + dt4_abulk_dvb * t5_qs1);
-    let dqsubs1_dvg = t6_qs1 * dxc_dvg + t7_qs1 * t4_abulk * dt5_qs1_dvg;
-    let dqsubs1_dvd = t6_qs1 * dxc_dvd + t7_qs1 * t4_abulk * dt5_qs1_dvd;
-    let dqsubs1_dvc = t6_qs1 * dxc_dvc + t7_qs1 * t4_abulk * dt5_qs1_dvc;
+        let t2_qs1 = vcs_cv2 / t1_qs1;
+        let t4_qs1 = t1_qs1 * t1_qs1;
+        let dt2_qs1_dvb = (dvcs_cv2_dvb * t1_qs1 - dt1_qs1_dvb * vcs_cv2) / t4_qs1;
+        let dt2_qs1_dvg = (dvcs_cv2_dvg * t1_qs1 - dt1_qs1_dvg * vcs_cv2) / t4_qs1;
+        let dt2_qs1_dvd = (dvcs_cv2_dvd * t1_qs1 - dt1_qs1_dvd * vcs_cv2) / t4_qs1;
+        let dt2_qs1_dvc = (dvcs_cv2_dvc * t1_qs1 - dt1_qs1_dvc * vcs_cv2) / t4_qs1;
 
-    // Qsubs2 (ngspice b3soiddld.c lines 2868-2874)
-    let qsubs2 = -cox_wl * (1.0 - xc) * (abulk_cv - 1.0) * vcs;
-    let t2_qs2 = cox_wl * (abulk_cv - 1.0) * vcs;
-    let dqsubs2_dvb = t2_qs2 * dxc_dvb - cox_wl * (1.0 - xc) * vcs * dabulk_cv_dvb;
-    let dqsubs2_dvg = t2_qs2 * dxc_dvg;
-    let dqsubs2_dvd = t2_qs2 * dxc_dvd;
-    let dqsubs2_dvc = t2_qs2 * dxc_dvc - cox_wl * (1.0 - xc) * (abulk_cv - 1.0);
+        let t3_qs1 = t0_qs1 * t2_qs1;
+        let dt3_qs1_dvb = dt0_qs1_dvb * t2_qs1 + dt2_qs1_dvb * t0_qs1;
+        let dt3_qs1_dvg = dt0_qs1_dvg * t2_qs1 + dt2_qs1_dvg * t0_qs1;
+        let dt3_qs1_dvd = dt0_qs1_dvd * t2_qs1 + dt2_qs1_dvd * t0_qs1;
+        let dt3_qs1_dvc = dt0_qs1_dvc * t2_qs1 + dt2_qs1_dvc * t0_qs1;
 
-    // Qbf: total front-gate body charge (ngspice b3soiddld.c lines 2876-2886)
-    let qbf = qac0 + qsub0 + qsubs1 + qsubs2;
-    let dqbf_dvrg = dqac0_dvrg + dqsub0_dvrg;
-    let dqbf_dvg = dqsub0_dvg + dqsubs1_dvg + dqsubs2_dvg;
-    let dqbf_dvd = dqac0_dvd + dqsub0_dvd + dqsubs1_dvd + dqsubs2_dvd;
-    let dqbf_dvb = dqac0_dvb + dqsub0_dvb + dqsubs1_dvb + dqsubs2_dvb;
-    let dqbf_dvc = dqsubs1_dvc + dqsubs2_dvc;
-    let dqbf_dve = 0.0;
+        let t4_abulk = 1.0 - abulk_cv;
+        let dt4_abulk_dvb = -dabulk_cv_dvb;
+
+        let t5_qs1 = 0.5 * vcs_cv2 - t3_qs1;
+        let dt5_qs1_dvb = 0.5 * dvcs_cv2_dvb - dt3_qs1_dvb;
+        let dt5_qs1_dvg = 0.5 * dvcs_cv2_dvg - dt3_qs1_dvg;
+        let dt5_qs1_dvd = 0.5 * dvcs_cv2_dvd - dt3_qs1_dvd;
+        let dt5_qs1_dvc = 0.5 * dvcs_cv2_dvc - dt3_qs1_dvc;
+
+        let t6_qs1 = t4_abulk * t5_qs1 * cox_wl;
+        let t7_qs1 = cox_wl * xc2;
+
+        let qsubs1_2 = cox_wl * xc2 * t4_abulk * t5_qs1;
+        let dqsubs1_2_dvb =
+            t6_qs1 * dxc2_dvb + t7_qs1 * (t4_abulk * dt5_qs1_dvb + dt4_abulk_dvb * t5_qs1);
+        let dqsubs1_2_dvg = t6_qs1 * dxc2_dvg + t7_qs1 * t4_abulk * dt5_qs1_dvg;
+        let dqsubs1_2_dvd = t6_qs1 * dxc2_dvd + t7_qs1 * t4_abulk * dt5_qs1_dvd;
+        let dqsubs1_2_dvc = t6_qs1 * dxc2_dvc + t7_qs1 * t4_abulk * dt5_qs1_dvc;
+
+        // Qsubs2 (ngspice b3soiddld.c lines 2868-2874)
+        let qsubs2_2 = -cox_wl * (1.0 - xc2) * (abulk_cv - 1.0) * vcs;
+        let t2_qs2 = cox_wl * (abulk_cv - 1.0) * vcs;
+        let dqsubs2_2_dvb = t2_qs2 * dxc2_dvb - cox_wl * (1.0 - xc2) * vcs * dabulk_cv_dvb;
+        let dqsubs2_2_dvg = t2_qs2 * dxc2_dvg;
+        let dqsubs2_2_dvd = t2_qs2 * dxc2_dvd;
+        let dqsubs2_2_dvc = t2_qs2 * dxc2_dvc - cox_wl * (1.0 - xc2) * (abulk_cv - 1.0);
+
+        // Qbf: total front-gate body charge (ngspice b3soiddld.c lines 2876-2886)
+        qbf = qac0 + qsub0 + qsubs1_2 + qsubs2_2;
+        dqbf_dvrg = dqac0_dvrg + dqsub0_dvrg;
+        dqbf_dvg = dqsub0_dvg + dqsubs1_2_dvg + dqsubs2_2_dvg;
+        dqbf_dvd = dqac0_dvd + dqsub0_dvd + dqsubs1_2_dvd + dqsubs2_2_dvd;
+        dqbf_dvb = dqac0_dvb + dqsub0_dvb + dqsubs1_2_dvb + dqsubs2_2_dvb;
+        dqbf_dvc = dqsubs1_2_dvc + dqsubs2_2_dvc;
+        dqbf_dve = 0.0;
+
+        // Export shared outputs
+        xc = xc2;
+        dxc_dvb = dxc2_dvb;
+        dxc_dvg = dxc2_dvg;
+        dxc_dvd = dxc2_dvd;
+        dxc_dvc = dxc2_dvc;
+        vds_cv = vds_cv2;
+        dvds_cv_dvg = dvds_cv2_dvg;
+        dvds_cv_dvd = dvds_cv2_dvd;
+        dvds_cv_dvb = dvds_cv2_dvb;
+        dvds_cv_dvc = 0.0; // dVdsCV/dVc = 0 for capMod=2
+        vcs_cv = vcs_cv2;
+        dvcs_cv_dvb = dvcs_cv2_dvb;
+        dvcs_cv_dvg = dvcs_cv2_dvg;
+        dvcs_cv_dvd = dvcs_cv2_dvd;
+        dvcs_cv_dvc = dvcs_cv2_dvc;
+    }
 
     // Backgate charge: Qsicv, Qbf0 (ngspice b3soiddld.c lines 3228-3247)
     let cbox_wl = sp.kb3 * model.cbox * sp.weff_cv * sp.leff_cv;
@@ -2887,7 +3246,7 @@ pub fn bsim3soi_dd_companion(
     // T10=dVgsteff, T11=dVbseff, T12=dVcs transform
     let t10_e2 = t3_e2 * (dvds_cv_dvg - dvcs_cv_dvg) - t4_e2 * dxc_dvg;
     let t11_e2 = t3_e2 * (dvds_cv_dvb - dvcs_cv_dvb) - t4_e2 * dxc_dvb;
-    let t12_e2_dvc = -dvcs_cv_dvc; // dVdsCV_dVc = 0 for capMod=2
+    let t12_e2_dvc = dvds_cv_dvc - dvcs_cv_dvc;
     let t12_e2 = t3_e2 * t12_e2_dvc - t4_e2 * dxc_dvc;
     let dqe2_dvg = t10_e2 * dvgsteff_dvg + t11_e2 * dvbseff_dvg + t12_e2 * dvcs_dvg;
     let dqe2_dvb = t10_e2 * dvgsteff_dvb + t11_e2 * dvbseff_dvb + t12_e2 * dvcs_dvb;

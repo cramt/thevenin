@@ -6,7 +6,7 @@
 "bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
 
 # === BSIM3SOI-DD ===
-"bsim3soidd/RampVg2.cir" = "DC OP 0.38% close but transient body voltage rises linearly to 549mV with no peak/decay (expected 553mV peak then decay to 275mV): requires CAPMOD=3 for subthreshold gate-body coupling (CAPMOD=2 lacks Qdep0/Qsubs1/VdsCV — ~240 LOC, sessions 127-136)"
+"bsim3soidd/RampVg2.cir" = "CAPMOD=3 now implemented but transient NR fails to converge (singular matrix after gmin stepping); other DD tests (inv2/t3/t4/t5) pass with CAPMOD=3 — RampVg2's tight gmin=1e-20 + fast pulse creates stiff Jacobian from new charge derivatives"
 
 # === General circuits ===
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
