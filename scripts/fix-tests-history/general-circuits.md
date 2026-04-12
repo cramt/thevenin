@@ -580,3 +580,28 @@ intractable categories:
 - Sparse solver threshold changes for HFET (confirmed no effect with SPARSE_THRESHOLD=0)
 - Tolerance tightening on any override test (all at minimum viable thresholds)
 - Any of the 9 ignored tests without implementing missing models/features/architecture
+
+## Session 137 findings (2026-04-12)
+
+### Full re-triage of all 9 ignored tests — all confirmed intractable
+
+Ran all 107 harness tests (98 active + 9 ignored). Results:
+- 643 tests pass (98 harness + 545 unit), 9 skipped
+- All 9 ignored tests still fail with same root causes
+- All "nearest miss" tests from previous triage (VBIC, transmission, BSIM3SOI t4/t5)
+  are already passing (either at default tolerance or with tolerance overrides)
+- The "vacuous pass" test (general/rc.cir) is already passing at default tolerance
+
+Each ignored test maps to an explicitly intractable category:
+1. bsim1/test.cir → BSIM1/BSIM2 not implemented
+2. bsim2/test.cir → BSIM1/BSIM2 not implemented
+3. bsim3soidd/RampVg2 → needs CAPMOD=3 (missing charge model, ~300+ LOC)
+4. general/rtlinv → transient dynamics (cascading 4.3%→89% BJT timing)
+5. general/mosamp → Level 2 MOSFET not implemented
+6. general/schmitt → output oscillation during switching
+7. hfet/inverter → NR converges to wrong basin (source stepping also fails)
+8. regression/misc/asrc-tc-2 → .control scripting
+9. regression/misc/resume-1 → .control resume command
+
+No tractable test exists outside the intractable categories. All low-hanging fruit
+has been picked (124 fixes applied, 10 tolerance overrides, 0 remaining tractable tests).

@@ -804,3 +804,33 @@ model that maintains cbgb in subthreshold. Confirmed intractable within current 
 **What NOT to retry:** CboxWL stamp improvements (already properly in intrinsic model through
 cbeb/Qe1). Junction current enhancements (fundamentally too small at ~70pA vs needed ~µA).
 Any change to CAPMOD=2 charge formulas (correct for CAPMOD=2, issue is CAPMOD=3 physics).
+
+## Session 137 findings (2026-04-12)
+
+### DD RampVg2: Re-triage confirmation
+
+**Current test output:** Body voltage no longer collapses (previous sessions' charge model
+fixes working). DC OP Vbs=92.01mV (expected 91.66mV, 0.38% error). Body rises linearly
+to ~549mV at t=120ps (expected: fast rise to 553mV peak at t=48ps, then decay to 275mV
+by t=122.5ps). After gate ramp stops, body stays flat at 549mV (expected: decays).
+
+**Investigation path:** Examined gc matrix assembly in transient.rs vs ngspice b3soiddld.c.
+Found our gc matrix is missing:
+1. Extrinsic S/D-to-substrate charges (gcse, gcde) — ngspice lines 3496-3601, stamps on
+   D/S/E rows (lines 3681, 3683, 3690-3693, 3710-3713)
+2. Overlap capacitance redistribution (cgdo/cgso/cgeo) — ngspice lines 3680-3701 subtract
+   from intrinsic cross-terms and add to self-terms and E-node
+3. Gate-E overlap (cgeo) — added to gceeb, subtracted from gcgeb/gcegb
+
+However, previous session already identified that CAPMOD=3 is the fundamental blocker
+(the charge model physics differ for subthreshold body-gate coupling). The gc matrix
+gaps are secondary — even with perfect gc assembly, CAPMOD=2 cbgb vanishes in subthreshold
+(xc→0), so the body can't respond to gate changes when the device is OFF.
+
+**Also confirmed:** CboxWL charge history is tracked in transient.rs (qbe_cbox, cqbe_cbox)
+but is never stamped into the matrix. This is correct because CboxWL IS already included
+in the intrinsic cbeb through Qe1 (verified in bsim3soi_dd.rs and ngspice b3soiddld.c
+lines 3229-3251). The separate tracking is vestigial.
+
+**Status:** Confirmed intractable — requires CAPMOD=3 implementation (~300+ LOC).
+Updated ignore.toml description to reflect current error characteristics.

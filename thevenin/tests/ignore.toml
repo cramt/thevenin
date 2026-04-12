@@ -6,7 +6,7 @@
 "bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
 
 # === BSIM3SOI-DD ===
-"bsim3soidd/RampVg2.cir" = "E-node charge coupling added (cgeb/cbeb/ceeb); body rises correctly (~549mV peak vs expected ~553mV) but decay too slow (549mV vs 275mV at t=122.5ps): missing transient body current drain paths"
+"bsim3soidd/RampVg2.cir" = "Body rises linearly to ~549mV (expected fast rise to 553mV peak at t=48ps then decay to 275mV by t=122.5ps): missing extrinsic S/D-to-substrate charges (gcse/gcde) and overlap cap redistribution in gc matrix assembly; body discharge paths too weak"
 
 # === General circuits ===
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
