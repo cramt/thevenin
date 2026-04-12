@@ -867,42 +867,91 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
         'R' | 'C' | 'L' => {
             let pos = need!(0, "n+").to_string();
             let neg = need!(1, "n-").to_string();
-            let value = parse_expr(need!(2, "value"));
-            let mut params: Vec<Param> = rest[3..]
-                .iter()
-                .filter(|t| t.contains('='))
-                .filter_map(|t| parse_kv(t))
-                .collect();
-            // Capture model name: a non-key=value token after the value that
-            // isn't a number. E.g., "R1 1 2 1k rmodel l=1u" → model=rmodel.
-            for t in &rest[3..] {
-                if !t.contains('=') && t.parse::<f64>().is_err() && !t.is_empty() {
-                    params.push(Param {
-                        name: "model".to_string(),
-                        value: Expr::Param(t.to_string()),
-                    });
-                    break;
+
+            // Detect behavioral R/C/L: `R name n+ n- r={expr} [tc1=...]`
+            // The tokenizer collapses `r = {expr}` into `r={expr}`.
+            // ngspice converts these to B-sources in inpcom.c preprocessing.
+            let value_tok = need!(2, "value");
+            let behavioral_expr = {
+                let letter_lower = letter.to_ascii_lowercase();
+                let val_lower = value_tok.to_lowercase();
+                val_lower
+                    .strip_prefix(letter_lower)
+                    .and_then(|s| s.strip_prefix('='))
+                    .map(|_| {
+                        // Extract the part after 'r=' (case-preserving)
+                        &value_tok[2..]
+                    })
+            };
+            if let Some(raw_expr) = behavioral_expr {
+                // Strip surrounding braces/quotes
+                let expr_inner = if let Some(inner) =
+                    raw_expr.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
+                {
+                    inner.to_string()
+                } else if let Some(inner) = raw_expr
+                    .strip_prefix('\'')
+                    .and_then(|s| s.strip_suffix('\''))
+                {
+                    inner.to_string()
+                } else {
+                    raw_expr.to_string()
+                };
+
+                // Collect tc1=, tc2= etc. from remaining tokens
+                let tc_params: String = rest[3..]
+                    .iter()
+                    .filter(|t| t.contains('='))
+                    .map(|t| format!(" {t}"))
+                    .collect();
+
+                // Convert to B-source: I = V(pos,neg) / R_expr for resistors.
+                // reciproctc=1 tells the B-source evaluator to use 1/tc_factor
+                // (temperature scales resistance, not current).
+                let spec = match letter {
+                    'R' => format!("I={{v({pos},{neg})/({expr_inner})}}{tc_params} reciproctc=1"),
+                    'C' => format!("I={{({expr_inner})*ddt(v({pos},{neg}))}}{tc_params}"),
+                    _ => format!("V={{({expr_inner})*ddt(i(TODO))}}{tc_params}"),
+                };
+                ElementKind::BehavioralSource { pos, neg, spec }
+            } else {
+                let value = parse_expr(need!(2, "value"));
+                let mut params: Vec<Param> = rest[3..]
+                    .iter()
+                    .filter(|t| t.contains('='))
+                    .filter_map(|t| parse_kv(t))
+                    .collect();
+                // Capture model name: a non-key=value token after the value that
+                // isn't a number. E.g., "R1 1 2 1k rmodel l=1u" → model=rmodel.
+                for t in &rest[3..] {
+                    if !t.contains('=') && t.parse::<f64>().is_err() && !t.is_empty() {
+                        params.push(Param {
+                            name: "model".to_string(),
+                            value: Expr::Param(t.to_string()),
+                        });
+                        break;
+                    }
                 }
-            }
-            match letter {
-                'R' => ElementKind::Resistor {
-                    pos,
-                    neg,
-                    value,
-                    params,
-                },
-                'C' => ElementKind::Capacitor {
-                    pos,
-                    neg,
-                    value,
-                    params,
-                },
-                _ => ElementKind::Inductor {
-                    pos,
-                    neg,
-                    value,
-                    params,
-                },
+                match letter {
+                    'R' => ElementKind::Resistor {
+                        pos,
+                        neg,
+                        value,
+                        params,
+                    },
+                    'C' => ElementKind::Capacitor {
+                        pos,
+                        neg,
+                        value,
+                        params,
+                    },
+                    _ => ElementKind::Inductor {
+                        pos,
+                        neg,
+                        value,
+                        params,
+                    },
+                }
             }
         }
         'V' => {

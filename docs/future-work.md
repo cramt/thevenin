@@ -93,21 +93,31 @@ negative first, which ngspice achieves accidentally through Markowitz pivot orde
 
 **Architectural options (in order of pragmatism):**
 
-1. **Multi-pass random perturbations** (~200 LOC, 60% confidence): Retry NR with small
-   random voltage perturbations on initial guess. Add to simulate.rs as final fallback.
-   Lightweight but empirical.
+1. ~~**Multi-pass random perturbations**~~ — **RULED OUT** (0% confidence). Exhaustively
+   tested: initial guess perturbations (negative bias -0.1 to -2.0V, alternating signs,
+   negated baseline), gmin continuation from varied starting points, source stepping with
+   different initial conditions, FloatRelaxed mode (bypassing fetlim), asymmetric diagonal
+   perturbation (scales 1e-1 to 1e-8), damped NR (alpha 0.1 to 0.9), and row-permuted
+   linear solves. **All converge to the Vdd basin.** The attractor is too strong — no
+   perturbation-based approach can escape it.
 
-2. **NR homotopy / parameter continuation** (~500 LOC, 40% confidence): Ramp a parameter
-   lambda from 0->1 multiplying all sources. More principled but may still find wrong basin.
+2. ~~**NR homotopy / parameter continuation**~~ — **RULED OUT** (0% confidence). Fine-grained
+   source continuation (50 steps, 0→100%) from multiple starting points all converge to
+   Vdd basin. Gmin continuation with adaptive backtracking also fails — the bifurcation
+   occurs at a gmin level where the step from high-gmin solution to low-gmin solution
+   always lands in the wrong basin.
 
 3. **Markowitz sparse solver** (~500-800 LOC, 95% confidence but high risk): Replace faer's
    pivot selection with Markowitz threshold strategy. Would match ngspice exactly but complex
-   to implement correctly, risk of regressions.
+   to implement correctly, risk of regressions. **This is the only viable approach** — the
+   correct basin is reached through a specific numerical path during NR iteration that depends
+   on the LU factorization pivot ordering. Partial pivoting (faer) always produces a trajectory
+   that lands in the Vdd basin.
 
 **Key files:** `newton.rs` (938 LOC), `simulate.rs` (1714 LOC), `device_stamp.rs` (1375 LOC),
 `sparse.rs` (750 LOC)
 
-**Priority:** Medium-low. Only 1 test, fix is speculative for options 1-2.
+**Priority:** Medium-low. Only 1 test, fix requires Markowitz solver implementation.
 
 ## 5. BSIM1 and BSIM2 Models
 
@@ -142,7 +152,7 @@ solver integration -- saving/restoring full circuit state mid-simulation. Estima
 
 1. RampVg2 transient convergence (solver improvements)
 2. ~~Level 2 MOSFET~~ -- **DONE**
-3. HFET perturbation fallback -- low effort, speculative
+3. ~~HFET perturbation fallback~~ -- **RULED OUT** (requires Markowitz solver, ~500-800 LOC)
 4. BSIM1/BSIM2 -- only if legacy PDK support needed
 5. rtlinv/schmitt -- accept as intractable
 6. resume-1 .control -- defer until broader .control support is needed

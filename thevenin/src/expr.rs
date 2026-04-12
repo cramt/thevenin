@@ -1295,4 +1295,17 @@ mod tests {
         assert_eq!(eval("gt0(1)"), 1.0);
         assert_eq!(eval("lt0(-1)"), 1.0);
     }
+
+    #[test]
+    fn behavioral_resistor_expr() {
+        let mut voltages: std::collections::BTreeMap<String, f64> =
+            std::collections::BTreeMap::new();
+        voltages.insert("0".to_string(), 0.0);
+        voltages.insert("1".to_string(), 100.0);
+        voltages.insert("3".to_string(), 0.0);
+        voltages.insert("9".to_string(), 0.0);
+
+        let result = evaluate_bsrc_expr("v(1,3)/(1k + v(9))", &voltages).unwrap();
+        assert!((result - 0.1).abs() < 1e-10, "expected 0.1, got {result}");
+    }
 }

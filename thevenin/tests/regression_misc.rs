@@ -344,3 +344,87 @@ V1 1 0 1
         .expect("v1 branch current");
     assert_abs_diff_eq!(i.data.as_real()[0].abs(), 1.0 / 300.0, epsilon = 1e-9);
 }
+
+/// Behavioral resistor: R name n+ n- r={expr} should be converted to a B-source.
+#[test]
+fn behavioral_resistor_op() {
+    // Simple behavioral resistor with constant expression (no v() dependency)
+    let netlist = Netlist::parse_single(
+        "behavioral resistor test
+v1 1 0 dc=10
+r1 1 2 r = {1k}
+v2 2 0 dc=0
+.op
+.end
+",
+    )
+    .unwrap();
+
+    let result = thevenin::simulate_op(&netlist).unwrap();
+    let names: Vec<_> = result.plots[0].vecs.iter().map(|v| &v.name).collect();
+    eprintln!("result vectors: {names:?}");
+    for v in &result.plots[0].vecs {
+        eprintln!("  {} = {:?}", v.name, v.data.as_real());
+    }
+    // Current through v2 should be 10/1000 = 0.01A
+    let iv2 = result.plots[0]
+        .vecs
+        .iter()
+        .find(|v| v.name.contains("v2"))
+        .expect("v2 branch current");
+    assert_abs_diff_eq!(iv2.data.as_real()[0].abs(), 0.01, epsilon = 1e-6);
+}
+
+/// Behavioral resistor with tc1 and temperature.
+#[test]
+fn behavioral_resistor_with_tc() {
+    let netlist = Netlist::parse_single(
+        "behavioral resistor with tc
+v1 1 0 dc=100
+r1 1 2 r = {1k} tc1=0.001
+v2 2 0 dc=0
+.temp 127.0
+.op
+.end
+",
+    )
+    .unwrap();
+
+    let result = thevenin::simulate_op(&netlist).unwrap();
+    // R = 1k, dT = 100, tc_factor = 1.1, R_eff = 1.1k
+    // I = 100/1100 = 0.0909...
+    let gold = 100.0 / (1000.0 * (1.0 + 100.0 * 0.001));
+    let iv2 = result.plots[0]
+        .vecs
+        .iter()
+        .find(|v| v.name.contains("v2"))
+        .expect("v2 branch current");
+    assert_abs_diff_eq!(iv2.data.as_real()[0].abs(), gold, epsilon = 1e-9);
+}
+
+/// Behavioral resistor with v() reference and tc (matches asrc-tc-2).
+#[test]
+fn behavioral_resistor_with_v_ref() {
+    let netlist = Netlist::parse_single(
+        "behavioral resistor with v(9) and tc
+v0 9 0 dc=0
+v1 1 0 dc=100
+r3 1 3 r = {1k + v(9)} tc1=0.001
+v3 3 0 dc=0
+.temp 127.0
+.op
+.end
+",
+    )
+    .unwrap();
+
+    let result = thevenin::simulate_op(&netlist).unwrap();
+    // R = 1k + v(9) = 1k, dT=100, tc_factor=1.1, R_eff=1.1k
+    let gold = 100.0 / (1000.0 * (1.0 + 100.0 * 0.001));
+    let iv3 = result.plots[0]
+        .vecs
+        .iter()
+        .find(|v| v.name.contains("v3"))
+        .expect("v3 branch current");
+    assert_abs_diff_eq!(iv3.data.as_real()[0].abs(), gold, epsilon = 1e-9);
+}

@@ -963,6 +963,34 @@ fn brace_expr_in_element() {
     }
 }
 
+#[test]
+fn behavioral_resistor_converts_to_bsource() {
+    let n = parse("T\nr3 1 3 r = {1k + v(9)} tc1=0.001\n.end");
+    let el = n
+        .elements()
+        .next()
+        .expect("should have at least one element");
+    match &el.kind {
+        ElementKind::BehavioralSource { pos, neg, spec } => {
+            assert_eq!(pos, "1");
+            assert_eq!(neg, "3");
+            assert!(
+                spec.contains("v(1,3)"),
+                "spec should contain v(1,3): {spec}"
+            );
+            assert!(
+                spec.contains("1k + v(9)"),
+                "spec should contain the expr: {spec}"
+            );
+            assert!(
+                spec.contains("tc1=0.001"),
+                "spec should contain tc1: {spec}"
+            );
+        }
+        other => panic!("expected BehavioralSource, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Round-trip tests
 // ---------------------------------------------------------------------------
