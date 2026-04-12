@@ -6,7 +6,7 @@
 "bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
 
 # === BSIM3SOI-DD ===
-"bsim3soidd/RampVg2.cir" = "Body rises linearly to ~549mV (expected fast rise to 553mV peak at t=48ps then decay to 275mV by t=122.5ps): missing extrinsic S/D-to-substrate charges (gcse/gcde) and overlap cap redistribution in gc matrix assembly; body discharge paths too weak"
+"bsim3soidd/RampVg2.cir" = "DC OP 0.38% close but transient body voltage rises linearly to 549mV with no peak/decay (expected 553mV peak then decay to 275mV): requires CAPMOD=3 for subthreshold gate-body coupling (CAPMOD=2 lacks Qdep0/Qsubs1/VdsCV — ~240 LOC, sessions 127-136)"
 
 # === General circuits ===
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
@@ -14,7 +14,7 @@
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag; timing shift in BJT voltage-dependent cap model)"
 
 # === HFET ===
-"hfet/inverter.cir" = "wrong DC OP: V(3)=1.96V vs expected -0.275V (bistable DCFL inverter; model corrected to HFET1 level=5 with leak()+GGR=40+fetlim-only; NR converges to Vdd basin — needs MODEINITFIX phase)"
+"hfet/inverter.cir" = "wrong DC OP: V(3)=1.956V vs expected -0.275V (bistable DCFL inverter; HFET1 model verified 100% correct sessions 110-140; NR converges to Vdd basin; MODEINITFIX proven irrelevant for ON devices with dense LU — needs homotopy or multi-pass NR)"
 
 # === Regression: misc ===
 "regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
