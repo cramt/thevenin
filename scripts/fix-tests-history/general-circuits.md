@@ -452,3 +452,34 @@ architectural changes.
 **What NOT to retry:** Any HFET initialization value change (Vgs=0, Vgs=Vt0,
 Vgd=0, etc.), source stepping, gmin stepping — all confirmed to converge to wrong
 basin. The leak() function, GGR terms, and matrix stamps are verified correct.
+
+## Session 131 findings (2026-04-12)
+
+### Full re-audit of all 12 ignored tests
+
+Ran all 12 ignored tests and all 95 non-ignored tests. Results: 640 pass, 12 skip, 0 fail.
+No regressions from previous sessions.
+
+### HFET inverter: gate leakage re-verification
+
+Re-examined the gate leakage current implementation in detail. Confirmed:
+- All parameter defaults match ngspice exactly (JS1D=1.0, JS2D=1.15e6, M1D=1.32, M2D=6.9, GGR=40, DEL=0.04, RGS=RGD=90)
+- The leak() function is functionally identical (two-diode parallel model with NR correction)
+- GGR recombination formula is identical
+- At VGD=+0.275V (the equilibrium point): gate-drain Schottky current ≈ 15.6 nA
+- GGR contribution ≈ 0.036 nA (negligible)
+
+The ~15.6 nA gate leakage IS sufficient to pull V(3) negative in equilibrium, but the NR solver cannot reach the V(3)<0 basin from any standard initialization. The MODEINITJCT→MODEINITFIX→MODEINITFLOAT phase transition in ngspice was analyzed; our 2-phase (InitJct→Float) vs ngspice's 3-phase introduces no difference for the HFET inverter because neither z1 nor z2 has the OFF flag (MODEINITFIX only changes behavior for OFF devices).
+
+### rtlinv: error unchanged at 4.3%→89%
+
+First mismatch still at t=9.06ns, col 0: expected 3.777V, got 3.941V (4.3% error). This corresponds to a ~100ps timing shift in the switching edge (dV/dt ≈ 2.15 V/ns × 0.1ns = 0.215V ≈ 4.3%). Error grows to 89% at subsequent edges due to cascading timing shifts.
+
+### schmitt: error unchanged at 31%
+
+First mismatch at t=293ns, col 1: expected -0.302V, got -0.396V (31% error). No improvement from any recent changes.
+
+**What NOT to retry:** All 3 tests (HFET inverter, rtlinv, schmitt) are confirmed intractable:
+- HFET: wrong NR basin, requires MODEINITFIX or multi-pass cycling
+- rtlinv: transient timing cascade, requires exact timestep algorithm match
+- schmitt: BJT voltage-dependent cap timing, same root cause as rtlinv

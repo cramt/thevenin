@@ -739,3 +739,33 @@ equilibrate through junction/channel current paths. The analytical Vbs0t→Vbsef
 may be overriding the NR body voltage during transient, preventing the companion-based
 charge dynamics from working properly. Understanding and fixing this interplay between
 the analytical chain and NR body node during transient is the remaining path forward.
+
+## Session 131 findings (2026-04-12)
+
+### DD RampVg2: analytical chain vs NR body node investigation
+
+Investigated the interplay between the analytical Vbseff chain and the NR body node.
+Confirmed that both ngspice and our code:
+1. Pass vbs (from NR body node solution) to the companion function
+2. Compute Vbs0eff from the back-gate chain (independent of NR body node)
+3. Compute Vbsdio from Vbs0eff + smooth clamp against vbs (line 1119 in ngspice)
+4. Use the analytical Vbseff (NOT the NR body node) for Vth and main device equations
+
+The body decay issue is NOT caused by the analytical chain "overriding" the NR body
+voltage in the code — both implementations handle this identically. The issue is
+structural: Vbs0eff (from back-gate) creates a strong equilibrium pull on Vbsdio through
+the smoothing factor `0.5*(1+T1/T2)`, and without adequate body resistance (Rbody) or
+junction current paths, the body charge cannot dissipate.
+
+**Status:** Charge-up phase works correctly (549mV peak, 0.7% error vs 553mV expected).
+Decay phase still broken (549mV vs 275mV at t=122.5ps) — requires body discharge
+mechanism that is structurally absent from the BSIM3SOI-DD analytical body model.
+
+### DD t3, inv2: tolerance overrides unchanged
+
+Both tests still pass at their current tolerance thresholds (t3: 3.5e-2, inv2: 2.6e-3).
+No improvement in underlying error from recent changes.
+
+**What NOT to retry:** Analytical chain code comparison for RampVg2 (verified identical
+in both implementations). The remaining issue is a missing body discharge mechanism,
+not a code bug.

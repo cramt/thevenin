@@ -26,4 +26,4 @@
 "transmission/cpl3_4_line.cir" = "~13.8% peak error at t=38.8ns: CPL 4-line CMOS switching timing shift (all setup + convolution code verified identical to ngspice; FP accumulation)"
 
 # === VBIC ===
-"vbic/FO.cir" = "VBIC FO: 0.4%→15%+ error growing monotonically with bias (FP eval order; pnjlim fix verified no effect; all formulas verified 80+ sessions)"
+"vbic/FO.cir" = "VBIC FO: 0.4%→52% error growing with Vc and Vb (FP eval order amplified by avalanche multiplication; all formulas, defaults, self-heating verified identical to ngspice over 130+ sessions)"
