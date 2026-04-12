@@ -71,6 +71,7 @@ pub mod jfet;
 pub mod ltra;
 pub mod mesa;
 pub mod mesfet;
+pub mod mos2;
 pub mod mos6;
 pub mod mosfet;
 pub mod txl;

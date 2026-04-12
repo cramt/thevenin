@@ -20,6 +20,7 @@ use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mesa::{mesa_companion, stamp_mesa};
 use crate::mesfet::{mesfet_companion, stamp_mesfet_with_voltages};
 use crate::mna::{MnaSystem, stamp_conductance};
+use crate::mos2::stamp_mos2;
 use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::newton::NrMode;
 use crate::vbic::{compute_self_heating_power, stamp_vbic_with_voltages};
@@ -109,6 +110,7 @@ pub(crate) struct DeviceVoltageState {
     vcrits: Vec<f64>,
     prev_bjt: RefCell<Vec<(f64, f64)>>,
     prev_mos: RefCell<Vec<(f64, f64, f64, f64)>>,
+    prev_mos2: RefCell<Vec<(f64, f64, f64, f64)>>,
     prev_mos6: RefCell<Vec<(f64, f64, f64, f64)>>,
     prev_jfet: RefCell<Vec<(f64, f64)>>,
     jfet_vcrits: Vec<f64>,
@@ -145,6 +147,7 @@ impl DeviceVoltageState {
             vcrits,
             prev_bjt: RefCell::new(vec![(0.0, 0.0); mna.bjts.len()]),
             prev_mos: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mosfets.len()]),
+            prev_mos2: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos2s.len()]),
             prev_mos6: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos6s.len()]),
             prev_jfet: RefCell::new(vec![(0.0, 0.0); mna.jfets.len()]),
             jfet_vcrits,
@@ -207,6 +210,15 @@ impl DeviceVoltageState {
                         let (vgs, vds, vbs) = m.terminal_voltages(prev_solution);
                         // Initialize von to 0.0 — it will be updated after the
                         // first companion call, matching ngspice's MOS1von default.
+                        (vgs, vds, vbs, 0.0)
+                    })
+                    .collect(),
+            ),
+            prev_mos2: RefCell::new(
+                mna.mos2s
+                    .iter()
+                    .map(|m| {
+                        let (vgs, vds, vbs) = m.terminal_voltages(prev_solution);
                         (vgs, vds, vbs, 0.0)
                     })
                     .collect(),
@@ -352,6 +364,14 @@ impl DeviceVoltageState {
                 let va = ja.map(|i| solution[i]).unwrap_or(0.0);
                 let vc = jc.map(|i| solution[i]).unwrap_or(0.0);
                 prev[di] = va - vc;
+            }
+        }
+        // Reset MOS2 prev voltages (von reset to 0.0 for fresh NR sequence)
+        {
+            let mut prev = self.prev_mos2.borrow_mut();
+            for (i, mos) in mna.mos2s.iter().enumerate() {
+                let (vgs, vds, vbs) = mos.terminal_voltages(solution);
+                prev[i] = (vgs, vds, vbs, 0.0);
             }
         }
         // Reset MOS6 prev voltages (von reset to 0.0 for fresh NR sequence)
@@ -565,6 +585,36 @@ impl DeviceVoltageState {
                 //   here->MOS1von = model->MOS1type * von;
                 prev[mi] = (vgs, vds, vbs, comp.von);
                 stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
+            }
+        }
+
+        // MOS Level 2
+        {
+            let mut prev = self.prev_mos2.borrow_mut();
+            for (mi, mos) in mna.mos2s.iter().enumerate() {
+                let (vgs, vds, vbs) = if init_jct {
+                    // MODEINITJCT matching ngspice mos2load.c:
+                    //   vbs = -1; vgs = type * tVto; vds = 0;
+                    let sign = mos.model.mos_type.sign();
+                    let vto = sign * mos.model.vto;
+                    (vto, 0.0, -1.0)
+                } else {
+                    let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
+                    let von_prev = prev[mi].3;
+                    let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let vbs = if vds >= 0.0 {
+                        bsim_pnjlim(raw_vbs, prev[mi].2)
+                    } else {
+                        bsim_pnjlim(raw_vbs - vds, prev[mi].2 - prev[mi].1) + vds
+                    };
+                    (vgs, vds, vbs)
+                };
+
+                let beta = mos.beta();
+                let l_eff = mos.l_eff();
+                let comp = mos.model.companion(vgs, vds, vbs, beta, mos.w, l_eff);
+                prev[mi] = (vgs, vds, vbs, comp.von);
+                stamp_mos2(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }
 

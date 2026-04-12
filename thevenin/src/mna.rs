@@ -228,6 +228,8 @@ pub struct MnaSystem {
     pub bjt_cap_indices: Vec<BjtCapIndices>,
     /// Resolved MOSFET instances for NR iteration.
     pub mosfets: Vec<MosfetInstance>,
+    /// Resolved MOS Level 2 instances for NR iteration.
+    pub mos2s: Vec<crate::mos2::Mos2Instance>,
     /// Resolved MOS6 MOSFET instances for NR iteration.
     pub mos6s: Vec<crate::mos6::Mos6Instance>,
     /// Resolved JFET instances for NR iteration.
@@ -289,6 +291,7 @@ impl MnaSystem {
         !self.diodes.is_empty()
             || !self.bjts.is_empty()
             || !self.mosfets.is_empty()
+            || !self.mos2s.is_empty()
             || !self.mos6s.is_empty()
             || !self.jfets.is_empty()
             || !self.bsim3s.is_empty()
@@ -1240,6 +1243,14 @@ fn assemble_mna_flat(
                     let (nrd, nrs) = get_nrd_nrs(params);
                     let has_body_contact = body.is_some();
                     internal_node_count += bm.internal_node_count_fd(nrd, nrs, has_body_contact);
+                } else if level == 2 {
+                    // MOS Level 2
+                    let mm = if let Some(mdef) = resolved {
+                        crate::mos2::Mos2Model::from_model_def(mdef)
+                    } else {
+                        crate::mos2::Mos2Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    internal_node_count += mm.internal_node_count();
                 } else if level == 6 {
                     // MOS6
                     let mm = if let Some(mdef) = resolved {
@@ -1468,6 +1479,7 @@ fn assemble_mna_flat(
     let mut bjt_cap_indices = Vec::new();
     let mut vbics = Vec::new();
     let mut mosfets = Vec::new();
+    let mut mos2s = Vec::new();
     let mut mos6s = Vec::new();
     let mut jfets = Vec::new();
     let mut mesas = Vec::new();
@@ -2082,6 +2094,72 @@ fn assemble_mna_flat(
                         vth0_inst,
                         nbc,
                     });
+                } else if level == 2 {
+                    // MOS Level 2
+                    let mm = if let Some(mdef) = resolved {
+                        crate::mos2::Mos2Model::from_model_def(mdef)
+                    } else {
+                        crate::mos2::Mos2Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+
+                    mos2s.push(crate::mos2::Mos2Instance {
+                        name: element.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm.clone(),
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
+
+                    push_mosfet_caps(
+                        &mut capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
                 } else if level == 6 {
                     // MOS6
                     let mm = if let Some(mdef) = resolved {
@@ -2845,24 +2923,33 @@ fn assemble_mna_flat(
                 };
                 // Separate expression from tc1=/tc2= parameters.
                 // The raw_expr may look like "v(1) tc1=0.001 tc2=1e-6".
-                let (expr_part, tc1, tc2) = parse_bsrc_expr_and_tc(raw_expr);
-                // Strip braces/quotes from expression
-                let expr_clean = if let Some(inner) = expr_part
+                let params = parse_bsrc_params(raw_expr);
+                // Strip braces/quotes from expression (trim first to handle
+                // trailing space from splitting at param keywords)
+                let expr_trimmed = params.expr.trim();
+                let expr_clean = if let Some(inner) = expr_trimmed
                     .strip_prefix('{')
                     .and_then(|s| s.strip_suffix('}'))
                 {
                     inner.trim()
-                } else if let Some(inner) = expr_part
+                } else if let Some(inner) = expr_trimmed
                     .strip_prefix('\'')
                     .and_then(|s| s.strip_suffix('\''))
                 {
                     inner.trim()
                 } else {
-                    expr_part.trim()
+                    expr_trimmed
                 };
-                // Compute temperature coefficient factor
+                // Compute temperature coefficient factor.
+                // reciproc_tc: behavioral resistors use 1/factor (tc scales
+                // resistance, not current — matches ngspice ASRCreciproctc).
                 let dt = crate::netlist_temp(netlist) - 27.0;
-                let tc_factor = 1.0 + tc1 * dt + tc2 * dt * dt;
+                let raw_factor = 1.0 + params.tc1 * dt + params.tc2 * dt * dt;
+                let tc_factor = if params.reciproc_tc {
+                    1.0 / raw_factor
+                } else {
+                    raw_factor
+                };
                 if is_current {
                     behavioral_sources.push(BehavioralSourceInstance {
                         pos_idx: node_map.get(pos),
@@ -3025,6 +3112,7 @@ fn assemble_mna_flat(
         bjts,
         bjt_cap_indices,
         mosfets,
+        mos2s,
         mos6s,
         jfets,
         mesas,
@@ -3050,23 +3138,34 @@ fn assemble_mna_flat(
     })
 }
 
-/// Parse a B-source expression string, extracting tc1/tc2 parameters.
+/// Parsed B-source parameters extracted from the spec string.
+struct BsrcParams<'a> {
+    expr: &'a str,
+    tc1: f64,
+    tc2: f64,
+    /// When true, use 1/tc_factor (behavioral resistor: tc scales resistance, not current).
+    reciproc_tc: bool,
+}
+
+/// Parse a B-source expression string, extracting tc1/tc2/reciproctc parameters.
 ///
-/// Input like `"v(1) tc1=0.001 tc2=1e-6"` returns `("v(1)", 0.001, 1e-6)`.
-/// Parameters not present default to 0.0.
-fn parse_bsrc_expr_and_tc(raw: &str) -> (&str, f64, f64) {
+/// Input like `"v(1) tc1=0.001 tc2=1e-6"` returns expr="v(1)", tc1=0.001, tc2=1e-6.
+/// Parameters not present default to 0.0 / false.
+fn parse_bsrc_params(raw: &str) -> BsrcParams<'_> {
     let mut tc1 = 0.0;
     let mut tc2 = 0.0;
-    // Find the earliest tc1= or tc2= (case-insensitive) to split off the expression.
+    let mut reciproc_tc = false;
+    // Find the earliest tc1=, tc2=, or reciproctc= to split off the expression.
     let lower = raw.to_lowercase();
-    let tc_start = lower
+    let param_start = lower
         .find("tc1=")
         .into_iter()
         .chain(lower.find("tc2="))
+        .chain(lower.find("reciproctc="))
         .min();
-    let expr_end = tc_start.unwrap_or(raw.len());
-    // Parse tc parameters from the remainder
-    if let Some(start) = tc_start {
+    let expr_end = param_start.unwrap_or(raw.len());
+    // Parse parameters from the remainder
+    if let Some(start) = param_start {
         let remainder = &raw[start..];
         for part in remainder.split_whitespace() {
             let part_lower = part.to_lowercase();
@@ -3074,10 +3173,17 @@ fn parse_bsrc_expr_and_tc(raw: &str) -> (&str, f64, f64) {
                 tc1 = val_str.parse().unwrap_or(0.0);
             } else if let Some(val_str) = part_lower.strip_prefix("tc2=") {
                 tc2 = val_str.parse().unwrap_or(0.0);
+            } else if let Some(val_str) = part_lower.strip_prefix("reciproctc=") {
+                reciproc_tc = val_str == "1";
             }
         }
     }
-    (&raw[..expr_end], tc1, tc2)
+    BsrcParams {
+        expr: &raw[..expr_end],
+        tc1,
+        tc2,
+        reciproc_tc,
+    }
 }
 
 /// Stamp a single element into the MNA system.

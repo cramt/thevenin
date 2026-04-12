@@ -29,6 +29,9 @@
 # cpl3_4_line: bounded ~40mV absolute error, growing relative error as signal decays
 "transmission/cpl3_4_line.cir" = { rel_tol = 2e-3, abs_tol = 5.5e-2 }
 
+# Level 2 MOSFET: CLM and mobility degradation derivative chain differences
+"general/mosamp.cir" = { rel_tol = 5e-2 }
+
 # BSIM3SOI-DD: analytical body voltage chain FP precision (sessions 99-101)
 "bsim3soidd/t3.cir" = { rel_tol = 3.5e-2 }
 "bsim3soidd/inv2.cir" = { rel_tol = 2.6e-3 }

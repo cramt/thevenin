@@ -10,14 +10,12 @@
 
 # === General circuits ===
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
-"general/mosamp.cir" = "~35% error at DC OP: Level 2 MOSFET not implemented (uses Level 1 fallback; missing velocity saturation/mobility degradation/short-channel effects)"
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag; timing shift in BJT voltage-dependent cap model)"
 
 # === HFET ===
 "hfet/inverter.cir" = "wrong DC OP: V(3)=1.956V vs expected -0.275V (bistable DCFL inverter; HFET1 model verified 100% correct sessions 110-140; NR converges to Vdd basin; MODEINITFIX proven irrelevant for ON devices with dense LU — needs homotopy or multi-pass NR)"
 
 # === Regression: misc ===
-"regression/misc/asrc-tc-2.cir" = "parameter expressions not yet supported (r={1k + v(9)}) + requires .control scripting"
 "regression/misc/resume-1.cir" = ".control: stop when + resume commands not implemented (requires transient state preservation)"
 
 # === Transmission lines ===
