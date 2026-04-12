@@ -769,3 +769,38 @@ No improvement in underlying error from recent changes.
 **What NOT to retry:** Analytical chain code comparison for RampVg2 (verified identical
 in both implementations). The remaining issue is a missing body discharge mechanism,
 not a code bug.
+
+## Session 132 findings (2026-04-12)
+
+### DD RampVg2: quantitative discharge analysis confirms CAPMOD=3 root cause
+
+**Investigated:** Why the body (at 549mV) doesn't discharge when the gate ramps down.
+
+**Findings:**
+1. **Junction currents are negligible:** At Vbs=549mV, the forward-biased source junction
+   provides only ~70pA (wtsi*jdif = weff*tsi*ISDIF = 10µ*50nm*1e-6 = 5e-19A saturation;
+   exp(549/29.3)≈1.4e8; Ibs≈7e-11A). Body capacitance CboxWL≈2.37fF requires τ=18.6µs
+   to discharge through junction alone — 18,000× too slow for the 1ns simulation.
+
+2. **Discharge requires gate-body coupling:** ngspice discharges body via dQbody/dt =
+   cbgb * dVgb/dt. With Vg ramping at 20V/ns, need cbgb≈50-100aF to get µA-scale current.
+
+3. **cbgb→0 in subthreshold for CAPMOD=2:** In our model, cbgb = cbg - dqe1_dvg + dqex_dvg.
+   In subthreshold (Vgs<Vth): dvgsteff_dvg→0, dvbseff_dvg→0, xc→0, so all terms collapse.
+   The body has no capacitive path to respond to gate changes when the device is OFF.
+
+4. **CboxWL IS included in intrinsic model:** Verified CboxWL participates in Qe1 (line 2869:
+   t5_e1 = -CboxWL*(vbsdio-vbs0), qe1 = -qsicv + qbf0 + t5_e1*xc). But the xc*CboxWL
+   term vanishes in subthreshold (xc→0), so CboxWL only provides coupling in strong inversion.
+
+5. **CAPMOD=3 provides different subthreshold coupling:** ngspice's CAPMOD=3 uses a unified
+   charge model with different partition/smoothing that maintains body-gate coupling even
+   below threshold. This is the missing physics for discharge.
+
+**Conclusion:** CAPMOD=3 implementation (300+ LOC) is the ONLY path to fix RampVg2 discharge.
+The issue is not a code bug in our CAPMOD=2 — it's a fundamentally different charge partition
+model that maintains cbgb in subthreshold. Confirmed intractable within current constraints.
+
+**What NOT to retry:** CboxWL stamp improvements (already properly in intrinsic model through
+cbeb/Qe1). Junction current enhancements (fundamentally too small at ~70pA vs needed ~µA).
+Any change to CAPMOD=2 charge formulas (correct for CAPMOD=2, issue is CAPMOD=3 physics).
