@@ -394,9 +394,9 @@ dependencies = [
 
 [[package]]
 name = "facet-format"
-version = "0.44.5"
+version = "0.44.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d87b44b7183a982f8c9889b7ec50bf8f1a38318a77069084436cc908bb1e5e96"
+checksum = "50e9bca089d254ef30bcb902566f7f8477b29a11cda26d5332bd584259af451c"
 dependencies = [
  "facet-core",
  "facet-dessert",
@@ -407,9 +407,9 @@ dependencies = [
 
 [[package]]
 name = "facet-json"
-version = "0.44.5"
+version = "0.44.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81791a228a3d57e2e982430f92ad2a219feaca8f21234316a830246594f64e84"
+checksum = "6dc7a1b6408721dfef48541539b8958a43940bcad5f312f9a691ee3f5ff44465"
 dependencies = [
  "facet",
  "facet-core",
@@ -509,9 +509,9 @@ dependencies = [
 
 [[package]]
 name = "facet-toml"
-version = "0.44.5"
+version = "0.44.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed9e781ae29e06f148fafa48c418c12666736bb5538246b4a7682431c0fe17c9"
+checksum = "b0da230f77d4c948580af7ee7d8c035c15bf1a22deb38ca5eb164c1d104e970b"
 dependencies = [
  "facet-core",
  "facet-format",
@@ -521,9 +521,9 @@ dependencies = [
 
 [[package]]
 name = "facet-yaml"
-version = "0.44.5"
+version = "0.44.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7253af3ca2c9d6d72d5d94afcf9d174f0cc827a2fa945f06391bb7aba5dfc24"
+checksum = "a0b8adae3ac1f7159bfdb58bf110a8ddd9cfce4835d86556897210e4fb048bf0"
 dependencies = [
  "facet",
  "facet-core",
