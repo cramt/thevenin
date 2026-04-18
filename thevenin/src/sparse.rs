@@ -1,5 +1,5 @@
 use faer::Mat;
-use faer::linalg::solvers::{PartialPivLu, Solve};
+use faer::linalg::solvers::{FullPivLu, PartialPivLu, Solve};
 use faer::sparse::{SparseColMat, Triplet as FaerTriplet};
 use thiserror::Error;
 
@@ -15,7 +15,7 @@ pub enum SparseMatrixError {
     DimensionMismatch { matrix_dim: usize, rhs_len: usize },
 }
 
-/// Dimension threshold: systems smaller than this use dense partial-pivoting LU;
+/// Dimension threshold: systems smaller than this use dense full-pivoting LU;
 /// larger systems use sparse LU for O(nnz) instead of O(n^3).
 const SPARSE_THRESHOLD: usize = 48;
 
@@ -161,10 +161,15 @@ impl LinearSystem {
         }
 
         if dim < SPARSE_THRESHOLD {
-            // Dense path: partial pivoting is cheaper than full pivoting
-            // (~1.5-2x) and sufficient for well-conditioned MNA matrices.
+            // Dense path: full pivoting (row + column permutations) provides
+            // superior numerical stability for ill-conditioned MNA matrices
+            // compared to partial pivoting (row only).  The extra cost of
+            // full pivoting is negligible at these dimensions and matches
+            // ngspice's Markowitz solver behaviour more closely for circuits
+            // with negative conductances (e.g. HFET GGR terms) that make
+            // the Jacobian ill-conditioned during NR convergence.
             let a = self.matrix.to_dense();
-            let lu = PartialPivLu::new(a.as_ref());
+            let lu = FullPivLu::new(a.as_ref());
             let x = lu.solve(&b);
             let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
             if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {

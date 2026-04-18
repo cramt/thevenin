@@ -168,6 +168,7 @@ where
         }
 
         let new_solution = system.solve()?;
+
         if new_solution.iter().any(|v| v.is_nan() || v.is_infinite()) {
             return Err(NrError::NoConvergence {
                 iterations: iter + 1,
@@ -224,7 +225,11 @@ where
     while gmin >= gmin_target * 0.9 {
         let attempt = NrAttempt {
             diag_gmin: gmin,
-            dev_gmin: gmin,
+            // Device-model gmin stays at the base level (options.gmin = 1e-12),
+            // NOT elevated.  This matches ngspice's dynamic_gmin (cktop.c) which
+            // only elevates CKTdiagGmin while CKTgmin remains at its default.
+            // The load closure computes max(dev_gmin, options.gmin) = options.gmin.
+            dev_gmin: gmin_target,
             source_factor: 1.0,
             max_iters: options.itl2,
         };
@@ -472,7 +477,8 @@ where
             for _ in 0..=10 {
                 let attempt = NrAttempt {
                     diag_gmin: gmin,
-                    dev_gmin: gmin,
+                    // Only elevate diagonal; device models keep base gmin.
+                    dev_gmin: target_gmin,
                     source_factor: 0.0,
                     max_iters: options.itl2,
                 };
@@ -584,15 +590,28 @@ pub fn transient_nr_solve<F>(
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
-    // First try: direct NR with the nominal diag_gmin.
+    // Direct NR only — no gmin/source stepping fallbacks.
+    //
+    // Matches ngspice dctran.c: transient timesteps call NIiter() with
+    // CKTtranMaxIter (ITL4, default 10).  On failure, the caller cuts the
+    // timestep (delta/8) and retries.  This is the correct strategy because
+    // the previous-timestep solution is a good initial guess that only needs
+    // a smaller step to stay within the convergence basin.
+    //
+    // ngspice sets CKTdiagGmin = 0 after DC OP convergence, but its
+    // Markowitz sparse solver tolerates near-singular pivots that dense LU
+    // cannot.  We use options.gmin as a minimal diagonal shunt — it's the
+    // circuit's requested floor conductance and is negligible compared to
+    // real device conductances, but keeps the matrix numerically non-singular
+    // for dense partial-pivoting LU.
     let attempt = NrAttempt {
-        diag_gmin: options.diag_gmin,
-        dev_gmin: options.diag_gmin,
+        diag_gmin: options.gmin,
+        dev_gmin: options.gmin,
         source_factor: 1.0,
         max_iters: options.itl4,
     };
     // Transient always uses Float — we have a meaningful previous solution.
-    match try_nr(
+    try_nr(
         options,
         dim,
         num_nodes,
@@ -600,15 +619,7 @@ where
         initial_guess,
         &attempt,
         NrMode::Float,
-    ) {
-        Ok(result) => Ok(result),
-        Err(_) => {
-            // Fallback: Gmin stepping for transient.
-            // Start with elevated diagonal Gmin and step down, matching ngspice's
-            // approach when MOSFET cutoff creates floating internal nodes.
-            gmin_stepping(options, dim, num_nodes, &load_system, initial_guess)
-        }
-    }
+    )
 }
 
 /// Solve a nonlinear system using source stepping directly, bypassing direct NR

@@ -23,6 +23,7 @@ pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
                         "VNTOL" => opts.vntol = *v,
                         "ITL1" => opts.itl1 = *v as usize,
                         "ITL2" => opts.itl2 = *v as usize,
+                        "ITL4" => opts.itl4 = *v as usize,
                         _ => {}
                     }
                 }
@@ -285,12 +286,26 @@ fn jct_initial_guess(
     }
 
     // Stamp each HFET at MODEINITJCT initial bias.
-    // HFET1 (hfetload.c:116-117): vgs=vgd=-1 (reverse-biased gate junctions)
-    // This provides non-zero junction conductances via the leak() function
-    // and channel conductances for the initial Jacobian.
+    // HFET1 (hfetload.c:116-117): vgs=vgd=-1 (reverse-biased gate junctions).
+    //
+    // For depletion-mode devices (t_vto < 0 for NHFET, t_vto > 0 for PHFET),
+    // use vgs = t_vto + 0.1 to put the device near threshold in the ON state.
+    // This breaks the symmetry in DCFL inverters where the depletion load
+    // must be ON and the enhancement driver OFF at the initial operating point.
+    // Without this, both devices look identical at vgs=-1 and the output node
+    // floats to Vdd, seeding NR into the wrong convergence basin.
     for hfet in &mna.hfets {
-        let comp = hfet_companion_full(hfet, -1.0, -1.0, options.gmin);
-        stamp_hfet_with_voltages(&comp, hfet, -1.0, -1.0, &mut system.matrix, &mut system.rhs);
+        let sign = hfet.model.device_type as i32 as f64;
+        let is_depletion = sign * hfet.precomp.t_vto < 0.0;
+        let (vgs, vgd) = if is_depletion {
+            // Depletion: bias near threshold (ON) — e.g. t_vto=-0.3 → vgs=-0.2
+            (hfet.precomp.t_vto + sign * 0.1, -1.0)
+        } else {
+            // Enhancement: standard reverse-biased junctions (OFF)
+            (-1.0, -1.0)
+        };
+        let comp = hfet_companion_full(hfet, vgs, vgd, options.gmin);
+        stamp_hfet_with_voltages(&comp, hfet, vgs, vgd, &mut system.matrix, &mut system.rhs);
     }
 
     // Stamp each BSIM3SOI-DD at InitJct voltages.

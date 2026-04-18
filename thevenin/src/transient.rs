@@ -957,8 +957,19 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // Prepare output vectors.
     let mut time_vec = SimVector::real("time", Vec::new());
 
-    let mut node_vecs: Vec<SimVector> = mna
-        .node_map
+    // Sort nodes by descending matrix index to match ngspice's LIFO node-list
+    // traversal order (last-inserted node first in output).  The DC path in
+    // simulate.rs applies the same sort.
+    let sorted_nodes: Vec<(String, usize)> = {
+        let mut nodes: Vec<_> = mna
+            .node_map
+            .iter()
+            .map(|(n, i)| (n.to_string(), i))
+            .collect();
+        nodes.sort_by(|a, b| b.1.cmp(&a.1));
+        nodes
+    };
+    let mut node_vecs: Vec<SimVector> = sorted_nodes
         .iter()
         .map(|(name, _)| SimVector::real(format!("v({})", name), Vec::new()))
         .collect();
@@ -1041,6 +1052,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             &mut branch_vecs,
             &device_param_queries,
             &mut device_param_vecs,
+            &sorted_nodes,
         );
     }
 
@@ -1834,6 +1846,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 &mut branch_vecs,
                 &device_param_queries,
                 &mut device_param_vecs,
+                &sorted_nodes,
             );
         }
     }
@@ -1913,11 +1926,12 @@ fn record_point(
     branch_vecs: &mut [SimVector],
     device_param_queries: &[(String, String)],
     device_param_vecs: &mut [SimVector],
+    sorted_nodes: &[(String, usize)],
 ) {
     time_vec.data.as_real_mut().push(t);
 
-    for (idx, (_name, node_idx)) in mna.node_map.iter().enumerate() {
-        node_vecs[idx].data.as_real_mut().push(solution[node_idx]);
+    for (idx, (_name, node_idx)) in sorted_nodes.iter().enumerate() {
+        node_vecs[idx].data.as_real_mut().push(solution[*node_idx]);
     }
 
     for (i, _vsrc) in mna.vsource_names.iter().enumerate() {

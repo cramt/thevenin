@@ -1271,6 +1271,7 @@ impl DeviceVoltageState {
                 prev[hi] = (vgs, vgd);
 
                 let comp = hfet_companion_full(hfet, vgs, vgd, gmin);
+
                 crate::hfet::stamp_hfet_with_voltages(
                     &comp,
                     hfet,

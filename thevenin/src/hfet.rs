@@ -1013,4 +1013,248 @@ mod tests {
         assert!(pre.imax > 0.0, "imax should be positive");
         assert!(pre.cf > 0.0, "cf should be positive");
     }
+
+    /// Diagnostic: evaluate HFET companion at InitJct bias (vgs=-1, vgd=-1)
+    /// for the driver and load models used in the DCFL inverter test circuit.
+    #[test]
+    fn hfet_dcfl_initjct_companion_values() {
+        // Build driver model (adrv): enhancement, vt0=0.3
+        let drv_def = ModelDef {
+            name: "adrv".to_string(),
+            kind: "NHFET".to_string(),
+            params: vec![
+                thevenin_types::Param {
+                    name: "RD".into(),
+                    value: Expr::Num(60.0),
+                },
+                thevenin_types::Param {
+                    name: "RS".into(),
+                    value: Expr::Num(60.0),
+                },
+                thevenin_types::Param {
+                    name: "M".into(),
+                    value: Expr::Num(2.57),
+                },
+                thevenin_types::Param {
+                    name: "LAMBDA".into(),
+                    value: Expr::Num(0.17),
+                },
+                thevenin_types::Param {
+                    name: "VS".into(),
+                    value: Expr::Num(1.5e5),
+                },
+                thevenin_types::Param {
+                    name: "MU".into(),
+                    value: Expr::Num(0.385),
+                },
+                thevenin_types::Param {
+                    name: "VTO".into(),
+                    value: Expr::Num(0.3),
+                },
+                thevenin_types::Param {
+                    name: "ETA".into(),
+                    value: Expr::Num(1.32),
+                },
+                thevenin_types::Param {
+                    name: "SIGMA0".into(),
+                    value: Expr::Num(0.04),
+                },
+                thevenin_types::Param {
+                    name: "VSIGMA".into(),
+                    value: Expr::Num(0.1),
+                },
+                thevenin_types::Param {
+                    name: "VSIGMAT".into(),
+                    value: Expr::Num(0.3),
+                },
+                thevenin_types::Param {
+                    name: "JS1S".into(),
+                    value: Expr::Num(1e-12),
+                },
+                thevenin_types::Param {
+                    name: "JS1D".into(),
+                    value: Expr::Num(1e-12),
+                },
+                thevenin_types::Param {
+                    name: "NMAX".into(),
+                    value: Expr::Num(6e15),
+                },
+            ],
+        };
+        let drv_model = HfetModel::from_model_def_with_level(&drv_def, 5);
+        let drv_pre = HfetPrecomp::compute(&drv_model, 300.15, 300.15, 10e-6, 1e-6);
+
+        // Build load model (aload): depletion, vt0=-0.3
+        let load_def = ModelDef {
+            name: "aload".to_string(),
+            kind: "NHFET".to_string(),
+            params: vec![
+                thevenin_types::Param {
+                    name: "RD".into(),
+                    value: Expr::Num(60.0),
+                },
+                thevenin_types::Param {
+                    name: "RS".into(),
+                    value: Expr::Num(60.0),
+                },
+                thevenin_types::Param {
+                    name: "M".into(),
+                    value: Expr::Num(2.57),
+                },
+                thevenin_types::Param {
+                    name: "LAMBDA".into(),
+                    value: Expr::Num(0.17),
+                },
+                thevenin_types::Param {
+                    name: "VS".into(),
+                    value: Expr::Num(1.5e5),
+                },
+                thevenin_types::Param {
+                    name: "MU".into(),
+                    value: Expr::Num(0.385),
+                },
+                thevenin_types::Param {
+                    name: "VTO".into(),
+                    value: Expr::Num(-0.3),
+                },
+                thevenin_types::Param {
+                    name: "ETA".into(),
+                    value: Expr::Num(1.32),
+                },
+                thevenin_types::Param {
+                    name: "SIGMA0".into(),
+                    value: Expr::Num(0.04),
+                },
+                thevenin_types::Param {
+                    name: "VSIGMA".into(),
+                    value: Expr::Num(0.1),
+                },
+                thevenin_types::Param {
+                    name: "VSIGMAT".into(),
+                    value: Expr::Num(0.3),
+                },
+                thevenin_types::Param {
+                    name: "JS1S".into(),
+                    value: Expr::Num(1e-12),
+                },
+                thevenin_types::Param {
+                    name: "JS1D".into(),
+                    value: Expr::Num(1e-12),
+                },
+                thevenin_types::Param {
+                    name: "NMAX".into(),
+                    value: Expr::Num(6e15),
+                },
+            ],
+        };
+        let load_model = HfetModel::from_model_def_with_level(&load_def, 5);
+        let load_pre = HfetPrecomp::compute(&load_model, 300.15, 300.15, 10e-6, 1e-6);
+
+        let drv_inst = HfetInstance {
+            name: "drv".into(),
+            drain_idx: Some(0),
+            gate_idx: Some(1),
+            source_idx: Some(2),
+            gate_prime_idx: None,
+            drain_prime_idx: Some(3),
+            source_prime_idx: Some(4),
+            drain_prm_prm_idx: None,
+            source_prm_prm_idx: None,
+            model: drv_model,
+            precomp: drv_pre,
+            w: 10e-6,
+            l: 1e-6,
+        };
+        let load_inst = HfetInstance {
+            name: "load".into(),
+            drain_idx: Some(0),
+            gate_idx: Some(1),
+            source_idx: Some(2),
+            gate_prime_idx: None,
+            drain_prime_idx: Some(3),
+            source_prime_idx: Some(4),
+            drain_prm_prm_idx: None,
+            source_prm_prm_idx: None,
+            model: load_model,
+            precomp: load_pre,
+            w: 10e-6,
+            l: 1e-6,
+        };
+
+        let gmin = 1e-12;
+        // InitJct: vgs=-1, vgd=-1
+        let drv_comp = hfet_companion_full(&drv_inst, -1.0, -1.0, gmin);
+        let load_comp = hfet_companion_full(&load_inst, -1.0, -1.0, gmin);
+
+        eprintln!("=== Driver (vt0=0.3) at InitJct (vgs=-1, vgd=-1) ===");
+        eprintln!(
+            "  cdrain via cd+cgd: cd={:.6e} cgd={:.6e}",
+            drv_comp.cd, drv_comp.cgd_current
+        );
+        eprintln!("  gm={:.6e} gds={:.6e}", drv_comp.gm, drv_comp.gds);
+        eprintln!("  ggs={:.6e} ggd={:.6e}", drv_comp.ggs, drv_comp.ggd);
+        eprintln!(
+            "  cgs={:.6e} cgd={:.6e}",
+            drv_comp.cgs_current, drv_comp.cgd_current
+        );
+        eprintln!("  cg={:.6e}", drv_comp.cg);
+        eprintln!(
+            "  capgs={:.6e} capgd={:.6e}",
+            drv_comp.capgs, drv_comp.capgd
+        );
+
+        eprintln!("=== Load (vt0=-0.3) at InitJct (vgs=-1, vgd=-1) ===");
+        eprintln!(
+            "  cdrain via cd+cgd: cd={:.6e} cgd={:.6e}",
+            load_comp.cd, load_comp.cgd_current
+        );
+        eprintln!("  gm={:.6e} gds={:.6e}", load_comp.gm, load_comp.gds);
+        eprintln!("  ggs={:.6e} ggd={:.6e}", load_comp.ggs, load_comp.ggd);
+        eprintln!(
+            "  cgs={:.6e} cgd={:.6e}",
+            load_comp.cgs_current, load_comp.cgd_current
+        );
+        eprintln!("  cg={:.6e}", load_comp.cg);
+        eprintln!(
+            "  capgs={:.6e} capgd={:.6e}",
+            load_comp.capgs, load_comp.capgd
+        );
+
+        // Now test at the ngspice solution: V(3)=-0.275446
+        // For the load z1 of x1: drain=1(2V), gate=3(-0.275), source=3(-0.275)
+        // External: d=2, g=-0.275, s=-0.275, all NHFET (sign=1)
+        // With rd=60, rs=60: series resistances create internal nodes
+        // At DC equilibrium, drain_prime voltage is between drain and channel
+        // Junction voltages: vgs = V(gp) - V(sp), vgd = V(gp) - V(dp)
+        // Since gate-source tied and rg=0: gp=g=s, so vgs_raw = 0
+        // For gate-drain: vgd_raw = V(g) - V(dp) where V(dp) is between V(d)=2 and channel
+
+        // Test at expected operating point vgs=0, vgd=-2.275 (load, approximate)
+        let load_comp_op = hfet_companion_full(&load_inst, 0.0, -2.275, gmin);
+        eprintln!("\n=== Load at operating point (vgs=0, vgd=-2.275) ===");
+        eprintln!(
+            "  cdrain={:.6e}",
+            load_comp_op.cd + load_comp_op.cgd_current
+        );
+        eprintln!("  gm={:.6e} gds={:.6e}", load_comp_op.gm, load_comp_op.gds);
+        eprintln!(
+            "  ggs={:.6e} ggd={:.6e}",
+            load_comp_op.ggs, load_comp_op.ggd
+        );
+        eprintln!(
+            "  cgs={:.6e} cgd={:.6e}",
+            load_comp_op.cgs_current, load_comp_op.cgd_current
+        );
+
+        // Test driver at expected operating point vgs=0, vgd=0.275 (forward gate-drain)
+        let drv_comp_op = hfet_companion_full(&drv_inst, 0.0, 0.275, gmin);
+        eprintln!("\n=== Driver at operating point (vgs=0, vgd=0.275) ===");
+        eprintln!("  cdrain={:.6e}", drv_comp_op.cd + drv_comp_op.cgd_current);
+        eprintln!("  gm={:.6e} gds={:.6e}", drv_comp_op.gm, drv_comp_op.gds);
+        eprintln!("  ggs={:.6e} ggd={:.6e}", drv_comp_op.ggs, drv_comp_op.ggd);
+        eprintln!(
+            "  cgs={:.6e} cgd={:.6e}",
+            drv_comp_op.cgs_current, drv_comp_op.cgd_current
+        );
+    }
 }
