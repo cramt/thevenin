@@ -167,7 +167,12 @@ where
             system.matrix.add(i, i, attempt.diag_gmin);
         }
 
-        let new_solution = system.solve()?;
+        let new_solution = match system.solve() {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(NrError::SolveError(e));
+            }
+        };
 
         if new_solution.iter().any(|v| v.is_nan() || v.is_infinite()) {
             return Err(NrError::NoConvergence {
@@ -175,6 +180,7 @@ where
             });
         }
         total_iters = iter + 1;
+
 
         if iter > 0 && check_convergence(&solution, &new_solution, num_nodes, options) {
             return Ok(NrResult {

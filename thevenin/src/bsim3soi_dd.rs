@@ -2813,7 +2813,8 @@ pub fn bsim3soi_dd_companion(
             };
 
         // Clamp VdsCV (ngspice lines 2977-2982)
-        // ngspice clamps the value but leaves derivatives unchanged
+        // ngspice clamps the VALUE only, never zeroes derivatives — keeping
+        // the smooth-formula derivatives preserves Jacobian continuity.
         let mut vds_cv_m = vds_cv_raw.max(0.0) + 1e-4;
         let dvds_cv_dvg_m = dvds_cv_dvg_r;
         let dvds_cv_dvd_m = dvds_cv_dvd_r;
@@ -2852,24 +2853,13 @@ pub fn bsim3soi_dd_companion(
         let dt1v_dvc = dvds_cv_dvc_m * factor_vcscv - 1.0; // -1 from dVcs/dVc
         let dt2v_dvc = (t1_vcscv3 * dt1v_dvc + t5_vcscv * vds_cv_m * dvds_cv_dvc_m) / t2_vcscv3;
 
-        let mut vcs_cv3 = vcs + 0.5 * (t1_vcscv3 - t2_vcscv3);
-        let mut dvcs_cv3_dvb = 0.5 * (dt1v_dvb - dt2v_dvb);
-        let mut dvcs_cv3_dvg = 0.5 * (dt1v_dvg - dt2v_dvg);
-        let mut dvcs_cv3_dvd = 0.5 * (dt1v_dvd - dt2v_dvd);
-        let mut dvcs_cv3_dvc = 1.0 + 0.5 * (dt1v_dvc - dt2v_dvc);
-        if vcs_cv3 < 0.0 {
-            vcs_cv3 = 0.0;
-            dvcs_cv3_dvb = 0.0;
-            dvcs_cv3_dvg = 0.0;
-            dvcs_cv3_dvd = 0.0;
-            dvcs_cv3_dvc = 0.0;
-        } else if vcs_cv3 > vds_cv_m {
-            vcs_cv3 = vds_cv_m;
-            dvcs_cv3_dvb = dvds_cv_dvb_m;
-            dvcs_cv3_dvg = dvds_cv_dvg_m;
-            dvcs_cv3_dvd = dvds_cv_dvd_m;
-            dvcs_cv3_dvc = dvds_cv_dvc_m;
-        }
+        // ngspice CAPMOD=3 b3soiddld.c lines 3020-3028: no explicit clamping.
+        // Match ngspice exactly — no clamp on VcsCV for CAPMOD=3.
+        let vcs_cv3 = vcs + 0.5 * (t1_vcscv3 - t2_vcscv3);
+        let dvcs_cv3_dvb = 0.5 * (dt1v_dvb - dt2v_dvb);
+        let dvcs_cv3_dvg = 0.5 * (dt1v_dvg - dt2v_dvg);
+        let dvcs_cv3_dvd = 0.5 * (dt1v_dvd - dt2v_dvd);
+        let dvcs_cv3_dvc = 1.0 + 0.5 * (dt1v_dvc - dt2v_dvc);
 
         let phisc = phis + vcs_cv3;
         let dphisc_dvb = dphis_dvb + dvcs_cv3_dvb;
@@ -2886,13 +2876,17 @@ pub fn bsim3soi_dd_companion(
         let xc_t4 = CONST_2OV3 * sp.k1 * (phisc * sqrt_phisc - phis * sqrt_phis);
         let xc_t5 = xc_t1 * vds_cv_m - xc_t2; // Denominator
         let xc_t6 = xc_t3 * vcs_cv3 - xc_t4; // Numerator
+        // Xc = T6/T5 (ngspice line 3045).  No floor — matching ngspice exactly.
+        // The NR convergence relies on the improved bypass (relative tolerance)
+        // rather than derivative clamping, since any charge/Jacobian mismatch
+        // from clamping is amplified by 1/h at small timesteps.
         let xc3 = if xc_t5.abs() > 1e-30 {
             xc_t6 / xc_t5
         } else {
             0.0
         };
 
-        // Xc derivatives (ngspice lines 3047-3099)
+        // Xc derivatives (ngspice lines 3047-3099), scaled by clamp factor.
         let dxc_t1_dvb = sp.k1 * dsqrt_phis_dvb - 0.5 * dvds_cv_dvb_m;
         let dxc_t2_dvb = sp.k1 * (sqrt_phisd * dphisd_dvb - sqrt_phis * dphis_dvb);
         let dxc_t3_dvb = sp.k1 * dsqrt_phis_dvb - 0.5 * dvcs_cv3_dvb;
@@ -2922,12 +2916,15 @@ pub fn bsim3soi_dd_companion(
         let dxc_t5_dvc = xc_t1 * dvds_cv_dvc_m + vds_cv_m * dxc_t1_dvc - dxc_t2_dvc;
         let dxc_t6_dvc = xc_t3 * dvcs_cv3_dvc + vcs_cv3 * dxc_t3_dvc - dxc_t4_dvc;
 
+        // Xc derivatives (ngspice lines 3047-3099).  No floor — matching ngspice exactly.
+        // dxc3/dV = (dT6/dV - xc3 * dT5/dV) / T5
         let (dxc3_dvb, dxc3_dvg, dxc3_dvd, dxc3_dvc) = if xc_t5.abs() > 1e-30 {
+            let xc3_raw = xc_t6 / xc_t5;
             (
-                (dxc_t6_dvb - xc3 * dxc_t5_dvb) / xc_t5,
-                (dxc_t6_dvg - xc3 * dxc_t5_dvg) / xc_t5,
-                (dxc_t6_dvd - xc3 * dxc_t5_dvd) / xc_t5,
-                (dxc_t6_dvc - xc3 * dxc_t5_dvc) / xc_t5,
+                (dxc_t6_dvb - xc3_raw * dxc_t5_dvb) / xc_t5,
+                (dxc_t6_dvg - xc3_raw * dxc_t5_dvg) / xc_t5,
+                (dxc_t6_dvd - xc3_raw * dxc_t5_dvd) / xc_t5,
+                (dxc_t6_dvc - xc3_raw * dxc_t5_dvc) / xc_t5,
             )
         } else {
             (0.0, 0.0, 0.0, 0.0)
@@ -2993,14 +2990,20 @@ pub fn bsim3soi_dd_companion(
         let ddenomi_dvg = vds_cv_m * dden_t4_dvg + den_t4 * dvds_cv_dvg_m - dden_t5_dvg;
         let ddenomi_dvc = vds_cv_m * dden_t4_dvc + den_t4 * dvds_cv_dvc_m - dden_t5_dvc;
 
-        let safe_denomi = if denomi.abs() < 1e-30 {
-            1e-30_f64.copysign(denomi + 1e-40)
+        // Denomi (ngspice line 3186): T6 = -CoxWL / Denomi.  No floor —
+        // matching ngspice exactly.  Convergence relies on the improved
+        // soi_bypass (relative tolerance) rather than derivative clamping.
+        let t6_qs1_3 = if denomi.abs() > 1e-30 {
+            -cox_wl / denomi
         } else {
-            denomi
+            0.0
         };
-        let t6_qs1_3 = -cox_wl / safe_denomi;
         let qsubs1_3 = t6_qs1_3 * nomi;
-        let nomi_over_den = nomi / safe_denomi;
+        let nomi_over_den = if denomi.abs() > 1e-30 {
+            nomi / denomi
+        } else {
+            0.0
+        };
         let dqsubs1_3_dvb = t6_qs1_3 * (dnomi_dvb - nomi_over_den * ddenomi_dvb);
         let dqsubs1_3_dvg = t6_qs1_3 * (dnomi_dvg - nomi_over_den * ddenomi_dvg);
         let dqsubs1_3_dvd = t6_qs1_3 * (dnomi_dvd - nomi_over_den * ddenomi_dvd);
@@ -3075,23 +3078,17 @@ pub fn bsim3soi_dd_companion(
         let dt1_vcscv_dvc: f64 = -1.0;
         let dt2_vcscv_dvc = t1_vcscv * dt1_vcscv_dvc / t2_vcscv;
 
+        // ngspice CAPMOD=2 b3soiddld.c lines 2795-2796: clamp VALUE only,
+        // keep derivatives from the smooth formula for Jacobian continuity.
         let mut vcs_cv2 = vcs + 0.5 * (t1_vcscv - t2_vcscv);
-        let mut dvcs_cv2_dvb = 0.5 * (dt1_vcscv_dvb - dt2_vcscv_dvb);
-        let mut dvcs_cv2_dvg = 0.5 * (dt1_vcscv_dvg - dt2_vcscv_dvg);
-        let mut dvcs_cv2_dvd = 0.5 * (dt1_vcscv_dvd - dt2_vcscv_dvd);
-        let mut dvcs_cv2_dvc = 1.0 + 0.5 * (dt1_vcscv_dvc - dt2_vcscv_dvc);
+        let dvcs_cv2_dvb = 0.5 * (dt1_vcscv_dvb - dt2_vcscv_dvb);
+        let dvcs_cv2_dvg = 0.5 * (dt1_vcscv_dvg - dt2_vcscv_dvg);
+        let dvcs_cv2_dvd = 0.5 * (dt1_vcscv_dvd - dt2_vcscv_dvd);
+        let dvcs_cv2_dvc = 1.0 + 0.5 * (dt1_vcscv_dvc - dt2_vcscv_dvc);
         if vcs_cv2 < 0.0 {
             vcs_cv2 = 0.0;
-            dvcs_cv2_dvb = 0.0;
-            dvcs_cv2_dvg = 0.0;
-            dvcs_cv2_dvd = 0.0;
-            dvcs_cv2_dvc = 0.0;
         } else if vcs_cv2 > vds_cv2 {
             vcs_cv2 = vds_cv2;
-            dvcs_cv2_dvb = dvds_cv2_dvb;
-            dvcs_cv2_dvg = dvds_cv2_dvg;
-            dvcs_cv2_dvd = dvds_cv2_dvd;
-            dvcs_cv2_dvc = 0.0;
         }
 
         // Xc calculation (cross-section parameter, ngspice b3soiddld.c lines 2798-2823)
@@ -3334,14 +3331,83 @@ pub fn bsim3soi_dd_companion(
     // cesb = dQsub/dVs (by KCL: sum of all 5 terminal derivatives = 0)
     let cesb = -(cegb + cedb + ceeb + (dqe1_dvb + dqe2_dvb - dqex_dvb));
 
-    // Assemble terminal charges (ngspice b3soiddld.c lines 3688-3692)
-    let qgate_total = qinv - (qbf0 + qe2);
-    let qbody_total = qbf0 - qe1 + qex;
+    // Assemble terminal charges (ngspice b3soiddld.c lines 3387-3390)
+    // Uses Qbf (CAPMOD body charge), NOT Qbf0 (backgate correction used only in Qe1).
+    let qgate_total = qinv - (qbf + qe2);
+    let mut qbody_total = qbf - qe1 + qex;
     let qsub_total = qe1 + qe2 - qex;
-    let qdrn_total = -(qinv + qsrc);
+    let mut qdrn_total = -(qinv + qsrc);
 
-    // qbf and qsicv are intermediate charge components consumed by qbody_total/qsub_total above.
-    let _ = (qbf, qsicv);
+    // qbf0 is consumed by qe1; qsicv is consumed by qe1.
+    let _ = (qbf0, qsicv);
+
+    // Intrinsic S/D junction charge (ngspice b3soiddld.c lines 3440-3494)
+    // These depletion + transit-time charges couple the body node to drain/source,
+    // providing essential diagonal stiffness for floating-body convergence.
+    let phi_bswg = model.pbswg;
+    let mjswg = model.mjswg;
+    let cjsbs = model.cjswg * weff * model.tsi / 1e-7;
+
+    // Source junction charge (Vbs-dependent)
+    let (qjs, gcjsbs) = if vbs_i < 0.0 {
+        let arg = 1.0 - vbs_i / phi_bswg;
+        let dt3_dvb = if mjswg == 0.5 {
+            1.0 / arg.sqrt()
+        } else {
+            (-mjswg * arg.ln()).exp()
+        };
+        let t3 = (1.0 - arg * dt3_dvb) * phi_bswg / (1.0 - mjswg);
+        (
+            cjsbs * t3 + model.tt * ibs1,
+            cjsbs * dt3_dvb + model.tt * dibs1_dvb,
+        )
+    } else {
+        let t3 = vbs_i * (1.0 + 0.5 * mjswg * vbs_i / phi_bswg);
+        let dt3_dvb = 1.0 + mjswg * vbs_i / phi_bswg;
+        (
+            cjsbs * t3 + model.tt * ibs1,
+            cjsbs * dt3_dvb + model.tt * dibs1_dvb,
+        )
+    };
+
+    // Drain junction charge (Vbd-dependent)
+    let dibd1_dvd = -dibd1_dvb;
+    let (qjd, gcjdbs, gcjdds) = if vbd < 0.0 {
+        let arg = 1.0 - vbd / phi_bswg;
+        let dt3_dvb = if mjswg == 0.5 {
+            1.0 / arg.sqrt()
+        } else {
+            (-mjswg * arg.ln()).exp()
+        };
+        let t3 = (1.0 - arg * dt3_dvb) * phi_bswg / (1.0 - mjswg);
+        let dt3_dvd = -dt3_dvb;
+        (
+            cjsbs * t3 + model.tt * ibd1,
+            cjsbs * dt3_dvb + model.tt * dibd1_dvb,
+            cjsbs * dt3_dvd + model.tt * dibd1_dvd,
+        )
+    } else {
+        let t3 = vbd * (1.0 + 0.5 * mjswg * vbd / phi_bswg);
+        let dt3_dvb = 1.0 + mjswg * vbd / phi_bswg;
+        let dt3_dvd = -dt3_dvb;
+        (
+            cjsbs * t3 + model.tt * ibd1,
+            cjsbs * dt3_dvb + model.tt * dibd1_dvb,
+            cjsbs * dt3_dvd + model.tt * dibd1_dvd,
+        )
+    };
+
+    // Fold junction charges into terminal charges (ngspice lines 3483-3485)
+    qdrn_total -= qjd;
+    qbody_total += qjs + qjd;
+    // qsrc is recomputed by KCL in the transient stamp
+
+    // Fold junction conductance derivatives into capacitance matrix
+    // (ngspice lines 3487-3494)
+    let cddb = cddb - gcjdds;
+    let cdsb = cdsb + gcjdds + gcjdbs;
+    let cbdb = cbdb + gcjdds;
+    let cbsb = cbsb - (gcjdds + gcjdbs + gcjsbs);
 
     Bsim3SoiDdCompanion {
         ids: ids / sp.nseg,
@@ -3626,6 +3692,10 @@ pub fn stamp_bsim3soi_dd(
 }
 
 /// BSIM3SOI-DD voltage limiting for NR convergence.
+///
+/// `is_dc`: true during DC operating-point analysis, false during transient.
+/// SmartVbs (clamp Vbs >= 0 for floating body) only applies during DC,
+/// matching ngspice B3SOIDDSmartVbs which checks `CKTmode & (MODEDC | MODEDCOP)`.
 pub fn bsim3soi_dd_limit(
     vgs_new: f64,
     vds_new: f64,
@@ -3637,6 +3707,7 @@ pub fn bsim3soi_dd_limit(
     ves_old: f64,
     vth: f64,
     floating_body: bool,
+    is_dc: bool,
 ) -> (f64, f64, f64, f64) {
     let vgs = crate::bsim3::fetlim(vgs_new, vgs_old, vth);
     let vds = crate::bsim3::fetlim(vds_new, vds_old, vth);
@@ -3651,9 +3722,10 @@ pub fn bsim3soi_dd_limit(
     } else {
         vbs_new
     };
-    // SmartVbs: for floating body in DC, Vbs cannot be negative.
-    // Prevents body from going below source which would cause oscillation.
-    let vbs = if floating_body { vbs.max(0.0) } else { vbs };
+    // SmartVbs: for floating body in DC only, Vbs cannot be negative.
+    // ngspice B3SOIDDSmartVbs: only applies when CKTmode & (MODEDC | MODEDCOP).
+    // During transient, the body potential can legitimately go negative.
+    let vbs = if floating_body && is_dc { vbs.max(0.0) } else { vbs };
     let limit_e = 3.0;
     let ves = if (ves_new - ves_old).abs() > limit_e {
         if ves_new > ves_old {
@@ -3734,7 +3806,7 @@ mod tests {
     #[test]
     fn test_dd_voltage_limiting() {
         let (vgs, vds, vbs, ves) =
-            bsim3soi_dd_limit(10.0, 10.0, 10.0, 10.0, 0.5, 0.5, 0.0, 0.0, 0.7, false);
+            bsim3soi_dd_limit(10.0, 10.0, 10.0, 10.0, 0.5, 0.5, 0.0, 0.0, 0.7, false, true);
         // VGS and VDS should be limited
         assert!(vgs < 10.0);
         assert!(vds < 10.0);

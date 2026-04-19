@@ -6,7 +6,7 @@
 "bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
 
 # === BSIM3SOI-DD ===
-"bsim3soidd/RampVg2.cir" = "CAPMOD=3 transient NR fails to converge: dev_gmin and fallback chain fixed but NR oscillates within ITL4=10 iterations per timestep — likely SOI-DD charge Jacobian accuracy issue (all other DD tests pass)"
+"bsim3soidd/RampVg2.cir" = "CAPMOD=3 transient NR converges (bypass + no-floor fix), but body voltage ~54% too weak during gate ramp — charge coupling dqbf/dvg too small (all other DD tests pass)"
 
 # === General circuits ===
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"

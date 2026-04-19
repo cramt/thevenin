@@ -559,7 +559,7 @@ fn solve_nonlinear_op_with_guess(
         //    (gmin = diag_gmin = 0 for DC OP), max(0, options.gmin) = options.gmin,
         //    so device stamps see the nominal value as before.
         let dev_gmin = gmin.max(options.gmin);
-        dev_state.stamp_devices(solution, system, mna, dev_gmin, mode);
+        dev_state.stamp_devices(solution, system, mna, dev_gmin, mode, false);
     };
 
     // Choose DC OP convergence strategy based on circuit topology.

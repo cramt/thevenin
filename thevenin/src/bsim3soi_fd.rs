@@ -2200,6 +2200,9 @@ pub fn stamp_bsim3soi_fd(
 /// FD uses simpler limiting than PD: all voltages limited ±3V per iteration
 /// (matching b3soifdld.c B3SOIFDlimit with limit=3.0), and in floating body DC,
 /// Vbs is clamped to non-negative.
+/// `is_dc`: true during DC operating-point analysis, false during transient.
+/// SmartVbs (clamp Vbs >= 0 for floating body) only applies during DC,
+/// matching ngspice B3SOIFDSmartVbs which checks `CKTmode & (MODEDC | MODEDCOP)`.
 pub fn bsim3soi_fd_limit(
     vgs_new: f64,
     vds_new: f64,
@@ -2211,6 +2214,7 @@ pub fn bsim3soi_fd_limit(
     ves_old: f64,
     vth: f64,
     floating_body: bool,
+    is_dc: bool,
 ) -> (f64, f64, f64, f64) {
     let vgs = crate::bsim3::fetlim(vgs_new, vgs_old, vth);
     let vds = crate::bsim3::fetlim(vds_new, vds_old, vth);
@@ -2226,9 +2230,9 @@ pub fn bsim3soi_fd_limit(
         vbs_new
     };
     // FD SmartVbs: in DC floating body, Vbs >= 0.
-    // Only applies to floating body — 5-terminal devices with explicit body
-    // contact can have Vbs < 0 (matching DD variant behavior).
-    let vbs = if floating_body { vbs.max(0.0) } else { vbs };
+    // ngspice B3SOIFDSmartVbs: only applies when CKTmode & (MODEDC | MODEDCOP).
+    // During transient, the body potential can legitimately go negative.
+    let vbs = if floating_body && is_dc { vbs.max(0.0) } else { vbs };
 
     let limit_e = 3.0;
     let ves = if (ves_new - ves_old).abs() > limit_e {

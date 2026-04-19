@@ -100,6 +100,56 @@ pub(crate) fn bsim_pnjlim(vnew: f64, vold: f64) -> f64 {
     crate::diode::pnjlim(vnew, vold, vt, vcrit_val)
 }
 
+/// SOI device-level bypass (ngspice b3soiddld.c:589-647, b3soifdld.c).
+///
+/// When ALL four terminal voltages changed by less than a tight absolute
+/// threshold between NR iterations, snap them back to the previous values.
+/// This all-or-nothing approach prevents sub-convergence ULP-level voltage
+/// oscillation from being amplified by ag0 through the model's capacitance
+/// derivative chain at tiny timesteps, while still allowing legitimate NR
+/// convergence when any voltage needs to move.
+///
+/// Uses a fixed 1e-10 V threshold — well above FP noise (~1e-16 V) but
+/// well below NR convergence tolerance (vntol ≈ 1e-6 V). The all-or-nothing
+/// semantics avoid the inconsistent per-voltage freeze that a per-voltage
+/// dead zone creates, and the tight threshold preserves model accuracy.
+/// Device-level bypass for BSIM3SOI models (ngspice b3soiddld.c lines 589-644).
+///
+/// When ALL terminal voltage changes are within convergence tolerance, snap
+/// voltages back to the previous NR iteration's values.  This freezes the
+/// entire companion evaluation (since the companion is deterministic), which
+/// prevents sub-convergence derivative oscillation from destabilizing the
+/// Newton loop — particularly important for CAPMOD=3 where Xc derivatives
+/// blow up in sub-threshold.
+///
+/// ngspice uses relative+absolute tolerance per voltage:
+///   |delta_v| < reltol * max(|v|, |v_prev|) + voltTol
+/// We replicate this with the SPICE defaults reltol=1e-3, voltTol=1e-6.
+fn soi_bypass(
+    vgs: f64,
+    vds: f64,
+    vbs: f64,
+    ves: f64,
+    prev: (f64, f64, f64, f64),
+) -> (f64, f64, f64, f64) {
+    const RELTOL: f64 = 1e-3;
+    const VOLTOL: f64 = 1e-6;
+
+    let within_tol = |v: f64, p: f64| -> bool {
+        (v - p).abs() < RELTOL * v.abs().max(p.abs()) + VOLTOL
+    };
+
+    if within_tol(vgs, prev.0)
+        && within_tol(vds, prev.1)
+        && within_tol(vbs, prev.2)
+        && within_tol(ves, prev.3)
+    {
+        prev
+    } else {
+        (vgs, vds, vbs, ves)
+    }
+}
+
 /// Tracks previous junction/terminal voltages for NR voltage limiting.
 ///
 /// Each device type needs its previous voltages preserved between NR iterations
@@ -487,6 +537,7 @@ impl DeviceVoltageState {
         mna: &MnaSystem,
         gmin: f64,
         mode: NrMode,
+        is_transient: bool,
     ) {
         let init_jct = mode == NrMode::InitJct;
         // Diodes
@@ -749,7 +800,7 @@ impl DeviceVoltageState {
                     (sign * 0.1 + bsim.vth0_inst, 0.0, 0.0, 0.0)
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
-                    bsim3soi_fd_limit(
+                    let (vgs, vds, vbs, ves) = bsim3soi_fd_limit(
                         raw_vgs,
                         raw_vds,
                         raw_vbs,
@@ -760,7 +811,25 @@ impl DeviceVoltageState {
                         prev[bi].3,
                         bsim.vth0_inst,
                         floating_body,
-                    )
+                        !is_transient,
+                    );
+                    // Device-level bypass (same as DD, matching ngspice
+                    // b3soifdld.c bypass mechanism). See DD section for
+                    // detailed rationale on the has_change / MODEINITPRED
+                    // check.
+                    if is_transient {
+                        let has_change = vgs != prev[bi].0
+                            || vds != prev[bi].1
+                            || vbs != prev[bi].2
+                            || ves != prev[bi].3;
+                        if has_change {
+                            soi_bypass(vgs, vds, vbs, ves, prev[bi])
+                        } else {
+                            (vgs, vds, vbs, ves)
+                        }
+                    } else {
+                        (vgs, vds, vbs, ves)
+                    }
                 };
                 prev[bi] = (vgs, vds, vbs, ves);
 
@@ -788,7 +857,7 @@ impl DeviceVoltageState {
                     (sign * 0.1 + bsim.vth0_inst, 0.0, 0.0, 0.0)
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
-                    bsim3soi_dd_limit(
+                    let (vgs, vds, vbs, ves) = bsim3soi_dd_limit(
                         raw_vgs,
                         raw_vds,
                         raw_vbs,
@@ -799,7 +868,34 @@ impl DeviceVoltageState {
                         prev[bi].3,
                         bsim.vth0_inst,
                         bsim.body_idx.is_none(),
-                    )
+                        !is_transient,
+                    );
+                    // Device-level bypass (ngspice b3soiddld.c:589-647):
+                    // When ALL terminal voltages changed by less than the NR
+                    // convergence tolerance, snap them back to the previous
+                    // iteration's values. This prevents sub-convergence ULP
+                    // oscillation from being amplified by ag0 through the
+                    // model's capacitance derivative chain at tiny timesteps.
+                    //
+                    // Only applied during transient and only when there IS a
+                    // non-zero change (has_change). On the first NR iteration
+                    // of each timestep, the solution is unchanged from the
+                    // previous timestep so limited voltages exactly equal prev
+                    // (has_change=false). Skipping bypass then forces a full
+                    // model evaluation, matching ngspice's MODEINITPRED check.
+                    if is_transient {
+                        let has_change = vgs != prev[bi].0
+                            || vds != prev[bi].1
+                            || vbs != prev[bi].2
+                            || ves != prev[bi].3;
+                        if has_change {
+                            soi_bypass(vgs, vds, vbs, ves, prev[bi])
+                        } else {
+                            (vgs, vds, vbs, ves)
+                        }
+                    } else {
+                        (vgs, vds, vbs, ves)
+                    }
                 };
                 prev[bi] = (vgs, vds, vbs, ves);
 

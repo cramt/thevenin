@@ -150,11 +150,10 @@ struct Bsim3SoiDdChargeHistory {
     qbe_cbox: f64,
     cqbe_cbox: f64,
     vbe_cbox: f64,
-    // Reference voltages for incremental charge (bulk-referenced, mode-aware)
-    vgb_prev: f64,
-    vdb_prev: f64,
-    vsb_prev: f64,
-    veb_prev: f64, // Ve - Vb for E-node coupling
+    // Charges at two timesteps ago (for divided-difference LTE, matching BJT pattern).
+    qgate_prev: f64,
+    qbody_prev: f64,
+    qdrn_prev: f64,
 }
 
 /// History state for VBIC junction charges at the previous timestep.
@@ -344,6 +343,7 @@ fn estimate_new_timestep(
     cap_histories: &[CapHistory],
     ind_histories: &[IndHistory],
     bjt_charge_histories: &[BjtChargeHistory],
+    soidd_charge_histories: &[Bsim3SoiDdChargeHistory],
     reltol: f64,
     abstol: f64,
 ) -> f64 {
@@ -473,6 +473,93 @@ fn estimate_new_timestep(
             let diff1_1 = (q1 - q2) / h_prev;
             let diff2 = (diff1_0 - diff1_1) / (h + h_prev);
             let lte_est = TRAP_COEFF * diff2.abs() * m;
+
+            if lte_est > 1e-30 {
+                let del = tol / lte_est.max(abstol);
+                let h_new = del.sqrt();
+                new_h = new_h.min(h_new);
+            }
+        }
+    }
+
+    // LTE for BSIM3SOI-DD intrinsic charges using divided differences.
+    // Matches ngspice's b3soiddtrunc.c → CKTterr: only qb, qg, qd are
+    // included (not qsub).
+    for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
+        let hist = &soidd_charge_histories[di];
+        // Direct terminal charges from the model at the current solution.
+        let (vgs_t, vds_t, vbs_t, ves_t) = inst.terminal_voltages(solution);
+        let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
+            vgs_t,
+            vds_t,
+            vbs_t,
+            ves_t,
+            &inst.size_params,
+            &inst.model,
+        );
+
+        let q0_gate = comp.qgate;
+        let q0_body = comp.qbody;
+        let q0_drn = comp.qdrn;
+
+        // Gate charge LTE.
+        {
+            let q0 = q0_gate;
+            let q1 = hist.qgate;
+            let q2 = hist.qgate_prev;
+
+            let vol_tol = abstol + reltol * hist.cqgate.abs().max((q0 - q1).abs() / h);
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
+            let tol = TRTOL * vol_tol.max(chg_tol);
+
+            let diff1_0 = (q0 - q1) / h;
+            let diff1_1 = (q1 - q2) / h_prev;
+            let diff2 = (diff1_0 - diff1_1) / (h + h_prev);
+            let lte_est = TRAP_COEFF * diff2.abs();
+
+            if lte_est > 1e-30 {
+                let del = tol / lte_est.max(abstol);
+                let h_new = del.sqrt();
+                new_h = new_h.min(h_new);
+            }
+        }
+
+        // Body charge LTE.
+        {
+            let q0 = q0_body;
+            let q1 = hist.qbody;
+            let q2 = hist.qbody_prev;
+
+            let vol_tol = abstol + reltol * hist.cqbody.abs().max((q0 - q1).abs() / h);
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
+            let tol = TRTOL * vol_tol.max(chg_tol);
+
+            let diff1_0 = (q0 - q1) / h;
+            let diff1_1 = (q1 - q2) / h_prev;
+            let diff2 = (diff1_0 - diff1_1) / (h + h_prev);
+            let lte_est = TRAP_COEFF * diff2.abs();
+
+            if lte_est > 1e-30 {
+                let del = tol / lte_est.max(abstol);
+                let h_new = del.sqrt();
+                new_h = new_h.min(h_new);
+            }
+        }
+
+        // Drain charge LTE.
+        {
+            let q0 = q0_drn;
+            let q1 = hist.qdrn;
+            let q2 = hist.qdrn_prev;
+
+            let vol_tol = abstol + reltol * hist.cqdrn.abs().max((q0 - q1).abs() / h);
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
+            let tol = TRTOL * vol_tol.max(chg_tol);
+
+            let diff1_0 = (q0 - q1) / h;
+            let diff1_1 = (q1 - q2) / h_prev;
+            let diff2 = (diff1_0 - diff1_1) / (h + h_prev);
+            let lte_est = TRAP_COEFF * diff2.abs();
 
             if lte_est > 1e-30 {
                 let del = tol / lte_est.max(abstol);
@@ -806,24 +893,21 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .collect();
 
     // Initialize BSIM3SOI-DD charge histories from DC operating point.
-    // Uses the incremental approach: Q_new = Q_old + C(V) * delta_V, matching
-    // the MOSFET Meyer cap pattern. At DC steady state dQ/dt = 0.
+    // Uses direct charge computation Q(V) from the model (matching ngspice
+    // NIintegrate).  At DC steady state dQ/dt = 0.
     let mut soidd_charge_histories: Vec<Bsim3SoiDdChargeHistory> = mna
         .bsim3soi_dds
         .iter()
         .map(|inst| {
             let sign = inst.model.mos_type.sign();
-            let vg = inst.gate_idx.map_or(0.0, |i| solution[i]);
             let vb = inst.body_int_idx.map_or(0.0, |i| solution[i]);
-            let vd = inst.drain_eff_idx().map_or(0.0, |i| solution[i]);
-            let vs = inst.source_eff_idx().map_or(0.0, |i| solution[i]);
             let ve = inst.e_idx.map_or(0.0, |i| solution[i]);
             let vbe = sign * (vb - ve);
             let cbox_wl = inst.size_params.kb3
                 * inst.model.cbox
                 * inst.size_params.weff_cv
                 * inst.size_params.leff_cv;
-            // Compute companion to get mode for dp/sp assignment.
+            // Compute companion to get direct terminal charges.
             let (vgs_t, vds_t, vbs_t, ves_t) = inst.terminal_voltages(&solution);
             let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
                 vgs_t,
@@ -833,29 +917,24 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 &inst.size_params,
                 &inst.model,
             );
-            // Bulk-referenced voltages with mode-aware dp/sp.
-            let (vdp, vsp) = if comp.mode > 0 { (vd, vs) } else { (vs, vd) };
-            let vgb = sign * (vg - vb);
-            let vdb = sign * (vdp - vb);
-            let vsb = sign * (vsp - vb);
-            let veb = sign * (ve - vb);
+            // Initialize with direct charges from DC operating point
+            // (ngspice MODEINITTRAN: copies state0 to state1).
             Bsim3SoiDdChargeHistory {
-                qgate: 0.0,
+                qgate: comp.qgate,
                 cqgate: 0.0,
-                qbody: 0.0,
+                qbody: comp.qbody,
                 cqbody: 0.0,
-                qdrn: 0.0,
+                qdrn: comp.qdrn,
                 cqdrn: 0.0,
-                qsub: 0.0,
+                qsub: comp.qsub,
                 cqsub: 0.0,
                 qbe_cbox: cbox_wl * vbe,
                 cqbe_cbox: 0.0,
                 vbe_cbox: vbe,
-                // Reference voltages for incremental charge.
-                vgb_prev: vgb,
-                vdb_prev: vdb,
-                vsb_prev: vsb,
-                veb_prev: veb,
+                // No previous history at DC init (same pattern as BJT).
+                qgate_prev: comp.qgate,
+                qbody_prev: comp.qbody,
+                qdrn_prev: comp.qdrn,
             }
         })
         .collect();
@@ -1212,6 +1291,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             Ok(sol) => sol,
             Err(e) if step_h > h_min * 2.0 => {
                 // NR failed — shrink h and retry without advancing time.
+                // Demote to Backward Euler on retry, matching ngspice dctran.c
+                // which sets order=1 after NR failure.  BE is unconditionally
+                // stable and handles discontinuities (PULSE edges, switching)
+                // better than Trapezoidal.
                 if has_txl {
                     for inst in &mut mna.txls {
                         inst.txline = inst.txline2.clone();
@@ -1222,6 +1305,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                         inst.cpline = inst.cpline2.clone();
                     }
                 }
+                force_be = true;
                 h = (step_h * MIN_SHRINK).max(h_min);
                 let _ = e;
                 continue;
@@ -1232,8 +1316,9 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         };
 
         // LTE-based timestep control.
-        let has_bjt_charges = !mna.bjts.is_empty() || !mna.vbics.is_empty();
-        if method == IntegrationMethod::Trapezoidal && (has_reactive || has_bjt_charges) {
+        let has_device_charges =
+            !mna.bjts.is_empty() || !mna.vbics.is_empty() || !mna.bsim3soi_dds.is_empty();
+        if method == IntegrationMethod::Trapezoidal && (has_reactive || has_device_charges) {
             let new_h = estimate_new_timestep(
                 step_h,
                 h_prev,
@@ -1242,6 +1327,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 &cap_histories,
                 &ind_histories,
                 &bjt_charge_histories,
+                &soidd_charge_histories,
                 nr_options.reltol,
                 nr_options.abstol,
             );
@@ -1266,7 +1352,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // Accept: schedule next h from LTE estimate.
             h = new_h.min(step_h * MAX_GROW).min(h_max).max(h_min);
             force_be = false;
-        } else if method == IntegrationMethod::BackwardEuler && (has_reactive || has_bjt_charges) {
+        } else if method == IntegrationMethod::BackwardEuler && (has_reactive || has_device_charges) {
             // Order upgrade check (ngspice dctran.c lines 820-831):
             // After a successful BE step, try computing the order-2 (Trap) LTE.
             // If the Trap LTE suggests a timestep <= 1.05× the current step,
@@ -1281,6 +1367,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 &cap_histories,
                 &ind_histories,
                 &bjt_charge_histories,
+                &soidd_charge_histories,
                 nr_options.reltol,
                 nr_options.abstol,
             );
@@ -1620,10 +1707,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         // Update BSIM3SOI-DD charge histories (intrinsic + CboxWL).
         for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
             let sign = inst.model.mos_type.sign();
-            let vg = inst.gate_idx.map_or(0.0, |i| solution[i]);
             let vb = inst.body_int_idx.map_or(0.0, |i| solution[i]);
-            let vd = inst.drain_eff_idx().map_or(0.0, |i| solution[i]);
-            let vs = inst.source_eff_idx().map_or(0.0, |i| solution[i]);
             let ve = inst.e_idx.map_or(0.0, |i| solution[i]);
             let vbe = sign * (vb - ve);
             let cbox_wl = inst.size_params.kb3
@@ -1638,7 +1722,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                     2.0 * (qbe - hist.qbe_cbox) / step_h - hist.cqbe_cbox
                 }
             };
-            // Incremental intrinsic charges using capacitance derivatives.
+            // Direct terminal charges from model (matching ngspice NIintegrate approach).
             let (vgs_t, vds_t, vbs_t, ves_t) = inst.terminal_voltages(&solution);
             let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
                 vgs_t,
@@ -1648,35 +1732,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 &inst.size_params,
                 &inst.model,
             );
-            let (vdp, vsp) = if comp.mode > 0 { (vd, vs) } else { (vs, vd) };
-            let vgb = sign * (vg - vb);
-            let vdb = sign * (vdp - vb);
-            let vsb = sign * (vsp - vb);
-            let veb = sign * (ve - vb);
-            let dvgb = vgb - hist.vgb_prev;
-            let dvdb = vdb - hist.vdb_prev;
-            let dvsb = vsb - hist.vsb_prev;
-            let dveb = veb - hist.veb_prev;
-            let qgate = hist.qgate
-                + comp.cggb * dvgb
-                + comp.cgdb * dvdb
-                + comp.cgsb * dvsb
-                + comp.cgeb * dveb;
-            let qbody = hist.qbody
-                + comp.cbgb * dvgb
-                + comp.cbdb * dvdb
-                + comp.cbsb * dvsb
-                + comp.cbeb * dveb;
-            let qdrn = hist.qdrn
-                + comp.cdgb * dvgb
-                + comp.cddb * dvdb
-                + comp.cdsb * dvsb
-                + comp.cdeb * dveb;
-            let qsub = hist.qsub
-                + comp.cegb * dvgb
-                + comp.cedb * dvdb
-                + comp.cesb * dvsb
-                + comp.ceeb * dveb;
+            let qgate = comp.qgate;
+            let qbody = comp.qbody;
+            let qdrn = comp.qdrn;
+            let qsub = comp.qsub;
             let cqgate = match method {
                 IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / step_h,
                 IntegrationMethod::Trapezoidal => 2.0 * (qgate - hist.qgate) / step_h - hist.cqgate,
@@ -1693,6 +1752,9 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 IntegrationMethod::BackwardEuler => (qsub - hist.qsub) / step_h,
                 IntegrationMethod::Trapezoidal => 2.0 * (qsub - hist.qsub) / step_h - hist.cqsub,
             };
+            let qgate_prev = soidd_charge_histories[di].qgate;
+            let qbody_prev = soidd_charge_histories[di].qbody;
+            let qdrn_prev = soidd_charge_histories[di].qdrn;
             soidd_charge_histories[di] = Bsim3SoiDdChargeHistory {
                 qgate,
                 cqgate,
@@ -1705,10 +1767,9 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 qbe_cbox: qbe,
                 cqbe_cbox: cqbe,
                 vbe_cbox: vbe,
-                vgb_prev: vgb,
-                vdb_prev: vdb,
-                vsb_prev: vsb,
-                veb_prev: veb,
+                qgate_prev,
+                qbody_prev,
+                qdrn_prev,
             };
         }
 
@@ -2091,7 +2152,7 @@ fn solve_timestep(
         if has_nonlinear {
             let _ = gmin;
             // Always use Float for transient — we have a meaningful previous solution.
-            dev_state.stamp_devices(solution, system, mna, nr_options.gmin, NrMode::Float);
+            dev_state.stamp_devices(solution, system, mna, nr_options.gmin, NrMode::Float, true);
         }
 
         // 5. Stamp BJT junction capacitance companion models.
@@ -2639,42 +2700,31 @@ fn solve_timestep(
                     (inst.source_prime_idx, inst.drain_prime_idx)
                 };
 
-                // Physical voltages (bulk-referenced, model convention).
-                let vg_raw = g.map_or(0.0, |i| solution[i]);
-                let vb_raw = b.map_or(0.0, |i| solution[i]);
-                let vdp_raw = dp.map_or(0.0, |i| solution[i]);
-                let vsp_raw = sp_node.map_or(0.0, |i| solution[i]);
-                let ve_raw = e.map_or(0.0, |i| solution[i]);
-                let vgb = sign * (vg_raw - vb_raw);
-                let vdb_model = sign * (vdp_raw - vb_raw);
-                let vsb_model = sign * (vsp_raw - vb_raw);
-                let veb_model = sign * (ve_raw - vb_raw);
+                // Body-referenced voltages from LIMITED terminal voltages.
+                // Must use limited voltages (not raw solution) so the Norton
+                // current is consistent with the gc matrix, which is evaluated
+                // at the limited operating point.  Mixing limited capacitances
+                // with raw solution voltages causes massive Norton current
+                // artifacts when ag0 is large (tiny timestep), because
+                // ceqqg = cqgate - gc*v involves catastrophic cancellation.
+                // ngspice b3soiddld.c lines 3860-3867 uses the same limited
+                // vgb/vbd/vbs/veb set during voltage limiting.
+                // Limited terminal voltages are source-referenced (already
+                // sign-multiplied): vgs=sign*(Vg-Vs), vds=sign*(Vd-Vs), etc.
+                let vgb = vgs - vbs_t;
+                let vdb_model = vds - vbs_t;
+                let vsb_model = -vbs_t;
+                let veb_model = ves - vbs_t;
 
-                // Incremental charges (5-terminal: include Ve contribution).
-                let dvgb = vgb - hist.vgb_prev;
-                let dvdb = vdb_model - hist.vdb_prev;
-                let dvsb = vsb_model - hist.vsb_prev;
-                let dveb = veb_model - hist.veb_prev;
-                let qgate = hist.qgate
-                    + comp.cggb * dvgb
-                    + comp.cgdb * dvdb
-                    + comp.cgsb * dvsb
-                    + comp.cgeb * dveb;
-                let qbody = hist.qbody
-                    + comp.cbgb * dvgb
-                    + comp.cbdb * dvdb
-                    + comp.cbsb * dvsb
-                    + comp.cbeb * dveb;
-                let qdrn = hist.qdrn
-                    + comp.cdgb * dvgb
-                    + comp.cddb * dvdb
-                    + comp.cdsb * dvsb
-                    + comp.cdeb * dveb;
-                let qsub = hist.qsub
-                    + comp.cegb * dvgb
-                    + comp.cedb * dvdb
-                    + comp.cesb * dvsb
-                    + comp.ceeb * dveb;
+                // Direct terminal charges from the model (ngspice b3soiddld.c lines 3387-3390,
+                // 3788-3791).  ngspice stores Q(V) directly, then calls NIintegrate.
+                // Using the exact charges instead of incremental C*ΔV avoids the
+                // derivative-oscillation problem in CAPMOD=3 where dQbf/dV blows up
+                // near Xc ≈ 1 but Q itself is smooth.
+                let qgate = comp.qgate;
+                let qbody = comp.qbody;
+                let qdrn = comp.qdrn;
+                let qsub = comp.qsub;
 
                 let cqgate = match method {
                     IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / h,
