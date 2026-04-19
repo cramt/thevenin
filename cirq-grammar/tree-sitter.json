@@ -1,0 +1,15 @@
+{
+  "grammars": [
+    {
+      "name": "cirq",
+      "camelcase": "Cirq",
+      "scope": "source.cirq",
+      "path": ".",
+      "file-types": ["cirq"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "BSD-3-Clause"
+  }
+}

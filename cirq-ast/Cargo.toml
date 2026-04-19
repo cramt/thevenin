@@ -1,0 +1,10 @@
+[package]
+name = "cirq-ast"
+version = "0.1.0"
+edition = "2024"
+description = "Cirq language AST types and CST-to-AST lowering"
+license = "BSD-3-Clause"
+repository = "https://github.com/cramt/thevenin"
+
+[dependencies]
+thiserror.workspace = true

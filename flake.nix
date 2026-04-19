@@ -112,6 +112,7 @@
             chromedriver
             cargo-nextest
             lld
+            tree-sitter
           ];
 
           shellHook = ''

@@ -1,5 +1,15 @@
 [workspace]
-members = ["thevenin-types", "thevenin-xspice", "thevenin", "thevenin-control", "thevenin-cirq", "thevenin-test-macro"]
+members = [
+    "thevenin-types",
+    "thevenin-xspice",
+    "thevenin",
+    "thevenin-control",
+    "thevenin-test-macro",
+    "cirq-ast",
+    "cirq-ir",
+    "cirq-frontend",
+    "cirq-spice-import",
+]
 resolver = "3"
 
 [workspace.dependencies]
@@ -34,7 +44,6 @@ publish = false
 [dependencies]
 thevenin-types = { path = "thevenin-types" }
 thevenin = { path = "thevenin" }
-thevenin-cirq = { path = "thevenin-cirq" }
 facet.workspace = true
 figue = "2"
 

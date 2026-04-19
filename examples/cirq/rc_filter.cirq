@@ -1,0 +1,20 @@
+// RC low-pass filter with AC analysis.
+
+circuit rc_lowpass {
+    param r = 10k
+    param c = 100n
+
+    // Cutoff frequency: 1 / (2*pi*R*C) ≈ 159 Hz
+    let f_cutoff = 1 / (2 * pi * r * c)
+
+    V1: vsource(in -> gnd, dc: 0, ac: 1)
+    R1: resistor(in -> out, r)
+    C1: capacitor(out -> gnd, c)
+
+    analysis ac {
+        start: 1
+        stop: 1M
+        points: 100
+        scale: decade
+    }
+}

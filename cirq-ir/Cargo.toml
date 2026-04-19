@@ -1,0 +1,11 @@
+[package]
+name = "cirq-ir"
+version = "0.1.0"
+edition = "2024"
+description = "Canonical Cirq IR — the resolved, validated semantic representation"
+license = "BSD-3-Clause"
+repository = "https://github.com/cramt/thevenin"
+
+[dependencies]
+cirq-ast = { path = "../cirq-ast" }
+thiserror.workspace = true

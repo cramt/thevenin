@@ -1,0 +1,13 @@
+[package]
+name = "cirq-frontend"
+version = "0.1.0"
+edition = "2024"
+description = "Cirq frontend pipeline: source → AST → IR → Netlist"
+license = "BSD-3-Clause"
+repository = "https://github.com/cramt/thevenin"
+
+[dependencies]
+cirq-ast = { path = "../cirq-ast" }
+cirq-ir = { path = "../cirq-ir" }
+thevenin-types = { path = "../thevenin-types" }
+thiserror.workspace = true

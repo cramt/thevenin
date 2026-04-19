@@ -43,12 +43,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arraydeque"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
-
-[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -149,6 +143,40 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "cirq-ast"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cirq-frontend"
+version = "0.1.0"
+dependencies = [
+ "cirq-ast",
+ "cirq-ir",
+ "thevenin-types",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cirq-ir"
+version = "0.1.0"
+dependencies = [
+ "cirq-ast",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cirq-spice-import"
+version = "0.1.0"
+dependencies = [
+ "cirq-ir",
+ "thevenin-types",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "const-fnv1a-hash"
@@ -520,19 +548,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "facet-yaml"
-version = "0.44.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0b8adae3ac1f7159bfdb58bf110a8ddd9cfce4835d86556897210e4fb048bf0"
-dependencies = [
- "facet",
- "facet-core",
- "facet-format",
- "facet-reflect",
- "saphyr-parser",
-]
-
-[[package]]
 name = "faer"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -862,15 +877,6 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
-]
-
-[[package]]
-name = "hashlink"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
-dependencies = [
- "hashbrown 0.15.5",
 ]
 
 [[package]]
@@ -1510,16 +1516,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "saphyr-parser"
-version = "0.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fb771b59f6b1985d1406325ec28f97cfb14256abcec4fdfb37b36a1766d6af7"
-dependencies = [
- "arraydeque",
- "hashlink",
-]
-
-[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1728,19 +1724,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "thevenin-cirq"
-version = "0.1.0"
-dependencies = [
- "approx",
- "facet",
- "facet-format",
- "facet-json",
- "facet-yaml",
- "thevenin-types",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "thevenin-cli"
 version = "0.1.0"
 dependencies = [
@@ -1749,7 +1732,6 @@ dependencies = [
  "figue",
  "getrandom 0.3.4",
  "thevenin",
- "thevenin-cirq",
  "thevenin-types",
  "wasm-bindgen-test",
 ]

@@ -1,0 +1,131 @@
+================================================================================
+Empty circuit
+================================================================================
+
+circuit empty {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)))
+
+================================================================================
+Simple voltage divider
+================================================================================
+
+circuit voltage_divider {
+    V1: vsource(vdd -> gnd, dc: 5)
+    R1: resistor(in -> mid, 10k)
+    R2: resistor(mid -> gnd, 2k)
+
+    analysis op {}
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (named_argument name: (identifier) value: (number_literal)))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (number_literal))))
+    (analysis_decl
+      kind: (identifier))))
+
+================================================================================
+Module definition
+================================================================================
+
+module inverter {
+    port in: in
+    port out: out
+    port vdd: inout
+    port vss: inout
+
+    param wp = 2u
+    param wn = 1u
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_decl
+    name: (identifier)
+    (port_decl name: (identifier) direction: (port_direction))
+    (port_decl name: (identifier) direction: (port_direction))
+    (port_decl name: (identifier) direction: (port_direction))
+    (port_decl name: (identifier) direction: (port_direction))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))))
+
+================================================================================
+Model definition
+================================================================================
+
+model d1n4148: diode {
+    is = 2.52n
+    rs = 0.568
+    n = 1.752
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (model_decl
+    name: (identifier)
+    device_type: (identifier)
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal))))
+
+================================================================================
+Import with alias
+================================================================================
+
+import "models/cmos.cirq" as cmos
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_decl
+    path: (string_literal)
+    alias: (identifier)))
+
+================================================================================
+DC sweep analysis
+================================================================================
+
+circuit sweep_test {
+    analysis dc {
+        sweep V1: 0..5 step 0.1
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (analysis_decl
+      kind: (identifier)
+      (sweep_spec
+        source: (identifier)
+        start: (number_literal)
+        stop: (number_literal)
+        step: (number_literal)))))
