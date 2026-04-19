@@ -1,0 +1,216 @@
+================================================================================
+Complete CMOS inverter circuit
+================================================================================
+
+circuit cmos_inverter {
+    model nch: nmos {
+        level = 1
+        vto = 0.7
+        kp = 110u
+        lambda = 0.04
+    }
+
+    model pch: pmos {
+        level = 1
+        vto = -0.7
+        kp = 55u
+        lambda = 0.04
+    }
+
+    param vdd_voltage = 1.8
+
+    Vdd: vsource(vdd -> gnd, dc: vdd_voltage)
+    Vin: vsource(in -> gnd,
+        pulse: { v1: 0, v2: 1.8, delay: 0, rise: 1n, fall: 1n, width: 5n, period: 10n }
+    )
+
+    M1: pmos(vdd -> out, gate: in, bulk: vdd, model: pch, w: 2u, l: 180n)
+    M2: nmos(out -> gnd, gate: in, bulk: gnd, model: nch, w: 1u, l: 180n)
+
+    analysis tran {
+        step: 100p
+        stop: 20n
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (model_decl
+      name: (identifier)
+      device_type: (identifier)
+      (model_param name: (identifier) value: (number_literal))
+      (model_param name: (identifier) value: (number_literal))
+      (model_param name: (identifier) value: (number_literal))
+      (model_param name: (identifier) value: (number_literal)))
+    (model_decl
+      name: (identifier)
+      device_type: (identifier)
+      (model_param name: (identifier) value: (number_literal))
+      (model_param name: (identifier) value: (unary_expression operand: (number_literal)))
+      (model_param name: (identifier) value: (number_literal))
+      (model_param name: (identifier) value: (number_literal)))
+    (param_decl
+      name: (identifier)
+      value: (number_literal))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (named_argument name: (identifier) value: (identifier)))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (named_argument
+          name: (identifier)
+          value: (block_literal
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal)))))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (number_literal)))
+        (argument (named_argument name: (identifier) value: (number_literal)))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (gnd)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (number_literal)))
+        (argument (named_argument name: (identifier) value: (number_literal)))))
+    (analysis_decl
+      kind: (identifier)
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal)))))
+
+================================================================================
+RC filter with let binding
+================================================================================
+
+circuit rc_lowpass {
+    param r = 10k
+    param c = 100n
+    let f_cutoff = 1 / (2 * pi * r * c)
+
+    V1: vsource(in -> gnd, dc: 0, ac: 1)
+    R1: resistor(in -> out, r)
+    C1: capacitor(out -> gnd, c)
+
+    analysis ac {
+        start: 1
+        stop: 1M
+        points: 100
+        scale: decade
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (let_decl
+      name: (identifier)
+      value: (binary_expression
+        left: (number_literal)
+        right: (paren_expression
+          (binary_expression
+            left: (binary_expression
+              left: (binary_expression
+                left: (number_literal)
+                right: (identifier))
+              right: (identifier))
+            right: (identifier)))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (named_argument name: (identifier) value: (number_literal)))
+        (argument (named_argument name: (identifier) value: (number_literal)))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (identifier))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (identifier))))
+    (analysis_decl
+      kind: (identifier)
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (identifier)))))
+
+================================================================================
+Semicolons as optional terminators
+================================================================================
+
+circuit test {
+    param a = 1; param b = 2;
+    R1: resistor(a -> gnd, 10k);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (number_literal))))))
+
+================================================================================
+Comments
+================================================================================
+
+// Top-level line comment
+
+/* Block comment */
+
+circuit test {
+    // Line comment inside circuit
+    param x = 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_comment)
+  (block_comment)
+  (circuit_decl
+    name: (identifier)
+    (line_comment)
+    (param_decl
+      name: (identifier)
+      value: (number_literal))))

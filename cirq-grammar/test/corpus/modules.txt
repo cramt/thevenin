@@ -1,0 +1,117 @@
+================================================================================
+Module with ports and params
+================================================================================
+
+module inverter {
+    port in: in
+    port out: out
+    port vdd: inout
+    port vss: inout
+
+    param wp = 2u
+    param wn = 1u
+    param l = 180n
+
+    M1: pmos(vdd -> out, gate: in, bulk: vdd, model: pch, w: wp, l: l)
+    M2: nmos(out -> vss, gate: in, bulk: vss, model: nch, w: wn, l: l)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_decl
+    name: (identifier)
+    (port_decl name: (identifier) direction: (port_direction))
+    (port_decl name: (identifier) direction: (port_direction))
+    (port_decl name: (identifier) direction: (port_direction))
+    (port_decl name: (identifier) direction: (port_direction))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))))))
+
+================================================================================
+Module inheritance
+================================================================================
+
+module derived: base_module {
+    port extra: out
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_decl
+    name: (identifier)
+    base: (identifier)
+    (port_decl name: (identifier) direction: (port_direction))))
+
+================================================================================
+Nested module in circuit
+================================================================================
+
+circuit top {
+    module buffer {
+        port a: in
+        port z: out
+    }
+
+    buf1: buffer(a: in, z: out)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (module_decl
+      name: (identifier)
+      (port_decl name: (identifier) direction: (port_direction))
+      (port_decl name: (identifier) direction: (port_direction)))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))))))
+
+================================================================================
+Module instantiation with qualified name
+================================================================================
+
+circuit top {
+    inv1: lib.inverter(in: a, out: b, vdd: vdd, vss: gnd)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (module_inst
+      name: (identifier)
+      module: (qualified_name (identifier) (identifier))
+      (argument_list
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (gnd)))))))

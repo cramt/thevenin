@@ -11,7 +11,7 @@
 module.exports = grammar({
   name: "cirq",
 
-  extras: ($) => [/\s/, $.line_comment, $.block_comment],
+  extras: ($) => [/\s/, /;/, $.line_comment, $.block_comment],
 
   word: ($) => $.identifier,
 
@@ -225,6 +225,16 @@ module.exports = grammar({
 
     binary_expression: ($) =>
       choice(
+        // Right-associative exponentiation
+        prec.right(
+          7,
+          seq(
+            field("left", $._expression),
+            field("operator", "**"),
+            field("right", $._expression)
+          )
+        ),
+        // Left-associative operators
         ...[
           ["||", 1],
           ["&&", 2],
@@ -239,7 +249,6 @@ module.exports = grammar({
           ["*", 6],
           ["/", 6],
           ["%", 6],
-          ["**", 7],
         ].map(([op, p]) =>
           prec.left(
             /** @type {number} */ (p),
@@ -274,7 +283,8 @@ module.exports = grammar({
         )
       ),
 
-    paren_expression: ($) => seq("(", $._expression, ")"),
+    paren_expression: ($) =>
+      seq("(", $._expression, repeat(seq(",", $._expression)), optional(","), ")"),
 
     list_literal: ($) =>
       seq("[", optional(seq($._expression, repeat(seq(",", $._expression)), optional(","))), "]"),

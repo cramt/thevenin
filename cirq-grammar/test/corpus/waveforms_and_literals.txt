@@ -1,0 +1,81 @@
+================================================================================
+Block literal (pulse waveform)
+================================================================================
+
+circuit test {
+    Vin: vsource(in -> gnd,
+        pulse: { v1: 0, v2: 1.8, delay: 0, rise: 1n, fall: 1n, width: 5n, period: 10n }
+    )
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (named_argument
+          name: (identifier)
+          value: (block_literal
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal))
+            (block_entry key: (identifier) value: (number_literal)))))))))
+
+================================================================================
+List literal (PWL waveform)
+================================================================================
+
+circuit test {
+    V1: vsource(a -> gnd,
+        pwl: [(0, 0), (1u, 0), (2u, 5), (10u, 5)]
+    )
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (named_argument
+          name: (identifier)
+          value: (list_literal
+            (paren_expression (number_literal) (number_literal))
+            (paren_expression (number_literal) (number_literal))
+            (paren_expression (number_literal) (number_literal))
+            (paren_expression (number_literal) (number_literal)))))))))
+
+================================================================================
+Boolean literals
+================================================================================
+
+circuit test {
+    analysis tran {
+        step: 10n
+        stop: 1u
+        uic: true
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (analysis_decl
+      kind: (identifier)
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (boolean_literal)))))

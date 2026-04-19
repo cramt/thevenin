@@ -1,0 +1,99 @@
+================================================================================
+Positional connections
+================================================================================
+
+circuit test {
+    R1: resistor(a -> b, 10k)
+    V1: vsource(vdd -> gnd, dc: 5)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (gnd)))
+        (argument (named_argument name: (identifier) value: (number_literal)))))))
+
+================================================================================
+Named connections
+================================================================================
+
+circuit test {
+    M1: nmos(drain -> source, gate: g, bulk: gnd)
+    Q1: npn(collector: c, base: b, emitter: e, model: bc547)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (gnd)))))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))
+        (argument (named_argument name: (identifier) value: (identifier)))))))
+
+================================================================================
+Named connection with arrow
+================================================================================
+
+circuit test {
+    E1: vcvs(out_p -> out_n, control: ctrl_p -> ctrl_n, gain: 10)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (named_connection name: (identifier) from: (identifier) to: (identifier)))
+        (argument (named_argument name: (identifier) value: (number_literal)))))))
+
+================================================================================
+Mixed positional and named arguments
+================================================================================
+
+circuit test {
+    R1: resistor(a -> b, resistance: 10k, tc1: 0.001, tc2: 0.0001)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (named_argument name: (identifier) value: (number_literal)))
+        (argument (named_argument name: (identifier) value: (number_literal)))
+        (argument (named_argument name: (identifier) value: (number_literal)))))))

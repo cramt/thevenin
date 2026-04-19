@@ -1,0 +1,173 @@
+================================================================================
+Exponentiation is right-associative
+================================================================================
+
+circuit test {
+    param x = 2 ** 3 ** 4
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (param_decl
+      name: (identifier)
+      value: (binary_expression
+        left: (number_literal)
+        right: (binary_expression
+          left: (number_literal)
+          right: (number_literal))))))
+
+================================================================================
+Operator precedence
+================================================================================
+
+circuit test {
+    param x = 1 + 2 * 3
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (param_decl
+      name: (identifier)
+      value: (binary_expression
+        left: (number_literal)
+        right: (binary_expression
+          left: (number_literal)
+          right: (number_literal))))))
+
+================================================================================
+Unary expressions
+================================================================================
+
+circuit test {
+    param x = -1
+    param y = !true
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (param_decl
+      name: (identifier)
+      value: (unary_expression
+        operand: (number_literal)))
+    (param_decl
+      name: (identifier)
+      value: (unary_expression
+        operand: (boolean_literal)))))
+
+================================================================================
+Function calls
+================================================================================
+
+circuit test {
+    let x = sqrt(2)
+    let y = atan2(1, 0)
+    let z = max(abs(a), abs(b))
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (let_decl
+      name: (identifier)
+      value: (call_expression
+        function: (identifier)
+        (number_literal)))
+    (let_decl
+      name: (identifier)
+      value: (call_expression
+        function: (identifier)
+        (number_literal)
+        (number_literal)))
+    (let_decl
+      name: (identifier)
+      value: (call_expression
+        function: (identifier)
+        (call_expression
+          function: (identifier)
+          (identifier))
+        (call_expression
+          function: (identifier)
+          (identifier))))))
+
+================================================================================
+Logical and comparison operators
+================================================================================
+
+circuit test {
+    let cond = a > 0 && b < 10 || c == 0
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (let_decl
+      name: (identifier)
+      value: (binary_expression
+        left: (binary_expression
+          left: (binary_expression
+            left: (identifier)
+            right: (number_literal))
+          right: (binary_expression
+            left: (identifier)
+            right: (number_literal)))
+        right: (binary_expression
+          left: (identifier)
+          right: (number_literal))))))
+
+================================================================================
+Numeric literal formats
+================================================================================
+
+circuit test {
+    param a = 42
+    param b = 3.14
+    param c = 1.0e-3
+    param d = .001
+    param e = 0xFF
+    param f = 0b1010
+    param g = 1_000_000
+    param h = 1k
+    param i = 100n
+    param j = 4.7u
+    param k = 10p
+    param l = 1Meg
+    param m = 1T
+    param n = 1G
+    param o = 1f
+    param p = 330m
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))
+    (param_decl name: (identifier) value: (number_literal))))

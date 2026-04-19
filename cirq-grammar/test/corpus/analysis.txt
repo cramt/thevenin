@@ -1,0 +1,149 @@
+================================================================================
+Operating point analysis
+================================================================================
+
+circuit test {
+    analysis op {}
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (analysis_decl
+      kind: (identifier))))
+
+================================================================================
+DC sweep analysis
+================================================================================
+
+circuit test {
+    analysis dc {
+        sweep V1: 0..5 step 0.1
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (analysis_decl
+      kind: (identifier)
+      (sweep_spec
+        source: (identifier)
+        start: (number_literal)
+        stop: (number_literal)
+        step: (number_literal)))))
+
+================================================================================
+AC analysis
+================================================================================
+
+circuit test {
+    analysis ac {
+        start: 1
+        stop: 1G
+        points: 100
+        scale: decade
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (analysis_decl
+      kind: (identifier)
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (identifier)))))
+
+================================================================================
+Transient analysis
+================================================================================
+
+circuit test {
+    analysis tran {
+        step: 1n
+        stop: 100n
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (analysis_decl
+      kind: (identifier)
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal)))))
+
+================================================================================
+Double DC sweep
+================================================================================
+
+circuit test {
+    analysis dc {
+        sweep V1: 0..5 step 0.1
+        sweep V2: 0..3.3 step 0.5
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (analysis_decl
+      kind: (identifier)
+      (sweep_spec
+        source: (identifier)
+        start: (number_literal)
+        stop: (number_literal)
+        step: (number_literal))
+      (sweep_spec
+        source: (identifier)
+        start: (number_literal)
+        stop: (number_literal)
+        step: (number_literal)))))
+
+================================================================================
+Multiple analyses
+================================================================================
+
+circuit test {
+    analysis op {}
+    analysis ac {
+        start: 1
+        stop: 10G
+        points: 200
+        scale: decade
+    }
+    analysis tran {
+        step: 1n
+        stop: 1u
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (analysis_decl
+      kind: (identifier))
+    (analysis_decl
+      kind: (identifier)
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (identifier)))
+    (analysis_decl
+      kind: (identifier)
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal)))))

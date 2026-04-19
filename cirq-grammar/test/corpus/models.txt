@@ -1,0 +1,92 @@
+================================================================================
+Simple model
+================================================================================
+
+model d1n4148: diode {
+    is = 2.52n
+    rs = 0.568
+    n = 1.752
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (model_decl
+    name: (identifier)
+    device_type: (identifier)
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal))))
+
+================================================================================
+MOSFET model with level
+================================================================================
+
+model nch: nmos {
+    level = 1
+    vto = 0.7
+    kp = 110u
+    lambda = 0.04
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (model_decl
+    name: (identifier)
+    device_type: (identifier)
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal))))
+
+================================================================================
+Model inheritance
+================================================================================
+
+model nch_base: nmos {
+    level = 1
+    vto = 0.7
+    kp = 110u
+}
+
+model nch_fast: nch_base {
+    kp = 150u
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (model_decl
+    name: (identifier)
+    device_type: (identifier)
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal)))
+  (model_decl
+    name: (identifier)
+    device_type: (identifier)
+    (model_param name: (identifier) value: (number_literal))))
+
+================================================================================
+Model with attribute
+================================================================================
+
+@deprecated("use nch_v2 instead")
+model nch_v1: nmos {
+    level = 1
+    vto = 0.7
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (model_decl
+    (attribute
+      name: (identifier)
+      (argument_list
+        (argument (string_literal))))
+    name: (identifier)
+    device_type: (identifier)
+    (model_param name: (identifier) value: (number_literal))
+    (model_param name: (identifier) value: (number_literal))))

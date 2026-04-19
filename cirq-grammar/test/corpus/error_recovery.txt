@@ -1,0 +1,68 @@
+================================================================================
+Missing closing brace
+================================================================================
+
+circuit test {
+    param x = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (param_decl
+      name: (identifier)
+      value: (number_literal))
+    (MISSING "}")))
+
+================================================================================
+Malformed element instance (missing close paren)
+================================================================================
+
+circuit test {
+    R1: resistor(a -> b, 10k
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument
+          (connection
+            from: (identifier)
+            to: (identifier)))
+        (argument
+          (number_literal)))
+      (MISSING ")"))))
+
+================================================================================
+Valid circuit after error
+================================================================================
+
+circuit broken {
+    R1: resistor(a ->
+}
+
+circuit good {
+    param x = 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (ERROR
+      (identifier)
+      (identifier)
+      (identifier)))
+  (circuit_decl
+    name: (identifier)
+    (param_decl
+      name: (identifier)
+      value: (number_literal))))
