@@ -155,13 +155,21 @@ dependencies = [
 name = "cirq-frontend"
 version = "0.1.0"
 dependencies = [
- "cc",
  "cirq-ast",
+ "cirq-grammar",
  "cirq-ir",
  "cirq-spice-import",
  "thevenin",
  "thevenin-types",
  "thiserror 2.0.18",
+ "tree-sitter",
+]
+
+[[package]]
+name = "cirq-grammar"
+version = "0.1.0"
+dependencies = [
+ "cc",
  "tree-sitter",
 ]
 

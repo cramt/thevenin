@@ -7,6 +7,7 @@ members = [
     "thevenin-test-macro",
     "cirq-ast",
     "cirq-ir",
+    "cirq-grammar",
     "cirq-frontend",
     "cirq-spice-import",
 ]
