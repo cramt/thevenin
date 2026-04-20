@@ -32,11 +32,19 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-        src = craneLib.cleanCargoSource ./.;
+        # Include both Cargo sources and the tree-sitter grammar directory so
+        # that build.rs can run `tree-sitter generate` during the pure build.
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            (craneLib.filterCargoSources path type)
+            || (builtins.match ".*cirq-grammar/.*" path != null);
+        };
 
         commonCraneArgs = {
           inherit src;
           strictDeps = true;
+          nativeBuildInputs = with pkgs; [tree-sitter nodejs];
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonCraneArgs;

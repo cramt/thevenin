@@ -11,3 +11,12 @@ cirq-ast = { path = "../cirq-ast" }
 cirq-ir = { path = "../cirq-ir" }
 thevenin-types = { path = "../thevenin-types" }
 thiserror.workspace = true
+tree-sitter = "0.25"
+
+[dev-dependencies]
+thevenin = { path = "../thevenin" }
+cirq-spice-import = { path = "../cirq-spice-import" }
+thevenin-types = { path = "../thevenin-types" }
+
+[build-dependencies]
+cc = "1"

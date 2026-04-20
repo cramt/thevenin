@@ -83,20 +83,21 @@ Each run should leave the workspace in a state where progress can be validated i
 
 ## Suggested run order
 
-1. `01-workspace-inventory-and-target-architecture.md`
-2. `02-cirq-language-spec.md`
-3. `03-tree-sitter-cirq-grammar.md`
-4. `04-cirq-ast-and-parser-integration.md`
-5. `05-canonical-cirq-ir.md`
-6. `06-cirq-to-thevenin-boundary.md`
-7. `07-spice-import-to-cirq-ir.md`
-8. `08-tests-migration-and-adoption.md`
+1. `01-workspace-inventory-and-target-architecture.md` ✅
+2. `02-cirq-language-spec.md` ✅
+3. `03-tree-sitter-cirq-grammar.md` ✅
+4. `04-cirq-ast-and-parser-integration.md` ✅
+5. `05-canonical-cirq-ir.md` ✅
+6. `06-cirq-to-thevenin-boundary.md` ✅
+7. `07-spice-import-to-cirq-ir.md` ✅
+8. `08-tests-migration-and-adoption.md` ✅
+9. `09-feature-parity-gaps.md` — close every gap between SPICE and Cirq
 
 ---
 
 ## What success looks like
 
-By the end of these runs, the project should have:
+By the end of runs 01–08, the project has:
 
 - a full Cirq language specification,
 - a standard Tree-sitter grammar for Cirq,
@@ -105,6 +106,10 @@ By the end of these runs, the project should have:
 - a defined boundary between Cirq IR and the Thevenin backend-facing layer,
 - a SPICE import path into Cirq IR,
 - and a migration/testing strategy that lets Thevenin gradually stop depending on SPICE-shaped structures.
+
+Run 09 extends this with full SPICE feature parity — every construct that
+`thevenin-types::Netlist` can represent must also be representable in Cirq IR,
+so the Cirq path never silently drops information the simulator needs.
 
 ---
 
