@@ -3725,7 +3725,11 @@ pub fn bsim3soi_dd_limit(
     // SmartVbs: for floating body in DC only, Vbs cannot be negative.
     // ngspice B3SOIDDSmartVbs: only applies when CKTmode & (MODEDC | MODEDCOP).
     // During transient, the body potential can legitimately go negative.
-    let vbs = if floating_body && is_dc { vbs.max(0.0) } else { vbs };
+    let vbs = if floating_body && is_dc {
+        vbs.max(0.0)
+    } else {
+        vbs
+    };
     let limit_e = 3.0;
     let ves = if (ves_new - ves_old).abs() > limit_e {
         if ves_new > ves_old {

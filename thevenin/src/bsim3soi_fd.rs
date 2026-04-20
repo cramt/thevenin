@@ -2232,7 +2232,11 @@ pub fn bsim3soi_fd_limit(
     // FD SmartVbs: in DC floating body, Vbs >= 0.
     // ngspice B3SOIFDSmartVbs: only applies when CKTmode & (MODEDC | MODEDCOP).
     // During transient, the body potential can legitimately go negative.
-    let vbs = if floating_body && is_dc { vbs.max(0.0) } else { vbs };
+    let vbs = if floating_body && is_dc {
+        vbs.max(0.0)
+    } else {
+        vbs
+    };
 
     let limit_e = 3.0;
     let ves = if (ves_new - ves_old).abs() > limit_e {

@@ -40,8 +40,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             for plot in &result.plots {
                 println!("{}:", plot.name);
                 for vec in &plot.vecs {
-                    let preview: Vec<String> =
-                        vec.data.as_real().iter().take(5).map(|v| format!("{v:.6}")).collect();
+                    let preview: Vec<String> = vec
+                        .data
+                        .as_real()
+                        .iter()
+                        .take(5)
+                        .map(|v| format!("{v:.6}"))
+                        .collect();
                     println!("  {} = [{}]", vec.name, preview.join(", "));
                 }
             }

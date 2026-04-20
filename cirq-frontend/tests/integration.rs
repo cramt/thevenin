@@ -140,8 +140,7 @@ R2 mid 0 1k
     let original = &original_netlists[0];
 
     // Import to Cirq IR.
-    let ir =
-        cirq_spice_import::import_netlist(original).expect("import_netlist should succeed");
+    let ir = cirq_spice_import::import_netlist(original).expect("import_netlist should succeed");
 
     // Verify IR structure preserves elements, nets, and analysis.
     assert_eq!(ir.elements.len(), 3, "should have V1, R1, R2");
@@ -224,15 +223,11 @@ R2 outp 0 2000
 .end
 ";
 
-    let netlists_a =
-        thevenin_types::Netlist::parse(spice_a).expect("SPICE A parse should succeed");
-    let netlists_b =
-        thevenin_types::Netlist::parse(spice_b).expect("SPICE B parse should succeed");
+    let netlists_a = thevenin_types::Netlist::parse(spice_a).expect("SPICE A parse should succeed");
+    let netlists_b = thevenin_types::Netlist::parse(spice_b).expect("SPICE B parse should succeed");
 
-    let ir_a =
-        cirq_spice_import::import_netlist(&netlists_a[0]).expect("import A should succeed");
-    let ir_b =
-        cirq_spice_import::import_netlist(&netlists_b[0]).expect("import B should succeed");
+    let ir_a = cirq_spice_import::import_netlist(&netlists_a[0]).expect("import A should succeed");
+    let ir_b = cirq_spice_import::import_netlist(&netlists_b[0]).expect("import B should succeed");
 
     // Same number of elements.
     assert_eq!(ir_a.elements.len(), ir_b.elements.len());

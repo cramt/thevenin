@@ -1352,7 +1352,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // Accept: schedule next h from LTE estimate.
             h = new_h.min(step_h * MAX_GROW).min(h_max).max(h_min);
             force_be = false;
-        } else if method == IntegrationMethod::BackwardEuler && (has_reactive || has_device_charges) {
+        } else if method == IntegrationMethod::BackwardEuler && (has_reactive || has_device_charges)
+        {
             // Order upgrade check (ngspice dctran.c lines 820-831):
             // After a successful BE step, try computing the order-2 (Trap) LTE.
             // If the Trap LTE suggests a timestep <= 1.05× the current step,

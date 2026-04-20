@@ -119,11 +119,7 @@ pub enum Argument {
     /// Connection argument: `a -> b`
     Connection { from: Ident, to: Ident },
     /// Named connection: `control: a -> b`
-    NamedConnection {
-        name: Ident,
-        from: Ident,
-        to: Ident,
-    },
+    NamedConnection { name: Ident, from: Ident, to: Ident },
 }
 
 // ---------------------------------------------------------------------------

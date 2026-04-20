@@ -135,9 +135,8 @@ fn soi_bypass(
     const RELTOL: f64 = 1e-3;
     const VOLTOL: f64 = 1e-6;
 
-    let within_tol = |v: f64, p: f64| -> bool {
-        (v - p).abs() < RELTOL * v.abs().max(p.abs()) + VOLTOL
-    };
+    let within_tol =
+        |v: f64, p: f64| -> bool { (v - p).abs() < RELTOL * v.abs().max(p.abs()) + VOLTOL };
 
     if within_tol(vgs, prev.0)
         && within_tol(vds, prev.1)

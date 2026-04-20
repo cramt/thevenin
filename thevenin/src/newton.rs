@@ -181,7 +181,6 @@ where
         }
         total_iters = iter + 1;
 
-
         if iter > 0 && check_convergence(&solution, &new_solution, num_nodes, options) {
             return Ok(NrResult {
                 solution: new_solution,
