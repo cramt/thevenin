@@ -78,13 +78,10 @@ module divider {
 
 ## Built-in Constants
 
-| Name | Value | Description |
-|------|-------|-------------|
-| `pi` | 3.14159... | Pi |
-| `e` | 2.71828... | Euler's number |
-| `boltzmann` | 1.380649e-23 | Boltzmann constant (J/K) |
-| `charge` | 1.602176634e-19 | Elementary charge (C) |
-| `kelvin` | 273.15 | 0 C in Kelvin |
+| Name | Value | Description | Status |
+|------|-------|-------------|--------|
+| `pi` | 3.14159... | Pi | ✓ implemented |
+| `e` | 2.71828... | Euler's number | ✓ implemented |
 
 ## Parameter Validation
 

@@ -29,7 +29,8 @@ Reserved keywords cannot be used as identifiers (see below).
 ```
 circuit    module     port       in         out        inout
 let        param      model      analysis   import     as
-true       false      gnd
+true       false      gnd        global     options    temp
+save       ic         sweep      step
 ```
 
 ## Numeric Literals

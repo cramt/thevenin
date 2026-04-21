@@ -23,11 +23,18 @@ The circuit name is an identifier. It serves as the title (equivalent to SPICE's
 ### Circuit Body
 
 The circuit body is a block `{ ... }` containing:
-- parameter declarations
+- parameter declarations (`param`, `let`)
 - element instantiations
 - module instantiations
 - analysis commands
 - nested module definitions (inline)
+- model definitions
+- user-defined functions (see `08-expressions.md`)
+- `options { ... }` blocks
+- `temp <value>` declarations
+- `save { ... }` blocks
+- `ic { ... }` initial condition blocks
+- `global <net>` declarations
 
 ## Module Declaration
 
@@ -140,6 +147,69 @@ circuit top {
 }
 ```
 
+## Options
+
+Simulation options are set using an `options` block:
+
+```cirq
+circuit top {
+    options {
+        gmin: 1e-12
+        abstol: 1e-12
+        reltol: 1e-3
+    }
+}
+```
+
+Each setting is a key-value pair. Options correspond to SPICE `.options` settings.
+
+## Temperature
+
+The simulation temperature (in °C) is set with `temp`:
+
+```cirq
+circuit top {
+    temp 85
+}
+```
+
+If omitted, the default temperature is 27°C.
+
+## Save Targets
+
+The `save` block specifies which signals to record during simulation:
+
+```cirq
+circuit top {
+    save {
+        v(out)
+        v(mid, gnd)
+        i(R1)
+    }
+}
+```
+
+Save targets can be:
+- `v(node)` — node voltage
+- `v(node1, node2)` — differential voltage
+- `i(element)` — current through an element
+- bare identifier — raw signal name
+
+## Initial Conditions
+
+The `ic` block sets initial node voltages for transient analysis:
+
+```cirq
+circuit top {
+    ic {
+        v(out) = 1.5
+        v(mid) = 0.8
+    }
+}
+```
+
+Initial conditions are used with `uic: true` in transient analysis, or as hints for the DC operating point solver.
+
 ## Import
 
 Modules can be imported from other files:
@@ -153,4 +223,10 @@ circuit top {
 }
 ```
 
-Import resolves at the file level. Circular imports are an error.
+Import resolves at the file level. The imported file is parsed and its top-level declarations (modules, models, functions) are merged into the importing file's AST.
+
+Import resolution:
+- Paths are resolved relative to the importing file's directory
+- Circular imports are detected and reported as errors
+- Diamond dependencies (A imports B and C, both import D) are deduplicated automatically
+- Recursive imports are supported

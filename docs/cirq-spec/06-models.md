@@ -27,6 +27,14 @@ model <name>: <device_type> {
 }
 ```
 
+A model can optionally extend a base model:
+
+```
+model <name>: <base_model> {
+    <param> = <value>    // overrides
+}
+```
+
 The device type must be one of the built-in device kinds:
 - `diode`
 - `npn`, `pnp` (BJT)
@@ -129,3 +137,4 @@ The `model` parameter is always named (never positional) to avoid ambiguity.
 | `npn`/`pnp` | Q | 1 (Gummel-Poon), 4 (VBIC) |
 | `diode` | D | 1 (standard) |
 | `njfet`/`pjfet` | J | 1 (Shichman-Hodges) |
+| `nmesfet`/`pmesfet` | Z | 1 (Statz) |

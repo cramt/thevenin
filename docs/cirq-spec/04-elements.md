@@ -100,17 +100,17 @@ Same parameter structure as voltage source.
 
 ### Waveform Specifications
 
-Sources can carry transient waveforms:
+Sources can carry transient waveforms. Field names follow SPICE conventions:
 
 ```cirq
 // Pulse
 V_clk: vsource(clk -> gnd,
-    pulse: { v1: 0, v2: 3.3, delay: 0, rise: 1n, fall: 1n, width: 5n, period: 10n }
+    pulse: { v1: 0, v2: 3.3, td: 0, tr: 1n, tf: 1n, pw: 5n, per: 10n }
 )
 
 // Sinusoidal
 V_sig: vsource(sig -> gnd,
-    sin: { offset: 0, amplitude: 1, freq: 1k }
+    sin: { v0: 0, va: 1, freq: 1k }
 )
 
 // Piecewise Linear
@@ -122,7 +122,28 @@ V_ramp: vsource(ramp -> gnd,
 V_exp: vsource(a -> gnd,
     exp: { v1: 0, v2: 5, td1: 1n, tau1: 10n, td2: 50n, tau2: 20n }
 )
+
+// Single-Frequency FM
+V_fm: vsource(a -> gnd,
+    sffm: { v0: 0, va: 1, fc: 10k, fs: 500, md: 5 }
+)
+
+// Amplitude Modulation
+V_am: vsource(a -> gnd,
+    am: { va: 1, vo: 0, fc: 10k, fs: 500, td: 0 }
+)
 ```
+
+#### Waveform Field Reference
+
+| Waveform | Required Fields | Optional Fields |
+|----------|----------------|-----------------|
+| `pulse`  | `v1`, `v2` | `td`, `tr`, `tf`, `pw`, `per` |
+| `sin`    | `v0`, `va` | `freq`, `td`, `theta`, `phi` |
+| `exp`    | `v1`, `v2` | `td1`, `tau1`, `td2`, `tau2` |
+| `pwl`    | list of `(time, value)` pairs | — |
+| `sffm`   | `v0`, `va` | `fc`, `fs`, `md` |
+| `am`     | `va`, `vo`, `fc`, `fs` | `td` |
 
 ## Semiconductor Devices
 
@@ -178,6 +199,13 @@ J1: njfet(drain -> source, gate: g, model: j201)
 J2: pjfet(drain -> source, gate: g, model: pjf1)
 ```
 
+### MESFET
+
+```cirq
+Z1: nmesfet(drain -> source, gate: g, model: gaas_n)
+Z2: pmesfet(drain -> source, gate: g, model: gaas_p)
+```
+
 ## Controlled Sources
 
 ### Voltage-Controlled Voltage Source (VCVS)
@@ -203,6 +231,20 @@ H1: ccvs(out_p -> out_n, sense: V_sense, transresistance: 100)
 ```cirq
 F1: cccs(out_p -> out_n, sense: V_sense, gain: 50)
 ```
+
+## Behavioral Sources
+
+Behavioral sources define voltage or current as an arbitrary expression of circuit variables:
+
+```cirq
+// Behavioral voltage source
+B1: behavioral(pos -> neg, v: sin(2 * pi * 1k * time))
+
+// Behavioral current source
+B2: behavioral(pos -> neg, i: v(ctrl) * 1m)
+```
+
+The named argument `v:` selects voltage mode; `i:` selects current mode. The expression is converted to a SPICE-compatible `V={expr}` or `I={expr}` string internally.
 
 ## Transmission Lines
 

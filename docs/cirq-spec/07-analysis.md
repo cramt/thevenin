@@ -90,6 +90,7 @@ Parameters:
 - `step`: maximum time step — **required**
 - `stop`: end time — **required**
 - `start`: start time — optional, default 0
+- `tmax`: maximum internal timestep — optional (solver picks automatically if omitted)
 - `uic`: use initial conditions — optional, default false
 
 ## Noise Analysis
@@ -110,12 +111,16 @@ analysis noise {
 
 ```cirq
 analysis pz {
-    input: in -> gnd           // input port
-    output: out -> gnd         // output port
+    input_pos: in              // input positive node
+    input_neg: gnd             // input negative node
+    output_pos: out            // output positive node
+    output_neg: gnd            // output negative node
     transfer: voltage          // voltage | current
     analysis: both             // poles | zeros | both
 }
 ```
+
+The node names also accept the short aliases `in_pos`, `in_neg`, `out_pos`, `out_neg`.
 
 ## Sensitivity Analysis
 

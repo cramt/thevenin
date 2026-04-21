@@ -38,38 +38,36 @@ Division by zero is a compile-time error if detectable, runtime error otherwise.
 
 ### Math Functions
 
-| Function | Description |
-|----------|------------|
-| `abs(x)` | Absolute value |
-| `sqrt(x)` | Square root |
-| `exp(x)` | e^x |
-| `ln(x)` | Natural logarithm |
-| `log10(x)` | Base-10 logarithm |
-| `log2(x)` | Base-2 logarithm |
-| `pow(x, y)` | x^y (equivalent to `x ** y`) |
-| `sin(x)` | Sine (radians) |
-| `cos(x)` | Cosine (radians) |
-| `tan(x)` | Tangent (radians) |
-| `asin(x)` | Arcsine |
-| `acos(x)` | Arccosine |
-| `atan(x)` | Arctangent |
-| `atan2(y, x)` | Two-argument arctangent |
-| `min(a, b)` | Minimum |
-| `max(a, b)` | Maximum |
-| `floor(x)` | Floor |
-| `ceil(x)` | Ceiling |
-| `round(x)` | Round to nearest integer |
+| Function | Description | Status |
+|----------|------------|--------|
+| `abs(x)` | Absolute value | ✓ implemented |
+| `sqrt(x)` | Square root | ✓ implemented |
+| `exp(x)` | e^x | ✓ implemented |
+| `ln(x)` | Natural logarithm | ✓ implemented |
+| `log(x)` | Natural logarithm (alias for `ln`) | ✓ implemented |
+| `log10(x)` | Base-10 logarithm | ✓ implemented |
+| `pow(x, y)` | x^y (equivalent to `x ** y`) | ✓ implemented |
+| `sin(x)` | Sine (radians) | ✓ implemented |
+| `cos(x)` | Cosine (radians) | ✓ implemented |
+| `tan(x)` | Tangent (radians) | ✓ implemented |
+| `min(a, b)` | Minimum | ✓ implemented |
+| `max(a, b)` | Maximum | ✓ implemented |
+
+### User-Defined Functions
+
+Users can define named functions using Haskell-style syntax:
+
+```cirq
+limit(x, lo, hi) = min(max(x, lo), hi)
+clamp01(v) = limit(v, 0, 1)
+```
+
+Function declarations are allowed at the top level of a file or inside circuit/module bodies. The body is a single expression. See `05-parameters.md` for how functions interact with parameter scoping.
 
 ### Thermal Voltage
 
 ```cirq
-let vt = boltzmann * (temperature + kelvin) / charge
-```
-
-This is a common pattern in semiconductor device expressions. A convenience function may be provided:
-
-```cirq
-let vt = vt(temperature)   // built-in thermal voltage at given temp in Celsius
+let vt = pi * 2   // use built-in constants in expressions
 ```
 
 ## String Expressions

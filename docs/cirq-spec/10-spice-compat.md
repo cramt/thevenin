@@ -14,10 +14,12 @@ Every valid SPICE netlist that Thevenin supports can be mechanically translated 
 | K | `coupling` |
 | V | `vsource` |
 | I | `isource` |
+| B | `behavioral` |
 | D | `diode` |
 | Q | `npn` / `pnp` |
 | M | `nmos` / `pmos` |
 | J | `njfet` / `pjfet` |
+| Z | `nmesfet` / `pmesfet` |
 | E | `vcvs` |
 | G | `vccs` |
 | H | `ccvs` |
@@ -53,10 +55,13 @@ Every valid SPICE netlist that Thevenin supports can be mechanically translated 
 | `.lib` | `import "..." as ...` |
 | `.end` | `}` (closing circuit block) |
 | `.ends` | `}` (closing module block) |
-| `.ic` | element-level `ic:` parameter |
+| `.ic` | `ic { v(node) = value }` block |
 | `.nodeset` | (future: `hint` block) |
-| `.options` | (future: `options` block) |
+| `.options` | `options { key: value }` block |
 | `.global` | `global <net>` |
+| `.save` | `save { v(node) i(elem) }` block |
+| `.temp` | `temp <value>` |
+| `.func` | `name(args) = expr` function declaration |
 | `.control` / `.endc` | Not mapped (scripting is separate) |
 
 ## SI Suffix Differences
@@ -126,7 +131,7 @@ circuit cmos_inverter {
 
     Vdd: vsource(vdd -> gnd, dc: 1.8)
     Vin: vsource(in -> gnd,
-        pulse: { v1: 0, v2: 1.8, delay: 0, rise: 1n, fall: 1n, width: 5n, period: 10n }
+        pulse: { v1: 0, v2: 1.8, td: 0, tr: 1n, tf: 1n, pw: 5n, per: 10n }
     )
 
     M1: pmos(vdd -> out, gate: in, bulk: vdd, model: pch, w: 2u, l: 180n)
@@ -142,7 +147,7 @@ circuit cmos_inverter {
 ## What Cannot Be Automatically Translated
 
 - `.control` / `.endc` blocks (scripting language — requires manual migration or separate tooling)
-- Behavioral `B` sources with SPICE expression syntax (requires expression translation)
 - `.meas` / `.measure` (future Cirq feature)
 - `.four` (Fourier analysis — future Cirq feature)
-- Complex `.func` definitions (requires expression translation)
+- XSPICE code models (`.cmodel` — future feature, requires syntax design)
+- CPL coupled transmission lines (uncommon, not yet supported)

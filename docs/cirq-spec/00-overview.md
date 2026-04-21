@@ -1,7 +1,7 @@
 # Cirq Language Specification — Overview
 
-**Version:** 0.1.0-draft
-**Status:** Design phase
+**Version:** 0.2.0-draft
+**Status:** Implementation in progress
 
 ## What is Cirq?
 
