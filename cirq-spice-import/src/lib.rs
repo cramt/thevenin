@@ -7,10 +7,10 @@
 use std::collections::HashMap;
 
 use cirq_ir::{
-    AcAnalysis, Analysis as IrAnalysis, Circuit, Connection, DcAnalysis, DcSweep as IrDcSweep,
-    Element as IrElement, ElementKind as IrElementKind, FrequencyScale, Id, Model as IrModel, Net,
-    NoiseAnalysis, PzAnalysis, PzType, ResolvedParam, SensAnalysis, TfAnalysis, TranAnalysis,
-    TransferType, Value,
+    AcAnalysis, AcSpec as IrAcSpec, Analysis as IrAnalysis, Circuit, Connection, DcAnalysis,
+    DcSweep as IrDcSweep, Element as IrElement, ElementKind as IrElementKind, FrequencyScale, Id,
+    Model as IrModel, Net, NoiseAnalysis, PzAnalysis, PzType, ResolvedParam, SensAnalysis,
+    SourceSpec, TfAnalysis, TranAnalysis, TransferType, Value, Waveform as IrWaveform,
 };
 use thevenin_types::{
     AcVariation, Analysis as SpiceAnalysis, ElementKind as SpiceElementKind, Expr, Item, Netlist,
@@ -125,6 +125,102 @@ fn expr_to_f64(expr: &Expr) -> Result<f64, ImportError> {
         Expr::Brace(s) => Err(ImportError::UnevaluableExpr(format!(
             "brace expression: {{{s}}}"
         ))),
+    }
+}
+
+/// Build a `SourceSpec` from a `thevenin_types::Source`.
+fn build_source_spec(source: &thevenin_types::Source) -> Result<SourceSpec, ImportError> {
+    let dc = source.dc.as_ref().and_then(|e| expr_to_f64(e).ok());
+    let ac = source
+        .ac
+        .as_ref()
+        .map(|ac| {
+            Ok::<IrAcSpec, ImportError>(IrAcSpec {
+                mag: expr_to_f64(&ac.mag).unwrap_or(0.0),
+                phase: ac
+                    .phase
+                    .as_ref()
+                    .map(expr_to_f64)
+                    .transpose()?
+                    .unwrap_or(0.0),
+            })
+        })
+        .transpose()?;
+    let waveform = source.waveform.as_ref().map(convert_waveform).transpose()?;
+    Ok(SourceSpec { dc, ac, waveform })
+}
+
+/// Convert a `thevenin_types::Waveform` to an `IrWaveform`.
+fn convert_waveform(w: &thevenin_types::Waveform) -> Result<IrWaveform, ImportError> {
+    match w {
+        thevenin_types::Waveform::Pulse {
+            v1,
+            v2,
+            td,
+            tr,
+            tf,
+            pw,
+            per,
+        } => Ok(IrWaveform::Pulse {
+            v1: expr_to_f64(v1)?,
+            v2: expr_to_f64(v2)?,
+            td: td.as_ref().map(expr_to_f64).transpose()?,
+            tr: tr.as_ref().map(expr_to_f64).transpose()?,
+            tf: tf.as_ref().map(expr_to_f64).transpose()?,
+            pw: pw.as_ref().map(expr_to_f64).transpose()?,
+            per: per.as_ref().map(expr_to_f64).transpose()?,
+        }),
+        thevenin_types::Waveform::Sin {
+            v0,
+            va,
+            freq,
+            td,
+            theta,
+            phi,
+        } => Ok(IrWaveform::Sin {
+            v0: expr_to_f64(v0)?,
+            va: expr_to_f64(va)?,
+            freq: freq.as_ref().map(expr_to_f64).transpose()?,
+            td: td.as_ref().map(expr_to_f64).transpose()?,
+            theta: theta.as_ref().map(expr_to_f64).transpose()?,
+            phi: phi.as_ref().map(expr_to_f64).transpose()?,
+        }),
+        thevenin_types::Waveform::Exp {
+            v1,
+            v2,
+            td1,
+            tau1,
+            td2,
+            tau2,
+        } => Ok(IrWaveform::Exp {
+            v1: expr_to_f64(v1)?,
+            v2: expr_to_f64(v2)?,
+            td1: td1.as_ref().map(expr_to_f64).transpose()?,
+            tau1: tau1.as_ref().map(expr_to_f64).transpose()?,
+            td2: td2.as_ref().map(expr_to_f64).transpose()?,
+            tau2: tau2.as_ref().map(expr_to_f64).transpose()?,
+        }),
+        thevenin_types::Waveform::Pwl(points) => {
+            let pairs = points
+                .iter()
+                .map(|pt| Ok((expr_to_f64(&pt.time)?, expr_to_f64(&pt.value)?)))
+                .collect::<Result<Vec<(f64, f64)>, ImportError>>()?;
+            Ok(IrWaveform::Pwl(pairs))
+        }
+        thevenin_types::Waveform::Sffm { v0, va, fc, fs, md } => Ok(IrWaveform::Sffm {
+            v0: expr_to_f64(v0)?,
+            va: expr_to_f64(va)?,
+            fc: fc.as_ref().map(expr_to_f64).transpose()?,
+            fs: fs.as_ref().map(expr_to_f64).transpose()?,
+            md: md.as_ref().map(expr_to_f64).transpose()?,
+        }),
+        thevenin_types::Waveform::Am { va, vo, fc, fs, td } => Ok(IrWaveform::Am {
+            va: expr_to_f64(va)?,
+            vo: expr_to_f64(vo)?,
+            fc: expr_to_f64(fc)?,
+            fs: expr_to_f64(fs)?,
+            td: td.as_ref().map(expr_to_f64).transpose()?,
+        }),
     }
 }
 
@@ -514,6 +610,7 @@ fn convert_element(
                 ],
                 params: ir_params,
                 model: None,
+                source_spec: None,
             }))
         }
 
@@ -535,6 +632,7 @@ fn convert_element(
                 ],
                 params: ir_params,
                 model: None,
+                source_spec: None,
             }))
         }
 
@@ -556,6 +654,7 @@ fn convert_element(
                 ],
                 params: ir_params,
                 model: None,
+                source_spec: None,
             }))
         }
 
@@ -570,6 +669,7 @@ fn convert_element(
                     ir_params.push(("ac_phase".to_owned(), expr_to_value(phase)));
                 }
             }
+            let source_spec = Some(build_source_spec(source)?);
             Ok(Some(IrElement {
                 id,
                 name: name.clone(),
@@ -580,6 +680,7 @@ fn convert_element(
                 ],
                 params: ir_params,
                 model: None,
+                source_spec,
             }))
         }
 
@@ -594,6 +695,7 @@ fn convert_element(
                     ir_params.push(("ac_phase".to_owned(), expr_to_value(phase)));
                 }
             }
+            let source_spec = Some(build_source_spec(source)?);
             Ok(Some(IrElement {
                 id,
                 name: name.clone(),
@@ -604,6 +706,7 @@ fn convert_element(
                 ],
                 params: ir_params,
                 model: None,
+                source_spec,
             }))
         }
 
@@ -624,6 +727,7 @@ fn convert_element(
                 ],
                 params: convert_params(params),
                 model: model_id,
+                source_spec: None,
             }))
         }
 
@@ -657,6 +761,7 @@ fn convert_element(
                 connections: conns,
                 params: ir_params,
                 model: model_id,
+                source_spec: None,
             }))
         }
 
@@ -687,6 +792,7 @@ fn convert_element(
                 connections: conns,
                 params: convert_params(params),
                 model: model_id,
+                source_spec: None,
             }))
         }
 
@@ -710,6 +816,7 @@ fn convert_element(
                 ],
                 params: convert_params(params),
                 model: model_id,
+                source_spec: None,
             }))
         }
 
@@ -734,6 +841,7 @@ fn convert_element(
                 ],
                 params: convert_params(params),
                 model: model_id,
+                source_spec: None,
             }))
         }
 
@@ -751,6 +859,7 @@ fn convert_element(
                     ("coupling".to_owned(), expr_to_value(coupling)),
                 ],
                 model: None,
+                source_spec: None,
             }))
         }
 
@@ -772,6 +881,7 @@ fn convert_element(
             ],
             params: vec![("gain".to_owned(), expr_to_value(gain))],
             model: None,
+            source_spec: None,
         })),
 
         SpiceElementKind::Vccs {
@@ -792,6 +902,7 @@ fn convert_element(
             ],
             params: vec![("gm".to_owned(), expr_to_value(gm))],
             model: None,
+            source_spec: None,
         })),
 
         SpiceElementKind::Ccvs {
@@ -812,6 +923,7 @@ fn convert_element(
                 ("rm".to_owned(), expr_to_value(rm)),
             ],
             model: None,
+            source_spec: None,
         })),
 
         SpiceElementKind::Cccs {
@@ -832,6 +944,7 @@ fn convert_element(
                 ("gain".to_owned(), expr_to_value(gain)),
             ],
             model: None,
+            source_spec: None,
         })),
 
         SpiceElementKind::Ltra {
@@ -863,6 +976,7 @@ fn convert_element(
                 ],
                 params: convert_params(params),
                 model: model_id,
+                source_spec: None,
             }))
         }
 
@@ -945,12 +1059,13 @@ fn convert_analysis(
             tstep,
             tstop,
             tstart,
-            tmax: _,
+            tmax,
         } => IrAnalysis::Tran(TranAnalysis {
             step: expr_to_f64(tstep)?,
             stop: expr_to_f64(tstop)?,
             start: tstart.as_ref().map(expr_to_f64).transpose()?.unwrap_or(0.0),
             uic: false,
+            tmax: tmax.as_ref().and_then(|e| expr_to_f64(e).ok()),
         }),
 
         SpiceAnalysis::Noise {

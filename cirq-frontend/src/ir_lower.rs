@@ -8,8 +8,8 @@ use cirq_ast::{
     ParamDecl, SourceFile, TopLevel, UnaryOp,
 };
 use cirq_ir::{
-    AcAnalysis, Analysis, Circuit, Connection, DcAnalysis, DcSweep, Element, ElementKind,
-    FrequencyScale, Id, Model, Net, ResolvedParam, TranAnalysis, Value,
+    AcAnalysis, AcSpec, Analysis, Circuit, Connection, DcAnalysis, DcSweep, Element, ElementKind,
+    FrequencyScale, Id, Model, Net, ResolvedParam, SourceSpec, TranAnalysis, Value, Waveform,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -87,6 +87,7 @@ fn standard_pins(kind: &ElementKind) -> &'static [&'static str] {
         ElementKind::Npn | ElementKind::Pnp => &["collector", "base", "emitter"],
         ElementKind::Nmos | ElementKind::Pmos => &["drain", "gate", "source", "bulk"],
         ElementKind::NJfet | ElementKind::PJfet => &["drain", "gate", "source"],
+        ElementKind::NMesfet | ElementKind::PMesfet => &["drain", "gate", "source"],
         ElementKind::Vcvs | ElementKind::Vccs | ElementKind::Ccvs | ElementKind::Cccs => {
             &["out_pos", "out_neg", "in_pos", "in_neg"]
         }
@@ -114,7 +115,10 @@ fn element_kind_from_str(name: &str) -> Option<ElementKind> {
         "vccs" => Some(ElementKind::Vccs),
         "ccvs" => Some(ElementKind::Ccvs),
         "cccs" => Some(ElementKind::Cccs),
+        "coupling" => Some(ElementKind::Coupling),
         "tline" | "transmission_line" => Some(ElementKind::TransmissionLine),
+        "nmesfet" => Some(ElementKind::NMesfet),
+        "pmesfet" => Some(ElementKind::PMesfet),
         _ => None,
     }
 }
@@ -377,10 +381,33 @@ impl IrCtx {
             }
         };
 
-        let mut params = Vec::new();
+        // Start with base model params if inheriting (Gap 2.6).
+        let mut params: Vec<(String, Value)> = if device_type.is_none() {
+            // This is an inherited model; copy base params first.
+            if let Some(&base_id) = self.model_by_name.get(&m.device_type.name) {
+                self.models
+                    .iter()
+                    .find(|model| model.id == base_id)
+                    .map(|base| base.params.clone())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Overlay child params (overwriting any base params with same name).
         for mp in &m.params {
             match self.eval_expr(&mp.value) {
-                Ok(val) => params.push((mp.name.name.clone(), val)),
+                Ok(val) => {
+                    // Replace existing param from base if present.
+                    if let Some(existing) = params.iter_mut().find(|p| p.0 == mp.name.name) {
+                        existing.1 = val;
+                    } else {
+                        params.push((mp.name.name.clone(), val));
+                    }
+                }
                 Err(msg) => {
                     self.diags.push(
                         Diagnostic::error(format!(
@@ -436,6 +463,11 @@ impl IrCtx {
         let mut element_params: Vec<(String, Value)> = Vec::new();
         let mut model_ref: Option<Id> = None;
         let mut positional_conn_idx: usize = 0;
+        let mut source_spec = SourceSpec::default();
+        let is_source = matches!(
+            kind,
+            ElementKind::VoltageSource | ElementKind::CurrentSource
+        );
 
         for arg in &e.args {
             match arg {
@@ -523,6 +555,49 @@ impl IrCtx {
                                     .with_span(name.span),
                             );
                         }
+                    } else if is_source && is_waveform_param(param_name) {
+                        // Waveform block for a source element.
+                        match self.lower_waveform(param_name, value) {
+                            Ok(wf) => source_spec.waveform = Some(wf),
+                            Err(msg) => {
+                                self.diags.push(
+                                    Diagnostic::error(format!(
+                                        "invalid waveform `{param_name}`: {msg}"
+                                    ))
+                                    .with_span(name.span),
+                                );
+                            }
+                        }
+                    } else if is_source && param_name == "ac" {
+                        // AC magnitude (scalar or block with mag/phase).
+                        match self.lower_ac_spec(value) {
+                            Ok(ac) => source_spec.ac = Some(ac),
+                            Err(msg) => {
+                                self.diags.push(
+                                    Diagnostic::error(format!("invalid ac spec: {msg}"))
+                                        .with_span(name.span),
+                                );
+                            }
+                        }
+                    } else if is_source && param_name == "dc" {
+                        // DC value for a source.
+                        match self.eval_to_f64(value) {
+                            Some(v) => source_spec.dc = Some(v),
+                            None => {
+                                // Also store as a param for backward compat.
+                                match self.eval_expr(value) {
+                                    Ok(val) => element_params.push(("dc".to_string(), val)),
+                                    Err(msg) => {
+                                        self.diags.push(
+                                            Diagnostic::error(format!(
+                                                "cannot evaluate dc value: {msg}"
+                                            ))
+                                            .with_span(name.span),
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     } else {
                         // Regular parameter.
                         match self.eval_expr(value) {
@@ -539,21 +614,62 @@ impl IrCtx {
                     }
                 }
                 Argument::Positional(expr) => {
-                    // Positional value param (e.g. `10k` for a resistor value).
-                    match self.eval_expr(expr) {
-                        Ok(val) => element_params.push(("value".to_string(), val)),
-                        Err(msg) => {
-                            self.diags.push(
-                                Diagnostic::error(format!(
-                                    "cannot evaluate positional param: {msg}"
-                                ))
-                                .with_span(e.span),
-                            );
+                    if is_source {
+                        // For sources, positional value is DC.
+                        match self.eval_to_f64(expr) {
+                            Some(v) => source_spec.dc = Some(v),
+                            None => match self.eval_expr(expr) {
+                                Ok(val) => element_params.push(("value".to_string(), val)),
+                                Err(msg) => {
+                                    self.diags.push(
+                                        Diagnostic::error(format!(
+                                            "cannot evaluate positional param: {msg}"
+                                        ))
+                                        .with_span(e.span),
+                                    );
+                                }
+                            },
+                        }
+                    } else {
+                        // Positional value param (e.g. `10k` for a resistor value).
+                        match self.eval_expr(expr) {
+                            Ok(val) => element_params.push(("value".to_string(), val)),
+                            Err(msg) => {
+                                self.diags.push(
+                                    Diagnostic::error(format!(
+                                        "cannot evaluate positional param: {msg}"
+                                    ))
+                                    .with_span(e.span),
+                                );
+                            }
                         }
                     }
                 }
             }
         }
+
+        // Build source_spec: only store if this is a source element and has
+        // at least some spec data.
+        let final_source_spec = if is_source {
+            let has_data = source_spec.dc.is_some()
+                || source_spec.ac.is_some()
+                || source_spec.waveform.is_some();
+            if has_data {
+                Some(source_spec)
+            } else {
+                // Check for legacy "dc" / "value" params (backward compat).
+                let dc_from_params = element_params
+                    .iter()
+                    .find(|p| p.0 == "dc" || p.0 == "value");
+                dc_from_params.map(|p| SourceSpec {
+                    dc: Some(value_as_f64(&p.1).unwrap_or(0.0)),
+                    ac: None,
+                    waveform: None,
+                })
+            }
+        } else {
+            None
+        };
 
         let id = self.alloc_element_id();
         self.element_by_name.insert(name.clone(), id);
@@ -564,6 +680,7 @@ impl IrCtx {
             connections,
             params: element_params,
             model: model_ref,
+            source_spec: final_source_spec,
         });
     }
 
@@ -585,21 +702,8 @@ impl IrCtx {
             "dc" => Some(self.lower_dc_analysis(&a.body, a)),
             "ac" => Some(self.lower_ac_analysis(&a.body, a)),
             "tran" => Some(self.lower_tran_analysis(&a.body, a)),
-            "noise" => {
-                // Noise requires detailed setup; emit a placeholder for now.
-                self.diags.push(
-                    Diagnostic::warning("noise analysis lowering is not fully implemented")
-                        .with_span(a.span),
-                );
-                None
-            }
-            "pz" => {
-                self.diags.push(
-                    Diagnostic::warning("pz analysis lowering is not fully implemented")
-                        .with_span(a.span),
-                );
-                None
-            }
+            "noise" => Some(self.lower_noise_analysis(&a.body, a)),
+            "pz" => Some(self.lower_pz_analysis(&a.body, a)),
             "sens" => {
                 // Look for an "output" setting.
                 let output = self
@@ -745,6 +849,7 @@ impl IrCtx {
         let mut stop = 0.0;
         let mut start = 0.0;
         let mut uic = false;
+        let mut tmax = None;
 
         for item in body {
             if let AnalysisItem::Setting { name, value } = item {
@@ -768,6 +873,9 @@ impl IrCtx {
                     "start" => {
                         start = self.eval_to_f64(value).unwrap_or(0.0);
                     }
+                    "tmax" => {
+                        tmax = self.eval_to_f64(value);
+                    }
                     "uic" => {
                         if let Expr::Bool { value: v, .. } = value {
                             uic = *v;
@@ -785,7 +893,368 @@ impl IrCtx {
             stop,
             start,
             uic,
+            tmax,
         })
+    }
+
+    fn lower_noise_analysis(&mut self, body: &[AnalysisItem], decl: &AnalysisDecl) -> Analysis {
+        let mut output_name = String::new();
+        let mut reference_name = String::new();
+        let mut source_name = String::new();
+        let mut start = 0.0;
+        let mut stop = 0.0;
+        let mut points = 0u32;
+        let mut scale = FrequencyScale::Decade;
+
+        for item in body {
+            if let AnalysisItem::Setting { name, value } = item {
+                match name.name.as_str() {
+                    "output" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            output_name = s.to_string();
+                        }
+                    }
+                    "reference" | "ref" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            reference_name = s.to_string();
+                        }
+                    }
+                    "source" | "src" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            source_name = s.to_string();
+                        }
+                    }
+                    "start" => {
+                        start = self.eval_to_f64(value).unwrap_or_else(|| {
+                            self.diags.push(
+                                Diagnostic::error("cannot evaluate noise start")
+                                    .with_span(decl.span),
+                            );
+                            0.0
+                        });
+                    }
+                    "stop" => {
+                        stop = self.eval_to_f64(value).unwrap_or_else(|| {
+                            self.diags.push(
+                                Diagnostic::error("cannot evaluate noise stop")
+                                    .with_span(decl.span),
+                            );
+                            0.0
+                        });
+                    }
+                    "points" => {
+                        points = self.eval_to_f64(value).unwrap_or(0.0) as u32;
+                    }
+                    "scale" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            scale = match s {
+                                "decade" | "dec" => FrequencyScale::Decade,
+                                "octave" | "oct" => FrequencyScale::Octave,
+                                "linear" | "lin" => FrequencyScale::Linear,
+                                _ => {
+                                    self.diags.push(
+                                        Diagnostic::error(format!(
+                                            "unknown frequency scale: `{s}`"
+                                        ))
+                                        .with_span(name.span),
+                                    );
+                                    FrequencyScale::Decade
+                                }
+                            };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let output_net = self.intern_net(&output_name, output_name == "gnd");
+        let reference_net = if reference_name.is_empty() {
+            Id(0) // default to gnd
+        } else {
+            self.intern_net(&reference_name, reference_name == "gnd")
+        };
+        let source_id = if let Some(&eid) = self.element_by_name.get(&source_name) {
+            eid
+        } else {
+            if !source_name.is_empty() {
+                self.diags.push(
+                    Diagnostic::warning(format!(
+                        "noise source `{source_name}` not found as an element"
+                    ))
+                    .with_span(decl.span),
+                );
+            }
+            Id(0)
+        };
+
+        Analysis::Noise(cirq_ir::NoiseAnalysis {
+            output_net,
+            reference_net,
+            source: source_id,
+            start,
+            stop,
+            points,
+            scale,
+        })
+    }
+
+    fn lower_pz_analysis(&mut self, body: &[AnalysisItem], decl: &AnalysisDecl) -> Analysis {
+        let mut input_pos_name = String::new();
+        let mut input_neg_name = String::new();
+        let mut output_pos_name = String::new();
+        let mut output_neg_name = String::new();
+        let mut transfer = cirq_ir::TransferType::Voltage;
+        let mut analysis_type = cirq_ir::PzType::Both;
+
+        for item in body {
+            if let AnalysisItem::Setting { name, value } = item {
+                match name.name.as_str() {
+                    "input_pos" | "in_pos" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            input_pos_name = s.to_string();
+                        }
+                    }
+                    "input_neg" | "in_neg" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            input_neg_name = s.to_string();
+                        }
+                    }
+                    "output_pos" | "out_pos" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            output_pos_name = s.to_string();
+                        }
+                    }
+                    "output_neg" | "out_neg" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            output_neg_name = s.to_string();
+                        }
+                    }
+                    "transfer" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            transfer = match s {
+                                "voltage" | "vol" => cirq_ir::TransferType::Voltage,
+                                "current" | "cur" => cirq_ir::TransferType::Current,
+                                _ => {
+                                    self.diags.push(
+                                        Diagnostic::error(format!("unknown transfer type: `{s}`"))
+                                            .with_span(name.span),
+                                    );
+                                    cirq_ir::TransferType::Voltage
+                                }
+                            };
+                        }
+                    }
+                    "type" | "analysis_type" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            analysis_type = match s {
+                                "poles" | "pol" => cirq_ir::PzType::Poles,
+                                "zeros" | "zer" => cirq_ir::PzType::Zeros,
+                                "both" | "pz" => cirq_ir::PzType::Both,
+                                _ => {
+                                    self.diags.push(
+                                        Diagnostic::error(format!(
+                                            "unknown pz analysis type: `{s}`"
+                                        ))
+                                        .with_span(name.span),
+                                    );
+                                    cirq_ir::PzType::Both
+                                }
+                            };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let input_pos = if input_pos_name.is_empty() {
+            self.diags
+                .push(Diagnostic::error("pz analysis requires input_pos").with_span(decl.span));
+            Id(0)
+        } else {
+            self.intern_net(&input_pos_name, input_pos_name == "gnd")
+        };
+        let input_neg = if input_neg_name.is_empty() {
+            Id(0) // default to gnd
+        } else {
+            self.intern_net(&input_neg_name, input_neg_name == "gnd")
+        };
+        let output_pos = if output_pos_name.is_empty() {
+            self.diags
+                .push(Diagnostic::error("pz analysis requires output_pos").with_span(decl.span));
+            Id(0)
+        } else {
+            self.intern_net(&output_pos_name, output_pos_name == "gnd")
+        };
+        let output_neg = if output_neg_name.is_empty() {
+            Id(0) // default to gnd
+        } else {
+            self.intern_net(&output_neg_name, output_neg_name == "gnd")
+        };
+
+        Analysis::Pz(cirq_ir::PzAnalysis {
+            input_pos,
+            input_neg,
+            output_pos,
+            output_neg,
+            transfer,
+            analysis_type,
+        })
+    }
+
+    // -------------------------------------------------------------------
+    // Waveform and AC spec lowering
+    // -------------------------------------------------------------------
+
+    /// Lower a waveform block expression into a typed [`Waveform`].
+    fn lower_waveform(&mut self, kind: &str, expr: &Expr) -> Result<Waveform, String> {
+        let entries = match expr {
+            Expr::Block { entries, .. } => entries,
+            _ => return Err("expected a block `{ ... }` for waveform".to_string()),
+        };
+
+        let get_f64 = |name: &str, entries: &[(cirq_ast::Ident, Expr)]| -> Option<f64> {
+            entries
+                .iter()
+                .find(|(k, _)| k.name == name)
+                .and_then(|(_, v)| match v {
+                    Expr::Number { value, .. } => Some(*value),
+                    Expr::Integer { value, .. } => Some(*value as f64),
+                    _ => None,
+                })
+        };
+
+        let require_f64 =
+            |name: &str, entries: &[(cirq_ast::Ident, Expr)]| -> Result<f64, String> {
+                get_f64(name, entries).ok_or_else(|| format!("missing required field `{name}`"))
+            };
+
+        match kind {
+            "pulse" => Ok(Waveform::Pulse {
+                v1: require_f64("v1", entries)?,
+                v2: require_f64("v2", entries)?,
+                td: get_f64("td", entries),
+                tr: get_f64("tr", entries),
+                tf: get_f64("tf", entries),
+                pw: get_f64("pw", entries),
+                per: get_f64("per", entries),
+            }),
+            "sin" | "sine" => Ok(Waveform::Sin {
+                v0: require_f64("v0", entries)?,
+                va: require_f64("va", entries)?,
+                freq: get_f64("freq", entries),
+                td: get_f64("td", entries),
+                theta: get_f64("theta", entries),
+                phi: get_f64("phi", entries),
+            }),
+            "exp" => Ok(Waveform::Exp {
+                v1: require_f64("v1", entries)?,
+                v2: require_f64("v2", entries)?,
+                td1: get_f64("td1", entries),
+                tau1: get_f64("tau1", entries),
+                td2: get_f64("td2", entries),
+                tau2: get_f64("tau2", entries),
+            }),
+            "pwl" => {
+                // PWL can be a list of (time, value) tuples inside the block,
+                // or pairs of t/v entries.
+                let mut points = Vec::new();
+                // Try named pairs: t0/v0, t1/v1, ...
+                let mut i = 0;
+                loop {
+                    let t_key = format!("t{i}");
+                    let v_key = format!("v{i}");
+                    match (get_f64(&t_key, entries), get_f64(&v_key, entries)) {
+                        (Some(t), Some(v)) => points.push((t, v)),
+                        _ => break,
+                    }
+                    i += 1;
+                }
+                // If no named pairs, try sequential time/value entries.
+                if points.is_empty() {
+                    let times: Vec<f64> = entries
+                        .iter()
+                        .filter(|(k, _)| k.name.starts_with('t'))
+                        .filter_map(|(_, v)| match v {
+                            Expr::Number { value, .. } => Some(*value),
+                            _ => None,
+                        })
+                        .collect();
+                    let values: Vec<f64> = entries
+                        .iter()
+                        .filter(|(k, _)| k.name.starts_with('v'))
+                        .filter_map(|(_, v)| match v {
+                            Expr::Number { value, .. } => Some(*value),
+                            _ => None,
+                        })
+                        .collect();
+                    for (t, v) in times.into_iter().zip(values) {
+                        points.push((t, v));
+                    }
+                }
+                if points.is_empty() {
+                    return Err("PWL waveform requires at least one point".to_string());
+                }
+                Ok(Waveform::Pwl(points))
+            }
+            "sffm" => Ok(Waveform::Sffm {
+                v0: require_f64("v0", entries)?,
+                va: require_f64("va", entries)?,
+                fc: get_f64("fc", entries),
+                fs: get_f64("fs", entries),
+                md: get_f64("md", entries),
+            }),
+            "am" => Ok(Waveform::Am {
+                va: require_f64("va", entries)?,
+                vo: require_f64("vo", entries)?,
+                fc: require_f64("fc", entries)?,
+                fs: require_f64("fs", entries)?,
+                td: get_f64("td", entries),
+            }),
+            _ => Err(format!("unknown waveform type: `{kind}`")),
+        }
+    }
+
+    /// Lower an AC specification from a value expression.
+    fn lower_ac_spec(&mut self, expr: &Expr) -> Result<AcSpec, String> {
+        match expr {
+            // Scalar: `ac: 1.0` means mag=1.0, phase=0.0
+            Expr::Number { value, .. } => Ok(AcSpec {
+                mag: *value,
+                phase: 0.0,
+            }),
+            Expr::Integer { value, .. } => Ok(AcSpec {
+                mag: *value as f64,
+                phase: 0.0,
+            }),
+            // Block: `ac: { mag: 1.0, phase: 90 }`
+            Expr::Block { entries, .. } => {
+                let mut mag = 1.0;
+                let mut phase = 0.0;
+                for (key, val) in entries {
+                    match key.name.as_str() {
+                        "mag" | "magnitude" => {
+                            if let Expr::Number { value, .. } = val {
+                                mag = *value;
+                            } else if let Expr::Integer { value, .. } = val {
+                                mag = *value as f64;
+                            }
+                        }
+                        "phase" => {
+                            if let Expr::Number { value, .. } = val {
+                                phase = *value;
+                            } else if let Expr::Integer { value, .. } = val {
+                                phase = *value as f64;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(AcSpec { mag, phase })
+            }
+            _ => Err("ac spec must be a number or block `{ mag: ..., phase: ... }`".to_string()),
+        }
     }
 
     /// Extract a string from a setting with the given name.
@@ -901,6 +1370,14 @@ fn expr_as_net_name(expr: &Expr) -> Option<String> {
         Expr::Gnd { .. } => Some("gnd".to_string()),
         _ => None,
     }
+}
+
+/// Check if a param name is a waveform type (should be lowered as a waveform block).
+fn is_waveform_param(name: &str) -> bool {
+    matches!(
+        name,
+        "pulse" | "sin" | "sine" | "exp" | "pwl" | "sffm" | "am"
+    )
 }
 
 /// Known terminal-name params that should be treated as net connections.
@@ -1335,5 +1812,299 @@ mod tests {
 
         assert_eq!(circuit.analyses.len(), 1);
         assert!(matches!(circuit.analyses[0], Analysis::Op));
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 1.5: Coupling element
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn coupling_element() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                L1: inductor(a -> gnd, 10e-6)
+                L2: inductor(b -> gnd, 10e-6)
+                K1: coupling(l1: "L1", l2: "L2", coupling: 0.99)
+            }
+            "#,
+        );
+
+        let k1 = circuit.elements.iter().find(|e| e.name == "K1").unwrap();
+        assert!(matches!(k1.kind, ElementKind::Coupling));
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 1.1/1.2: Waveforms and AC spec
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn voltage_source_with_pulse_waveform() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                V1: vsource(a -> gnd, dc: 0, pulse: { v1: 0, v2: 3.3, td: 1e-9, tr: 0.5e-9, tf: 0.5e-9, pw: 5e-9, per: 10e-9 })
+            }
+            "#,
+        );
+
+        let v1 = circuit.elements.iter().find(|e| e.name == "V1").unwrap();
+        assert!(matches!(v1.kind, ElementKind::VoltageSource));
+
+        let spec = v1.source_spec.as_ref().expect("should have source_spec");
+        assert_eq!(spec.dc, Some(0.0));
+
+        match &spec.waveform {
+            Some(Waveform::Pulse {
+                v1,
+                v2,
+                td,
+                tr,
+                tf,
+                pw,
+                per,
+            }) => {
+                assert!((*v1 - 0.0).abs() < 1e-12);
+                assert!((*v2 - 3.3).abs() < 1e-12);
+                assert!((td.unwrap() - 1e-9).abs() < 1e-18);
+                assert!((tr.unwrap() - 0.5e-9).abs() < 1e-18);
+                assert!((tf.unwrap() - 0.5e-9).abs() < 1e-18);
+                assert!((pw.unwrap() - 5e-9).abs() < 1e-18);
+                assert!((per.unwrap() - 10e-9).abs() < 1e-18);
+            }
+            other => panic!("expected Pulse waveform, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn voltage_source_with_sin_waveform() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                V1: vsource(a -> gnd, sin: { v0: 0, va: 1, freq: 1000 })
+            }
+            "#,
+        );
+
+        let v1 = circuit.elements.iter().find(|e| e.name == "V1").unwrap();
+        let spec = v1.source_spec.as_ref().expect("should have source_spec");
+
+        match &spec.waveform {
+            Some(Waveform::Sin { v0, va, freq, .. }) => {
+                assert!((*v0 - 0.0).abs() < 1e-12);
+                assert!((*va - 1.0).abs() < 1e-12);
+                assert!((freq.unwrap() - 1000.0).abs() < 1e-6);
+            }
+            other => panic!("expected Sin waveform, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn voltage_source_with_ac_spec_scalar() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                V1: vsource(a -> gnd, dc: 0, ac: 1)
+            }
+            "#,
+        );
+
+        let v1 = circuit.elements.iter().find(|e| e.name == "V1").unwrap();
+        let spec = v1.source_spec.as_ref().expect("should have source_spec");
+
+        let ac = spec.ac.as_ref().expect("should have ac spec");
+        assert!((ac.mag - 1.0).abs() < 1e-12);
+        assert!((ac.phase - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn voltage_source_with_ac_spec_block() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                V1: vsource(a -> gnd, ac: { mag: 1.5, phase: 90 })
+            }
+            "#,
+        );
+
+        let v1 = circuit.elements.iter().find(|e| e.name == "V1").unwrap();
+        let spec = v1.source_spec.as_ref().expect("should have source_spec");
+
+        let ac = spec.ac.as_ref().expect("should have ac spec");
+        assert!((ac.mag - 1.5).abs() < 1e-12);
+        assert!((ac.phase - 90.0).abs() < 1e-12);
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 1.3: Noise analysis
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn noise_analysis_lowering() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                V1: vsource(in -> gnd, dc: 0, ac: 1)
+                R1: resistor(in -> out, 1000)
+                analysis noise {
+                    output: out
+                    ref: gnd
+                    source: V1
+                    start: 1
+                    stop: 1000000000
+                    points: 100
+                    scale: decade
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.analyses.len(), 1);
+        match &circuit.analyses[0] {
+            Analysis::Noise(n) => {
+                assert!((n.start - 1.0).abs() < 1e-6);
+                assert!((n.stop - 1e9).abs() < 1.0);
+                assert_eq!(n.points, 100);
+                assert_eq!(n.scale, FrequencyScale::Decade);
+            }
+            other => panic!("expected Noise analysis, got {other:?}"),
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 1.4: PZ analysis
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn pz_analysis_lowering() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                R1: resistor(in -> out, 1000)
+                C1: capacitor(out -> gnd, 1e-12)
+                analysis pz {
+                    input_pos: in
+                    input_neg: gnd
+                    output_pos: out
+                    output_neg: gnd
+                    transfer: voltage
+                    type: both
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.analyses.len(), 1);
+        match &circuit.analyses[0] {
+            Analysis::Pz(pz) => {
+                assert_eq!(pz.transfer, cirq_ir::TransferType::Voltage);
+                assert_eq!(pz.analysis_type, cirq_ir::PzType::Both);
+            }
+            other => panic!("expected Pz analysis, got {other:?}"),
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 2.6: Model inheritance param merging
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn model_inheritance_merges_params() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                model nch_base: nmos {
+                    vto = 0.7
+                    kp = 110e-6
+                    lambda = 0.04
+                }
+                model nch_fast: nch_base {
+                    vto = 0.5
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.models.len(), 2);
+
+        let derived = circuit
+            .models
+            .iter()
+            .find(|m| m.name == "nch_fast")
+            .unwrap();
+        assert_eq!(derived.device_type, cirq_ir::DeviceType::Nmos);
+
+        // Should have all 3 params from base, with vto overridden.
+        assert_eq!(derived.params.len(), 3);
+
+        let vto = derived.params.iter().find(|p| p.0 == "vto").unwrap();
+        match &vto.1 {
+            Value::Real(v) => assert!((*v - 0.5).abs() < 1e-12, "vto should be 0.5, got {v}"),
+            _ => panic!("expected Real for vto"),
+        }
+
+        let kp = derived.params.iter().find(|p| p.0 == "kp").unwrap();
+        match &kp.1 {
+            Value::Real(v) => assert!((*v - 110e-6).abs() < 1e-12, "kp should be 110e-6, got {v}"),
+            _ => panic!("expected Real for kp"),
+        }
+
+        let lambda = derived.params.iter().find(|p| p.0 == "lambda").unwrap();
+        match &lambda.1 {
+            Value::Real(v) => assert!((*v - 0.04).abs() < 1e-12, "lambda should be 0.04, got {v}"),
+            _ => panic!("expected Real for lambda"),
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 2.3: MESFET element kind
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn mesfet_element_kind() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                model nm: nmesfet {
+                    vto = -1.3
+                }
+                Z1: nmesfet(drain: d, gate: g, source: s, model: nm)
+            }
+            "#,
+        );
+
+        let z1 = circuit.elements.iter().find(|e| e.name == "Z1").unwrap();
+        assert!(matches!(z1.kind, ElementKind::NMesfet));
+        assert!(z1.model.is_some());
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 3.7: Tran tmax
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn tran_analysis_with_tmax() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                analysis tran {
+                    step: 1e-9
+                    stop: 100e-9
+                    tmax: 0.5e-9
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.analyses.len(), 1);
+        match &circuit.analyses[0] {
+            Analysis::Tran(tran) => {
+                assert!((tran.step - 1e-9).abs() < 1e-15);
+                assert!((tran.stop - 100e-9).abs() < 1e-15);
+                assert!(tran.tmax.is_some());
+                assert!((tran.tmax.unwrap() - 0.5e-9).abs() < 1e-18);
+            }
+            other => panic!("expected Tran analysis, got {other:?}"),
+        }
     }
 }

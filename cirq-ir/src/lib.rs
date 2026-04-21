@@ -36,6 +36,9 @@ pub struct Element {
     pub connections: Vec<Connection>,
     pub params: Vec<(String, Value)>,
     pub model: Option<Id>,
+    /// Source specification for voltage/current sources.
+    /// `None` for non-source elements.
+    pub source_spec: Option<SourceSpec>,
 }
 
 /// Connection between an element terminal and a net.
@@ -61,6 +64,8 @@ pub enum ElementKind {
     Pmos,
     NJfet,
     PJfet,
+    NMesfet,
+    PMesfet,
     Vcvs,
     Vccs,
     Ccvs,
@@ -98,6 +103,80 @@ pub enum Value {
     Integer(i64),
     Bool(bool),
     String(String),
+}
+
+// ---------------------------------------------------------------------------
+// Source specifications (voltage/current sources)
+// ---------------------------------------------------------------------------
+
+/// AC specification for a voltage/current source: magnitude and phase.
+#[derive(Debug, Clone)]
+pub struct AcSpec {
+    pub mag: f64,
+    /// Phase in degrees. Defaults to 0.0 when not specified.
+    pub phase: f64,
+}
+
+/// Transient waveform for voltage/current sources.
+#[derive(Debug, Clone)]
+pub enum Waveform {
+    /// `PULSE(v1 v2 [td [tr [tf [pw [per]]]]])`
+    Pulse {
+        v1: f64,
+        v2: f64,
+        td: Option<f64>,
+        tr: Option<f64>,
+        tf: Option<f64>,
+        pw: Option<f64>,
+        per: Option<f64>,
+    },
+    /// `SIN(v0 va [freq [td [theta [phi]]]])`
+    Sin {
+        v0: f64,
+        va: f64,
+        freq: Option<f64>,
+        td: Option<f64>,
+        theta: Option<f64>,
+        phi: Option<f64>,
+    },
+    /// `EXP(v1 v2 [td1 [tau1 [td2 [tau2]]]])`
+    Exp {
+        v1: f64,
+        v2: f64,
+        td1: Option<f64>,
+        tau1: Option<f64>,
+        td2: Option<f64>,
+        tau2: Option<f64>,
+    },
+    /// `PWL(t1 v1 t2 v2 ...)` — piecewise linear.
+    Pwl(Vec<(f64, f64)>),
+    /// `SFFM(v0 va [fc [fs [md]]])`
+    Sffm {
+        v0: f64,
+        va: f64,
+        fc: Option<f64>,
+        fs: Option<f64>,
+        md: Option<f64>,
+    },
+    /// `AM(va vo fc fs [td])`
+    Am {
+        va: f64,
+        vo: f64,
+        fc: f64,
+        fs: f64,
+        td: Option<f64>,
+    },
+}
+
+/// Source specification for voltage/current sources.
+///
+/// Combines DC value, AC small-signal specification, and transient waveform.
+/// All fields are independently optional.
+#[derive(Debug, Clone, Default)]
+pub struct SourceSpec {
+    pub dc: Option<f64>,
+    pub ac: Option<AcSpec>,
+    pub waveform: Option<Waveform>,
 }
 
 /// A resolved parameter binding.
@@ -154,6 +233,8 @@ pub struct TranAnalysis {
     pub stop: f64,
     pub start: f64,
     pub uic: bool,
+    /// Maximum internal timestep. `None` means the solver picks automatically.
+    pub tmax: Option<f64>,
 }
 
 #[derive(Debug, Clone)]

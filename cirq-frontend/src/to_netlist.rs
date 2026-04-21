@@ -7,12 +7,12 @@
 use std::collections::HashMap;
 
 use cirq_ir::{
-    Circuit, DeviceType, Element as IrElement, ElementKind as IrElementKind, FrequencyScale, Id,
-    Value,
+    AcSpec as IrAcSpec, Circuit, DeviceType, Element as IrElement, ElementKind as IrElementKind,
+    FrequencyScale, Id, Value, Waveform as IrWaveform,
 };
 use thevenin_types::{
-    AcVariation, Analysis, DcSweep, Element, ElementKind, Expr, Item, ModelDef, Netlist, Param,
-    PzAnalysisType, PzInputType, Source,
+    AcSpec, AcVariation, Analysis, DcSweep, Element, ElementKind, Expr, Item, ModelDef, Netlist,
+    Param, PwlPoint, PzAnalysisType, PzInputType, Source, Waveform,
 };
 
 /// Errors that can occur during IR-to-Netlist conversion.
@@ -226,6 +226,113 @@ fn extra_params(elem: &IrElement, exclude: &[&str]) -> Vec<Param> {
         .collect()
 }
 
+fn convert_waveform(w: &IrWaveform) -> Waveform {
+    match w {
+        IrWaveform::Pulse {
+            v1,
+            v2,
+            td,
+            tr,
+            tf,
+            pw,
+            per,
+        } => Waveform::Pulse {
+            v1: Expr::Num(*v1),
+            v2: Expr::Num(*v2),
+            td: td.map(Expr::Num),
+            tr: tr.map(Expr::Num),
+            tf: tf.map(Expr::Num),
+            pw: pw.map(Expr::Num),
+            per: per.map(Expr::Num),
+        },
+        IrWaveform::Sin {
+            v0,
+            va,
+            freq,
+            td,
+            theta,
+            phi,
+        } => Waveform::Sin {
+            v0: Expr::Num(*v0),
+            va: Expr::Num(*va),
+            freq: freq.map(Expr::Num),
+            td: td.map(Expr::Num),
+            theta: theta.map(Expr::Num),
+            phi: phi.map(Expr::Num),
+        },
+        IrWaveform::Exp {
+            v1,
+            v2,
+            td1,
+            tau1,
+            td2,
+            tau2,
+        } => Waveform::Exp {
+            v1: Expr::Num(*v1),
+            v2: Expr::Num(*v2),
+            td1: td1.map(Expr::Num),
+            tau1: tau1.map(Expr::Num),
+            td2: td2.map(Expr::Num),
+            tau2: tau2.map(Expr::Num),
+        },
+        IrWaveform::Pwl(points) => Waveform::Pwl(
+            points
+                .iter()
+                .map(|(t, v)| PwlPoint {
+                    time: Expr::Num(*t),
+                    value: Expr::Num(*v),
+                })
+                .collect(),
+        ),
+        IrWaveform::Sffm { v0, va, fc, fs, md } => Waveform::Sffm {
+            v0: Expr::Num(*v0),
+            va: Expr::Num(*va),
+            fc: fc.map(Expr::Num),
+            fs: fs.map(Expr::Num),
+            md: md.map(Expr::Num),
+        },
+        IrWaveform::Am { va, vo, fc, fs, td } => Waveform::Am {
+            va: Expr::Num(*va),
+            vo: Expr::Num(*vo),
+            fc: Expr::Num(*fc),
+            fs: Expr::Num(*fs),
+            td: td.map(Expr::Num),
+        },
+    }
+}
+
+fn convert_ac_spec(ac: &IrAcSpec) -> AcSpec {
+    AcSpec {
+        mag: Expr::Num(ac.mag),
+        phase: if ac.phase != 0.0 {
+            Some(Expr::Num(ac.phase))
+        } else {
+            None
+        },
+    }
+}
+
+fn convert_source_spec(elem: &IrElement) -> Source {
+    if let Some(spec) = &elem.source_spec {
+        Source {
+            dc: spec.dc.map(Expr::Num),
+            ac: spec.ac.as_ref().map(convert_ac_spec),
+            waveform: spec.waveform.as_ref().map(convert_waveform),
+        }
+    } else {
+        let dc = elem
+            .params
+            .iter()
+            .find(|p| p.0 == "value" || p.0 == "dc")
+            .map(|p| value_to_expr(&p.1));
+        Source {
+            dc,
+            ac: None,
+            waveform: None,
+        }
+    }
+}
+
 fn resolve_model_name(
     elem: &IrElement,
     model_names: &HashMap<Id, String>,
@@ -305,16 +412,7 @@ fn convert_element(
         IrElementKind::VoltageSource => {
             let pos = get_conn(elem, "pos", net_names)?;
             let neg = get_conn(elem, "neg", net_names)?;
-            let dc = elem
-                .params
-                .iter()
-                .find(|p| p.0 == "value" || p.0 == "dc")
-                .map(|p| value_to_expr(&p.1));
-            let source = Source {
-                dc,
-                ac: None,
-                waveform: None,
-            };
+            let source = convert_source_spec(elem);
             Ok(Element {
                 name: spice_name(&elem.name, 'V'),
                 kind: ElementKind::VoltageSource { pos, neg, source },
@@ -324,16 +422,7 @@ fn convert_element(
         IrElementKind::CurrentSource => {
             let pos = get_conn(elem, "pos", net_names)?;
             let neg = get_conn(elem, "neg", net_names)?;
-            let dc = elem
-                .params
-                .iter()
-                .find(|p| p.0 == "value" || p.0 == "dc")
-                .map(|p| value_to_expr(&p.1));
-            let source = Source {
-                dc,
-                ac: None,
-                waveform: None,
-            };
+            let source = convert_source_spec(elem);
             Ok(Element {
                 name: spice_name(&elem.name, 'I'),
                 kind: ElementKind::CurrentSource { pos, neg, source },
@@ -406,6 +495,24 @@ fn convert_element(
             Ok(Element {
                 name: spice_name(&elem.name, 'J'),
                 kind: ElementKind::Jfet {
+                    d,
+                    g,
+                    s,
+                    model,
+                    params,
+                },
+            })
+        }
+
+        IrElementKind::NMesfet | IrElementKind::PMesfet => {
+            let d = get_conn(elem, "drain", net_names)?;
+            let g = get_conn(elem, "gate", net_names)?;
+            let s = get_conn(elem, "source", net_names)?;
+            let model = resolve_model_name(elem, model_names)?;
+            let params = extra_params(elem, &["value"]);
+            Ok(Element {
+                name: spice_name(&elem.name, 'Z'),
+                kind: ElementKind::Mesa {
                     d,
                     g,
                     s,
@@ -697,7 +804,7 @@ fn convert_analysis(
                 tstep: Expr::Num(tran.step),
                 tstop: Expr::Num(tran.stop),
                 tstart,
-                tmax: None,
+                tmax: tran.tmax.map(Expr::Num),
             }
         }
 
@@ -842,6 +949,7 @@ mod tests {
                 connections: vec![conn("pos", 1), conn("neg", 2)],
                 params: vec![("value".to_string(), Value::Real(1000.0))],
                 model: None,
+                source_spec: None,
             }],
             vec![],
             vec![cirq_ir::Analysis::Op],
@@ -906,6 +1014,7 @@ mod tests {
                     ],
                     params: vec![],
                     model: Some(Id(0)),
+                    source_spec: None,
                 },
                 IrElement {
                     id: Id(1),
@@ -919,6 +1028,7 @@ mod tests {
                     ],
                     params: vec![],
                     model: Some(Id(1)),
+                    source_spec: None,
                 },
             ],
             vec![
@@ -1040,6 +1150,7 @@ mod tests {
                 connections: vec![conn("pos", 1), conn("neg", 0)],
                 params: vec![("dc".to_string(), Value::Real(5.0))],
                 model: None,
+                source_spec: None,
             }],
             vec![],
             vec![cirq_ir::Analysis::Dc(DcAnalysis {
@@ -1127,6 +1238,7 @@ mod tests {
                 stop: 100e-9,
                 start: 0.0,
                 uic: false,
+                tmax: None,
             })],
             vec![],
         );
@@ -1204,6 +1316,7 @@ mod tests {
                 connections: vec![conn("pos", 1), conn("neg", 0)],
                 params: vec![("value".to_string(), Value::Real(100.0))],
                 model: None,
+                source_spec: None,
             }],
             vec![],
             vec![
@@ -1276,6 +1389,7 @@ mod tests {
                 connections: vec![conn("anode", 1), conn("cathode", 0)],
                 params: vec![],
                 model: Some(Id(0)),
+                source_spec: None,
             }],
             vec![Model {
                 id: Id(0),
