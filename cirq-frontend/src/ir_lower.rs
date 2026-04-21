@@ -9,8 +9,9 @@ use cirq_ast::{
     TopLevel, UnaryOp,
 };
 use cirq_ir::{
-    AcAnalysis, AcSpec, Analysis, Circuit, Connection, DcAnalysis, DcSweep, Element, ElementKind,
-    FrequencyScale, Id, Model, Net, ResolvedParam, SourceSpec, TranAnalysis, Value, Waveform,
+    AcAnalysis, AcSpec, Analysis, BehavioralMode, Circuit, Connection, DcAnalysis, DcSweep,
+    Element, ElementKind, FrequencyScale, Id, Model, Net, ResolvedParam, SourceSpec, TranAnalysis,
+    Value, Waveform,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -87,6 +88,7 @@ fn standard_pins(kind: &ElementKind) -> &'static [&'static str] {
         ElementKind::Inductor => &["pos", "neg"],
         ElementKind::VoltageSource => &["pos", "neg"],
         ElementKind::CurrentSource => &["pos", "neg"],
+        ElementKind::BehavioralSource { .. } => &["pos", "neg"],
         ElementKind::Diode => &["anode", "cathode"],
         ElementKind::Npn | ElementKind::Pnp => &["collector", "base", "emitter"],
         ElementKind::Nmos | ElementKind::Pmos => &["drain", "gate", "source", "bulk"],
@@ -123,6 +125,10 @@ fn element_kind_from_str(name: &str) -> Option<ElementKind> {
         "tline" | "transmission_line" => Some(ElementKind::TransmissionLine),
         "nmesfet" => Some(ElementKind::NMesfet),
         "pmesfet" => Some(ElementKind::PMesfet),
+        "behavioral" => Some(ElementKind::BehavioralSource {
+            mode: BehavioralMode::Voltage,
+            spec: String::new(),
+        }),
         _ => None,
     }
 }
@@ -510,6 +516,9 @@ impl IrCtx {
             kind,
             ElementKind::VoltageSource | ElementKind::CurrentSource
         );
+        let is_behavioral = matches!(kind, ElementKind::BehavioralSource { .. });
+        let mut behavioral_mode: Option<BehavioralMode> = None;
+        let mut behavioral_spec: Option<String> = None;
 
         for arg in &e.args {
             match arg {
@@ -640,6 +649,14 @@ impl IrCtx {
                                 }
                             }
                         }
+                    } else if is_behavioral && (param_name == "v" || param_name == "i") {
+                        // Behavioral source mode and expression spec.
+                        behavioral_mode = Some(if param_name == "v" {
+                            BehavioralMode::Voltage
+                        } else {
+                            BehavioralMode::Current
+                        });
+                        behavioral_spec = Some(expr_to_spice_string(value));
                     } else {
                         // Regular parameter.
                         match self.eval_expr(value) {
@@ -711,6 +728,24 @@ impl IrCtx {
             }
         } else {
             None
+        };
+
+        // Finalize behavioral source kind with the actual mode and spec.
+        let kind = if is_behavioral {
+            match (behavioral_mode, behavioral_spec) {
+                (Some(mode), Some(spec)) => ElementKind::BehavioralSource { mode, spec },
+                _ => {
+                    self.diags.push(
+                        Diagnostic::error(
+                            "behavioral source requires a `v:` or `i:` argument specifying the expression"
+                        )
+                        .with_span(e.span),
+                    );
+                    return;
+                }
+            }
+        } else {
+            kind
         };
 
         let id = self.alloc_element_id();
@@ -1913,6 +1948,98 @@ fn one_arg_f64(args: &[Value], name: &str) -> Result<f64, String> {
     value_as_f64(&args[0])
 }
 
+/// Convert a Cirq AST expression to a SPICE-compatible expression string.
+///
+/// This is used for behavioral source specs, where we need the expression
+/// as a string rather than as an evaluated numeric value.
+fn expr_to_spice_string(expr: &Expr) -> String {
+    match expr {
+        Expr::Number { value, .. } => format_f64(*value),
+        Expr::Integer { value, .. } => value.to_string(),
+        Expr::StringLit { value, .. } => value.clone(),
+        Expr::Bool { value, .. } => {
+            if *value {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            }
+        }
+        Expr::Ident(id) => id.name.clone(),
+        Expr::QualifiedName(qn) => qn
+            .segments
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join("."),
+        Expr::BinOp { op, lhs, rhs, .. } => {
+            let l = expr_to_spice_string(lhs);
+            let r = expr_to_spice_string(rhs);
+            let op_str = match op {
+                BinOp::Add => "+",
+                BinOp::Sub => "-",
+                BinOp::Mul => "*",
+                BinOp::Div => "/",
+                BinOp::Pow => "**",
+                BinOp::Mod => "%",
+                BinOp::Eq => "==",
+                BinOp::Ne => "!=",
+                BinOp::Lt => "<",
+                BinOp::Gt => ">",
+                BinOp::Le => "<=",
+                BinOp::Ge => ">=",
+                BinOp::And => "&&",
+                BinOp::Or => "||",
+            };
+            format!("({l}{op_str}{r})")
+        }
+        Expr::UnaryOp { op, operand, .. } => {
+            let o = expr_to_spice_string(operand);
+            match op {
+                UnaryOp::Neg => format!("(-{o})"),
+                UnaryOp::Not => format!("(!{o})"),
+            }
+        }
+        Expr::Call { func, args, .. } => {
+            let arg_strs: Vec<String> = args.iter().map(expr_to_spice_string).collect();
+            format!("{}({})", func.name, arg_strs.join(","))
+        }
+        Expr::Gnd { .. } => "0".to_string(),
+        // Fallback for other expression types — produce a reasonable string.
+        Expr::Range { start, end, .. } => {
+            format!(
+                "{}..{}",
+                expr_to_spice_string(start),
+                expr_to_spice_string(end)
+            )
+        }
+        Expr::List { elements, .. } | Expr::Tuple { elements, .. } => {
+            let strs: Vec<String> = elements.iter().map(expr_to_spice_string).collect();
+            strs.join(",")
+        }
+        Expr::Block { entries, .. } => {
+            let strs: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| format!("{}={}", k.name, expr_to_spice_string(v)))
+                .collect();
+            strs.join(",")
+        }
+    }
+}
+
+/// Format an f64 without unnecessary trailing zeros or scientific notation for
+/// small integers, while preserving scientific notation for very large/small values.
+fn format_f64(v: f64) -> String {
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    // For values that are exact integers in a reasonable range, format without decimal.
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        return format!("{}", v as i64);
+    }
+    // Otherwise use default formatting which picks a reasonable representation.
+    format!("{v}")
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -2909,5 +3036,80 @@ mod tests {
 
         assert_eq!(circuit.save.len(), 1);
         assert_eq!(circuit.save[0], "v(a,b)");
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 2.2: Behavioral sources
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn behavioral_voltage_source() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                b1: behavioral(out -> gnd, v: 3.3)
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.elements.len(), 1);
+        let b1 = &circuit.elements[0];
+        assert_eq!(b1.name, "b1");
+        match &b1.kind {
+            ElementKind::BehavioralSource { mode, spec } => {
+                assert_eq!(*mode, BehavioralMode::Voltage);
+                assert_eq!(spec, "3.3");
+            }
+            other => panic!("expected BehavioralSource, got {other:?}"),
+        }
+        // Should have 2 connections: pos->out, neg->gnd.
+        assert_eq!(b1.connections.len(), 2);
+        assert_eq!(b1.connections[0].terminal, "pos");
+        assert_eq!(b1.connections[1].terminal, "neg");
+    }
+
+    #[test]
+    fn behavioral_current_source() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                b1: behavioral(out -> gnd, i: 0.001)
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.elements.len(), 1);
+        let b1 = &circuit.elements[0];
+        assert_eq!(b1.name, "b1");
+        match &b1.kind {
+            ElementKind::BehavioralSource { mode, spec } => {
+                assert_eq!(*mode, BehavioralMode::Current);
+                assert_eq!(spec, "0.001");
+            }
+            other => panic!("expected BehavioralSource, got {other:?}"),
+        }
+        assert_eq!(b1.connections.len(), 2);
+    }
+
+    #[test]
+    fn behavioral_source_with_expression() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                b1: behavioral(out -> gnd, v: sin(2 * 3.14159 * 1000 * time))
+            }
+            "#,
+        );
+
+        let b1 = &circuit.elements[0];
+        match &b1.kind {
+            ElementKind::BehavioralSource { mode, spec } => {
+                assert_eq!(*mode, BehavioralMode::Voltage);
+                // The spec should contain sin, multiplication operators, and time.
+                assert!(spec.contains("sin"), "spec should contain sin: {spec}");
+                assert!(spec.contains("time"), "spec should contain time: {spec}");
+            }
+            other => panic!("expected BehavioralSource, got {other:?}"),
+        }
     }
 }

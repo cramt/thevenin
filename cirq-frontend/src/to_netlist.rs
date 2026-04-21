@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use cirq_ir::{
-    AcSpec as IrAcSpec, Circuit, DeviceType, Element as IrElement, ElementKind as IrElementKind,
-    FrequencyScale, Id, Value, Waveform as IrWaveform,
+    AcSpec as IrAcSpec, BehavioralMode, Circuit, DeviceType, Element as IrElement,
+    ElementKind as IrElementKind, FrequencyScale, Id, Value, Waveform as IrWaveform,
 };
 use thevenin_types::{
     AcSpec, AcVariation, Analysis, DcSweep, Element, ElementKind, Expr, Item, ModelDef, Netlist,
@@ -449,6 +449,23 @@ fn convert_element(
             Ok(Element {
                 name: spice_name(&elem.name, 'I'),
                 kind: ElementKind::CurrentSource { pos, neg, source },
+            })
+        }
+
+        IrElementKind::BehavioralSource { mode, spec } => {
+            let pos = get_conn(elem, "pos", net_names)?;
+            let neg = get_conn(elem, "neg", net_names)?;
+            let full_spec = match mode {
+                BehavioralMode::Voltage => format!("V={spec}"),
+                BehavioralMode::Current => format!("I={spec}"),
+            };
+            Ok(Element {
+                name: spice_name(&elem.name, 'B'),
+                kind: ElementKind::BehavioralSource {
+                    pos,
+                    neg,
+                    spec: full_spec,
+                },
             })
         }
 
@@ -1466,6 +1483,110 @@ mod tests {
                 assert_eq!(model, "d_model");
             }
             _ => panic!("expected Diode"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 11: Behavioral voltage source
+    // -----------------------------------------------------------------------
+    #[test]
+    fn behavioral_voltage_source_netlist() {
+        let circuit = make_circuit(
+            "behavioral_v_test",
+            vec![net(0, "gnd", true), net(1, "out", false)],
+            vec![IrElement {
+                id: Id(0),
+                name: "b1".to_string(),
+                kind: IrElementKind::BehavioralSource {
+                    mode: cirq_ir::BehavioralMode::Voltage,
+                    spec: "sin(2*3.14159*1000*time)".to_string(),
+                },
+                connections: vec![conn("pos", 1), conn("neg", 0)],
+                params: vec![],
+                model: None,
+                source_spec: None,
+            }],
+            vec![],
+            vec![cirq_ir::Analysis::Op],
+            vec![],
+        );
+
+        let netlists = circuit_to_netlists(&circuit).unwrap();
+        assert_eq!(netlists.len(), 1);
+
+        let nl = &netlists[0];
+        let elem = nl
+            .items
+            .iter()
+            .find_map(|i| {
+                if let Item::Element(e) = i {
+                    Some(e)
+                } else {
+                    None
+                }
+            })
+            .expect("should have an element");
+
+        // "b1" already starts with 'b' (case-insensitive match to 'B'),
+        // so spice_name keeps it as-is.
+        assert_eq!(elem.name, "b1");
+        match &elem.kind {
+            ElementKind::BehavioralSource { pos, neg, spec } => {
+                assert_eq!(pos, "out");
+                assert_eq!(neg, "0");
+                assert_eq!(spec, "V=sin(2*3.14159*1000*time)");
+            }
+            other => panic!("expected BehavioralSource, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 12: Behavioral current source
+    // -----------------------------------------------------------------------
+    #[test]
+    fn behavioral_current_source_netlist() {
+        let circuit = make_circuit(
+            "behavioral_i_test",
+            vec![net(0, "gnd", true), net(1, "out", false)],
+            vec![IrElement {
+                id: Id(0),
+                name: "b1".to_string(),
+                kind: IrElementKind::BehavioralSource {
+                    mode: cirq_ir::BehavioralMode::Current,
+                    spec: "v(in)/1000".to_string(),
+                },
+                connections: vec![conn("pos", 1), conn("neg", 0)],
+                params: vec![],
+                model: None,
+                source_spec: None,
+            }],
+            vec![],
+            vec![cirq_ir::Analysis::Op],
+            vec![],
+        );
+
+        let netlists = circuit_to_netlists(&circuit).unwrap();
+        let nl = &netlists[0];
+        let elem = nl
+            .items
+            .iter()
+            .find_map(|i| {
+                if let Item::Element(e) = i {
+                    Some(e)
+                } else {
+                    None
+                }
+            })
+            .expect("should have an element");
+
+        assert_eq!(elem.name, "b1");
+        match &elem.kind {
+            ElementKind::BehavioralSource { pos, neg, spec } => {
+                assert_eq!(pos, "out");
+                assert_eq!(neg, "0");
+                assert_eq!(spec, "I=v(in)/1000");
+            }
+            other => panic!("expected BehavioralSource, got {other:?}"),
         }
     }
 }

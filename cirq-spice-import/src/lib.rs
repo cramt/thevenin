@@ -7,10 +7,11 @@
 use std::collections::HashMap;
 
 use cirq_ir::{
-    AcAnalysis, AcSpec as IrAcSpec, Analysis as IrAnalysis, Circuit, Connection, DcAnalysis,
-    DcSweep as IrDcSweep, Element as IrElement, ElementKind as IrElementKind, FrequencyScale, Id,
-    Model as IrModel, Net, NoiseAnalysis, PzAnalysis, PzType, ResolvedParam, SensAnalysis,
-    SourceSpec, TfAnalysis, TranAnalysis, TransferType, Value, Waveform as IrWaveform,
+    AcAnalysis, AcSpec as IrAcSpec, Analysis as IrAnalysis, BehavioralMode, Circuit, Connection,
+    DcAnalysis, DcSweep as IrDcSweep, Element as IrElement, ElementKind as IrElementKind,
+    FrequencyScale, Id, Model as IrModel, Net, NoiseAnalysis, PzAnalysis, PzType, ResolvedParam,
+    SensAnalysis, SourceSpec, TfAnalysis, TranAnalysis, TransferType, Value,
+    Waveform as IrWaveform,
 };
 use thevenin_types::{
     AcVariation, Analysis as SpiceAnalysis, ElementKind as SpiceElementKind, Expr, Item, Netlist,
@@ -1023,8 +1024,41 @@ fn convert_element(
             Ok(None)
         }
 
-        SpiceElementKind::BehavioralSource { .. }
-        | SpiceElementKind::Cpl { .. }
+        SpiceElementKind::BehavioralSource { pos, neg, spec } => {
+            let spec_trimmed = spec.trim();
+            // Parse "V=expr" or "I=expr" to determine mode and extract expression.
+            let (mode, expr_str) = if let Some(rest) = spec_trimmed
+                .strip_prefix("V=")
+                .or_else(|| spec_trimmed.strip_prefix("v="))
+            {
+                (BehavioralMode::Voltage, rest.trim().to_owned())
+            } else if let Some(rest) = spec_trimmed
+                .strip_prefix("I=")
+                .or_else(|| spec_trimmed.strip_prefix("i="))
+            {
+                (BehavioralMode::Current, rest.trim().to_owned())
+            } else {
+                // Default to voltage mode with the full spec as the expression.
+                (BehavioralMode::Voltage, spec_trimmed.to_owned())
+            };
+            Ok(Some(IrElement {
+                id,
+                name: name.clone(),
+                kind: IrElementKind::BehavioralSource {
+                    mode,
+                    spec: expr_str,
+                },
+                connections: vec![
+                    connection("pos", nets.intern(pos)),
+                    connection("neg", nets.intern(neg)),
+                ],
+                params: Vec::new(),
+                model: None,
+                source_spec: None,
+            }))
+        }
+
+        SpiceElementKind::Cpl { .. }
         | SpiceElementKind::Xspice { .. }
         | SpiceElementKind::Raw(_) => Err(ImportError::UnsupportedElement(name.clone())),
     }

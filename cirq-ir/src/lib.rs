@@ -63,6 +63,12 @@ pub enum ElementKind {
     Coupling,
     VoltageSource,
     CurrentSource,
+    BehavioralSource {
+        /// `Voltage` or `Current` — voltage or current mode.
+        mode: BehavioralMode,
+        /// The expression string, e.g. `"sin(2*pi*1k*time)"`.
+        spec: String,
+    },
     Diode,
     Npn,
     Pnp,
@@ -77,6 +83,13 @@ pub enum ElementKind {
     Ccvs,
     Cccs,
     TransmissionLine,
+}
+
+/// Behavioral source mode — voltage or current.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BehavioralMode {
+    Voltage,
+    Current,
 }
 
 /// A resolved device model.
