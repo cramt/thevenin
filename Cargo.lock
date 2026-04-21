@@ -1795,6 +1795,7 @@ dependencies = [
 name = "thevenin-cli"
 version = "0.1.0"
 dependencies = [
+ "cirq-frontend",
  "facet",
  "faer",
  "figue",

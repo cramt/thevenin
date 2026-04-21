@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use facet::Facet;
 use figue::{self as args, FigueBuiltins};
 
@@ -14,9 +16,9 @@ struct Cli {
 #[repr(u8)]
 #[allow(dead_code)]
 enum Command {
-    /// Run a SPICE simulation.
+    /// Run a circuit simulation.
     Run {
-        /// Input SPICE netlist file.
+        /// Input file (.cirq or SPICE netlist).
         #[facet(args::positional)]
         input: String,
     },
@@ -35,24 +37,46 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Run { input } => {
             let src = std::fs::read_to_string(&input)
                 .map_err(|e| format!("failed to read {input}: {e}"))?;
-            let netlist = thevenin_types::Netlist::parse_single(&src)?;
-            let result = thevenin::simulate(&netlist)?;
-            for plot in &result.plots {
-                println!("{}:", plot.name);
-                for vec in &plot.vecs {
-                    let preview: Vec<String> = vec
-                        .data
-                        .as_real()
-                        .iter()
-                        .take(5)
-                        .map(|v| format!("{v:.6}"))
-                        .collect();
-                    println!("  {} = [{}]", vec.name, preview.join(", "));
+
+            let netlists = if is_cirq_file(&input) {
+                let base_dir = Path::new(&input)
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .to_owned();
+                cirq_frontend::compile_file_to_netlist(&src, &base_dir).map_err(|diags| {
+                    let msgs: Vec<String> = diags.iter().map(|d| d.message.clone()).collect();
+                    msgs.join("\n")
+                })?
+            } else {
+                vec![thevenin_types::Netlist::parse_single(&src)?]
+            };
+
+            for netlist in &netlists {
+                let result = thevenin::simulate(netlist)?;
+                for plot in &result.plots {
+                    println!("{}:", plot.name);
+                    for vec in &plot.vecs {
+                        let preview: Vec<String> = vec
+                            .data
+                            .as_real()
+                            .iter()
+                            .take(5)
+                            .map(|v| format!("{v:.6}"))
+                            .collect();
+                        println!("  {} = [{}]", vec.name, preview.join(", "));
+                    }
                 }
             }
             Ok(())
         }
     }
+}
+
+/// Detect Cirq source files by extension.
+fn is_cirq_file(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext == "cirq")
 }
 
 #[cfg(test)]
