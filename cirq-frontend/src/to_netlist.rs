@@ -78,6 +78,24 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
         items.push(Item::Element(converted));
     }
 
+    // Options.
+    if !circuit.options.is_empty() {
+        let params: Vec<Param> = circuit
+            .options
+            .iter()
+            .map(|o| Param {
+                name: o.0.clone(),
+                value: value_to_expr(&o.1),
+            })
+            .collect();
+        items.push(Item::Options(params));
+    }
+
+    // Temperature.
+    if let Some(temp) = circuit.temp {
+        items.push(Item::Temp(temp));
+    }
+
     // Build analyses.
     let analyses: Vec<Analysis> = if circuit.analyses.is_empty() {
         vec![Analysis::Op]
@@ -916,6 +934,8 @@ mod tests {
             models,
             analyses,
             params,
+            options: Vec::new(),
+            temp: None,
         }
     }
 

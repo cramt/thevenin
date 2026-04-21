@@ -42,7 +42,9 @@ module.exports = grammar({
         $.module_decl,
         $.model_decl,
         $.analysis_decl,
-        $.global_decl
+        $.global_decl,
+        $.options_decl,
+        $.temp_decl
       ),
 
     // ── Module ───────────────────────────────────────────────────────
@@ -142,7 +144,23 @@ module.exports = grammar({
 
     global_decl: ($) => seq("global", field("name", $.identifier)),
 
-    // ── Models ───────────────────────────────────────────────────────
+    // ── Options and Temperature ────────��────────────────────────────
+
+    options_decl: ($) =>
+      seq(
+        "options",
+        "{",
+        repeat($.options_setting),
+        "}"
+      ),
+
+    options_setting: ($) =>
+      seq(field("name", $.identifier), ":", field("value", $._expression)),
+
+    temp_decl: ($) =>
+      seq("temp", field("value", $._expression)),
+
+    // ── Models ─────────────────────────────────��─────────────────────
 
     model_decl: ($) =>
       seq(

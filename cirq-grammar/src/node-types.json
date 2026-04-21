@@ -599,7 +599,15 @@
           "named": true
         },
         {
+          "type": "options_decl",
+          "named": true
+        },
+        {
           "type": "param_decl",
+          "named": true
+        },
+        {
+          "type": "temp_decl",
           "named": true
         }
       ]
@@ -1032,11 +1040,19 @@
           "named": true
         },
         {
+          "type": "options_decl",
+          "named": true
+        },
+        {
           "type": "param_decl",
           "named": true
         },
         {
           "type": "port_decl",
+          "named": true
+        },
+        {
+          "type": "temp_decl",
           "named": true
         }
       ]
@@ -1190,6 +1206,91 @@
           },
           {
             "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "options_decl",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "options_setting",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "options_setting",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block_literal",
+            "named": true
+          },
+          {
+            "type": "boolean_literal",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "gnd",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_literal",
+            "named": true
+          },
+          {
+            "type": "number_literal",
+            "named": true
+          },
+          {
+            "type": "paren_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_name",
+            "named": true
+          },
+          {
+            "type": "string_literal",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
             "named": true
           }
         ]
@@ -1608,6 +1709,66 @@
     }
   },
   {
+    "type": "temp_decl",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block_literal",
+            "named": true
+          },
+          {
+            "type": "boolean_literal",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "gnd",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_literal",
+            "named": true
+          },
+          {
+            "type": "number_literal",
+            "named": true
+          },
+          {
+            "type": "paren_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_name",
+            "named": true
+          },
+          {
+            "type": "string_literal",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "unary_expression",
     "named": true,
     "fields": {
@@ -1848,6 +2009,10 @@
     "named": true
   },
   {
+    "type": "options",
+    "named": false
+  },
+  {
     "type": "out",
     "named": false
   },
@@ -1869,6 +2034,10 @@
   },
   {
     "type": "sweep",
+    "named": false
+  },
+  {
+    "type": "temp",
     "named": false
   },
   {

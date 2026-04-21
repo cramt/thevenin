@@ -394,7 +394,30 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 7. Build circuit.
+    // 7. Collect .options items.
+    let mut ir_options: Vec<(String, cirq_ir::Value)> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Options(params) = item {
+            for p in params {
+                let val = expr_to_value(&p.value);
+                if let Some(existing) = ir_options.iter_mut().find(|o| o.0 == p.name) {
+                    existing.1 = val;
+                } else {
+                    ir_options.push((p.name.clone(), val));
+                }
+            }
+        }
+    }
+
+    // 8. Collect .temp.
+    let mut ir_temp: Option<f64> = None;
+    for item in &netlist.items {
+        if let Item::Temp(t) = item {
+            ir_temp = Some(*t);
+        }
+    }
+
+    // 9. Build circuit.
     let nets = net_table.into_nets();
 
     Ok(Circuit {
@@ -404,6 +427,8 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         models: ir_models,
         analyses: ir_analyses,
         params: ir_params,
+        options: ir_options,
+        temp: ir_temp,
     })
 }
 

@@ -52,6 +52,8 @@ pub enum CircuitItem {
     ModelDef(ModelDef),
     Analysis(AnalysisDecl),
     Global(GlobalDecl),
+    Options(OptionsDecl),
+    Temp(TempDecl),
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +151,28 @@ pub struct LetDecl {
 #[derive(Debug, Clone)]
 pub struct GlobalDecl {
     pub name: Ident,
+    pub span: Span,
+}
+
+/// `options { gmin: 1e-12, abstol: 1e-12, ... }`
+#[derive(Debug, Clone)]
+pub struct OptionsDecl {
+    pub settings: Vec<OptionSetting>,
+    pub span: Span,
+}
+
+/// A single key-value setting inside an `options` block.
+#[derive(Debug, Clone)]
+pub struct OptionSetting {
+    pub name: Ident,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// `temp 27`
+#[derive(Debug, Clone)]
+pub struct TempDecl {
+    pub value: Expr,
     pub span: Span,
 }
 

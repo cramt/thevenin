@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, BinOp, CircuitItem, ElementInst, Expr, LetDecl, ModelDef,
-    ModuleDef, ModuleInst, ParamDecl, SourceFile, TopLevel, UnaryOp,
+    ModuleDef, ModuleInst, OptionsDecl, ParamDecl, SourceFile, TempDecl, TopLevel, UnaryOp,
 };
 use cirq_ir::{
     AcAnalysis, AcSpec, Analysis, Circuit, Connection, DcAnalysis, DcSweep, Element, ElementKind,
@@ -61,6 +61,8 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         models: ctx.models,
         analyses: ctx.analyses,
         params: ctx.resolved_params,
+        options: ctx.options,
+        temp: ctx.temp,
     };
 
     let has_errors = ctx.diags.iter().any(|d| d.severity == Severity::Error);
@@ -176,6 +178,10 @@ struct IrCtx {
     // Net name remapping during module inlining: port name → actual net name.
     // Stacked per module instantiation level.
     net_remap: HashMap<String, String>,
+
+    // Simulation options and temperature.
+    options: Vec<(String, Value)>,
+    temp: Option<f64>,
 }
 
 impl IrCtx {
@@ -198,6 +204,8 @@ impl IrCtx {
             param_eval_stack: Vec::new(),
             module_inst_stack: Vec::new(),
             net_remap: HashMap::new(),
+            options: Vec::new(),
+            temp: None,
         };
         // `gnd` always gets Id(0).
         ctx.intern_net("gnd", true);
@@ -268,12 +276,14 @@ impl IrCtx {
             }
         }
 
-        // Pass 2: elements, module instances, analyses.
+        // Pass 2: elements, module instances, analyses, options, temp.
         for item in items {
             match item {
                 CircuitItem::Element(e) => self.lower_element_prefixed(e, prefix),
                 CircuitItem::Analysis(a) => self.lower_analysis(a),
                 CircuitItem::ModuleInst(mi) => self.lower_module_inst(mi, prefix),
+                CircuitItem::Options(o) => self.lower_options_decl(o),
+                CircuitItem::Temp(t) => self.lower_temp_decl(t),
                 // Already handled in pass 1, or collected above.
                 CircuitItem::Param(_)
                 | CircuitItem::Let(_)
@@ -989,6 +999,43 @@ impl IrCtx {
 
         self.module_inst_stack.pop();
         self.net_remap = saved_remap;
+    }
+
+    // -------------------------------------------------------------------
+    // Options and temperature lowering
+    // -------------------------------------------------------------------
+
+    fn lower_options_decl(&mut self, o: &OptionsDecl) {
+        for setting in &o.settings {
+            let name = setting.name.name.clone();
+            match self.eval_expr(&setting.value) {
+                Ok(val) => {
+                    // Overwrite if the same option is set multiple times.
+                    if let Some(existing) = self.options.iter_mut().find(|p| p.0 == name) {
+                        existing.1 = val;
+                    } else {
+                        self.options.push((name, val));
+                    }
+                }
+                Err(msg) => {
+                    self.diags.push(
+                        Diagnostic::error(format!("cannot evaluate option `{name}`: {msg}"))
+                            .with_span(setting.name.span),
+                    );
+                }
+            }
+        }
+    }
+
+    fn lower_temp_decl(&mut self, t: &TempDecl) {
+        match self.eval_to_f64(&t.value) {
+            Some(v) => self.temp = Some(v),
+            None => {
+                self.diags.push(
+                    Diagnostic::error("cannot evaluate temperature value").with_span(t.span),
+                );
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -2730,5 +2777,70 @@ mod tests {
             err.is_some(),
             "expected unknown element type, got: {diags:?}"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 3.1: Simulation options
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn options_block_lowering() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                options {
+                    gmin: 1e-12
+                    abstol: 1e-12
+                    reltol: 1e-3
+                    vntol: 1e-6
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.options.len(), 4);
+
+        let gmin = circuit.options.iter().find(|o| o.0 == "gmin").unwrap();
+        match &gmin.1 {
+            Value::Real(v) => assert!((*v - 1e-12).abs() < 1e-20),
+            _ => panic!("expected Real for gmin"),
+        }
+
+        let reltol = circuit.options.iter().find(|o| o.0 == "reltol").unwrap();
+        match &reltol.1 {
+            Value::Real(v) => assert!((*v - 1e-3).abs() < 1e-10),
+            _ => panic!("expected Real for reltol"),
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 3.3: Temperature
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn temp_decl_lowering() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                temp 85
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.temp, Some(85.0));
+    }
+
+    #[test]
+    fn temp_with_expression() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                param t_corner = 125
+                temp t_corner
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.temp, Some(125.0));
     }
 }

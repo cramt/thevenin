@@ -4,7 +4,8 @@
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, ElementInst,
     Expr, GlobalDecl, Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst,
-    ParamDecl, PortDecl, PortDirection, QualifiedName, SourceFile, TopLevel, UnaryOp, span::Span,
+    OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SourceFile,
+    TempDecl, TopLevel, UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -164,6 +165,8 @@ impl Ctx<'_> {
             "model_decl" => self.lower_model(node).map(CircuitItem::ModelDef),
             "analysis_decl" => self.lower_analysis(node).map(CircuitItem::Analysis),
             "global_decl" => self.lower_global(node).map(CircuitItem::Global),
+            "options_decl" => self.lower_options(node).map(CircuitItem::Options),
+            "temp_decl" => self.lower_temp(node).map(CircuitItem::Temp),
             "line_comment" | "block_comment" => None,
             "ERROR" => {
                 self.error_at(node, "syntax error in circuit body");
@@ -437,6 +440,43 @@ impl Ctx<'_> {
         let name = self.ident(name_node);
         Some(GlobalDecl {
             name,
+            span: span_of(node),
+        })
+    }
+
+    fn lower_options(&mut self, node: tree_sitter::Node) -> Option<OptionsDecl> {
+        let mut settings = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "options_setting"
+                && let Some(setting) = self.lower_option_setting(child)
+            {
+                settings.push(setting);
+            }
+        }
+        Some(OptionsDecl {
+            settings,
+            span: span_of(node),
+        })
+    }
+
+    fn lower_option_setting(&mut self, node: tree_sitter::Node) -> Option<OptionSetting> {
+        let name_node = self.required_field(node, "name")?;
+        let name = self.ident(name_node);
+        let value_node = self.required_field(node, "value")?;
+        let value = self.lower_expr(value_node)?;
+        Some(OptionSetting {
+            name,
+            value,
+            span: span_of(node),
+        })
+    }
+
+    fn lower_temp(&mut self, node: tree_sitter::Node) -> Option<TempDecl> {
+        let value_node = self.required_field(node, "value")?;
+        let value = self.lower_expr(value_node)?;
+        Some(TempDecl {
+            value,
             span: span_of(node),
         })
     }

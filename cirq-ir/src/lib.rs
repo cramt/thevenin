@@ -17,6 +17,10 @@ pub struct Circuit {
     pub models: Vec<Model>,
     pub analyses: Vec<Analysis>,
     pub params: Vec<ResolvedParam>,
+    /// Simulation options (e.g. GMIN, ABSTOL, RELTOL).
+    pub options: Vec<(String, Value)>,
+    /// Simulation temperature in °C. `None` means use default (27°C).
+    pub temp: Option<f64>,
 }
 
 /// A resolved electrical net.
