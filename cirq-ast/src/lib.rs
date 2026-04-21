@@ -26,6 +26,7 @@ pub enum TopLevel {
     Module(ModuleDef),
     Import(Import),
     Model(ModelDef),
+    Func(FuncDecl),
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,8 @@ pub enum CircuitItem {
     Options(OptionsDecl),
     Temp(TempDecl),
     Save(SaveDecl),
+    Func(FuncDecl),
+    Ic(IcDecl),
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +200,38 @@ pub enum SaveTarget {
     Current { element: Ident, span: Span },
     /// Bare identifier
     Name { name: Ident, span: Span },
+}
+
+// ---------------------------------------------------------------------------
+// User-defined functions
+// ---------------------------------------------------------------------------
+
+/// `limit(x, lo, hi) = min(max(x, lo), hi)`
+#[derive(Debug, Clone)]
+pub struct FuncDecl {
+    pub name: Ident,
+    pub params: Vec<Ident>,
+    pub body: Expr,
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
+// Initial conditions
+// ---------------------------------------------------------------------------
+
+/// `ic { v(out) = 1.5, v(mid) = 0.8 }`
+#[derive(Debug, Clone)]
+pub struct IcDecl {
+    pub entries: Vec<IcEntry>,
+    pub span: Span,
+}
+
+/// A single initial condition entry: `v(node) = value`.
+#[derive(Debug, Clone)]
+pub struct IcEntry {
+    pub node: Ident,
+    pub value: Expr,
+    pub span: Span,
 }
 
 // ---------------------------------------------------------------------------

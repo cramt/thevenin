@@ -155,14 +155,14 @@ fn parse_and_extract(
     // Recursively resolve imports within the imported file.
     let items = resolve_items(sf.items, import_dir, search_paths, visited, diags);
 
-    // Filter to only exportable declarations: modules, models, and circuits.
+    // Filter to only exportable declarations: modules, models, circuits, funcs.
     // We don't re-export imports (they've already been resolved above).
     items
         .into_iter()
         .filter(|item| {
             matches!(
                 item,
-                TopLevel::Module(_) | TopLevel::Model(_) | TopLevel::Circuit(_)
+                TopLevel::Module(_) | TopLevel::Model(_) | TopLevel::Circuit(_) | TopLevel::Func(_)
             )
         })
         .collect()

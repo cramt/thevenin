@@ -430,7 +430,19 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 10. Build circuit.
+    // 10. Collect .func definitions.
+    let mut ir_funcs: Vec<cirq_ir::FuncDef> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Func { name, args, body } = item {
+            ir_funcs.push(cirq_ir::FuncDef {
+                name: name.clone(),
+                args: args.clone(),
+                body: body.clone(),
+            });
+        }
+    }
+
+    // 11. Build circuit.
     let nets = net_table.into_nets();
 
     Ok(Circuit {
@@ -443,6 +455,8 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         options: ir_options,
         temp: ir_temp,
         save: ir_save,
+        funcs: ir_funcs,
+        initial_conditions: Vec::new(),
     })
 }
 

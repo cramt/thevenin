@@ -3,9 +3,9 @@
 
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, ElementInst,
-    Expr, GlobalDecl, Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst,
-    OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl,
-    SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
+    Expr, FuncDecl, GlobalDecl, IcDecl, IcEntry, Ident, Import, LetDecl, ModelDef, ModelParam,
+    ModuleDef, ModuleInst, OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection,
+    QualifiedName, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -46,6 +46,11 @@ pub fn lower(tree: &tree_sitter::Tree, source: &str) -> (SourceFile, Vec<Diagnos
             "model_decl" => {
                 if let Some(m) = ctx.lower_model(child) {
                     items.push(TopLevel::Model(m));
+                }
+            }
+            "func_decl" => {
+                if let Some(f) = ctx.lower_func(child) {
+                    items.push(TopLevel::Func(f));
                 }
             }
             "line_comment" | "block_comment" => {}
@@ -168,6 +173,8 @@ impl Ctx<'_> {
             "options_decl" => self.lower_options(node).map(CircuitItem::Options),
             "temp_decl" => self.lower_temp(node).map(CircuitItem::Temp),
             "save_decl" => self.lower_save(node).map(CircuitItem::Save),
+            "func_decl" => self.lower_func(node).map(CircuitItem::Func),
+            "ic_decl" => self.lower_ic(node).map(CircuitItem::Ic),
             "line_comment" | "block_comment" => None,
             "ERROR" => {
                 self.error_at(node, "syntax error in circuit body");
@@ -532,6 +539,78 @@ impl Ctx<'_> {
         } else {
             None
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// User-defined functions
+// ---------------------------------------------------------------------------
+
+impl Ctx<'_> {
+    fn lower_func(&mut self, node: tree_sitter::Node) -> Option<FuncDecl> {
+        let name_node = self.required_field(node, "name")?;
+        let name = self.ident(name_node);
+        let body_node = self.required_field(node, "body")?;
+        let body = self.lower_expr(body_node)?;
+
+        let mut params = Vec::new();
+
+        // Collect parameters from the func_params child.
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "func_params" {
+                let mut param_cursor = child.walk();
+                for param_child in child.named_children(&mut param_cursor) {
+                    if param_child.kind() == "identifier" {
+                        params.push(self.ident(param_child));
+                    }
+                }
+            }
+        }
+
+        Some(FuncDecl {
+            name,
+            params,
+            body,
+            span: span_of(node),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Initial conditions
+// ---------------------------------------------------------------------------
+
+impl Ctx<'_> {
+    fn lower_ic(&mut self, node: tree_sitter::Node) -> Option<IcDecl> {
+        let mut entries = Vec::new();
+        let mut cursor = node.walk();
+
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "ic_entry"
+                && let Some(entry) = self.lower_ic_entry(child)
+            {
+                entries.push(entry);
+            }
+        }
+
+        Some(IcDecl {
+            entries,
+            span: span_of(node),
+        })
+    }
+
+    fn lower_ic_entry(&mut self, node: tree_sitter::Node) -> Option<IcEntry> {
+        let node_ident = self.required_field(node, "node")?;
+        let node_name = self.ident(node_ident);
+        let value_node = self.required_field(node, "value")?;
+        let value = self.lower_expr(value_node)?;
+
+        Some(IcEntry {
+            node: node_name,
+            value,
+            span: span_of(node),
+        })
     }
 }
 

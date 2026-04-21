@@ -101,6 +101,15 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
         items.push(Item::Save(circuit.save.clone()));
     }
 
+    // User-defined functions.
+    for func in &circuit.funcs {
+        items.push(Item::Func {
+            name: func.name.clone(),
+            args: func.args.clone(),
+            body: func.body.clone(),
+        });
+    }
+
     // Build analyses.
     let analyses: Vec<Analysis> = if circuit.analyses.is_empty() {
         vec![Analysis::Op]
@@ -959,6 +968,8 @@ mod tests {
             options: Vec::new(),
             temp: None,
             save: Vec::new(),
+            funcs: Vec::new(),
+            initial_conditions: Vec::new(),
         }
     }
 

@@ -4,14 +4,14 @@
 use std::collections::HashMap;
 
 use cirq_ast::{
-    AnalysisDecl, AnalysisItem, Argument, BinOp, CircuitItem, ElementInst, Expr, LetDecl, ModelDef,
-    ModuleDef, ModuleInst, OptionsDecl, ParamDecl, SaveDecl, SaveTarget, SourceFile, TempDecl,
-    TopLevel, UnaryOp,
+    AnalysisDecl, AnalysisItem, Argument, BinOp, CircuitItem, ElementInst, Expr, FuncDecl,
+    IcDecl, LetDecl, ModelDef, ModuleDef, ModuleInst, OptionsDecl, ParamDecl, SaveDecl,
+    SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp,
 };
 use cirq_ir::{
     AcAnalysis, AcSpec, Analysis, BehavioralMode, Circuit, Connection, DcAnalysis, DcSweep,
-    Element, ElementKind, FrequencyScale, Id, Model, Net, ResolvedParam, SourceSpec, TranAnalysis,
-    Value, Waveform,
+    Element, ElementKind, FrequencyScale, FuncDef, Id, Model, Net, ResolvedParam, SourceSpec,
+    TranAnalysis, Value, Waveform,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -38,10 +38,12 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         }
     });
 
-    // Also collect top-level models (outside circuits).
+    // Also collect top-level models and functions (outside circuits).
     for item in &source_file.items {
-        if let TopLevel::Model(m) = item {
-            ctx.lower_model_def(m);
+        match item {
+            TopLevel::Model(m) => ctx.lower_model_def(m),
+            TopLevel::Func(f) => ctx.lower_func_decl(f),
+            _ => {}
         }
     }
 
@@ -66,6 +68,8 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         options: ctx.options,
         temp: ctx.temp,
         save: ctx.save,
+        funcs: ctx.funcs,
+        initial_conditions: ctx.initial_conditions,
     };
 
     let has_errors = ctx.diags.iter().any(|d| d.severity == Severity::Error);
@@ -191,6 +195,8 @@ struct IrCtx {
     options: Vec<(String, Value)>,
     temp: Option<f64>,
     save: Vec<String>,
+    funcs: Vec<FuncDef>,
+    initial_conditions: Vec<(Id, f64)>,
 }
 
 impl IrCtx {
@@ -216,6 +222,8 @@ impl IrCtx {
             options: Vec::new(),
             temp: None,
             save: Vec::new(),
+            funcs: Vec::new(),
+            initial_conditions: Vec::new(),
         };
         // `gnd` always gets Id(0).
         ctx.intern_net("gnd", true);
@@ -295,6 +303,8 @@ impl IrCtx {
                 CircuitItem::Options(o) => self.lower_options_decl(o),
                 CircuitItem::Temp(t) => self.lower_temp_decl(t),
                 CircuitItem::Save(s) => self.lower_save_decl(s),
+                CircuitItem::Func(f) => self.lower_func_decl(f),
+                CircuitItem::Ic(ic) => self.lower_ic_decl(ic),
                 // Already handled in pass 1, or collected above.
                 CircuitItem::Param(_)
                 | CircuitItem::Let(_)
@@ -1096,6 +1106,40 @@ impl IrCtx {
             };
             if !self.save.contains(&spec) {
                 self.save.push(spec);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // User-defined function lowering
+    // -------------------------------------------------------------------
+
+    fn lower_func_decl(&mut self, f: &FuncDecl) {
+        let body_str = expr_to_spice_string(&f.body);
+        self.funcs.push(FuncDef {
+            name: f.name.name.clone(),
+            args: f.params.iter().map(|p| p.name.clone()).collect(),
+            body: body_str,
+        });
+    }
+
+    // -------------------------------------------------------------------
+    // Initial condition lowering
+    // -------------------------------------------------------------------
+
+    fn lower_ic_decl(&mut self, ic: &IcDecl) {
+        for entry in &ic.entries {
+            let net_id = self.intern_net(&entry.node.name, false);
+            if let Some(val) = self.eval_to_f64(&entry.value) {
+                self.initial_conditions.push((net_id, val));
+            } else {
+                self.diags.push(
+                    Diagnostic::error(format!(
+                        "cannot evaluate initial condition for `{}`",
+                        entry.node.name
+                    ))
+                    .with_span(entry.span),
+                );
             }
         }
     }
@@ -3111,5 +3155,99 @@ mod tests {
             }
             other => panic!("expected BehavioralSource, got {other:?}"),
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 3.4: User-defined functions
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn func_decl_lowering() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                limit(x, lo, hi) = min(max(x, lo), hi)
+                R1: resistor(a -> gnd, 1000)
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.funcs.len(), 1);
+        assert_eq!(circuit.funcs[0].name, "limit");
+        assert_eq!(circuit.funcs[0].args, vec!["x", "lo", "hi"]);
+        assert!(
+            circuit.funcs[0].body.contains("min"),
+            "body should contain min: {}",
+            circuit.funcs[0].body
+        );
+        assert!(
+            circuit.funcs[0].body.contains("max"),
+            "body should contain max: {}",
+            circuit.funcs[0].body
+        );
+    }
+
+    #[test]
+    fn func_decl_simple_expression() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                double(x) = x * 2
+                R1: resistor(a -> gnd, 1000)
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.funcs.len(), 1);
+        assert_eq!(circuit.funcs[0].name, "double");
+        assert_eq!(circuit.funcs[0].args, vec!["x"]);
+        assert!(
+            circuit.funcs[0].body.contains("*"),
+            "body should contain multiplication: {}",
+            circuit.funcs[0].body
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 3.6: Initial conditions
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn ic_decl_lowering() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                R1: resistor(out -> gnd, 1000)
+                ic {
+                    v(out) = 1.5
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.initial_conditions.len(), 1);
+        let (net_id, value) = &circuit.initial_conditions[0];
+        // Find the net name for this id.
+        let net = circuit.nets.iter().find(|n| n.id == *net_id).unwrap();
+        assert_eq!(net.name, "out");
+        assert!((value - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ic_multiple_entries() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                R1: resistor(a -> b, 1000)
+                R2: resistor(b -> gnd, 2000)
+                ic {
+                    v(a) = 3.3
+                    v(b) = 1.5
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.initial_conditions.len(), 2);
     }
 }

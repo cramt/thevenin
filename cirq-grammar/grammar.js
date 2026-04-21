@@ -19,7 +19,7 @@ module.exports = grammar({
     source_file: ($) => repeat($._top_level),
 
     _top_level: ($) =>
-      choice($.circuit_decl, $.module_decl, $.import_decl, $.model_decl),
+      choice($.circuit_decl, $.module_decl, $.import_decl, $.model_decl, $.func_decl),
 
     // ── Circuit ──────────────────────────────────────────────────────
 
@@ -45,7 +45,9 @@ module.exports = grammar({
         $.global_decl,
         $.options_decl,
         $.temp_decl,
-        $.save_decl
+        $.save_decl,
+        $.func_decl,
+        $.ic_decl
       ),
 
     // ── Module ───────────────────────────────────────────────────────
@@ -145,7 +147,42 @@ module.exports = grammar({
 
     global_decl: ($) => seq("global", field("name", $.identifier)),
 
-    // ── Options and Temperature ────────��────────────────────────────
+    // ── User-defined functions ──────────────────────────────────────
+
+    func_decl: ($) =>
+      seq(
+        field("name", $.identifier),
+        "(",
+        optional($.func_params),
+        ")",
+        "=",
+        field("body", $._expression)
+      ),
+
+    func_params: ($) =>
+      seq($.identifier, repeat(seq(",", $.identifier)), optional(",")),
+
+    // ── Initial conditions ──────────────────────────────────────────
+
+    ic_decl: ($) =>
+      seq(
+        "ic",
+        "{",
+        repeat($.ic_entry),
+        "}"
+      ),
+
+    ic_entry: ($) =>
+      seq(
+        "v",
+        "(",
+        field("node", $.identifier),
+        ")",
+        "=",
+        field("value", $._expression)
+      ),
+
+    // ── Options and Temperature ─────────────────────────────────────
 
     options_decl: ($) =>
       seq(

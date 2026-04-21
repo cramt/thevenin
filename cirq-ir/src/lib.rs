@@ -23,6 +23,10 @@ pub struct Circuit {
     pub temp: Option<f64>,
     /// Output save targets (e.g. `v(out)`, `i(R1)`).
     pub save: Vec<String>,
+    /// User-defined functions.
+    pub funcs: Vec<FuncDef>,
+    /// Initial node voltages (`.ic`).
+    pub initial_conditions: Vec<(Id, f64)>,
 }
 
 /// A resolved electrical net.
@@ -203,6 +207,15 @@ pub struct SourceSpec {
 pub struct ResolvedParam {
     pub name: String,
     pub value: Value,
+}
+
+/// A user-defined function.
+#[derive(Debug, Clone)]
+pub struct FuncDef {
+    pub name: String,
+    pub args: Vec<String>,
+    /// The function body as a SPICE-compatible expression string.
+    pub body: String,
 }
 
 /// A resolved analysis command.
