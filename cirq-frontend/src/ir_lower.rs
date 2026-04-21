@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, BinOp, CircuitItem, ElementInst, Expr, LetDecl, ModelDef,
-    ParamDecl, SourceFile, TopLevel, UnaryOp,
+    ModuleDef, ModuleInst, ParamDecl, SourceFile, TopLevel, UnaryOp,
 };
 use cirq_ir::{
     AcAnalysis, AcSpec, Analysis, Circuit, Connection, DcAnalysis, DcSweep, Element, ElementKind,
@@ -164,8 +164,18 @@ struct IrCtx {
     model_by_name: HashMap<String, Id>,
     param_values: HashMap<String, Value>,
 
+    // Module definitions for subcircuit flattening.
+    module_defs: HashMap<String, ModuleDef>,
+
     // For cycle detection during param evaluation.
     param_eval_stack: Vec<String>,
+
+    // For cycle detection during module instantiation.
+    module_inst_stack: Vec<String>,
+
+    // Net name remapping during module inlining: port name → actual net name.
+    // Stacked per module instantiation level.
+    net_remap: HashMap<String, String>,
 }
 
 impl IrCtx {
@@ -184,7 +194,10 @@ impl IrCtx {
             element_by_name: HashMap::new(),
             model_by_name: HashMap::new(),
             param_values: HashMap::new(),
+            module_defs: HashMap::new(),
             param_eval_stack: Vec::new(),
+            module_inst_stack: Vec::new(),
+            net_remap: HashMap::new(),
         };
         // `gnd` always gets Id(0).
         ctx.intern_net("gnd", true);
@@ -232,10 +245,14 @@ impl IrCtx {
     // -------------------------------------------------------------------
 
     fn lower_circuit_body(&mut self, items: &[CircuitItem]) {
+        self.lower_circuit_body_prefixed(items, "");
+    }
+
+    fn lower_circuit_body_prefixed(&mut self, items: &[CircuitItem], prefix: &str) {
         // Two-pass: first collect all declaration names to detect duplicates
         // and register models/params, then lower elements and analyses.
 
-        // Pass 1: declarations (params, lets, models, globals).
+        // Pass 1: declarations (params, lets, models, globals, module defs).
         for item in items {
             match item {
                 CircuitItem::Param(p) => self.lower_param(p),
@@ -244,6 +261,9 @@ impl IrCtx {
                 CircuitItem::Global(g) => {
                     self.intern_net(&g.name.name, true);
                 }
+                CircuitItem::ModuleDef(m) => {
+                    self.module_defs.insert(m.name.name.clone(), m.clone());
+                }
                 _ => {}
             }
         }
@@ -251,19 +271,14 @@ impl IrCtx {
         // Pass 2: elements, module instances, analyses.
         for item in items {
             match item {
-                CircuitItem::Element(e) => self.lower_element(e),
+                CircuitItem::Element(e) => self.lower_element_prefixed(e, prefix),
                 CircuitItem::Analysis(a) => self.lower_analysis(a),
-                CircuitItem::ModuleInst(_) => {
-                    // Module instantiation lowering is out of scope for this
-                    // pass (would require subcircuit flattening).
-                }
-                CircuitItem::ModuleDef(_) => {
-                    // Nested module definitions are collected but not inlined.
-                }
-                // Already handled in pass 1.
+                CircuitItem::ModuleInst(mi) => self.lower_module_inst(mi, prefix),
+                // Already handled in pass 1, or collected above.
                 CircuitItem::Param(_)
                 | CircuitItem::Let(_)
                 | CircuitItem::ModelDef(_)
+                | CircuitItem::ModuleDef(_)
                 | CircuitItem::Global(_) => {}
             }
         }
@@ -434,20 +449,32 @@ impl IrCtx {
     // Element lowering
     // -------------------------------------------------------------------
 
-    fn lower_element(&mut self, e: &ElementInst) {
-        let name = &e.name.name;
+    fn lower_element_prefixed(&mut self, e: &ElementInst, prefix: &str) {
+        let raw_name = &e.name.name;
+        let name = if prefix.is_empty() {
+            raw_name.clone()
+        } else {
+            format!("{prefix}.{raw_name}")
+        };
 
-        if self.element_by_name.contains_key(name) {
+        if self.element_by_name.contains_key(&name) {
             self.diags.push(
                 Diagnostic::error(format!("duplicate element: `{name}`")).with_span(e.name.span),
             );
             return;
         }
 
-        // Resolve element kind.
+        // Resolve element kind.  If the type name doesn't match a built-in
+        // element, check whether it names a locally defined module and, if so,
+        // handle it as a module instantiation instead.
         let kind = match element_kind_from_str(&e.element_type.name) {
             Some(k) => k,
             None => {
+                if self.module_defs.contains_key(&e.element_type.name) {
+                    // Treat as a local module instantiation.
+                    self.lower_local_module_inst(e, prefix);
+                    return;
+                }
                 self.diags.push(
                     Diagnostic::error(format!("unknown element type: `{}`", e.element_type.name))
                         .with_span(e.element_type.span),
@@ -485,7 +512,7 @@ impl IrCtx {
                         continue;
                     }
 
-                    let from_net = self.resolve_net_ident(from);
+                    let from_net = self.resolve_net_ident_prefixed(from, prefix);
                     let pin_from = pins[positional_conn_idx].to_string();
                     connections.push(Connection {
                         terminal: pin_from,
@@ -494,7 +521,7 @@ impl IrCtx {
                     positional_conn_idx += 1;
 
                     if positional_conn_idx < pins.len() {
-                        let to_net = self.resolve_net_ident(to);
+                        let to_net = self.resolve_net_ident_prefixed(to, prefix);
                         let pin_to = pins[positional_conn_idx].to_string();
                         connections.push(Connection {
                             terminal: pin_to,
@@ -506,8 +533,8 @@ impl IrCtx {
                 Argument::NamedConnection { name, from, to } => {
                     // Named connection pair, e.g. `control: a -> b`.
                     // We treat this as two connections with derived terminal names.
-                    let from_net = self.resolve_net_ident(from);
-                    let to_net = self.resolve_net_ident(to);
+                    let from_net = self.resolve_net_ident_prefixed(from, prefix);
+                    let to_net = self.resolve_net_ident_prefixed(to, prefix);
                     connections.push(Connection {
                         terminal: format!("{}_pos", name.name),
                         net: from_net,
@@ -524,7 +551,7 @@ impl IrCtx {
                     if is_connection_param(param_name) {
                         // The value should be an ident referencing a net.
                         if let Some(net_name) = expr_as_net_name(value) {
-                            let net_id = self.intern_net(&net_name, net_name == "gnd");
+                            let net_id = self.resolve_net_name_prefixed(&net_name, prefix);
                             connections.push(Connection {
                                 terminal: param_name.clone(),
                                 net: net_id,
@@ -684,10 +711,284 @@ impl IrCtx {
         });
     }
 
-    /// Resolve an identifier to a net Id (creating the net if it doesn't exist).
-    fn resolve_net_ident(&mut self, ident: &cirq_ast::Ident) -> Id {
-        let name = &ident.name;
-        self.intern_net(name, name == "gnd")
+    /// Resolve a net name with prefix and remapping applied.
+    /// Used during module inlining to map port names to caller nets and
+    /// prefix internal nets with the instance path.
+    fn resolve_net_name_prefixed(&mut self, name: &str, prefix: &str) -> Id {
+        // Global nets are never remapped or prefixed.
+        if name == "gnd" {
+            return self.intern_net("gnd", true);
+        }
+        // Check if this net is remapped (port binding).
+        if let Some(remapped) = self.net_remap.get(name) {
+            let remapped = remapped.clone();
+            return self.intern_net(&remapped, false);
+        }
+        // Otherwise, prefix the net name for hierarchy.
+        if prefix.is_empty() {
+            self.intern_net(name, false)
+        } else {
+            let prefixed = format!("{prefix}.{name}");
+            self.intern_net(&prefixed, false)
+        }
+    }
+
+    /// Resolve an identifier to a net Id, applying prefix and remapping.
+    fn resolve_net_ident_prefixed(&mut self, ident: &cirq_ast::Ident, prefix: &str) -> Id {
+        self.resolve_net_name_prefixed(&ident.name, prefix)
+    }
+
+    // -------------------------------------------------------------------
+    // Module instantiation (subcircuit flattening)
+    // -------------------------------------------------------------------
+
+    /// Inline a module instantiation by flattening its body into the current circuit.
+    ///
+    /// The strategy:
+    /// 1. Look up the module definition.
+    /// 2. Detect instantiation cycles.
+    /// 3. Map module ports to caller nets (via `net_remap`).
+    /// 4. Recursively lower the module body with a hierarchical prefix.
+    fn lower_module_inst(&mut self, mi: &ModuleInst, parent_prefix: &str) {
+        // Build the module name from the qualified name segments.
+        let module_name = mi
+            .module_name
+            .segments
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+
+        // Look up the module definition.
+        let module_def = match self.module_defs.get(&module_name) {
+            Some(m) => m.clone(),
+            None => {
+                self.diags.push(
+                    Diagnostic::error(format!("unknown module: `{module_name}`"))
+                        .with_span(mi.module_name.span),
+                );
+                return;
+            }
+        };
+
+        // Cycle detection.
+        if self.module_inst_stack.contains(&module_name) {
+            self.diags.push(
+                Diagnostic::error(format!(
+                    "recursive module instantiation: `{module_name}` (cycle: {})",
+                    self.module_inst_stack.join(" → ")
+                ))
+                .with_span(mi.span),
+            );
+            return;
+        }
+
+        // Build the hierarchical instance prefix.
+        let inst_name = &mi.name.name;
+        let inst_prefix = if parent_prefix.is_empty() {
+            inst_name.clone()
+        } else {
+            format!("{parent_prefix}.{inst_name}")
+        };
+
+        // Build port-to-net remapping from instantiation arguments.
+        // The module's ports define formal parameters; the instantiation's
+        // arguments provide actual net bindings.
+        let mut port_remap: HashMap<String, String> = HashMap::new();
+        let ports = &module_def.ports;
+
+        for arg in &mi.args {
+            match arg {
+                Argument::Named { name, value } => {
+                    // Named port binding: `in: caller_net`
+                    if let Some(net_name) = expr_as_net_name(value) {
+                        port_remap.insert(name.name.clone(), net_name);
+                    } else if let Expr::Ident(ident) = value {
+                        port_remap.insert(name.name.clone(), ident.name.clone());
+                    } else {
+                        self.diags.push(
+                            Diagnostic::error(format!(
+                                "module port `{}` must be bound to a net name",
+                                name.name
+                            ))
+                            .with_span(name.span),
+                        );
+                    }
+                }
+                Argument::Positional(expr) => {
+                    // Positional port binding: maps to ports in declaration order.
+                    let idx = port_remap.len();
+                    if idx < ports.len() {
+                        let port_name = &ports[idx].name.name;
+                        if let Some(net_name) = expr_as_net_name(expr) {
+                            port_remap.insert(port_name.clone(), net_name);
+                        } else if let Expr::Ident(ident) = expr {
+                            port_remap.insert(port_name.clone(), ident.name.clone());
+                        } else {
+                            self.diags.push(
+                                Diagnostic::error(format!(
+                                    "module port `{port_name}` must be bound to a net name"
+                                ))
+                                .with_span(mi.span),
+                            );
+                        }
+                    } else {
+                        self.diags.push(
+                            Diagnostic::error(format!(
+                                "too many arguments for module `{module_name}` (expected {})",
+                                ports.len()
+                            ))
+                            .with_span(mi.span),
+                        );
+                    }
+                }
+                Argument::Connection { from, to } => {
+                    // Connection-style: maps two ports positionally.
+                    let idx = port_remap.len();
+                    if idx < ports.len() {
+                        port_remap.insert(ports[idx].name.name.clone(), from.name.clone());
+                    }
+                    let idx2 = port_remap.len();
+                    if idx2 < ports.len() {
+                        port_remap.insert(ports[idx2].name.name.clone(), to.name.clone());
+                    }
+                }
+                Argument::NamedConnection { name, from, to } => {
+                    // Named connection pair binding — less common for modules
+                    // but handle it: `control: a -> b` maps to ports
+                    // `control_pos` and `control_neg` (or similar).
+                    port_remap.insert(format!("{}_pos", name.name), from.name.clone());
+                    port_remap.insert(format!("{}_neg", name.name), to.name.clone());
+                }
+            }
+        }
+
+        // Save current net_remap and replace with the port bindings for
+        // this instantiation level.
+        let saved_remap = std::mem::replace(&mut self.net_remap, port_remap);
+
+        // Push onto the instantiation stack for cycle detection.
+        self.module_inst_stack.push(module_name.clone());
+
+        // Recursively lower the module body with the instance prefix.
+        self.lower_circuit_body_prefixed(&module_def.body, &inst_prefix);
+
+        // Restore state.
+        self.module_inst_stack.pop();
+        self.net_remap = saved_remap;
+    }
+
+    /// Handle a local module instantiation that was parsed as an `ElementInst`
+    /// because the module name has no dots (single identifier).
+    ///
+    /// This synthesizes a `ModuleInst`-like lowering from the element's name,
+    /// type (= module name), and arguments.
+    fn lower_local_module_inst(&mut self, e: &ElementInst, prefix: &str) {
+        let module_name = &e.element_type.name;
+
+        let module_def = match self.module_defs.get(module_name) {
+            Some(m) => m.clone(),
+            None => {
+                self.diags.push(
+                    Diagnostic::error(format!("unknown module: `{module_name}`"))
+                        .with_span(e.element_type.span),
+                );
+                return;
+            }
+        };
+
+        // Cycle detection.
+        if self.module_inst_stack.contains(module_name) {
+            self.diags.push(
+                Diagnostic::error(format!(
+                    "recursive module instantiation: `{module_name}` (cycle: {})",
+                    self.module_inst_stack.join(" → ")
+                ))
+                .with_span(e.span),
+            );
+            return;
+        }
+
+        // Build hierarchical instance prefix.
+        let inst_name = &e.name.name;
+        let inst_prefix = if prefix.is_empty() {
+            inst_name.clone()
+        } else {
+            format!("{prefix}.{inst_name}")
+        };
+
+        // Build port-to-net remapping from the element's arguments.
+        let mut port_remap: HashMap<String, String> = HashMap::new();
+        let ports = &module_def.ports;
+
+        for arg in &e.args {
+            match arg {
+                Argument::Named { name, value } => {
+                    if let Some(net_name) = expr_as_net_name(value) {
+                        port_remap.insert(name.name.clone(), net_name);
+                    } else if let Expr::Ident(ident) = value {
+                        port_remap.insert(name.name.clone(), ident.name.clone());
+                    } else {
+                        self.diags.push(
+                            Diagnostic::error(format!(
+                                "module port `{}` must be bound to a net name",
+                                name.name
+                            ))
+                            .with_span(name.span),
+                        );
+                    }
+                }
+                Argument::Positional(expr) => {
+                    let idx = port_remap.len();
+                    if idx < ports.len() {
+                        let port_name = &ports[idx].name.name;
+                        if let Some(net_name) = expr_as_net_name(expr) {
+                            port_remap.insert(port_name.clone(), net_name);
+                        } else if let Expr::Ident(ident) = expr {
+                            port_remap.insert(port_name.clone(), ident.name.clone());
+                        } else {
+                            self.diags.push(
+                                Diagnostic::error(format!(
+                                    "module port `{port_name}` must be bound to a net name"
+                                ))
+                                .with_span(e.span),
+                            );
+                        }
+                    } else {
+                        self.diags.push(
+                            Diagnostic::error(format!(
+                                "too many arguments for module `{module_name}` (expected {})",
+                                ports.len()
+                            ))
+                            .with_span(e.span),
+                        );
+                    }
+                }
+                Argument::Connection { from, to } => {
+                    let idx = port_remap.len();
+                    if idx < ports.len() {
+                        port_remap.insert(ports[idx].name.name.clone(), from.name.clone());
+                    }
+                    let idx2 = port_remap.len();
+                    if idx2 < ports.len() {
+                        port_remap.insert(ports[idx2].name.name.clone(), to.name.clone());
+                    }
+                }
+                Argument::NamedConnection { name, from, to } => {
+                    port_remap.insert(format!("{}_pos", name.name), from.name.clone());
+                    port_remap.insert(format!("{}_neg", name.name), to.name.clone());
+                }
+            }
+        }
+
+        // Save/restore net_remap, push/pop module stack, lower body.
+        let saved_remap = std::mem::replace(&mut self.net_remap, port_remap);
+        self.module_inst_stack.push(module_name.clone());
+
+        self.lower_circuit_body_prefixed(&module_def.body, &inst_prefix);
+
+        self.module_inst_stack.pop();
+        self.net_remap = saved_remap;
     }
 
     // -------------------------------------------------------------------
@@ -2106,5 +2407,328 @@ mod tests {
             }
             other => panic!("expected Tran analysis, got {other:?}"),
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 2.1: Module (subcircuit) flattening
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn simple_module_flattening() {
+        // A local module used via element-inst syntax (single identifier).
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module inverter {
+                    port inp: in
+                    port out: out
+                    port vdd: inout
+                    port vss: inout
+                    R1: resistor(inp -> out, 1000)
+                    R2: resistor(out -> vss, 2000)
+                }
+
+                inv1: inverter(inp: a, out: b, vdd: vdd, vss: gnd)
+            }
+            "#,
+        );
+
+        // The module body should be flattened: two resistors with prefixed names.
+        assert_eq!(circuit.elements.len(), 2);
+
+        let r1 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "inv1.R1")
+            .expect("should have inv1.R1");
+        assert!(matches!(r1.kind, ElementKind::Resistor));
+
+        let r2 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "inv1.R2")
+            .expect("should have inv1.R2");
+        assert!(matches!(r2.kind, ElementKind::Resistor));
+
+        // Port remapping: inv1.R1's `inp` port → caller net `a`, `out` port → caller net `b`.
+        let r1_pos = r1.connections.iter().find(|c| c.terminal == "pos").unwrap();
+        let r1_neg = r1.connections.iter().find(|c| c.terminal == "neg").unwrap();
+        let net_a = circuit.nets.iter().find(|n| n.name == "a").unwrap();
+        let net_b = circuit.nets.iter().find(|n| n.name == "b").unwrap();
+        assert_eq!(
+            r1_pos.net, net_a.id,
+            "R1 pos should connect to caller net 'a'"
+        );
+        assert_eq!(
+            r1_neg.net, net_b.id,
+            "R1 neg should connect to caller net 'b'"
+        );
+
+        // inv1.R2: `out` → caller net `b`, `vss` → gnd
+        let r2_pos = r2.connections.iter().find(|c| c.terminal == "pos").unwrap();
+        let r2_neg = r2.connections.iter().find(|c| c.terminal == "neg").unwrap();
+        assert_eq!(
+            r2_pos.net, net_b.id,
+            "R2 pos should connect to caller net 'b'"
+        );
+        assert_eq!(r2_neg.net, Id(0), "R2 neg should connect to gnd");
+    }
+
+    #[test]
+    fn module_with_internal_nets() {
+        // Internal nets that aren't ports should get hierarchical prefixed names.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module rc_filter {
+                    port inp: in
+                    port out: out
+                    port gnd_port: inout
+                    R1: resistor(inp -> mid, 1000)
+                    C1: capacitor(mid -> gnd_port, 1e-12)
+                }
+
+                filt1: rc_filter(inp: sig_in, out: sig_out, gnd_port: gnd)
+            }
+            "#,
+        );
+
+        // `mid` is an internal net — should be prefixed as `filt1.mid`.
+        let mid_net = circuit
+            .nets
+            .iter()
+            .find(|n| n.name == "filt1.mid")
+            .expect("internal net 'mid' should be prefixed as 'filt1.mid'");
+
+        // R1's neg and C1's pos should both connect to filt1.mid.
+        let r1 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "filt1.R1")
+            .unwrap();
+        let c1 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "filt1.C1")
+            .unwrap();
+
+        let r1_neg = r1.connections.iter().find(|c| c.terminal == "neg").unwrap();
+        let c1_pos = c1.connections.iter().find(|c| c.terminal == "pos").unwrap();
+        assert_eq!(r1_neg.net, mid_net.id);
+        assert_eq!(c1_pos.net, mid_net.id);
+    }
+
+    #[test]
+    fn multiple_module_instances() {
+        // Two instances of the same module get distinct prefixed names and nets.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module buffer {
+                    port inp: in
+                    port out: out
+                    R1: resistor(inp -> out, 100)
+                }
+
+                buf1: buffer(inp: a, out: b)
+                buf2: buffer(inp: b, out: c)
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.elements.len(), 2);
+
+        let buf1_r1 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "buf1.R1")
+            .expect("should have buf1.R1");
+        let buf2_r1 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "buf2.R1")
+            .expect("should have buf2.R1");
+
+        // buf1.R1 connects a -> b, buf2.R1 connects b -> c.
+        let net_a = circuit.nets.iter().find(|n| n.name == "a").unwrap();
+        let net_b = circuit.nets.iter().find(|n| n.name == "b").unwrap();
+        let net_c = circuit.nets.iter().find(|n| n.name == "c").unwrap();
+
+        let b1_pos = buf1_r1
+            .connections
+            .iter()
+            .find(|c| c.terminal == "pos")
+            .unwrap();
+        let b1_neg = buf1_r1
+            .connections
+            .iter()
+            .find(|c| c.terminal == "neg")
+            .unwrap();
+        assert_eq!(b1_pos.net, net_a.id);
+        assert_eq!(b1_neg.net, net_b.id);
+
+        let b2_pos = buf2_r1
+            .connections
+            .iter()
+            .find(|c| c.terminal == "pos")
+            .unwrap();
+        let b2_neg = buf2_r1
+            .connections
+            .iter()
+            .find(|c| c.terminal == "neg")
+            .unwrap();
+        assert_eq!(b2_pos.net, net_b.id);
+        assert_eq!(b2_neg.net, net_c.id);
+    }
+
+    #[test]
+    fn nested_module_flattening() {
+        // A module that instantiates another module — two levels of hierarchy.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module resistor_pair {
+                    port inp: in
+                    port out: out
+                    R1: resistor(inp -> mid, 1000)
+                    R2: resistor(mid -> out, 1000)
+                }
+
+                module double_pair {
+                    port inp: in
+                    port out: out
+                    stage1: resistor_pair(inp: inp, out: link)
+                    stage2: resistor_pair(inp: link, out: out)
+                }
+
+                top: double_pair(inp: a, out: b)
+            }
+            "#,
+        );
+
+        // Should flatten to 4 resistors with hierarchical names.
+        assert_eq!(circuit.elements.len(), 4);
+
+        let names: Vec<&str> = circuit.elements.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"top.stage1.R1"),
+            "expected top.stage1.R1, got {names:?}"
+        );
+        assert!(
+            names.contains(&"top.stage1.R2"),
+            "expected top.stage1.R2, got {names:?}"
+        );
+        assert!(
+            names.contains(&"top.stage2.R1"),
+            "expected top.stage2.R1, got {names:?}"
+        );
+        assert!(
+            names.contains(&"top.stage2.R2"),
+            "expected top.stage2.R2, got {names:?}"
+        );
+
+        // Verify net connectivity: stage1.R2 and stage2.R1 should share
+        // the `link` net (prefixed as `top.link`).
+        let s1_r2 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "top.stage1.R2")
+            .unwrap();
+        let s2_r1 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "top.stage2.R1")
+            .unwrap();
+
+        let s1_r2_neg = s1_r2
+            .connections
+            .iter()
+            .find(|c| c.terminal == "neg")
+            .unwrap();
+        let s2_r1_pos = s2_r1
+            .connections
+            .iter()
+            .find(|c| c.terminal == "pos")
+            .unwrap();
+        assert_eq!(
+            s1_r2_neg.net, s2_r1_pos.net,
+            "stage1.R2 neg and stage2.R1 pos should share the 'link' net"
+        );
+    }
+
+    #[test]
+    fn module_gnd_not_prefixed() {
+        // `gnd` should always resolve to Id(0), never prefixed.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module grounded_r {
+                    port inp: in
+                    R1: resistor(inp -> gnd, 1000)
+                }
+
+                inst1: grounded_r(inp: a)
+            }
+            "#,
+        );
+
+        let r1 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "inst1.R1")
+            .unwrap();
+        let neg = r1.connections.iter().find(|c| c.terminal == "neg").unwrap();
+        assert_eq!(neg.net, Id(0), "gnd inside module should map to Id(0)");
+    }
+
+    #[test]
+    fn module_with_model_and_source() {
+        // A module containing a model reference and source element.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                model d1n4148: diode {
+                    is = 2.52e-9
+                }
+
+                module rectifier {
+                    port inp: in
+                    port out: out
+                    D1: diode(inp -> out, model: d1n4148)
+                }
+
+                rect1: rectifier(inp: ac_in, out: dc_out)
+            }
+            "#,
+        );
+
+        let d1 = circuit
+            .elements
+            .iter()
+            .find(|e| e.name == "rect1.D1")
+            .unwrap();
+        assert!(matches!(d1.kind, ElementKind::Diode));
+        assert!(d1.model.is_some(), "diode should reference model d1n4148");
+    }
+
+    #[test]
+    fn unknown_module_error() {
+        let result = compile(
+            r#"
+            circuit test {
+                inv1: nonexistent(inp: a, out: b)
+            }
+            "#,
+        );
+
+        assert!(result.is_err());
+        let diags = result.unwrap_err();
+        let err = diags
+            .iter()
+            .find(|d| d.message.contains("unknown element type"));
+        assert!(
+            err.is_some(),
+            "expected unknown element type, got: {diags:?}"
+        );
     }
 }
