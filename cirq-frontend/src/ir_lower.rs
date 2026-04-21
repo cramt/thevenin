@@ -5,7 +5,8 @@ use std::collections::HashMap;
 
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, BinOp, CircuitItem, ElementInst, Expr, LetDecl, ModelDef,
-    ModuleDef, ModuleInst, OptionsDecl, ParamDecl, SourceFile, TempDecl, TopLevel, UnaryOp,
+    ModuleDef, ModuleInst, OptionsDecl, ParamDecl, SaveDecl, SaveTarget, SourceFile, TempDecl,
+    TopLevel, UnaryOp,
 };
 use cirq_ir::{
     AcAnalysis, AcSpec, Analysis, Circuit, Connection, DcAnalysis, DcSweep, Element, ElementKind,
@@ -63,6 +64,7 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         params: ctx.resolved_params,
         options: ctx.options,
         temp: ctx.temp,
+        save: ctx.save,
     };
 
     let has_errors = ctx.diags.iter().any(|d| d.severity == Severity::Error);
@@ -179,9 +181,10 @@ struct IrCtx {
     // Stacked per module instantiation level.
     net_remap: HashMap<String, String>,
 
-    // Simulation options and temperature.
+    // Simulation options, temperature, and save targets.
     options: Vec<(String, Value)>,
     temp: Option<f64>,
+    save: Vec<String>,
 }
 
 impl IrCtx {
@@ -206,6 +209,7 @@ impl IrCtx {
             net_remap: HashMap::new(),
             options: Vec::new(),
             temp: None,
+            save: Vec::new(),
         };
         // `gnd` always gets Id(0).
         ctx.intern_net("gnd", true);
@@ -284,6 +288,7 @@ impl IrCtx {
                 CircuitItem::ModuleInst(mi) => self.lower_module_inst(mi, prefix),
                 CircuitItem::Options(o) => self.lower_options_decl(o),
                 CircuitItem::Temp(t) => self.lower_temp_decl(t),
+                CircuitItem::Save(s) => self.lower_save_decl(s),
                 // Already handled in pass 1, or collected above.
                 CircuitItem::Param(_)
                 | CircuitItem::Let(_)
@@ -1031,9 +1036,31 @@ impl IrCtx {
         match self.eval_to_f64(&t.value) {
             Some(v) => self.temp = Some(v),
             None => {
-                self.diags.push(
-                    Diagnostic::error("cannot evaluate temperature value").with_span(t.span),
-                );
+                self.diags
+                    .push(Diagnostic::error("cannot evaluate temperature value").with_span(t.span));
+            }
+        }
+    }
+
+    fn lower_save_decl(&mut self, s: &SaveDecl) {
+        for target in &s.targets {
+            let spec = match target {
+                SaveTarget::Voltage {
+                    node, reference, ..
+                } => {
+                    if let Some(ref_node) = reference {
+                        format!("v({},{})", node.name, ref_node.name)
+                    } else {
+                        format!("v({})", node.name)
+                    }
+                }
+                SaveTarget::Current { element, .. } => {
+                    format!("i({})", element.name)
+                }
+                SaveTarget::Name { name, .. } => name.name.clone(),
+            };
+            if !self.save.contains(&spec) {
+                self.save.push(spec);
             }
         }
     }
@@ -2842,5 +2869,45 @@ mod tests {
         );
 
         assert_eq!(circuit.temp, Some(125.0));
+    }
+
+    // -------------------------------------------------------------------
+    // Gap 3.2: Save targets
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn save_block_lowering() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                R1: resistor(a -> gnd, 1000)
+                save {
+                    v(a)
+                    i(R1)
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.save.len(), 2);
+        assert!(circuit.save.contains(&"v(a)".to_string()));
+        assert!(circuit.save.contains(&"i(R1)".to_string()));
+    }
+
+    #[test]
+    fn save_differential_voltage() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                R1: resistor(a -> b, 1000)
+                save {
+                    v(a, b)
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.save.len(), 1);
+        assert_eq!(circuit.save[0], "v(a,b)");
     }
 }

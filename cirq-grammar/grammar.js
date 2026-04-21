@@ -44,7 +44,8 @@ module.exports = grammar({
         $.analysis_decl,
         $.global_decl,
         $.options_decl,
-        $.temp_decl
+        $.temp_decl,
+        $.save_decl
       ),
 
     // ── Module ───────────────────────────────────────────────────────
@@ -160,7 +161,36 @@ module.exports = grammar({
     temp_decl: ($) =>
       seq("temp", field("value", $._expression)),
 
-    // ── Models ─────────────────────────────────��─────────────────────
+    save_decl: ($) =>
+      seq(
+        "save",
+        "{",
+        repeat($.save_target),
+        "}"
+      ),
+
+    save_target: ($) =>
+      choice(
+        // v(node) or v(node1, node2) — voltage probe
+        seq(
+          field("type", "v"),
+          "(",
+          field("node", $.identifier),
+          optional(seq(",", field("node2", $.identifier))),
+          ")"
+        ),
+        // i(element) — current probe
+        seq(
+          field("type", "i"),
+          "(",
+          field("element", $.identifier),
+          ")"
+        ),
+        // Bare identifier — raw save target
+        field("name", $.identifier)
+      ),
+
+    // ── Models ──────────────────────────────────────────────────────
 
     model_decl: ($) =>
       seq(

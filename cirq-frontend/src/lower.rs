@@ -4,8 +4,8 @@
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, ElementInst,
     Expr, GlobalDecl, Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst,
-    OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SourceFile,
-    TempDecl, TopLevel, UnaryOp, span::Span,
+    OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl,
+    SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -167,6 +167,7 @@ impl Ctx<'_> {
             "global_decl" => self.lower_global(node).map(CircuitItem::Global),
             "options_decl" => self.lower_options(node).map(CircuitItem::Options),
             "temp_decl" => self.lower_temp(node).map(CircuitItem::Temp),
+            "save_decl" => self.lower_save(node).map(CircuitItem::Save),
             "line_comment" | "block_comment" => None,
             "ERROR" => {
                 self.error_at(node, "syntax error in circuit body");
@@ -479,6 +480,58 @@ impl Ctx<'_> {
             value,
             span: span_of(node),
         })
+    }
+
+    fn lower_save(&mut self, node: tree_sitter::Node) -> Option<SaveDecl> {
+        let mut targets = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "save_target"
+                && let Some(target) = self.lower_save_target(child)
+            {
+                targets.push(target);
+            }
+        }
+        Some(SaveDecl {
+            targets,
+            span: span_of(node),
+        })
+    }
+
+    fn lower_save_target(&mut self, node: tree_sitter::Node) -> Option<SaveTarget> {
+        // Check for a "type" field (v or i function form).
+        if let Some(type_node) = node.child_by_field_name("type") {
+            let type_text = self.text(type_node);
+            match type_text {
+                "v" => {
+                    let node_field = node.child_by_field_name("node")?;
+                    let node_ident = self.ident(node_field);
+                    let reference = node.child_by_field_name("node2").map(|n| self.ident(n));
+                    Some(SaveTarget::Voltage {
+                        node: node_ident,
+                        reference,
+                        span: span_of(node),
+                    })
+                }
+                "i" => {
+                    let elem_field = node.child_by_field_name("element")?;
+                    let element = self.ident(elem_field);
+                    Some(SaveTarget::Current {
+                        element,
+                        span: span_of(node),
+                    })
+                }
+                _ => None,
+            }
+        } else if let Some(name_node) = node.child_by_field_name("name") {
+            let name = self.ident(name_node);
+            Some(SaveTarget::Name {
+                name,
+                span: span_of(node),
+            })
+        } else {
+            None
+        }
     }
 }
 

@@ -96,6 +96,11 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
         items.push(Item::Temp(temp));
     }
 
+    // Save targets.
+    if !circuit.save.is_empty() {
+        items.push(Item::Save(circuit.save.clone()));
+    }
+
     // Build analyses.
     let analyses: Vec<Analysis> = if circuit.analyses.is_empty() {
         vec![Analysis::Op]
@@ -936,6 +941,7 @@ mod tests {
             params,
             options: Vec::new(),
             temp: None,
+            save: Vec::new(),
         }
     }
 

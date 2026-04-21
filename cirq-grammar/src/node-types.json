@@ -607,6 +607,10 @@
           "named": true
         },
         {
+          "type": "save_decl",
+          "named": true
+        },
+        {
           "type": "temp_decl",
           "named": true
         }
@@ -1049,6 +1053,10 @@
         },
         {
           "type": "port_decl",
+          "named": true
+        },
+        {
+          "type": "save_decl",
           "named": true
         },
         {
@@ -1500,6 +1508,81 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "save_decl",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "save_target",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "save_target",
+    "named": true,
+    "fields": {
+      "element": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "node": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "node2": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "i",
+            "named": false
+          },
+          {
+            "type": "v",
+            "named": false
+          }
+        ]
+      }
     }
   },
   {
@@ -1972,6 +2055,10 @@
     "named": true
   },
   {
+    "type": "i",
+    "named": false
+  },
+  {
     "type": "identifier",
     "named": true
   },
@@ -2025,6 +2112,10 @@
     "named": false
   },
   {
+    "type": "save",
+    "named": false
+  },
+  {
     "type": "step",
     "named": false
   },
@@ -2042,6 +2133,10 @@
   },
   {
     "type": "true",
+    "named": false
+  },
+  {
+    "type": "v",
     "named": false
   },
   {

@@ -21,6 +21,8 @@ pub struct Circuit {
     pub options: Vec<(String, Value)>,
     /// Simulation temperature in °C. `None` means use default (27°C).
     pub temp: Option<f64>,
+    /// Output save targets (e.g. `v(out)`, `i(R1)`).
+    pub save: Vec<String>,
 }
 
 /// A resolved electrical net.

@@ -417,7 +417,19 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 9. Build circuit.
+    // 9. Collect .save targets.
+    let mut ir_save: Vec<String> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Save(targets) = item {
+            for t in targets {
+                if !ir_save.contains(t) {
+                    ir_save.push(t.clone());
+                }
+            }
+        }
+    }
+
+    // 10. Build circuit.
     let nets = net_table.into_nets();
 
     Ok(Circuit {
@@ -429,6 +441,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         params: ir_params,
         options: ir_options,
         temp: ir_temp,
+        save: ir_save,
     })
 }
 

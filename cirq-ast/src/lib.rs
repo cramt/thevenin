@@ -54,6 +54,7 @@ pub enum CircuitItem {
     Global(GlobalDecl),
     Options(OptionsDecl),
     Temp(TempDecl),
+    Save(SaveDecl),
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +175,28 @@ pub struct OptionSetting {
 pub struct TempDecl {
     pub value: Expr,
     pub span: Span,
+}
+
+/// `save { v(out), i(R1), ... }`
+#[derive(Debug, Clone)]
+pub struct SaveDecl {
+    pub targets: Vec<SaveTarget>,
+    pub span: Span,
+}
+
+/// A single save target: `v(node)`, `v(n1, n2)`, `i(elem)`, or a bare name.
+#[derive(Debug, Clone)]
+pub enum SaveTarget {
+    /// `v(node)` — node voltage
+    Voltage {
+        node: Ident,
+        reference: Option<Ident>,
+        span: Span,
+    },
+    /// `i(element)` — element current
+    Current { element: Ident, span: Span },
+    /// Bare identifier
+    Name { name: Ident, span: Span },
 }
 
 // ---------------------------------------------------------------------------
