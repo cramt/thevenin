@@ -110,17 +110,10 @@ fn cirq_voltage_divider_simulate_op() {
 // Test 3: SPICE -> Cirq IR -> Netlist round-trip
 // ---------------------------------------------------------------------------
 //
-// NOTE: The SPICE importer stores resistor values as param `"resistance"`,
-// capacitor values as `"capacitance"`, etc., while the to_netlist adapter
-// expects `"value"` for passive elements. This param naming gap means a
-// direct SPICE -> IR -> Netlist round-trip for passives requires that the
-// IR elements use the `"value"` param name.
-//
-// Voltage sources work correctly because both paths use `"dc"`.
-// This test exercises a SPICE circuit containing only a voltage source and
-// passive elements, verifying the parts of the round-trip that are fully
-// aligned, and separately testing the SPICE -> IR import for structural
-// equivalence.
+// Both the Cirq ir_lower and the SPICE importer now store passive element
+// values under the canonical param name `"value"`, which matches what
+// to_netlist expects. This means the full SPICE -> IR -> Netlist round-trip
+// works for passives.
 
 #[test]
 fn spice_to_cirq_ir_structural_equivalence() {
@@ -158,16 +151,16 @@ R2 mid 0 1k
     let r2 = ir.elements.iter().find(|e| e.name == "R2").expect("R2");
     assert!(matches!(r2.kind, cirq_ir::ElementKind::Resistor));
 
-    // Verify the resistor values were imported correctly (as "resistance" param).
+    // Verify the resistor values were imported correctly (as "value" param).
     let r1_val = r1
         .params
         .iter()
-        .find(|p| p.0 == "resistance")
+        .find(|p| p.0 == "value")
         .map(|p| match &p.1 {
             cirq_ir::Value::Real(v) => *v,
             _ => panic!("expected real"),
         })
-        .expect("R1 should have resistance param");
+        .expect("R1 should have value param");
     assert!(
         (r1_val - 1000.0).abs() < 1e-6,
         "R1 resistance should be 1k, got {r1_val}"
@@ -195,6 +188,61 @@ R2 mid 0 1k
         .filter(|i| matches!(i, thevenin_types::Item::Element(_)))
         .count();
     assert_eq!(original_elem_count, ir.elements.len());
+}
+
+// ---------------------------------------------------------------------------
+// Test 3b: SPICE -> IR -> Netlist full round-trip (passives + voltage source)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spice_ir_netlist_round_trip() {
+    let spice_source = "\
+Voltage Divider Round-Trip
+V1 in 0 DC 10
+R1 in mid 2k
+R2 mid 0 2k
+.op
+.end
+";
+
+    // SPICE -> Netlist (direct parse).
+    let original_netlists =
+        thevenin_types::Netlist::parse(spice_source).expect("SPICE parse should succeed");
+    let original = &original_netlists[0];
+
+    // SPICE Netlist -> Cirq IR.
+    let ir = cirq_spice_import::import_netlist(original).expect("import_netlist should succeed");
+
+    // Cirq IR -> Netlist (via to_netlist adapter).
+    let round_tripped = cirq_frontend::to_netlist::circuit_to_netlists(&ir)
+        .expect("circuit_to_netlists should succeed");
+    assert_eq!(round_tripped.len(), 1);
+    let nl = &round_tripped[0];
+
+    // Verify the round-tripped netlist has the same element count.
+    let elem_count = nl
+        .items
+        .iter()
+        .filter(|i| matches!(i, thevenin_types::Item::Element(_)))
+        .count();
+    assert_eq!(elem_count, 3, "should have V1, R1, R2");
+
+    // Simulate the round-tripped netlist.
+    let result =
+        thevenin::simulate(nl).expect("simulation of round-tripped netlist should succeed");
+
+    // Verify operating point: mid = 10V * (2k / (2k+2k)) = 5V.
+    let v_mid = result.vector("v(mid)").expect("should have v(mid) vector");
+    let data = v_mid.data.as_real();
+    assert!(
+        !data.is_empty(),
+        "v(mid) should have at least one data point"
+    );
+    assert!(
+        (data[0] - 5.0).abs() < 0.01,
+        "v(mid) should be ~5V, got {}",
+        data[0]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +299,7 @@ R2 outp 0 2000
     assert!(matches!(ir_a.analyses[0], cirq_ir::Analysis::Op));
     assert!(matches!(ir_b.analyses[0], cirq_ir::Analysis::Op));
 
-    // Resistance values should be the same.
+    // Value params should be the same.
     let r1_a = ir_a
         .elements
         .iter()
@@ -266,25 +314,25 @@ R2 outp 0 2000
     let val_a = r1_a
         .params
         .iter()
-        .find(|p| p.0 == "resistance")
+        .find(|p| p.0 == "value")
         .map(|p| match &p.1 {
             cirq_ir::Value::Real(v) => *v,
             _ => panic!("expected real"),
         })
-        .expect("resistance param in A");
+        .expect("value param in A");
     let val_b = r1_b
         .params
         .iter()
-        .find(|p| p.0 == "resistance")
+        .find(|p| p.0 == "value")
         .map(|p| match &p.1 {
             cirq_ir::Value::Real(v) => *v,
             _ => panic!("expected real"),
         })
-        .expect("resistance param in B");
+        .expect("value param in B");
 
     assert!(
         (val_a - val_b).abs() < 1e-6,
-        "resistance values should match: {val_a} vs {val_b}"
+        "value params should match: {val_a} vs {val_b}"
     );
 }
 

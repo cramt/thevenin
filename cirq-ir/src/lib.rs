@@ -87,6 +87,19 @@ pub enum ElementKind {
     Ccvs,
     Cccs,
     TransmissionLine,
+    /// Coupled multiconductor transmission line (P element).
+    /// Connections use terminal names `"in0"`, `"in1"`, ..., `"gnd"`,
+    /// `"out0"`, `"out1"`, ... in the element's `connections` field.
+    CoupledLine {
+        /// Number of coupled lines (= number of in/out port pairs).
+        width: usize,
+    },
+    /// XSPICE code model instance (A element).
+    /// Scalar connections use terminal names `"c0"`, `"c1"`, ...
+    /// The full structured connection list (scalar vs. array) is here.
+    Xspice {
+        connections: Vec<XspiceConnection>,
+    },
 }
 
 /// Behavioral source mode — voltage or current.
@@ -94,6 +107,15 @@ pub enum ElementKind {
 pub enum BehavioralMode {
     Voltage,
     Current,
+}
+
+/// A single XSPICE port connection at the IR level.
+#[derive(Debug, Clone)]
+pub enum XspiceConnection {
+    /// A single scalar net.
+    Scalar(Id),
+    /// A bracketed array of nets.
+    Array(Vec<Id>),
 }
 
 /// A resolved device model.

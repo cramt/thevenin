@@ -11,7 +11,7 @@ use cirq_ir::{
     DcAnalysis, DcSweep as IrDcSweep, Element as IrElement, ElementKind as IrElementKind,
     FrequencyScale, Id, Model as IrModel, Net, NoiseAnalysis, PzAnalysis, PzType, ResolvedParam,
     SensAnalysis, SourceSpec, TfAnalysis, TranAnalysis, TransferType, Value,
-    Waveform as IrWaveform,
+    Waveform as IrWaveform, XspiceConnection as IrXspiceConnection,
 };
 use thevenin_types::{
     AcVariation, Analysis as SpiceAnalysis, ElementKind as SpiceElementKind, Expr, Item, Netlist,
@@ -297,6 +297,18 @@ fn jfet_kind(
     match model_table.get(&model_name.to_ascii_uppercase()) {
         Some(cirq_ir::DeviceType::PJfet) => Ok(IrElementKind::PJfet),
         Some(cirq_ir::DeviceType::NJfet) | Some(_) => Ok(IrElementKind::NJfet),
+        None => Err(ImportError::ModelNotFound(model_name.to_owned())),
+    }
+}
+
+/// Determine `ElementKind` for a MESFET based on its model type.
+fn mesfet_kind(
+    model_name: &str,
+    model_table: &HashMap<String, cirq_ir::DeviceType>,
+) -> Result<IrElementKind, ImportError> {
+    match model_table.get(&model_name.to_ascii_uppercase()) {
+        Some(cirq_ir::DeviceType::PMesfet) => Ok(IrElementKind::PMesfet),
+        Some(cirq_ir::DeviceType::NMesfet) | Some(_) => Ok(IrElementKind::NMesfet),
         None => Err(ImportError::ModelNotFound(model_name.to_owned())),
     }
 }
@@ -651,7 +663,7 @@ fn convert_element(
             value,
             params,
         } => {
-            let mut ir_params = vec![("resistance".to_owned(), expr_to_value(value))];
+            let mut ir_params = vec![("value".to_owned(), expr_to_value(value))];
             ir_params.extend(convert_params(params));
             Ok(Some(IrElement {
                 id,
@@ -673,7 +685,7 @@ fn convert_element(
             value,
             params,
         } => {
-            let mut ir_params = vec![("capacitance".to_owned(), expr_to_value(value))];
+            let mut ir_params = vec![("value".to_owned(), expr_to_value(value))];
             ir_params.extend(convert_params(params));
             Ok(Some(IrElement {
                 id,
@@ -695,7 +707,7 @@ fn convert_element(
             value,
             params,
         } => {
-            let mut ir_params = vec![("inductance".to_owned(), expr_to_value(value))];
+            let mut ir_params = vec![("value".to_owned(), expr_to_value(value))];
             ir_params.extend(convert_params(params));
             Ok(Some(IrElement {
                 id,
@@ -880,8 +892,8 @@ fn convert_element(
             model,
             params,
         } => {
-            // MESA devices map to JFET kind based on model, defaulting to NJfet.
-            let kind = jfet_kind(model, model_types).unwrap_or(IrElementKind::NJfet);
+            // MESA devices map to MESFET kind based on model, defaulting to NMesfet.
+            let kind = mesfet_kind(model, model_types).unwrap_or(IrElementKind::NMesfet);
             let model_id = model_ids.get(&model.to_ascii_uppercase()).copied();
             Ok(Some(IrElement {
                 id,
@@ -1072,9 +1084,69 @@ fn convert_element(
             }))
         }
 
-        SpiceElementKind::Cpl { .. }
-        | SpiceElementKind::Xspice { .. }
-        | SpiceElementKind::Raw(_) => Err(ImportError::UnsupportedElement(name.clone())),
+        SpiceElementKind::Cpl {
+            in_nodes,
+            out_nodes,
+            gnd,
+            model,
+            params,
+        } => {
+            let width = in_nodes.len();
+            let mut conns = Vec::new();
+            for (i, n) in in_nodes.iter().enumerate() {
+                conns.push(connection(&format!("in{i}"), nets.intern(n)));
+            }
+            conns.push(connection("gnd", nets.intern(gnd)));
+            for (i, n) in out_nodes.iter().enumerate() {
+                conns.push(connection(&format!("out{i}"), nets.intern(n)));
+            }
+            let mut ir_params = convert_params(params);
+            ir_params.push(("model".to_owned(), Value::String(model.clone())));
+            Ok(Some(IrElement {
+                id,
+                name: name.clone(),
+                kind: IrElementKind::CoupledLine { width },
+                connections: conns,
+                params: ir_params,
+                model: None,
+                source_spec: None,
+            }))
+        }
+
+        SpiceElementKind::Xspice { connections, model } => {
+            let mut ir_conns: Vec<Connection> = Vec::new();
+            let mut xspice_conns: Vec<IrXspiceConnection> = Vec::new();
+            let mut scalar_idx = 0usize;
+
+            for conn_spec in connections {
+                match conn_spec {
+                    thevenin_types::XspiceConnection::Scalar(s) => {
+                        let net_id = nets.intern(s);
+                        ir_conns.push(connection(&format!("c{scalar_idx}"), net_id));
+                        xspice_conns.push(IrXspiceConnection::Scalar(net_id));
+                        scalar_idx += 1;
+                    }
+                    thevenin_types::XspiceConnection::Array(arr) => {
+                        let ids: Vec<Id> = arr.iter().map(|s| nets.intern(s)).collect();
+                        xspice_conns.push(IrXspiceConnection::Array(ids));
+                    }
+                }
+            }
+
+            Ok(Some(IrElement {
+                id,
+                name: name.clone(),
+                kind: IrElementKind::Xspice {
+                    connections: xspice_conns,
+                },
+                connections: ir_conns,
+                params: vec![("model".to_owned(), Value::String(model.clone()))],
+                model: None,
+                source_spec: None,
+            }))
+        }
+
+        SpiceElementKind::Raw(_) => Err(ImportError::UnsupportedElement(name.clone())),
     }
 }
 
@@ -1264,17 +1336,17 @@ R2 a b 2k
         let r1 = c.elements.iter().find(|e| e.name == "R1").unwrap();
         assert!(matches!(r1.kind, IrElementKind::Resistor));
         assert_eq!(r1.connections.len(), 2);
-        // Resistance param
-        let resistance = r1.params.iter().find(|p| p.0 == "resistance").unwrap();
-        match &resistance.1 {
+        // Value param
+        let value_param = r1.params.iter().find(|p| p.0 == "value").unwrap();
+        match &value_param.1 {
             Value::Real(v) => assert!((v - 1000.0).abs() < 1e-6),
             other => panic!("expected Real, got {other:?}"),
         }
 
         let r2 = c.elements.iter().find(|e| e.name == "R2").unwrap();
         assert!(matches!(r2.kind, IrElementKind::Resistor));
-        let resistance2 = r2.params.iter().find(|p| p.0 == "resistance").unwrap();
-        match &resistance2.1 {
+        let value_param2 = r2.params.iter().find(|p| p.0 == "value").unwrap();
+        match &value_param2.1 {
             Value::Real(v) => assert!((v - 2000.0).abs() < 1e-6),
             other => panic!("expected Real, got {other:?}"),
         }
@@ -1625,5 +1697,206 @@ R1 a 0 1k
         let ground = c.nets.iter().find(|n| n.id == Id(0)).unwrap();
         assert_eq!(ground.name, "0");
         assert!(ground.is_global);
+    }
+
+    #[test]
+    fn mesa_maps_to_mesfet() {
+        let spice = "\
+MESFET test
+.model ZM1 NMF
+Z1 d g s ZM1
+R1 d 0 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        let z1 = c.elements.iter().find(|e| e.name == "Z1").unwrap();
+        assert!(matches!(z1.kind, IrElementKind::NMesfet));
+        assert!(z1.model.is_some());
+    }
+
+    #[test]
+    fn pmesa_maps_to_pmesfet() {
+        let spice = "\
+PMESFET test
+.model ZM1 PMF
+Z1 d g s ZM1
+R1 d 0 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        let z1 = c.elements.iter().find(|e| e.name == "Z1").unwrap();
+        assert!(matches!(z1.kind, IrElementKind::PMesfet));
+        assert!(z1.model.is_some());
+
+        // Verify the model was imported with the correct device type.
+        let model = c.models.iter().find(|m| m.name == "ZM1").unwrap();
+        assert_eq!(model.device_type, cirq_ir::DeviceType::PMesfet);
+    }
+
+    #[test]
+    fn mesfet_round_trip() {
+        // Build a SPICE Netlist with a Mesa element, import it to IR, convert back
+        // to Netlist, and verify the Mesa element survives the round trip.
+        use thevenin_types::{Analysis, Element, ElementKind as SK, Expr, Item, ModelDef, Param};
+
+        let netlist = Netlist {
+            title: "MESFET round-trip".to_string(),
+            items: vec![
+                Item::Model(ModelDef {
+                    name: "mesmod".to_string(),
+                    kind: "NMF".to_string(),
+                    params: vec![Param {
+                        name: "vto".to_string(),
+                        value: Expr::Num(-1.3),
+                    }],
+                }),
+                Item::Element(Element {
+                    name: "Z1".to_string(),
+                    kind: SK::Mesa {
+                        d: "drain".to_string(),
+                        g: "gate".to_string(),
+                        s: "0".to_string(),
+                        model: "mesmod".to_string(),
+                        params: vec![],
+                    },
+                }),
+            ],
+            analysis: Analysis::Op,
+            source: String::new(),
+        };
+
+        // Step 1: Import to IR.
+        let ir = import_netlist(&netlist).unwrap();
+        let z1_ir = ir.elements.iter().find(|e| e.name == "Z1").unwrap();
+        assert!(matches!(z1_ir.kind, IrElementKind::NMesfet));
+
+        // Step 2: Convert IR back to Netlist.
+        let netlists_out = cirq_frontend::to_netlist::circuit_to_netlists(&ir).unwrap();
+        let nl_out = &netlists_out[0];
+
+        // Step 3: Verify the Mesa element survived.
+        let z1_out = nl_out
+            .items
+            .iter()
+            .find_map(|i| {
+                if let Item::Element(e) = i {
+                    if e.name == "Z1" { Some(e) } else { None }
+                } else {
+                    None
+                }
+            })
+            .expect("Z1 should survive round-trip");
+        match &z1_out.kind {
+            SK::Mesa { d, g, s, model, .. } => {
+                assert_eq!(d, "drain");
+                assert_eq!(g, "gate");
+                assert_eq!(s, "0");
+                assert_eq!(model, "mesmod");
+            }
+            other => panic!("expected Mesa, got {other:?}"),
+        }
+
+        // Step 4: Verify model survived.
+        let model_out = nl_out.items.iter().find_map(|i| {
+            if let Item::Model(m) = i {
+                if m.name == "mesmod" { Some(m) } else { None }
+            } else {
+                None
+            }
+        });
+        assert!(model_out.is_some());
+        assert_eq!(model_out.unwrap().kind, "NMF");
+    }
+
+    #[test]
+    fn cpl_element_imported() {
+        use thevenin_types::{Analysis, Element, ElementKind as SK};
+
+        let netlist = Netlist {
+            title: "CPL test".to_string(),
+            items: vec![Item::Element(Element {
+                name: "P1".to_string(),
+                kind: SK::Cpl {
+                    in_nodes: vec!["n1".to_string(), "n2".to_string()],
+                    out_nodes: vec!["n3".to_string(), "n4".to_string()],
+                    gnd: "0".to_string(),
+                    model: "cpl_mod".to_string(),
+                    params: vec![],
+                },
+            })],
+            analysis: Analysis::Op,
+            source: String::new(),
+        };
+
+        let circuit = import_netlist(&netlist).unwrap();
+        let p1 = circuit.elements.iter().find(|e| e.name == "P1").unwrap();
+        match &p1.kind {
+            IrElementKind::CoupledLine { width } => assert_eq!(*width, 2),
+            other => panic!("expected CoupledLine, got {other:?}"),
+        }
+        // Check connections: in0, in1, gnd, out0, out1
+        assert_eq!(p1.connections.len(), 5);
+        assert_eq!(p1.connections[0].terminal, "in0");
+        assert_eq!(p1.connections[1].terminal, "in1");
+        assert_eq!(p1.connections[2].terminal, "gnd");
+        assert_eq!(p1.connections[3].terminal, "out0");
+        assert_eq!(p1.connections[4].terminal, "out1");
+        // Model stored as param
+        let model_param = p1.params.iter().find(|p| p.0 == "model").unwrap();
+        match &model_param.1 {
+            Value::String(s) => assert_eq!(s, "cpl_mod"),
+            other => panic!("expected String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn xspice_element_imported() {
+        use thevenin_types::{Analysis, Element, ElementKind as SK, XspiceConnection};
+
+        let netlist = Netlist {
+            title: "XSPICE test".to_string(),
+            items: vec![Item::Element(Element {
+                name: "A1".to_string(),
+                kind: SK::Xspice {
+                    connections: vec![
+                        XspiceConnection::Scalar("in".to_string()),
+                        XspiceConnection::Array(vec!["out1".to_string(), "out2".to_string()]),
+                    ],
+                    model: "buf_model".to_string(),
+                },
+            })],
+            analysis: Analysis::Op,
+            source: String::new(),
+        };
+
+        let circuit = import_netlist(&netlist).unwrap();
+        let a1 = circuit.elements.iter().find(|e| e.name == "A1").unwrap();
+        match &a1.kind {
+            IrElementKind::Xspice { connections } => {
+                assert_eq!(connections.len(), 2);
+                match &connections[0] {
+                    IrXspiceConnection::Scalar(_) => {}
+                    other => panic!("expected Scalar, got {other:?}"),
+                }
+                match &connections[1] {
+                    IrXspiceConnection::Array(ids) => assert_eq!(ids.len(), 2),
+                    other => panic!("expected Array, got {other:?}"),
+                }
+            }
+            other => panic!("expected Xspice, got {other:?}"),
+        }
+        // Scalar connection appears in ir_conns.
+        assert_eq!(a1.connections.len(), 1);
+        assert_eq!(a1.connections[0].terminal, "c0");
+        // Model stored as param.
+        let model_param = a1.params.iter().find(|p| p.0 == "model").unwrap();
+        match &model_param.1 {
+            Value::String(s) => assert_eq!(s, "buf_model"),
+            other => panic!("expected String, got {other:?}"),
+        }
     }
 }

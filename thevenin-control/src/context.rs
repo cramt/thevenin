@@ -257,3 +257,406 @@ fn format_number(v: f64) -> String {
         format!("{v:e}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thevenin_types::{Analysis, Complex, Netlist, SimPlot, SimVector, VectorData};
+
+    fn empty_netlist() -> Netlist {
+        Netlist {
+            title: String::new(),
+            items: Vec::new(),
+            analysis: Analysis::Op,
+            source: String::new(),
+        }
+    }
+
+    fn make_real_vec(name: &str, data: Vec<f64>) -> SimVector {
+        SimVector {
+            name: name.to_string(),
+            data: VectorData::Real(data),
+        }
+    }
+
+    fn make_complex_vec(name: &str, pairs: Vec<(f64, f64)>) -> SimVector {
+        SimVector {
+            name: name.to_string(),
+            data: VectorData::Complex(
+                pairs
+                    .into_iter()
+                    .map(|(re, im)| Complex { re, im })
+                    .collect(),
+            ),
+        }
+    }
+
+    fn make_plot(name: &str, vecs: Vec<SimVector>) -> SimPlot {
+        SimPlot {
+            name: name.to_string(),
+            vecs,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::new
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn new_context_has_empty_state() {
+        let ctx = SimContext::new(empty_netlist());
+        assert!(ctx.plots.is_empty());
+        assert!(ctx.current_plot.is_none());
+        assert!(ctx.plot_counters.is_empty());
+        assert!(ctx.variables.is_empty());
+        assert!(ctx.functions.is_empty());
+        assert!(ctx.exit_code.is_none());
+        assert!(ctx.output.is_empty());
+        assert!(ctx.user_vectors.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::add_plot — auto-naming and current_plot tracking
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn add_plot_autonaming_op() {
+        let mut ctx = SimContext::new(empty_netlist());
+        let name = ctx.add_plot(make_plot("op", vec![]));
+        assert_eq!(name, "op1");
+        let name = ctx.add_plot(make_plot("op", vec![]));
+        assert_eq!(name, "op2");
+    }
+
+    #[test]
+    fn add_plot_autonaming_dc() {
+        let mut ctx = SimContext::new(empty_netlist());
+        let name = ctx.add_plot(make_plot("dc", vec![]));
+        assert_eq!(name, "dc1");
+        let name = ctx.add_plot(make_plot("dc", vec![]));
+        assert_eq!(name, "dc2");
+    }
+
+    #[test]
+    fn add_plot_mixed_types() {
+        let mut ctx = SimContext::new(empty_netlist());
+        assert_eq!(ctx.add_plot(make_plot("op", vec![])), "op1");
+        assert_eq!(ctx.add_plot(make_plot("dc", vec![])), "dc1");
+        assert_eq!(ctx.add_plot(make_plot("tran", vec![])), "tran1");
+        assert_eq!(ctx.add_plot(make_plot("op", vec![])), "op2");
+    }
+
+    #[test]
+    fn add_plot_sets_current_plot() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.add_plot(make_plot("op", vec![]));
+        assert_eq!(ctx.current_plot, Some(0));
+        ctx.add_plot(make_plot("dc", vec![]));
+        assert_eq!(ctx.current_plot, Some(1));
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::current_plot / current_plot_name
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn current_plot_none_before_adding() {
+        let ctx = SimContext::new(empty_netlist());
+        assert!(ctx.current_plot().is_none());
+        assert_eq!(ctx.current_plot_name(), "");
+    }
+
+    #[test]
+    fn current_plot_reflects_latest() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.add_plot(make_plot("op", vec![]));
+        assert_eq!(ctx.current_plot_name(), "op1");
+        ctx.add_plot(make_plot("dc", vec![]));
+        assert_eq!(ctx.current_plot_name(), "dc1");
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::find_vector
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_vector_in_current_plot() {
+        let mut ctx = SimContext::new(empty_netlist());
+        let plot = make_plot("op", vec![make_real_vec("v(out)", vec![1.5])]);
+        ctx.add_plot(plot);
+        let v = ctx.find_vector("v(out)").unwrap();
+        assert_eq!(v.data.as_real(), &[1.5]);
+    }
+
+    #[test]
+    fn find_vector_in_user_vectors() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.user_vectors.push(make_real_vec("myvec", vec![42.0]));
+        let v = ctx.find_vector("myvec").unwrap();
+        assert_eq!(v.data.as_real(), &[42.0]);
+    }
+
+    #[test]
+    fn find_vector_in_other_plots() {
+        let mut ctx = SimContext::new(empty_netlist());
+        let plot1 = make_plot("op", vec![make_real_vec("v(a)", vec![1.0])]);
+        ctx.add_plot(plot1);
+        let plot2 = make_plot("dc", vec![make_real_vec("v(b)", vec![2.0])]);
+        ctx.add_plot(plot2);
+        // current plot is dc1, but v(a) is in op1
+        let v = ctx.find_vector("v(a)").unwrap();
+        assert_eq!(v.data.as_real(), &[1.0]);
+    }
+
+    #[test]
+    fn find_vector_missing_returns_none() {
+        let ctx = SimContext::new(empty_netlist());
+        assert!(ctx.find_vector("nonexistent").is_none());
+    }
+
+    #[test]
+    fn find_vector_ibranch_alias() {
+        let mut ctx = SimContext::new(empty_netlist());
+        let plot = make_plot("op", vec![make_real_vec("vsrc#branch", vec![0.5])]);
+        ctx.add_plot(plot);
+        // i(vsrc) should resolve to vsrc#branch
+        let v = ctx.find_vector("i(vsrc)").unwrap();
+        assert_eq!(v.data.as_real(), &[0.5]);
+    }
+
+    #[test]
+    fn find_vector_case_insensitive() {
+        let mut ctx = SimContext::new(empty_netlist());
+        let plot = make_plot("op", vec![make_real_vec("V(Out)", vec![3.3])]);
+        ctx.add_plot(plot);
+        let v = ctx.find_vector("v(out)").unwrap();
+        assert_eq!(v.data.as_real(), &[3.3]);
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::find_vector_in_plot
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_vector_in_specific_plot() {
+        let mut ctx = SimContext::new(empty_netlist());
+        let plot = make_plot("op", vec![make_real_vec("v(x)", vec![7.0])]);
+        ctx.add_plot(plot);
+        let v = ctx.find_vector_in_plot("op1", "v(x)").unwrap();
+        assert_eq!(v.data.as_real(), &[7.0]);
+    }
+
+    #[test]
+    fn find_vector_in_wrong_plot_returns_none() {
+        let mut ctx = SimContext::new(empty_netlist());
+        let plot = make_plot("op", vec![make_real_vec("v(x)", vec![7.0])]);
+        ctx.add_plot(plot);
+        assert!(ctx.find_vector_in_plot("dc1", "v(x)").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::store_vector
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn store_vector_appends_to_current_plot() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.add_plot(make_plot("op", vec![]));
+        ctx.store_vector(make_real_vec("result", vec![10.0]));
+        let v = ctx.find_vector("result").unwrap();
+        assert_eq!(v.data.as_real(), &[10.0]);
+    }
+
+    #[test]
+    fn store_vector_replaces_existing_in_current_plot() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.add_plot(make_plot("op", vec![make_real_vec("x", vec![1.0])]));
+        ctx.store_vector(make_real_vec("x", vec![99.0]));
+        let v = ctx.find_vector("x").unwrap();
+        assert_eq!(v.data.as_real(), &[99.0]);
+        // Should still be only one vector named "x"
+        assert_eq!(
+            ctx.plots[0]
+                .vecs
+                .iter()
+                .filter(|v| v.name.to_lowercase() == "x")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn store_vector_without_current_plot_goes_to_user_vectors() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.store_vector(make_real_vec("uv", vec![5.0]));
+        assert_eq!(ctx.user_vectors.len(), 1);
+        assert_eq!(ctx.user_vectors[0].data.as_real(), &[5.0]);
+    }
+
+    #[test]
+    fn store_vector_replaces_existing_user_vector() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.store_vector(make_real_vec("uv", vec![1.0]));
+        ctx.store_vector(make_real_vec("uv", vec![2.0]));
+        assert_eq!(ctx.user_vectors.len(), 1);
+        assert_eq!(ctx.user_vectors[0].data.as_real(), &[2.0]);
+    }
+
+    #[test]
+    fn store_vector_cross_sync_user_vectors() {
+        let mut ctx = SimContext::new(empty_netlist());
+        // Pre-populate user_vectors
+        ctx.user_vectors.push(make_real_vec("shared", vec![0.0]));
+        // Add a plot and store — should also update user_vectors
+        ctx.add_plot(make_plot("op", vec![]));
+        ctx.store_vector(make_real_vec("shared", vec![42.0]));
+        assert_eq!(ctx.user_vectors[0].data.as_real(), &[42.0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::resolve_var
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_var_normal() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.variables.insert("foo".to_string(), "bar".to_string());
+        assert_eq!(ctx.resolve_var("foo"), "bar");
+    }
+
+    #[test]
+    fn resolve_var_curplot_special() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.add_plot(make_plot("tran", vec![]));
+        assert_eq!(ctx.resolve_var("curplot"), "tran1");
+    }
+
+    #[test]
+    fn resolve_var_missing_returns_empty() {
+        let ctx = SimContext::new(empty_netlist());
+        assert_eq!(ctx.resolve_var("missing"), "");
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::resolve_vec_scalar
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_vec_scalar_single_real() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.user_vectors.push(make_real_vec("x", vec![3.14]));
+        assert_eq!(ctx.resolve_vec_scalar("x"), "3.14");
+    }
+
+    #[test]
+    fn resolve_vec_scalar_multi_element_returns_last() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.user_vectors
+            .push(make_real_vec("sweep", vec![1.0, 2.0, 3.0]));
+        assert_eq!(ctx.resolve_vec_scalar("sweep"), "3");
+    }
+
+    #[test]
+    fn resolve_vec_scalar_empty_returns_zero() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.user_vectors.push(make_real_vec("empty", vec![]));
+        assert_eq!(ctx.resolve_vec_scalar("empty"), "0");
+    }
+
+    #[test]
+    fn resolve_vec_scalar_complex() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.user_vectors
+            .push(make_complex_vec("z", vec![(1.5, 2.5)]));
+        assert_eq!(ctx.resolve_vec_scalar("z"), "1.5,2.5");
+    }
+
+    #[test]
+    fn resolve_vec_scalar_missing_vector() {
+        let ctx = SimContext::new(empty_netlist());
+        assert_eq!(ctx.resolve_vec_scalar("nope"), "0");
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::set_current_plot
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_current_plot_by_name() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.add_plot(make_plot("op", vec![]));
+        ctx.add_plot(make_plot("dc", vec![]));
+        assert_eq!(ctx.current_plot_name(), "dc1");
+        ctx.set_current_plot("op1");
+        assert_eq!(ctx.current_plot_name(), "op1");
+    }
+
+    #[test]
+    fn set_current_plot_new_creates_empty() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.set_current_plot("new");
+        assert!(ctx.current_plot().is_some());
+        assert_eq!(ctx.current_plot().unwrap().name, "user");
+        assert!(ctx.current_plot().unwrap().vecs.is_empty());
+    }
+
+    #[test]
+    fn set_current_plot_missing_name_is_noop() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.add_plot(make_plot("op", vec![]));
+        assert_eq!(ctx.current_plot, Some(0));
+        ctx.set_current_plot("nonexistent");
+        // Should remain unchanged
+        assert_eq!(ctx.current_plot, Some(0));
+    }
+
+    // -----------------------------------------------------------------------
+    // SimContext::echo
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn echo_appends_with_newline() {
+        let mut ctx = SimContext::new(empty_netlist());
+        ctx.echo("hello");
+        ctx.echo("world");
+        assert_eq!(ctx.output, "hello\nworld\n");
+    }
+
+    // -----------------------------------------------------------------------
+    // format_number
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_number_zero() {
+        assert_eq!(format_number(0.0), "0");
+    }
+
+    #[test]
+    fn format_number_normal_range() {
+        assert_eq!(format_number(3.14), "3.14");
+        assert_eq!(format_number(1.0), "1");
+        assert_eq!(format_number(-0.5), "-0.5");
+    }
+
+    #[test]
+    fn format_number_scientific() {
+        // Very small
+        let s = format_number(1e-9);
+        assert!(s.contains('e'), "expected scientific notation, got: {s}");
+        // Very large
+        let s = format_number(1e9);
+        assert!(s.contains('e'), "expected scientific notation, got: {s}");
+    }
+
+    // -----------------------------------------------------------------------
+    // plot_analysis_type
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn plot_analysis_type_strips_digits() {
+        assert_eq!(plot_analysis_type("op1"), "op");
+        assert_eq!(plot_analysis_type("dc23"), "dc");
+        assert_eq!(plot_analysis_type("tran"), "tran");
+        assert_eq!(plot_analysis_type("TRAN1"), "tran");
+    }
+}

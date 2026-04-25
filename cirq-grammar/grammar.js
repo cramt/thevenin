@@ -47,7 +47,8 @@ module.exports = grammar({
         $.temp_decl,
         $.save_decl,
         $.func_decl,
-        $.ic_decl
+        $.ic_decl,
+        $.coupled_line_decl
       ),
 
     // ── Module ───────────────────────────────────────────────────────
@@ -179,6 +180,24 @@ module.exports = grammar({
         field("node", $.identifier),
         ")",
         "=",
+        field("value", $._expression)
+      ),
+
+    // ── Coupled transmission lines ─────────────────────────────────
+
+    coupled_line_decl: ($) =>
+      seq(
+        "coupled_line",
+        field("name", $.identifier),
+        "{",
+        repeat($.coupled_line_field),
+        "}"
+      ),
+
+    coupled_line_field: ($) =>
+      seq(
+        field("key", $.identifier),
+        ":",
         field("value", $._expression)
       ),
 

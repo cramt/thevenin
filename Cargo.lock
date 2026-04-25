@@ -186,6 +186,7 @@ dependencies = [
 name = "cirq-spice-import"
 version = "0.1.0"
 dependencies = [
+ "cirq-frontend",
  "cirq-ir",
  "thevenin-types",
  "thiserror 2.0.18",

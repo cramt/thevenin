@@ -527,4 +527,386 @@ mod tests {
             other => panic!("expected If, got {:?}", other),
         }
     }
+
+    // -----------------------------------------------------------------------
+    // parse_let
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_let_success() {
+        let lines = vec!["let x = 42 + 1".to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::Let { name, expr } => {
+                assert_eq!(name, "x");
+                assert_eq!(expr, "42 + 1");
+            }
+            other => panic!("expected Let, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_let_missing_eq() {
+        let result = parse_let("x 42");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("let without '='"));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_foreach
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_foreach_with_values() {
+        let lines = vec![
+            "foreach val 1 2 3".to_string(),
+            "  echo $val".to_string(),
+            "end".to_string(),
+        ];
+        let stmts = parse_control_block(&lines).unwrap();
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::Foreach { var, values, body } => {
+                assert_eq!(var, "val");
+                assert_eq!(values, &["1", "2", "3"]);
+                assert_eq!(body.len(), 1);
+            }
+            other => panic!("expected Foreach, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_foreach_empty_var_error() {
+        let lines = vec!["foreach".to_string(), "end".to_string()];
+        let result = parse_control_block(&lines);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("foreach without variable"));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_quit
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_quit_no_code() {
+        let result = parse_quit("").unwrap();
+        assert!(matches!(result, Statement::Quit(Some(0))));
+    }
+
+    #[test]
+    fn test_parse_quit_explicit_code() {
+        let result = parse_quit("42").unwrap();
+        assert!(matches!(result, Statement::Quit(Some(42))));
+    }
+
+    #[test]
+    fn test_parse_quit_invalid_code() {
+        let result = parse_quit("notanumber");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid quit code"));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_set
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_set_key_only() {
+        let result = parse_set("nobreak").unwrap();
+        match result {
+            Statement::Set(pairs) => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(pairs[0].0, "nobreak");
+                assert!(pairs[0].1.is_none());
+            }
+            other => panic!("expected Set, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_key_value() {
+        let result = parse_set("wr_vecnames").unwrap();
+        match result {
+            Statement::Set(pairs) => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(pairs[0].0, "wr_vecnames");
+            }
+            other => panic!("expected Set, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_key_eq_value() {
+        let result = parse_set("filetype=ascii").unwrap();
+        match result {
+            Statement::Set(pairs) => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(pairs[0].0, "filetype");
+                assert_eq!(pairs[0].1.as_deref(), Some("ascii"));
+            }
+            other => panic!("expected Set, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_key_eq_quoted() {
+        let result = parse_set(r#"title="my circuit""#).unwrap();
+        match result {
+            Statement::Set(pairs) => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(pairs[0].0, "title");
+                assert_eq!(pairs[0].1.as_deref(), Some("my circuit"));
+            }
+            other => panic!("expected Set, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_multiple_key_only() {
+        // Multiple key-only pairs separated by spaces
+        let result = parse_set("nobreak wr_vecnames").unwrap();
+        match result {
+            Statement::Set(pairs) => {
+                assert_eq!(pairs.len(), 2);
+                assert_eq!(pairs[0].0, "nobreak");
+                assert!(pairs[0].1.is_none());
+                assert_eq!(pairs[1].0, "wr_vecnames");
+                assert!(pairs[1].1.is_none());
+            }
+            other => panic!("expected Set, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_multiple_key_value() {
+        // Multiple key=value pairs
+        let result = parse_set("filetype=ascii color=0").unwrap();
+        match result {
+            Statement::Set(pairs) => {
+                assert_eq!(pairs.len(), 2);
+                assert_eq!(pairs[0].0, "filetype");
+                assert_eq!(pairs[0].1.as_deref(), Some("ascii"));
+                assert_eq!(pairs[1].0, "color");
+                assert_eq!(pairs[1].1.as_deref(), Some("0"));
+            }
+            other => panic!("expected Set, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_define
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_define_success() {
+        let result = parse_define("myfunc(a, b) a + b").unwrap();
+        match result {
+            Statement::Define { name, args, body } => {
+                assert_eq!(name, "myfunc");
+                assert_eq!(args, &["a", "b"]);
+                assert_eq!(body, "a + b");
+            }
+            other => panic!("expected Define, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_define_missing_lparen() {
+        let result = parse_define("myfunc a,b) a+b");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing '('"));
+    }
+
+    #[test]
+    fn test_parse_define_missing_rparen() {
+        let result = parse_define("myfunc(a,b a+b");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing ')'"));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_compose
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_compose_with_values_keyword() {
+        let result = parse_compose("myvec values 1 2 3").unwrap();
+        match result {
+            Statement::Compose { name, value_exprs } => {
+                assert_eq!(name, "myvec");
+                assert_eq!(value_exprs, &["1", "2", "3"]);
+            }
+            other => panic!("expected Compose, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_compose_without_values_keyword() {
+        let result = parse_compose("myvec 1 2 3").unwrap();
+        match result {
+            Statement::Compose { name, value_exprs } => {
+                assert_eq!(name, "myvec");
+                assert_eq!(value_exprs, &["1", "2", "3"]);
+            }
+            other => panic!("expected Compose, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_compose_paren_balanced() {
+        let result = parse_compose("myvec values v(n1) ln(2.7)").unwrap();
+        match result {
+            Statement::Compose { name, value_exprs } => {
+                assert_eq!(name, "myvec");
+                assert_eq!(value_exprs, &["v(n1)", "ln(2.7)"]);
+            }
+            other => panic!("expected Compose, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_alter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_alter_scalar() {
+        let result = parse_alter("@r1[resistance] = 1000").unwrap();
+        match result {
+            Statement::Alter { spec, value } => {
+                assert_eq!(spec, "@r1[resistance]");
+                match value {
+                    AlterValue::Scalar(v) => assert!((v - 1000.0).abs() < 1e-10),
+                    _ => panic!("expected Scalar"),
+                }
+            }
+            other => panic!("expected Alter, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_alter_vector() {
+        let result = parse_alter("@v1[pulse] = [ 0 5 0 1n 1n 10n 20n ]").unwrap();
+        match result {
+            Statement::Alter { spec, value } => {
+                assert_eq!(spec, "@v1[pulse]");
+                match value {
+                    AlterValue::Vector(v) => {
+                        assert_eq!(v.len(), 7);
+                        assert!((v[0]).abs() < 1e-15);
+                        assert!((v[1] - 5.0).abs() < 1e-10);
+                    }
+                    _ => panic!("expected Vector"),
+                }
+            }
+            other => panic!("expected Alter, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_alter_missing_eq() {
+        let result = parse_alter("@r1[resistance] 1000");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("alter without '='"));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_print
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_print_basic() {
+        let result = parse_print("v(out) i(vin)").unwrap();
+        match result {
+            Statement::Print { exprs, file } => {
+                assert_eq!(exprs, &["v(out)", "i(vin)"]);
+                assert!(file.is_none());
+            }
+            other => panic!("expected Print, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_print_redirect() {
+        let result = parse_print("v(out) > results.txt").unwrap();
+        match result {
+            Statement::Print { exprs, file } => {
+                assert_eq!(exprs, &["v(out)"]);
+                assert_eq!(file.as_deref(), Some("results.txt"));
+            }
+            other => panic!("expected Print, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_print_col_line_filtered() {
+        let result = parse_print("col v(out) line i(vin)").unwrap();
+        match result {
+            Statement::Print { exprs, file } => {
+                // "col" and "line" should be stripped
+                assert_eq!(exprs, &["v(out)", "i(vin)"]);
+                assert!(file.is_none());
+            }
+            other => panic!("expected Print, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // strip_unit_suffix
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_strip_unit_suffix_hz() {
+        assert_eq!(strip_unit_suffix("100Hz"), "100");
+    }
+
+    #[test]
+    fn test_strip_unit_suffix_ohm() {
+        assert_eq!(strip_unit_suffix("47ohm"), "47");
+        assert_eq!(strip_unit_suffix("47Ohms"), "47");
+    }
+
+    #[test]
+    fn test_strip_unit_suffix_v() {
+        assert_eq!(strip_unit_suffix("5V"), "5");
+    }
+
+    #[test]
+    fn test_strip_unit_suffix_a() {
+        assert_eq!(strip_unit_suffix("10A"), "10");
+    }
+
+    #[test]
+    fn test_strip_unit_suffix_w() {
+        assert_eq!(strip_unit_suffix("1W"), "1");
+    }
+
+    #[test]
+    fn test_strip_unit_suffix_no_suffix() {
+        assert_eq!(strip_unit_suffix("100"), "100");
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_spice_number
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_spice_number_meg() {
+        assert!((parse_spice_number("2meg").unwrap() - 2e6).abs() < 1e-3);
+        assert!((parse_spice_number("2MEG").unwrap() - 2e6).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_parse_spice_number_with_unit_stripping() {
+        assert!((parse_spice_number("5V").unwrap() - 5.0).abs() < 1e-10);
+        assert!((parse_spice_number("42mA").unwrap() - 42e-3).abs() < 1e-10);
+        assert!((parse_spice_number("1kHz").unwrap() - 1e3).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_parse_spice_number_empty_error() {
+        let result = parse_spice_number("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty number"));
+    }
 }

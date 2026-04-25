@@ -191,6 +191,31 @@ circuit test {
         (argument (number_literal))))))
 
 ================================================================================
+Coupled transmission line
+================================================================================
+
+circuit cpl_test {
+    coupled_line P1 {
+        in: [a1, a2]
+        out: [b1, b2]
+        gnd: gnd
+        model: cpl_mod
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (coupled_line_decl
+      name: (identifier)
+      (coupled_line_field key: (identifier) value: (list_literal (identifier) (identifier)))
+      (coupled_line_field key: (identifier) value: (list_literal (identifier) (identifier)))
+      (coupled_line_field key: (identifier) value: (gnd))
+      (coupled_line_field key: (identifier) value: (identifier)))))
+
+================================================================================
 Comments
 ================================================================================
 

@@ -1367,4 +1367,355 @@ mod tests {
         let v = eval_vec_expr("mismatch(10, 10.1, 0.5)", &ctx).unwrap();
         assert_eq!(v.data, vec![0.0]); // |10-10.1| = 0.1 < 0.5
     }
+
+    // -----------------------------------------------------------------------
+    // Comparison operators
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_less_than() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("1 < 2", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0]);
+        let v = eval_vec_expr("2 < 1", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+    }
+
+    #[test]
+    fn test_greater_eq() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("3 >= 3", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0]);
+        let v = eval_vec_expr("3 >= 4", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+    }
+
+    #[test]
+    fn test_less_eq() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("3 <= 3", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0]);
+        let v = eval_vec_expr("4 <= 3", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+    }
+
+    #[test]
+    fn test_equality() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("5 = 5", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0]);
+        let v = eval_vec_expr("5 = 6", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+    }
+
+    #[test]
+    fn test_not_equal() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("5 <> 6", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0]);
+        let v = eval_vec_expr("5 <> 5", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Logical operators
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_logical_or() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("0 or 1", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0]);
+        let v = eval_vec_expr("0 or 0", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+        let v = eval_vec_expr("1 or 0", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0]);
+    }
+
+    #[test]
+    fn test_logical_and() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("1 and 1", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0]);
+        let v = eval_vec_expr("1 and 0", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+        let v = eval_vec_expr("0 and 1", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Built-in math functions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_exp() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("exp(0)", &ctx).unwrap();
+        assert!((v.data[0] - 1.0).abs() < 1e-10);
+        let v = eval_vec_expr("exp(1)", &ctx).unwrap();
+        assert!((v.data[0] - std::f64::consts::E).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log_ln() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("log(1)", &ctx).unwrap();
+        assert!((v.data[0]).abs() < 1e-10);
+        let v = eval_vec_expr("ln(e)", &ctx).unwrap();
+        assert!((v.data[0] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log10() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("log10(100)", &ctx).unwrap();
+        assert!((v.data[0] - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sin() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("sin(0)", &ctx).unwrap();
+        assert!(v.data[0].abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cos() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("cos(0)", &ctx).unwrap();
+        assert!((v.data[0] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tan() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("tan(0)", &ctx).unwrap();
+        assert!(v.data[0].abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_atan() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("atan(1)", &ctx).unwrap();
+        assert!((v.data[0] - std::f64::consts::FRAC_PI_4).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vecmax() {
+        let mut ctx = empty_ctx();
+        ctx.user_vectors.push(thevenin_types::SimVector::real(
+            "vals",
+            vec![1.0, 5.0, 3.0, 2.0],
+        ));
+        let v = eval_vec_expr("vecmax(vals)", &ctx).unwrap();
+        assert_eq!(v.data, vec![5.0]);
+    }
+
+    #[test]
+    fn test_vecmin() {
+        let mut ctx = empty_ctx();
+        ctx.user_vectors.push(thevenin_types::SimVector::real(
+            "vals",
+            vec![1.0, 5.0, 3.0, -2.0],
+        ));
+        let v = eval_vec_expr("vecmin(vals)", &ctx).unwrap();
+        assert_eq!(v.data, vec![-2.0]);
+    }
+
+    #[test]
+    fn test_length() {
+        let mut ctx = empty_ctx();
+        ctx.user_vectors
+            .push(thevenin_types::SimVector::real("vals", vec![1.0, 2.0, 3.0]));
+        let v = eval_vec_expr("length(vals)", &ctx).unwrap();
+        assert_eq!(v.data, vec![3.0]);
+    }
+
+    #[test]
+    fn test_max_min_scalar() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("max(3, 7)", &ctx).unwrap();
+        assert_eq!(v.data, vec![7.0]);
+        let v = eval_vec_expr("min(3, 7)", &ctx).unwrap();
+        assert_eq!(v.data, vec![3.0]);
+    }
+
+    #[test]
+    fn test_vector_fn() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("vector(5)", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0, 1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_unitvec_fn() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("unitvec(4)", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_mean_avg() {
+        let mut ctx = empty_ctx();
+        ctx.user_vectors
+            .push(thevenin_types::SimVector::real("vals", vec![2.0, 4.0, 6.0]));
+        let v = eval_vec_expr("mean(vals)", &ctx).unwrap();
+        assert!((v.data[0] - 4.0).abs() < 1e-10);
+        let v = eval_vec_expr("avg(vals)", &ctx).unwrap();
+        assert!((v.data[0] - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_ceil() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("ceil(2.3)", &ctx).unwrap();
+        assert_eq!(v.data, vec![3.0]);
+    }
+
+    #[test]
+    fn test_floor_int() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("floor(2.7)", &ctx).unwrap();
+        assert_eq!(v.data, vec![2.0]);
+        let v = eval_vec_expr("int(2.7)", &ctx).unwrap();
+        assert_eq!(v.data, vec![2.0]);
+    }
+
+    #[test]
+    fn test_nint_round() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("nint(2.5)", &ctx).unwrap();
+        assert_eq!(v.data, vec![3.0]);
+        let v = eval_vec_expr("round(2.4)", &ctx).unwrap();
+        assert_eq!(v.data, vec![2.0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // eval_condition
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_eval_condition_truthy() {
+        let ctx = empty_ctx();
+        assert!(eval_condition("1", &ctx).unwrap());
+        assert!(eval_condition("3 > 2", &ctx).unwrap());
+    }
+
+    #[test]
+    fn test_eval_condition_falsy() {
+        let ctx = empty_ctx();
+        assert!(!eval_condition("0", &ctx).unwrap());
+        assert!(!eval_condition("1 > 2", &ctx).unwrap());
+    }
+
+    // -----------------------------------------------------------------------
+    // Unary not
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_unary_not() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("not 0", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0]);
+        let v = eval_vec_expr("not 1", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+        let v = eval_vec_expr("not 42", &ctx).unwrap();
+        assert_eq!(v.data, vec![0.0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiplication and division with vectors (broadcasting)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_mul_vectors_broadcast() {
+        let mut ctx = empty_ctx();
+        ctx.user_vectors
+            .push(thevenin_types::SimVector::real("a", vec![1.0, 2.0, 3.0]));
+        // scalar * vector
+        let v = eval_vec_expr("2 * a", &ctx).unwrap();
+        assert_eq!(v.data, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_div_vectors_broadcast() {
+        let mut ctx = empty_ctx();
+        ctx.user_vectors
+            .push(thevenin_types::SimVector::real("a", vec![10.0, 20.0, 30.0]));
+        let v = eval_vec_expr("a / 10", &ctx).unwrap();
+        assert_eq!(v.data, vec![1.0, 2.0, 3.0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Nested expressions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_nested_sqrt_abs() {
+        let ctx = empty_ctx();
+        let v = eval_vec_expr("sqrt(abs(-16))", &ctx).unwrap();
+        assert!((v.data[0] - 4.0).abs() < 1e-10);
+    }
+
+    // -----------------------------------------------------------------------
+    // Error cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_unknown_function_error() {
+        let ctx = empty_ctx();
+        let result = eval_vec_expr("bogus(1)", &ctx);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown function"));
+    }
+
+    #[test]
+    fn test_wrong_arg_count_error() {
+        let ctx = empty_ctx();
+        let result = eval_vec_expr("abs(1, 2)", &ctx);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected 1 args, got 2"));
+    }
+
+    // -----------------------------------------------------------------------
+    // VecVal methods
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_vecval_scalar() {
+        let v = VecVal::scalar(42.0);
+        assert_eq!(v.data, vec![42.0]);
+        assert!(v.imag.is_empty());
+        assert!(v.is_scalar());
+        assert!(!v.is_complex());
+    }
+
+    #[test]
+    fn test_vecval_complex_scalar() {
+        let v = VecVal::complex_scalar(3.0, 4.0);
+        assert_eq!(v.data, vec![3.0]);
+        assert_eq!(v.imag, vec![4.0]);
+        assert!(v.is_scalar());
+        assert!(v.is_complex());
+    }
+
+    #[test]
+    fn test_vecval_as_scalar() {
+        let v = VecVal::real(vec![10.0, 20.0, 30.0]);
+        // as_scalar returns last element
+        assert_eq!(v.as_scalar(), 30.0);
+    }
+
+    #[test]
+    fn test_vecval_as_scalar_empty() {
+        let v = VecVal::real(vec![]);
+        assert_eq!(v.as_scalar(), 0.0);
+    }
+
+    #[test]
+    fn test_vecval_is_truthy() {
+        assert!(VecVal::scalar(1.0).is_truthy());
+        assert!(VecVal::scalar(-1.0).is_truthy());
+        assert!(!VecVal::scalar(0.0).is_truthy());
+    }
 }

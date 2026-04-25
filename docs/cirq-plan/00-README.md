@@ -91,7 +91,7 @@ Each run should leave the workspace in a state where progress can be validated i
 6. `06-cirq-to-thevenin-boundary.md` ✅
 7. `07-spice-import-to-cirq-ir.md` ✅
 8. `08-tests-migration-and-adoption.md` ✅
-9. `09-feature-parity-gaps.md` — close every gap between SPICE and Cirq
+9. `09-feature-parity-gaps.md` ✅
 
 ---
 

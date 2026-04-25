@@ -344,22 +344,22 @@ The transient solver uses `tmax` to limit the internal timestep.
 
 Recommended sequence based on dependency and impact:
 
-1. **1.1 + 1.2 — Waveforms and AC specs** (largest silent-failure surface)
-2. **1.5 — Coupling element wiring** (one-line fix in `element_kind_from_str`)
-3. **1.3 + 1.4 — Noise and PZ analysis** (IR types exist; just need lowering)
-4. **2.1 — Subcircuit flattening** (biggest feature gap; blocks real designs)
-5. **2.6 — Model inheritance merging** (small fix, correctness)
-6. **3.7 — Tran tmax** (small fix, correctness)
-7. **3.1 — Options** (simulator needs GMIN/ABSTOL for convergence)
-8. **3.3 — Temperature** (affects device models)
-9. **2.3 — MESFET element kind** (small IR addition)
-10. **3.5 — Include/lib resolution** (needed for real multi-file designs)
-11. **2.2 — Behavioral sources** (larger design effort)
-12. **3.4 — User-defined functions** (larger design effort)
-13. **2.4 — CPL** (uncommon)
-14. **2.5 — XSPICE** (larger design effort, separate framework)
-15. **3.2 — Save** (convenience)
-16. **3.6 — IC/nodeset** (partially works already)
+1. ~~**1.1 + 1.2 — Waveforms and AC specs**~~ ✅ Done
+2. ~~**1.5 — Coupling element wiring**~~ ✅ Done
+3. ~~**1.3 + 1.4 — Noise and PZ analysis**~~ ✅ Done
+4. ~~**2.1 — Subcircuit flattening**~~ ✅ Done
+5. ~~**2.6 — Model inheritance merging**~~ ✅ Done
+6. ~~**3.7 — Tran tmax**~~ ✅ Done
+7. ~~**3.1 — Options**~~ ✅ Done
+8. ~~**3.3 — Temperature**~~ ✅ Done
+9. ~~**2.3 — MESFET element kind**~~ ✅ Done
+10. ~~**3.5 — Include/lib resolution**~~ ✅ Done (Cirq import resolution via `resolve.rs`)
+11. ~~**2.2 — Behavioral sources**~~ ✅ Done
+12. ~~**3.4 — User-defined functions**~~ ✅ Done
+13. ~~**2.4 — CPL**~~ ✅ Done
+14. ~~**2.5 — XSPICE**~~ ✅ Done
+15. ~~**3.2 — Save**~~ ✅ Done
+16. ~~**3.6 — IC/nodeset**~~ ✅ Done
 
 ---
 

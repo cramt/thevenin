@@ -2,10 +2,11 @@
 //! [`cirq_ast`] types.
 
 use cirq_ast::{
-    AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, ElementInst,
-    Expr, FuncDecl, GlobalDecl, IcDecl, IcEntry, Ident, Import, LetDecl, ModelDef, ModelParam,
-    ModuleDef, ModuleInst, OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection,
-    QualifiedName, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
+    AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CoupledLineDecl,
+    CoupledLineField, ElementInst, Expr, FuncDecl, GlobalDecl, IcDecl, IcEntry, Ident, Import,
+    LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting, OptionsDecl, ParamDecl,
+    PortDecl, PortDirection, QualifiedName, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel,
+    UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -175,6 +176,7 @@ impl Ctx<'_> {
             "save_decl" => self.lower_save(node).map(CircuitItem::Save),
             "func_decl" => self.lower_func(node).map(CircuitItem::Func),
             "ic_decl" => self.lower_ic(node).map(CircuitItem::Ic),
+            "coupled_line_decl" => self.lower_coupled_line(node).map(CircuitItem::CoupledLine),
             "line_comment" | "block_comment" => None,
             "ERROR" => {
                 self.error_at(node, "syntax error in circuit body");
@@ -608,6 +610,45 @@ impl Ctx<'_> {
 
         Some(IcEntry {
             node: node_name,
+            value,
+            span: span_of(node),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Coupled transmission lines
+// ---------------------------------------------------------------------------
+
+impl Ctx<'_> {
+    fn lower_coupled_line(&mut self, node: tree_sitter::Node) -> Option<CoupledLineDecl> {
+        let name_node = self.required_field(node, "name")?;
+        let name = self.ident(name_node);
+        let mut fields = Vec::new();
+        let mut cursor = node.walk();
+
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "coupled_line_field"
+                && let Some(f) = self.lower_coupled_line_field(child)
+            {
+                fields.push(f);
+            }
+        }
+
+        Some(CoupledLineDecl {
+            name,
+            fields,
+            span: span_of(node),
+        })
+    }
+
+    fn lower_coupled_line_field(&mut self, node: tree_sitter::Node) -> Option<CoupledLineField> {
+        let key_node = self.required_field(node, "key")?;
+        let key = self.ident(key_node);
+        let value_node = self.required_field(node, "value")?;
+        let value = self.lower_expr(value_node)?;
+        Some(CoupledLineField {
+            key,
             value,
             span: span_of(node),
         })
@@ -1779,5 +1820,56 @@ import "models/pmos.cirq" as pmos_lib
         };
         assert_eq!(i1.path, "models/pmos.cirq");
         assert_eq!(i1.alias.as_ref().unwrap().name, "pmos_lib");
+    }
+
+    #[test]
+    fn coupled_line_declaration() {
+        let src = r#"
+circuit cpl_test {
+    coupled_line P1 {
+        in: [a1, a2]
+        out: [b1, b2]
+        gnd: gnd
+        model: cpl_mod
+    }
+}
+"#;
+        let (sf, diags) = parse_and_lower(src);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+
+        let c = match &sf.items[0] {
+            TopLevel::Circuit(c) => c,
+            other => panic!("expected Circuit, got {other:?}"),
+        };
+        assert_eq!(c.body.len(), 1);
+        match &c.body[0] {
+            CircuitItem::CoupledLine(cl) => {
+                assert_eq!(cl.name.name, "P1");
+                assert_eq!(cl.fields.len(), 4);
+
+                // in: [a1, a2]
+                assert_eq!(cl.fields[0].key.name, "in");
+                match &cl.fields[0].value {
+                    Expr::List { elements, .. } => {
+                        assert_eq!(elements.len(), 2);
+                        assert!(matches!(&elements[0], Expr::Ident(id) if id.name == "a1"));
+                        assert!(matches!(&elements[1], Expr::Ident(id) if id.name == "a2"));
+                    }
+                    other => panic!("expected List, got {other:?}"),
+                }
+
+                // out: [b1, b2]
+                assert_eq!(cl.fields[1].key.name, "out");
+
+                // gnd: gnd
+                assert_eq!(cl.fields[2].key.name, "gnd");
+                assert!(matches!(&cl.fields[2].value, Expr::Gnd { .. }));
+
+                // model: cpl_mod
+                assert_eq!(cl.fields[3].key.name, "model");
+                assert!(matches!(&cl.fields[3].value, Expr::Ident(id) if id.name == "cpl_mod"));
+            }
+            other => panic!("expected CoupledLine, got {other:?}"),
+        }
     }
 }

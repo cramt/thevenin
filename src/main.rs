@@ -74,9 +74,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Detect Cirq source files by extension.
 fn is_cirq_file(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .is_some_and(|ext| ext == "cirq")
+    Path::new(path).extension().is_some_and(|ext| ext == "cirq")
 }
 
 #[cfg(test)]

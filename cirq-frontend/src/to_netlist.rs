@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use cirq_ir::{
     AcSpec as IrAcSpec, BehavioralMode, Circuit, DeviceType, Element as IrElement,
     ElementKind as IrElementKind, FrequencyScale, Id, Value, Waveform as IrWaveform,
+    XspiceConnection as IrXspiceConnection,
 };
 use thevenin_types::{
     AcSpec, AcVariation, Analysis, DcSweep, Element, ElementKind, Expr, Item, ModelDef, Netlist,
@@ -739,6 +740,83 @@ fn convert_element(
                 },
             })
         }
+
+        IrElementKind::CoupledLine { width } => {
+            let mut in_nodes = Vec::new();
+            for i in 0..*width {
+                in_nodes.push(get_conn(elem, &format!("in{i}"), net_names)?);
+            }
+            let gnd = get_conn(elem, "gnd", net_names)?;
+            let mut out_nodes = Vec::new();
+            for i in 0..*width {
+                out_nodes.push(get_conn(elem, &format!("out{i}"), net_names)?);
+            }
+            let model = elem
+                .params
+                .iter()
+                .find(|p| p.0 == "model")
+                .map(|p| match &p.1 {
+                    Value::String(s) => s.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+            let params = extra_params(elem, &["model"]);
+            Ok(Element {
+                name: spice_name(&elem.name, 'P'),
+                kind: ElementKind::Cpl {
+                    in_nodes,
+                    out_nodes,
+                    gnd,
+                    model,
+                    params,
+                },
+            })
+        }
+
+        IrElementKind::Xspice {
+            connections: xspice_conns,
+        } => {
+            let mut out_conns: Vec<thevenin_types::XspiceConnection> = Vec::new();
+            for xc in xspice_conns {
+                match xc {
+                    IrXspiceConnection::Scalar(net_id) => {
+                        let node = net_names
+                            .get(net_id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("{}", net_id.0));
+                        out_conns.push(thevenin_types::XspiceConnection::Scalar(node));
+                    }
+                    IrXspiceConnection::Array(ids) => {
+                        let nodes: Vec<String> = ids
+                            .iter()
+                            .map(|id| {
+                                net_names
+                                    .get(id)
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("{}", id.0))
+                            })
+                            .collect();
+                        out_conns.push(thevenin_types::XspiceConnection::Array(nodes));
+                    }
+                }
+            }
+            let model = elem
+                .params
+                .iter()
+                .find(|p| p.0 == "model")
+                .map(|p| match &p.1 {
+                    Value::String(s) => s.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+            Ok(Element {
+                name: spice_name(&elem.name, 'A'),
+                kind: ElementKind::Xspice {
+                    connections: out_conns,
+                    model,
+                },
+            })
+        }
     }
 }
 
@@ -944,7 +1022,7 @@ fn convert_analysis(
 mod tests {
     use super::*;
     use cirq_ir::{
-        AcAnalysis, Connection, DcAnalysis, DcSweep as IrDcSweep, Element as IrElement,
+        AcAnalysis, Connection, DcAnalysis, DcSweep as IrDcSweep, DeviceType, Element as IrElement,
         FrequencyScale, Id, Model, Net, ResolvedParam, TranAnalysis,
     };
 
@@ -1598,6 +1676,272 @@ mod tests {
                 assert_eq!(spec, "I=v(in)/1000");
             }
             other => panic!("expected BehavioralSource, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 12b: NMesfet and PMesfet → Mesa
+    // -----------------------------------------------------------------------
+    #[test]
+    fn nmesfet_to_mesa_netlist() {
+        let circuit = make_circuit(
+            "nmesfet_test",
+            vec![
+                net(0, "gnd", true),
+                net(1, "d", false),
+                net(2, "g", false),
+                net(3, "s", false),
+            ],
+            vec![IrElement {
+                id: Id(0),
+                name: "Z1".to_string(),
+                kind: IrElementKind::NMesfet,
+                connections: vec![conn("drain", 1), conn("gate", 2), conn("source", 3)],
+                params: vec![],
+                model: Some(Id(0)),
+                source_spec: None,
+            }],
+            vec![Model {
+                id: Id(0),
+                name: "nm1".to_string(),
+                device_type: DeviceType::NMesfet,
+                params: vec![("vto".to_string(), Value::Real(-1.3))],
+            }],
+            vec![cirq_ir::Analysis::Op],
+            vec![],
+        );
+
+        let netlists = circuit_to_netlists(&circuit).unwrap();
+        let nl = &netlists[0];
+
+        // Check model kind is NMF.
+        let model_item = nl.items.iter().find_map(|i| {
+            if let Item::Model(m) = i {
+                Some(m)
+            } else {
+                None
+            }
+        });
+        assert!(model_item.is_some());
+        assert_eq!(model_item.unwrap().kind, "NMF");
+
+        // Check element is Mesa with correct connections.
+        let elem = nl
+            .items
+            .iter()
+            .find_map(|i| {
+                if let Item::Element(e) = i {
+                    Some(e)
+                } else {
+                    None
+                }
+            })
+            .expect("should have an element");
+        assert_eq!(elem.name, "Z1");
+        match &elem.kind {
+            ElementKind::Mesa { d, g, s, model, .. } => {
+                assert_eq!(d, "d");
+                assert_eq!(g, "g");
+                assert_eq!(s, "s");
+                assert_eq!(model, "nm1");
+            }
+            other => panic!("expected Mesa, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pmesfet_to_mesa_netlist() {
+        let circuit = make_circuit(
+            "pmesfet_test",
+            vec![
+                net(0, "gnd", true),
+                net(1, "d", false),
+                net(2, "g", false),
+                net(3, "s", false),
+            ],
+            vec![IrElement {
+                id: Id(0),
+                name: "Z2".to_string(),
+                kind: IrElementKind::PMesfet,
+                connections: vec![conn("drain", 1), conn("gate", 2), conn("source", 3)],
+                params: vec![],
+                model: Some(Id(0)),
+                source_spec: None,
+            }],
+            vec![Model {
+                id: Id(0),
+                name: "pm1".to_string(),
+                device_type: DeviceType::PMesfet,
+                params: vec![],
+            }],
+            vec![cirq_ir::Analysis::Op],
+            vec![],
+        );
+
+        let netlists = circuit_to_netlists(&circuit).unwrap();
+        let nl = &netlists[0];
+
+        // PMesfet model should become PMF.
+        let model_item = nl.items.iter().find_map(|i| {
+            if let Item::Model(m) = i {
+                Some(m)
+            } else {
+                None
+            }
+        });
+        assert!(model_item.is_some());
+        assert_eq!(model_item.unwrap().kind, "PMF");
+
+        // Element should still be Mesa (SPICE uses same element type for both).
+        let elem = nl
+            .items
+            .iter()
+            .find_map(|i| {
+                if let Item::Element(e) = i {
+                    Some(e)
+                } else {
+                    None
+                }
+            })
+            .expect("should have an element");
+        assert_eq!(elem.name, "Z2");
+        match &elem.kind {
+            ElementKind::Mesa { d, g, s, model, .. } => {
+                assert_eq!(d, "d");
+                assert_eq!(g, "g");
+                assert_eq!(s, "s");
+                assert_eq!(model, "pm1");
+            }
+            other => panic!("expected Mesa, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 13: Coupled transmission line
+    // -----------------------------------------------------------------------
+    #[test]
+    fn coupled_line_netlist() {
+        let circuit = make_circuit(
+            "cpl_test",
+            vec![
+                net(0, "gnd", true),
+                net(1, "in0", false),
+                net(2, "in1", false),
+                net(3, "out0", false),
+                net(4, "out1", false),
+            ],
+            vec![IrElement {
+                id: Id(0),
+                name: "P1".to_string(),
+                kind: IrElementKind::CoupledLine { width: 2 },
+                connections: vec![
+                    conn("in0", 1),
+                    conn("in1", 2),
+                    conn("gnd", 0),
+                    conn("out0", 3),
+                    conn("out1", 4),
+                ],
+                params: vec![("model".to_string(), Value::String("cpl_mod".to_string()))],
+                model: None,
+                source_spec: None,
+            }],
+            vec![],
+            vec![cirq_ir::Analysis::Op],
+            vec![],
+        );
+
+        let netlists = circuit_to_netlists(&circuit).unwrap();
+        let nl = &netlists[0];
+        let elem = nl
+            .items
+            .iter()
+            .find_map(|i| {
+                if let Item::Element(e) = i {
+                    Some(e)
+                } else {
+                    None
+                }
+            })
+            .expect("should have an element");
+
+        assert_eq!(elem.name, "P1");
+        match &elem.kind {
+            ElementKind::Cpl {
+                in_nodes,
+                out_nodes,
+                gnd,
+                model,
+                ..
+            } => {
+                assert_eq!(in_nodes, &["in0", "in1"]);
+                assert_eq!(out_nodes, &["out0", "out1"]);
+                assert_eq!(gnd, "0");
+                assert_eq!(model, "cpl_mod");
+            }
+            other => panic!("expected Cpl, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 14: XSPICE code model
+    // -----------------------------------------------------------------------
+    #[test]
+    fn xspice_netlist() {
+        use cirq_ir::XspiceConnection;
+
+        let circuit = make_circuit(
+            "xspice_test",
+            vec![
+                net(0, "gnd", true),
+                net(1, "in", false),
+                net(2, "out", false),
+            ],
+            vec![IrElement {
+                id: Id(0),
+                name: "A1".to_string(),
+                kind: IrElementKind::Xspice {
+                    connections: vec![
+                        XspiceConnection::Scalar(Id(1)),
+                        XspiceConnection::Scalar(Id(2)),
+                    ],
+                },
+                connections: vec![conn("c0", 1), conn("c1", 2)],
+                params: vec![("model".to_string(), Value::String("buf_model".to_string()))],
+                model: None,
+                source_spec: None,
+            }],
+            vec![],
+            vec![cirq_ir::Analysis::Op],
+            vec![],
+        );
+
+        let netlists = circuit_to_netlists(&circuit).unwrap();
+        let nl = &netlists[0];
+        let elem = nl
+            .items
+            .iter()
+            .find_map(|i| {
+                if let Item::Element(e) = i {
+                    Some(e)
+                } else {
+                    None
+                }
+            })
+            .expect("should have an element");
+
+        assert_eq!(elem.name, "A1");
+        match &elem.kind {
+            ElementKind::Xspice { connections, model } => {
+                assert_eq!(connections.len(), 2);
+                assert!(
+                    matches!(&connections[0], thevenin_types::XspiceConnection::Scalar(s) if s == "in")
+                );
+                assert!(
+                    matches!(&connections[1], thevenin_types::XspiceConnection::Scalar(s) if s == "out")
+                );
+                assert_eq!(model, "buf_model");
+            }
+            other => panic!("expected Xspice, got {other:?}"),
         }
     }
 }

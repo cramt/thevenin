@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 
 use cirq_ast::{
-    AnalysisDecl, AnalysisItem, Argument, BinOp, CircuitItem, ElementInst, Expr, FuncDecl,
-    IcDecl, LetDecl, ModelDef, ModuleDef, ModuleInst, OptionsDecl, ParamDecl, SaveDecl,
+    AnalysisDecl, AnalysisItem, Argument, BinOp, CircuitItem, CoupledLineDecl, ElementInst, Expr,
+    FuncDecl, IcDecl, LetDecl, ModelDef, ModuleDef, ModuleInst, OptionsDecl, ParamDecl, SaveDecl,
     SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp,
 };
 use cirq_ir::{
@@ -103,6 +103,8 @@ fn standard_pins(kind: &ElementKind) -> &'static [&'static str] {
         }
         ElementKind::TransmissionLine => &["in_pos", "in_neg", "out_pos", "out_neg"],
         ElementKind::Coupling => &[],
+        // CoupledLine and Xspice have variable-width connections; no static pin list.
+        ElementKind::CoupledLine { .. } | ElementKind::Xspice { .. } => &[],
     }
 }
 
@@ -305,6 +307,7 @@ impl IrCtx {
                 CircuitItem::Save(s) => self.lower_save_decl(s),
                 CircuitItem::Func(f) => self.lower_func_decl(f),
                 CircuitItem::Ic(ic) => self.lower_ic_decl(ic),
+                CircuitItem::CoupledLine(cl) => self.lower_coupled_line_decl(cl, prefix),
                 // Already handled in pass 1, or collected above.
                 CircuitItem::Param(_)
                 | CircuitItem::Let(_)
@@ -796,6 +799,172 @@ impl IrCtx {
     /// Resolve an identifier to a net Id, applying prefix and remapping.
     fn resolve_net_ident_prefixed(&mut self, ident: &cirq_ast::Ident, prefix: &str) -> Id {
         self.resolve_net_name_prefixed(&ident.name, prefix)
+    }
+
+    // -------------------------------------------------------------------
+    // Coupled transmission line lowering
+    // -------------------------------------------------------------------
+
+    fn lower_coupled_line_decl(&mut self, cl: &CoupledLineDecl, prefix: &str) {
+        let elem_name = if prefix.is_empty() {
+            cl.name.name.clone()
+        } else {
+            format!("{prefix}.{}", cl.name.name)
+        };
+
+        // Extract the known fields: in, out, gnd, model.
+        let mut in_nets: Vec<String> = Vec::new();
+        let mut out_nets: Vec<String> = Vec::new();
+        let mut gnd_net: Option<String> = None;
+        let mut model_name: Option<String> = None;
+        let mut extra_params: Vec<(String, Value)> = Vec::new();
+
+        for field in &cl.fields {
+            let key = field.key.name.as_str();
+            match key {
+                "in" | "out" => {
+                    // Expect a list expression: [a1, a2, ...]
+                    let nets = match &field.value {
+                        Expr::List { elements, .. } => {
+                            let mut names = Vec::new();
+                            for e in elements {
+                                match e {
+                                    Expr::Ident(id) => names.push(id.name.clone()),
+                                    Expr::Gnd { .. } => names.push("gnd".to_owned()),
+                                    _ => {
+                                        self.diags.push(
+                                            Diagnostic::error(format!(
+                                                "coupled_line `{key}` list elements must be identifiers"
+                                            ))
+                                            .with_span(cl.span),
+                                        );
+                                        return;
+                                    }
+                                }
+                            }
+                            names
+                        }
+                        _ => {
+                            self.diags.push(
+                                Diagnostic::error(format!(
+                                    "coupled_line `{key}` must be a list, e.g. [{key}: [a, b]]"
+                                ))
+                                .with_span(field.span),
+                            );
+                            return;
+                        }
+                    };
+                    if key == "in" {
+                        in_nets = nets;
+                    } else {
+                        out_nets = nets;
+                    }
+                }
+                "gnd" => match &field.value {
+                    Expr::Ident(id) => gnd_net = Some(id.name.clone()),
+                    Expr::Gnd { .. } => gnd_net = Some("gnd".to_owned()),
+                    _ => {
+                        self.diags.push(
+                            Diagnostic::error("coupled_line `gnd` must be a net name")
+                                .with_span(field.span),
+                        );
+                        return;
+                    }
+                },
+                "model" => match &field.value {
+                    Expr::Ident(id) => model_name = Some(id.name.clone()),
+                    _ => {
+                        self.diags.push(
+                            Diagnostic::error("coupled_line `model` must be an identifier")
+                                .with_span(field.span),
+                        );
+                        return;
+                    }
+                },
+                _ => {
+                    // Any other field becomes a param.
+                    match self.eval_expr(&field.value) {
+                        Ok(val) => extra_params.push((key.to_owned(), val)),
+                        Err(msg) => {
+                            self.diags.push(
+                                Diagnostic::error(format!(
+                                    "cannot evaluate coupled_line param `{key}`: {msg}"
+                                ))
+                                .with_span(field.span),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate required fields.
+        if in_nets.is_empty() {
+            self.diags.push(
+                Diagnostic::error("coupled_line is missing `in` port list").with_span(cl.span),
+            );
+            return;
+        }
+        if out_nets.is_empty() {
+            self.diags.push(
+                Diagnostic::error("coupled_line is missing `out` port list").with_span(cl.span),
+            );
+            return;
+        }
+        if in_nets.len() != out_nets.len() {
+            self.diags.push(
+                Diagnostic::error(format!(
+                    "coupled_line `in` ({}) and `out` ({}) lists must have the same length",
+                    in_nets.len(),
+                    out_nets.len()
+                ))
+                .with_span(cl.span),
+            );
+            return;
+        }
+
+        let width = in_nets.len();
+        let gnd_name = gnd_net.unwrap_or_else(|| "gnd".to_owned());
+
+        // Build connections: in0, in1, ..., gnd, out0, out1, ...
+        let mut connections = Vec::new();
+        for (i, net_name) in in_nets.iter().enumerate() {
+            let net_id = self.resolve_net_name_prefixed(net_name, prefix);
+            connections.push(Connection {
+                terminal: format!("in{i}"),
+                net: net_id,
+            });
+        }
+        let gnd_id = self.resolve_net_name_prefixed(&gnd_name, prefix);
+        connections.push(Connection {
+            terminal: "gnd".to_owned(),
+            net: gnd_id,
+        });
+        for (i, net_name) in out_nets.iter().enumerate() {
+            let net_id = self.resolve_net_name_prefixed(net_name, prefix);
+            connections.push(Connection {
+                terminal: format!("out{i}"),
+                net: net_id,
+            });
+        }
+
+        // Build params.
+        let mut params = extra_params;
+        if let Some(m) = model_name {
+            params.push(("model".to_owned(), Value::String(m)));
+        }
+
+        let id = self.alloc_element_id();
+        self.element_by_name.insert(elem_name.clone(), id);
+        self.elements.push(Element {
+            id,
+            name: elem_name,
+            kind: ElementKind::CoupledLine { width },
+            connections,
+            params,
+            model: None,
+            source_spec: None,
+        });
     }
 
     // -------------------------------------------------------------------
@@ -2624,6 +2793,28 @@ mod tests {
         assert!(z1.model.is_some());
     }
 
+    #[test]
+    fn pmesfet_element_kind() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                model pm: pmesfet {
+                    vto = 0.5
+                }
+                Z1: pmesfet(drain: d, gate: g, source: s, model: pm)
+            }
+            "#,
+        );
+
+        let z1 = circuit.elements.iter().find(|e| e.name == "Z1").unwrap();
+        assert!(matches!(z1.kind, ElementKind::PMesfet));
+        assert!(z1.model.is_some());
+
+        // Verify the model was resolved as PMesfet device type.
+        let model = circuit.models.iter().find(|m| m.name == "pm").unwrap();
+        assert_eq!(model.device_type, cirq_ir::DeviceType::PMesfet);
+    }
+
     // -------------------------------------------------------------------
     // Gap 3.7: Tran tmax
     // -------------------------------------------------------------------
@@ -3249,5 +3440,151 @@ mod tests {
         );
 
         assert_eq!(circuit.initial_conditions.len(), 2);
+    }
+
+    #[test]
+    fn coupled_line_basic() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                coupled_line P1 {
+                    in: [a1, a2]
+                    out: [b1, b2]
+                    gnd: gnd
+                    model: cpl_mod
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.elements.len(), 1);
+        let elem = &circuit.elements[0];
+        assert_eq!(elem.name, "P1");
+        assert!(
+            matches!(elem.kind, ElementKind::CoupledLine { width: 2 }),
+            "expected CoupledLine {{ width: 2 }}, got {:?}",
+            elem.kind
+        );
+
+        // Connections: in0, in1, gnd, out0, out1 = 5 total.
+        assert_eq!(elem.connections.len(), 5);
+        assert_eq!(elem.connections[0].terminal, "in0");
+        assert_eq!(elem.connections[1].terminal, "in1");
+        assert_eq!(elem.connections[2].terminal, "gnd");
+        assert_eq!(elem.connections[3].terminal, "out0");
+        assert_eq!(elem.connections[4].terminal, "out1");
+
+        // Model param.
+        let model_param = elem
+            .params
+            .iter()
+            .find(|p| p.0 == "model")
+            .expect("should have model param");
+        assert!(matches!(&model_param.1, Value::String(s) if s == "cpl_mod"));
+    }
+
+    #[test]
+    fn coupled_line_single_line() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                coupled_line P1 {
+                    in: [a]
+                    out: [b]
+                    gnd: g
+                    model: m
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(circuit.elements.len(), 1);
+        let elem = &circuit.elements[0];
+        assert!(matches!(elem.kind, ElementKind::CoupledLine { width: 1 }));
+        // in0, gnd, out0 = 3 connections
+        assert_eq!(elem.connections.len(), 3);
+    }
+
+    #[test]
+    fn coupled_line_three_lines() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                coupled_line P1 {
+                    in: [a1, a2, a3]
+                    out: [b1, b2, b3]
+                    gnd: gnd
+                    model: cpl3
+                }
+            }
+            "#,
+        );
+
+        let elem = &circuit.elements[0];
+        assert!(matches!(elem.kind, ElementKind::CoupledLine { width: 3 }));
+        // 3 in + 1 gnd + 3 out = 7
+        assert_eq!(elem.connections.len(), 7);
+    }
+
+    #[test]
+    fn coupled_line_mismatched_widths_errors() {
+        let result = compile(
+            r#"
+            circuit test {
+                coupled_line P1 {
+                    in: [a1, a2]
+                    out: [b1]
+                    gnd: gnd
+                    model: m
+                }
+            }
+            "#,
+        );
+        assert!(result.is_err(), "mismatched in/out widths should error");
+    }
+
+    #[test]
+    fn coupled_line_missing_in_errors() {
+        let result = compile(
+            r#"
+            circuit test {
+                coupled_line P1 {
+                    out: [b1]
+                    gnd: gnd
+                    model: m
+                }
+            }
+            "#,
+        );
+        assert!(result.is_err(), "missing `in` should error");
+    }
+
+    #[test]
+    fn coupled_line_default_gnd() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                coupled_line P1 {
+                    in: [a]
+                    out: [b]
+                    model: m
+                }
+            }
+            "#,
+        );
+
+        // When gnd is omitted, it should default to "gnd".
+        let elem = &circuit.elements[0];
+        let gnd_conn = elem
+            .connections
+            .iter()
+            .find(|c| c.terminal == "gnd")
+            .expect("should have gnd connection");
+        // Verify the gnd net exists by looking it up in the circuit nets.
+        let gnd_net = &circuit.nets[gnd_conn.net.0 as usize];
+        assert_eq!(
+            gnd_net.name, "gnd",
+            "gnd connection should point to ground net"
+        );
     }
 }

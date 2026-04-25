@@ -58,6 +58,7 @@ pub enum CircuitItem {
     Save(SaveDecl),
     Func(FuncDecl),
     Ic(IcDecl),
+    CoupledLine(CoupledLineDecl),
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +231,26 @@ pub struct IcDecl {
 #[derive(Debug, Clone)]
 pub struct IcEntry {
     pub node: Ident,
+    pub value: Expr,
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
+// Coupled transmission lines
+// ---------------------------------------------------------------------------
+
+/// `coupled_line P1 { in: [a1, a2], out: [b1, b2], gnd: gnd, model: cpl_mod }`
+#[derive(Debug, Clone)]
+pub struct CoupledLineDecl {
+    pub name: Ident,
+    pub fields: Vec<CoupledLineField>,
+    pub span: Span,
+}
+
+/// A single key-value field inside a `coupled_line` block.
+#[derive(Debug, Clone)]
+pub struct CoupledLineField {
+    pub key: Ident,
     pub value: Expr,
     pub span: Span,
 }
