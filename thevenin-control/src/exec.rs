@@ -191,8 +191,13 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
         return run_temp_sweep(parts[2], parts[3], parts[4], ctx);
     }
 
-    // Parse the command line into an Analysis and build a single-analysis netlist
-    let analysis = parse_analysis_command(&cmd, &parts[1..])?;
+    // Parse the command line into an Analysis and build a single-analysis netlist.
+    // `run` re-executes whatever analysis is declared in the netlist.
+    let analysis = if cmd == "run" {
+        ctx.netlist.analysis.clone()
+    } else {
+        parse_analysis_command(&cmd, &parts[1..])?
+    };
 
     // Build a working copy of the netlist with the analysis set directly
     let mut netlist = ctx.netlist.clone();
@@ -620,10 +625,6 @@ fn parse_analysis_command(cmd: &str, args: &[&str]) -> Result<Analysis, String> 
                 output: args[0].to_string(),
                 input: args[1].to_string(),
             })
-        }
-        "run" => {
-            // `run` executes whatever analyses are in the netlist — default to OP
-            Ok(Analysis::Op)
         }
         _ => Err(format!("unknown analysis command: {cmd}")),
     }
