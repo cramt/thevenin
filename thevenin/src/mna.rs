@@ -156,6 +156,17 @@ pub struct InductorInstance {
     pub ic: Option<f64>,
 }
 
+/// A resolved mutual coupling (K-element) instance linking two inductors.
+#[derive(Debug, Clone)]
+pub struct MutualCouplingInstance {
+    /// Branch index of the first coupled inductor.
+    pub branch1_idx: usize,
+    /// Branch index of the second coupled inductor.
+    pub branch2_idx: usize,
+    /// Mutual inductance factor: M = k * sqrt(L1 * L2).
+    pub factor: f64,
+}
+
 /// A resolved voltage source instance with matrix indices and waveform.
 #[derive(Debug, Clone)]
 pub struct VoltageSourceInstance {
@@ -222,6 +233,8 @@ pub struct MnaSystem {
     pub capacitors: Vec<CapacitorInstance>,
     /// Resolved inductor instances for transient analysis.
     pub inductors: Vec<InductorInstance>,
+    /// Resolved mutual coupling (K-element) instances for transient/AC analysis.
+    pub mutual_couplings: Vec<MutualCouplingInstance>,
     /// Resolved BJT instances for NR iteration.
     pub bjts: Vec<BjtInstance>,
     /// Capacitor indices for each BJT's depletion caps (CJE, CJC).
@@ -1500,6 +1513,7 @@ fn assemble_mna_flat(
     let mut behavioral_sources = Vec::new();
     let mut behavioral_voltage_sources = Vec::new();
     let mut xspice_instances = Vec::new();
+    let mut mutual_couplings_raw: Vec<(&str, &str, &str, &thevenin_types::Expr)> = Vec::new();
     let mut internal_idx = node_map.len(); // internal nodes start after external nodes
 
     // Second pass: stamp each element.
@@ -3085,6 +3099,9 @@ fn assemble_mna_flat(
                 }
                 // If no registry, silently skip (backward compat)
             }
+            ElementKind::MutualCoupling { l1, l2, coupling } => {
+                mutual_couplings_raw.push((&element.name, l1, l2, coupling));
+            }
             _ => {
                 stamp_element(
                     element,
@@ -3101,6 +3118,57 @@ fn assemble_mna_flat(
                 )?;
             }
         }
+    }
+
+    // Resolve mutual coupling (K-elements) now that all inductors are registered.
+    let mut mutual_couplings = Vec::with_capacity(mutual_couplings_raw.len());
+    for (k_name, l1_name, l2_name, coupling_expr) in &mutual_couplings_raw {
+        let k = expr_value(coupling_expr, k_name)?;
+
+        let l1_lower = l1_name.to_lowercase();
+        let l2_lower = l2_name.to_lowercase();
+
+        let l1_offset = vsource_offset_map.get(&l1_lower).copied().ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                "mutual coupling '{k_name}' references unknown inductor '{l1_name}'"
+            ))
+        })?;
+        let l2_offset = vsource_offset_map.get(&l2_lower).copied().ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                "mutual coupling '{k_name}' references unknown inductor '{l2_name}'"
+            ))
+        })?;
+
+        let branch1 = n + l1_offset;
+        let branch2 = n + l2_offset;
+
+        // Find the inductance values to compute M = k * sqrt(L1 * L2).
+        let l1_val = inductors
+            .iter()
+            .find(|ind| ind.branch_idx == branch1)
+            .map(|ind| ind.inductance)
+            .ok_or_else(|| {
+                MnaError::UnsupportedElement(format!(
+                    "mutual coupling '{k_name}': inductor '{l1_name}' not found in instances"
+                ))
+            })?;
+        let l2_val = inductors
+            .iter()
+            .find(|ind| ind.branch_idx == branch2)
+            .map(|ind| ind.inductance)
+            .ok_or_else(|| {
+                MnaError::UnsupportedElement(format!(
+                    "mutual coupling '{k_name}': inductor '{l2_name}' not found in instances"
+                ))
+            })?;
+
+        let factor = k * (l1_val * l2_val).abs().sqrt();
+
+        mutual_couplings.push(MutualCouplingInstance {
+            branch1_idx: branch1,
+            branch2_idx: branch2,
+            factor,
+        });
     }
 
     Ok(MnaSystem {
@@ -3120,6 +3188,7 @@ fn assemble_mna_flat(
         hfets,
         capacitors,
         inductors,
+        mutual_couplings,
         voltage_sources,
         current_sources,
         bsim3s,
@@ -3911,5 +3980,58 @@ R1 1 0 1k
         let mna_modedc = assemble_mna_inner(&netlist, true, None).unwrap();
         let sol_modedc = mna_modedc.solve().unwrap();
         assert_abs_diff_eq!(sol_modedc.voltage("1").unwrap(), 0.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_mutual_coupling_assembly() {
+        // Two coupled inductors with k=0.5. In DC both are shorts, so mutual
+        // coupling has no DC effect. We verify the MNA assembles correctly and
+        // the mutual_couplings vec is populated with the right factor.
+        let netlist = Netlist::parse_single(
+            "Mutual coupling test
+V1 1 0 5
+R1 1 2 100
+L1 2 0 10m
+L2 3 0 20m
+R2 3 0 100
+K1 L1 L2 0.5
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let mna = assemble_mna(&netlist).unwrap();
+        assert_eq!(mna.mutual_couplings.len(), 1);
+
+        let mc = &mna.mutual_couplings[0];
+        // M = k * sqrt(L1 * L2) = 0.5 * sqrt(0.01 * 0.02) = 0.5 * sqrt(0.0002)
+        let expected_m = 0.5 * (0.01_f64 * 0.02).sqrt();
+        assert_abs_diff_eq!(mc.factor, expected_m, epsilon = 1e-12);
+
+        // In DC, inductors are shorts: V(2) = 0V, V(3) = 0V.
+        let sol = mna.solve().unwrap();
+        assert_abs_diff_eq!(sol.voltage("2").unwrap(), 0.0, epsilon = 1e-9);
+        assert_abs_diff_eq!(sol.voltage("3").unwrap(), 0.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_mutual_coupling_unknown_inductor() {
+        // K element referencing a non-existent inductor should error.
+        let netlist = Netlist::parse_single(
+            "Bad coupling
+V1 1 0 5
+L1 1 0 10m
+K1 L1 L99 0.5
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result = assemble_mna(&netlist);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("L99") || err_msg.contains("l99"));
     }
 }

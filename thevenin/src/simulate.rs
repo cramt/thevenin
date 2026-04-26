@@ -33,6 +33,22 @@ pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
     opts
 }
 
+/// Extract `.nodeset` pairs from the netlist, resolving node names to MNA
+/// matrix indices. Returns `(index, voltage)` pairs ready for the NR solver.
+pub(crate) fn resolve_nodeset(netlist: &Netlist, mna: &MnaSystem) -> Vec<(usize, f64)> {
+    let mut pairs = Vec::new();
+    for item in &netlist.items {
+        if let Item::Nodeset(ns) = item {
+            for (node_name, val) in ns {
+                if let Some(idx) = mna.node_map.get(node_name) {
+                    pairs.push((idx, *val));
+                }
+            }
+        }
+    }
+    pairs
+}
+
 /// Compute the DC operating point of a circuit.
 ///
 /// Assembles the MNA system from the netlist, solves it, and returns
@@ -41,7 +57,12 @@ pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
 pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
     let opts = nr_options_from_netlist(netlist);
-    let solution_vec = solve_op_raw_with_opts(&mna, &opts)?;
+    let nodeset = resolve_nodeset(netlist, &mna);
+    let solution_vec = if nodeset.is_empty() {
+        solve_op_raw_with_opts(&mna, &opts)?
+    } else {
+        solve_op_raw_with_nodeset(&mna, &opts, &nodeset)?
+    };
 
     let mut vecs = Vec::new();
 
@@ -162,6 +183,26 @@ pub(crate) fn solve_op_raw_with_opts(
     }
 }
 
+/// Like [`solve_op_raw_with_opts`] but applies `.nodeset` hints to bias the
+/// NR initial guess. Only affects nonlinear circuits (linear solves are direct
+/// and don't use initial guesses).
+pub(crate) fn solve_op_raw_with_nodeset(
+    mna: &MnaSystem,
+    base_opts: &NrOptions,
+    nodeset: &[(usize, f64)],
+) -> Result<Vec<f64>, MnaError> {
+    if !mna.has_nonlinear() {
+        // Linear circuits: direct solve, nodeset has no effect.
+        solve_op_raw_with_opts(mna, base_opts)
+    } else {
+        let opts = NrOptions {
+            diag_gmin: 0.0,
+            ..*base_opts
+        };
+        solve_nonlinear_op_with_nodeset(mna, &opts, nodeset)
+    }
+}
+
 /// Compute the DC operating point with `diag_gmin = 0`, matching ngspice's
 /// behaviour for explicit `.op` analysis (`CKTdiagGmin` starts at 0).
 ///
@@ -214,7 +255,20 @@ pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
 /// Solve a nonlinear DC operating point using Newton-Raphson.
 pub fn solve_nonlinear_op(mna: &MnaSystem, options: &NrOptions) -> Result<Vec<f64>, MnaError> {
-    solve_nonlinear_op_with_guess(mna, options, None)
+    solve_nonlinear_op_with_guess(mna, options, None, &[])
+}
+
+/// Solve a nonlinear DC operating point with `.nodeset` hints.
+///
+/// `nodeset` contains `(matrix_index, voltage)` pairs that bias the initial
+/// NR guess toward user-specified node voltages — a convergence aid that
+/// does not constrain the final solution.
+pub fn solve_nonlinear_op_with_nodeset(
+    mna: &MnaSystem,
+    options: &NrOptions,
+    nodeset: &[(usize, f64)],
+) -> Result<Vec<f64>, MnaError> {
+    solve_nonlinear_op_with_guess(mna, options, None, nodeset)
 }
 
 /// Compute a MODEINITJCT-style initial guess for the DC operating point.
@@ -481,6 +535,7 @@ fn solve_nonlinear_op_with_guess(
     mna: &MnaSystem,
     options: &NrOptions,
     initial_guess: Option<&[f64]>,
+    nodeset: &[(usize, f64)],
 ) -> Result<Vec<f64>, MnaError> {
     let dim = mna.system.dim();
     let num_nodes = mna.total_num_nodes();
@@ -491,7 +546,7 @@ fn solve_nonlinear_op_with_guess(
     // Choose initial solution vector.  When no explicit guess is provided and
     // the circuit contains Level-1 MOSFETs, run the JCT init pass to obtain a
     // non-trivial starting point (matching ngspice's MODEINITJCT behaviour).
-    let initial: Vec<f64> = if let Some(guess) = initial_guess {
+    let mut initial: Vec<f64> = if let Some(guess) = initial_guess {
         if guess.len() == dim {
             guess.to_vec()
         } else {
@@ -510,6 +565,14 @@ fn solve_nonlinear_op_with_guess(
     } else {
         vec![0.0; dim]
     };
+
+    // Apply .nodeset hints: override initial guess entries for specified nodes.
+    // This biases NR toward user-specified voltages as a convergence aid.
+    for &(idx, val) in nodeset {
+        if idx < initial.len() {
+            initial[idx] = val;
+        }
+    }
 
     let dev_state = if initial.iter().any(|&x| x != 0.0) {
         DeviceVoltageState::from_solution(mna, &initial)
@@ -893,7 +956,7 @@ fn collect_solution_into(
         }
     } else {
         // Nonlinear circuit — use NR solver with previous solution as initial guess.
-        let sol = solve_nonlinear_op_with_guess(mna, nr_opts, prev_solution.as_deref())?;
+        let sol = solve_nonlinear_op_with_guess(mna, nr_opts, prev_solution.as_deref(), &[])?;
         let mut idx = 0;
         let num_nodes = mna.total_num_nodes();
 

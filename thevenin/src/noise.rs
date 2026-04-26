@@ -16,7 +16,9 @@ use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
 use crate::ac::generate_ac_sweep;
 use crate::expr_val;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
-use crate::simulate::{nr_options_from_netlist, solve_nonlinear_op};
+use crate::simulate::{
+    nr_options_from_netlist, resolve_nodeset, solve_nonlinear_op, solve_nonlinear_op_with_nodeset,
+};
 use crate::sparse::ComplexLinearSystem;
 
 /// Boltzmann constant (J/K).
@@ -62,8 +64,13 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // DC operating point.
     let mna = assemble_mna(netlist)?;
     let nr_opts = nr_options_from_netlist(netlist);
+    let nodeset = resolve_nodeset(netlist, &mna);
     let op_solution = if mna.has_nonlinear() {
-        solve_nonlinear_op(&mna, &nr_opts)?
+        if nodeset.is_empty() {
+            solve_nonlinear_op(&mna, &nr_opts)?
+        } else {
+            solve_nonlinear_op_with_nodeset(&mna, &nr_opts, &nodeset)?
+        }
     } else {
         mna.system.solve()?
     };

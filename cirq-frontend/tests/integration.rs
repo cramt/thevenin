@@ -1530,3 +1530,422 @@ fn cirq_control_block_round_trip() {
         "gain should be ~0.5, got {gain_val}"
     );
 }
+
+// ===========================================================================
+// Round-trip tests for newly wired simulator features
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// .ic node-level initial conditions in transient
+// ---------------------------------------------------------------------------
+
+/// Verify that `.ic` node voltages are applied in transient analysis.
+///
+/// A simple RC circuit with V1=5V, R1=1k, C1=1n. With `.ic v(cap)=5.0`,
+/// the capacitor node starts at 5V (same as supply), so there should be
+/// no initial transient — v(cap) should stay at ~5V throughout.
+#[test]
+fn cirq_ic_node_voltage_in_transient() {
+    let source = r#"
+        circuit ic_test {
+            V1: vsource(in -> gnd, dc: 5)
+            R1: resistor(in -> cap, 1000)
+            C1: capacitor(cap -> gnd, 1e-9)
+            ic { v(cap) = 5.0 }
+            analysis tran { step: 1e-9, stop: 50e-9 }
+        }
+    "#;
+
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
+    assert_eq!(netlists.len(), 1);
+
+    // Verify the netlist contains .ic
+    let has_ic = netlists[0]
+        .items
+        .iter()
+        .any(|i| matches!(i, thevenin_types::Item::Ic(_)));
+    assert!(has_ic, "netlist should contain .ic directive");
+
+    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+
+    // v(cap) should start at 5V and stay near it (since supply is also 5V).
+    let vcap = result.vector("v(cap)").expect("should have v(cap)");
+    let data = vcap.data.as_real();
+    assert!(!data.is_empty(), "transient should produce data points");
+    assert!(
+        (data[0] - 5.0).abs() < 0.1,
+        "v(cap) should start at ~5V from .ic, got {}",
+        data[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// UIC flag — skip DC operating point
+// ---------------------------------------------------------------------------
+
+/// With UIC, the transient starts from zero + .ic values instead of DC OP.
+///
+/// R1=1k from in to out, V1=5V on in, C1 on out. Without UIC, DC OP gives
+/// v(out)=5V. With UIC and ic{v(out)=0}, we start at 0V and charge up.
+#[test]
+fn cirq_uic_skips_dc_op() {
+    let source = r#"
+        circuit uic_test {
+            V1: vsource(in -> gnd, dc: 5)
+            R1: resistor(in -> out, 1000)
+            C1: capacitor(out -> gnd, 1e-6)
+            ic { v(out) = 0.0 }
+            analysis tran { step: 1e-6, stop: 100e-6, uic: true }
+        }
+    "#;
+
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
+    assert_eq!(netlists.len(), 1);
+
+    // Verify UIC flag is set in the netlist analysis.
+    match &netlists[0].analysis {
+        thevenin_types::Analysis::Tran { uic, .. } => {
+            assert!(uic, "UIC flag should be set");
+        }
+        _ => panic!("expected tran analysis"),
+    }
+
+    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+
+    let vout = result.vector("v(out)").expect("should have v(out)");
+    let data = vout.data.as_real();
+    assert!(!data.is_empty());
+
+    // With UIC + ic{v(out)=0}, the first point should be near 0V, not 5V.
+    assert!(
+        data[0].abs() < 0.5,
+        "with UIC + ic=0, v(out) should start near 0V, got {}",
+        data[0]
+    );
+
+    // By the end of 100us with RC=1ms, we should be partially charged.
+    let last = *data.last().unwrap();
+    assert!(
+        last > 0.1 && last < 5.0,
+        "v(out) should be partially charged, got {last}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// .nodeset — convergence hint (structural test)
+// ---------------------------------------------------------------------------
+
+/// Verify that `.nodeset` passes through the pipeline and doesn't break
+/// simulation. The circuit should converge to the same DC OP regardless.
+#[test]
+fn cirq_nodeset_passes_through_pipeline() {
+    // Build a circuit with nodeset via the SPICE import path, since the Cirq
+    // grammar doesn't have a `nodeset` keyword yet — but the IR does, and
+    // to_netlist emits it.
+    let spice = "\
+Nodeset Test
+V1 in 0 5
+R1 in mid 1k
+R2 mid 0 1k
+.nodeset V(mid)=2.5
+.op
+.end
+";
+
+    let spice_netlists = thevenin_types::Netlist::parse(spice).expect("SPICE parse");
+    let spice_nl = &spice_netlists[0];
+
+    // Import to IR and back.
+    let ir = cirq_spice_import::import_netlist(spice_nl).expect("import");
+    assert!(!ir.nodeset.is_empty(), "IR should have nodeset entries");
+
+    let round_trip_netlists =
+        cirq_frontend::to_netlist::circuit_to_netlists(&ir).expect("to_netlist");
+    let rt_nl = &round_trip_netlists[0];
+
+    // Verify .nodeset survived the round-trip.
+    let has_nodeset = rt_nl
+        .items
+        .iter()
+        .any(|i| matches!(i, thevenin_types::Item::Nodeset(_)));
+    assert!(has_nodeset, "round-tripped netlist should have .nodeset");
+
+    // Simulate both: original SPICE and round-tripped.
+    let r1 = thevenin::simulate(spice_nl).expect("SPICE sim");
+    let r2 = thevenin::simulate(rt_nl).expect("round-trip sim");
+
+    let v1 = r1.vector("v(mid)").unwrap().data.as_real()[0];
+    let v2 = r2.vector("v(mid)").unwrap().data.as_real()[0];
+    assert!(
+        (v1 - v2).abs() < 1e-6,
+        "round-trip should give same result: {v1} vs {v2}"
+    );
+    assert!((v1 - 2.5).abs() < 0.01, "v(mid) should be 2.5V, got {v1}");
+}
+
+// ---------------------------------------------------------------------------
+// .meas — post-simulation measurement
+// ---------------------------------------------------------------------------
+
+/// Verify that `.meas` directives produce measurement results after simulation.
+#[test]
+fn cirq_meas_max_in_transient() {
+    // Use SPICE path since Cirq grammar doesn't have .meas syntax yet,
+    // but the IR→netlist→simulator pipeline supports it.
+    let spice = "\
+Meas Test
+V1 in 0 DC 0 PULSE(0 5 0 1n 1n 25n 50n)
+R1 in out 1k
+C1 out 0 1n
+.tran 1n 100n
+.meas tran vout_max MAX v(out)
+.meas tran vout_avg AVG v(out)
+.end
+";
+
+    let netlists = thevenin_types::Netlist::parse(spice).expect("SPICE parse");
+    let nl = &netlists[0];
+
+    // Verify .meas items are in the netlist.
+    let meas_count = nl
+        .items
+        .iter()
+        .filter(|i| matches!(i, thevenin_types::Item::Meas(_)))
+        .count();
+    assert_eq!(meas_count, 2, "should have 2 .meas directives");
+
+    let result = thevenin::simulate(nl).expect("simulation should succeed");
+
+    // Check that a "measurements" plot was added.
+    let meas_plot = result.plots.iter().find(|p| p.name == "measurements");
+    assert!(
+        meas_plot.is_some(),
+        "result should contain a 'measurements' plot"
+    );
+
+    let meas = meas_plot.unwrap();
+
+    // vout_max should be > 0 (the pulse drives the RC filter).
+    let vout_max = meas.vector("vout_max");
+    assert!(vout_max.is_some(), "should have vout_max measurement");
+    let max_val = vout_max.unwrap().data.as_real()[0];
+    assert!(
+        max_val > 0.1,
+        "vout_max should be positive (pulse-driven RC), got {max_val}"
+    );
+
+    // vout_avg should be between 0 and max.
+    let vout_avg = meas.vector("vout_avg");
+    assert!(vout_avg.is_some(), "should have vout_avg measurement");
+    let avg_val = vout_avg.unwrap().data.as_real()[0];
+    assert!(
+        avg_val > 0.0 && avg_val <= max_val,
+        "vout_avg ({avg_val}) should be between 0 and max ({max_val})"
+    );
+}
+
+/// Verify .meas round-trips through SPICE → IR → netlist → simulate.
+#[test]
+fn spice_meas_round_trip_through_ir() {
+    let spice = "\
+Meas Round-Trip
+V1 in 0 5
+R1 in out 1k
+R2 out 0 1k
+.op
+.meas dc vout_val FIND v(out) AT=5
+.end
+";
+
+    let netlists = thevenin_types::Netlist::parse(spice).expect("SPICE parse");
+    let nl = &netlists[0];
+
+    // Import to IR.
+    let ir = cirq_spice_import::import_netlist(nl).expect("import");
+    assert!(!ir.measures.is_empty(), "IR should have measure specs");
+
+    // Convert back to netlist.
+    let rt_netlists = cirq_frontend::to_netlist::circuit_to_netlists(&ir).expect("to_netlist");
+    let rt_nl = &rt_netlists[0];
+
+    // Verify .meas survived.
+    let meas_count = rt_nl
+        .items
+        .iter()
+        .filter(|i| matches!(i, thevenin_types::Item::Meas(_)))
+        .count();
+    assert!(meas_count > 0, "round-tripped netlist should have .meas");
+}
+
+// ---------------------------------------------------------------------------
+// Multi-temperature simulation
+// ---------------------------------------------------------------------------
+
+/// Multiple `.temp` values should produce multiple plots (one per temperature).
+#[test]
+fn cirq_multi_temp_produces_multiple_plots() {
+    let source = r#"
+        circuit multi_temp {
+            V1: vsource(in -> gnd, dc: 5)
+            R1: resistor(in -> mid, 1000)
+            R2: resistor(mid -> gnd, 1000)
+            temp 25
+            temp 50
+            analysis op {}
+        }
+    "#;
+
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
+    assert_eq!(netlists.len(), 1);
+
+    // Verify multiple .temp items are in the netlist.
+    let temp_count = netlists[0]
+        .items
+        .iter()
+        .filter(|i| matches!(i, thevenin_types::Item::Temp(_)))
+        .count();
+    assert_eq!(temp_count, 2, "should have 2 .temp directives");
+
+    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+
+    // Multi-temp produces one plot per temperature.
+    assert!(
+        result.plots.len() >= 2,
+        "multi-temp should produce >= 2 plots, got {}",
+        result.plots.len()
+    );
+
+    // Each plot should have a temperature-annotated name.
+    assert!(
+        result.plots[0].name.contains("temp"),
+        "first plot name should contain 'temp': {}",
+        result.plots[0].name
+    );
+    assert!(
+        result.plots[1].name.contains("temp"),
+        "second plot name should contain 'temp': {}",
+        result.plots[1].name
+    );
+
+    // Both should produce the same voltage divider result (resistors are
+    // temperature-independent at this level).
+    let v1 = result.plots[0]
+        .vector("v(mid)")
+        .expect("plot 0 should have v(mid)")
+        .data
+        .as_real()[0];
+    let v2 = result.plots[1]
+        .vector("v(mid)")
+        .expect("plot 1 should have v(mid)")
+        .data
+        .as_real()[0];
+    assert!(
+        (v1 - 2.5).abs() < 0.01,
+        "v(mid) at temp1 should be 2.5V, got {v1}"
+    );
+    assert!(
+        (v2 - 2.5).abs() < 0.01,
+        "v(mid) at temp2 should be 2.5V, got {v2}"
+    );
+}
+
+/// SPICE multi-temp round-trip: `.temp 25 50` → IR → netlist → simulate.
+#[test]
+fn spice_multi_temp_round_trip() {
+    let spice = "\
+Multi-Temp RT
+V1 in 0 5
+R1 in mid 1k
+R2 mid 0 1k
+.temp 25
+.temp 100
+.op
+.end
+";
+
+    let netlists = thevenin_types::Netlist::parse(spice).expect("SPICE parse");
+    let nl = &netlists[0];
+
+    // Import to IR.
+    let ir = cirq_spice_import::import_netlist(nl).expect("import");
+    assert!(
+        ir.temps.len() >= 2,
+        "IR should have multiple temps, got {}",
+        ir.temps.len()
+    );
+
+    // Convert back to netlist.
+    let rt_netlists = cirq_frontend::to_netlist::circuit_to_netlists(&ir).expect("to_netlist");
+    let rt_nl = &rt_netlists[0];
+
+    let rt_temp_count = rt_nl
+        .items
+        .iter()
+        .filter(|i| matches!(i, thevenin_types::Item::Temp(_)))
+        .count();
+    assert!(
+        rt_temp_count >= 2,
+        "round-tripped netlist should have >= 2 .temp, got {rt_temp_count}"
+    );
+
+    // Simulate the round-tripped netlist.
+    let result = thevenin::simulate(rt_nl).expect("simulation should succeed");
+    assert!(
+        result.plots.len() >= 2,
+        "multi-temp simulation should produce >= 2 plots, got {}",
+        result.plots.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SPICE → IR → Netlist → Simulate: .ic round-trip
+// ---------------------------------------------------------------------------
+
+/// Verify .ic passes through the full SPICE → IR → netlist pipeline and the
+/// simulator consumes it.
+#[test]
+fn spice_ic_round_trip_simulate() {
+    let spice = "\
+IC Round-Trip
+V1 in 0 5
+R1 in cap 1k
+C1 cap 0 1n
+.ic V(cap)=5.0
+.tran 1n 50n
+.end
+";
+
+    let netlists = thevenin_types::Netlist::parse(spice).expect("SPICE parse");
+    let nl = &netlists[0];
+
+    // Import to IR and back.
+    let ir = cirq_spice_import::import_netlist(nl).expect("import");
+    assert!(
+        !ir.initial_conditions.is_empty(),
+        "IR should have initial conditions"
+    );
+
+    let rt_netlists = cirq_frontend::to_netlist::circuit_to_netlists(&ir).expect("to_netlist");
+    let rt_nl = &rt_netlists[0];
+
+    // Verify .ic survived.
+    let has_ic = rt_nl
+        .items
+        .iter()
+        .any(|i| matches!(i, thevenin_types::Item::Ic(_)));
+    assert!(has_ic, "round-tripped netlist should have .ic");
+
+    // Simulate and verify the initial voltage is applied.
+    let result = thevenin::simulate(rt_nl).expect("simulation should succeed");
+    let vcap = result.vector("v(cap)").expect("should have v(cap)");
+    let data = vcap.data.as_real();
+    assert!(!data.is_empty());
+    assert!(
+        (data[0] - 5.0).abs() < 0.2,
+        "v(cap) should start near 5V from .ic, got {}",
+        data[0]
+    );
+}

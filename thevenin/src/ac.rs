@@ -5,7 +5,9 @@ use thevenin_types::{AcVariation, Analysis, Complex, Netlist, SimPlot, SimResult
 use crate::expr_val;
 use crate::expr_val_or;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
-use crate::simulate::{nr_options_from_netlist, solve_nonlinear_op};
+use crate::simulate::{
+    nr_options_from_netlist, resolve_nodeset, solve_nonlinear_op, solve_nonlinear_op_with_nodeset,
+};
 use crate::sparse::ComplexLinearSystem;
 
 /// Perform AC small-signal analysis.
@@ -36,8 +38,13 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // to get the full solution vector including internal device nodes.
     let mna = assemble_mna(netlist)?;
     let nr_opts = nr_options_from_netlist(netlist);
+    let nodeset = resolve_nodeset(netlist, &mna);
     let op_solution = if mna.has_nonlinear() {
-        solve_nonlinear_op(&mna, &nr_opts)?
+        if nodeset.is_empty() {
+            solve_nonlinear_op(&mna, &nr_opts)?
+        } else {
+            solve_nonlinear_op_with_nodeset(&mna, &nr_opts, &nodeset)?
+        }
     } else {
         mna.system.solve()?
     };
@@ -266,6 +273,14 @@ pub fn stamp_ac_devices(
     for ind in &mna.inductors {
         sys.imag
             .add(ind.branch_idx, ind.branch_idx, -omega * ind.inductance);
+    }
+
+    // 3b. Stamp mutual coupling AC cross-terms: -jωM on off-diagonal.
+    for mc in &mna.mutual_couplings {
+        sys.imag
+            .add(mc.branch1_idx, mc.branch2_idx, -omega * mc.factor);
+        sys.imag
+            .add(mc.branch2_idx, mc.branch1_idx, -omega * mc.factor);
     }
 
     // 4. Stamp diode small-signal conductance at DC operating point.

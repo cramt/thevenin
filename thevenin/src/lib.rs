@@ -51,6 +51,7 @@ pub(crate) mod waveform;
 
 // ── Analysis modules ────────────────────────────────────────────────────────
 pub(crate) mod ac;
+pub(crate) mod measure;
 pub(crate) mod noise;
 pub(crate) mod pz;
 pub(crate) mod sens;
@@ -105,6 +106,10 @@ pub use subckt::flatten_netlist;
 
 /// Extract simulation temperature from a netlist (from `.temp` directive or `.options temp=`).
 /// Returns 27.0°C (room temperature) as default.
+///
+/// When multiple `.temp` directives exist, returns the last one (last-wins
+/// semantics for single-temperature queries — use [`netlist_temps`] for
+/// multi-temperature sweeps).
 pub fn netlist_temp(netlist: &Netlist) -> f64 {
     let mut temp_c = 27.0_f64;
     for item in &netlist.items {
@@ -123,6 +128,22 @@ pub fn netlist_temp(netlist: &Netlist) -> f64 {
         }
     }
     temp_c
+}
+
+/// Extract all simulation temperatures from a netlist.
+///
+/// Returns every `.temp` value found. When multiple temperatures are
+/// specified (e.g. `.temp 25 50 100`), the simulation should be run at each.
+/// Returns an empty vec if no `.temp` directive exists (caller should use
+/// the default 27°C).
+pub fn netlist_temps(netlist: &Netlist) -> Vec<f64> {
+    let mut temps = Vec::new();
+    for item in &netlist.items {
+        if let Item::Temp(t) = item {
+            temps.push(*t);
+        }
+    }
+    temps
 }
 
 /// Extract nominal temperature (TNOM) from `.options` in Kelvin.
@@ -147,7 +168,26 @@ pub fn netlist_tnom(netlist: &Netlist) -> f64 {
 ///
 /// Each `Netlist` contains exactly one analysis command. This function
 /// dispatches to the appropriate simulator based on that analysis.
+///
+/// When multiple `.temp` directives are present, the simulation is run once
+/// per temperature and results are collected into a single `SimResult` with
+/// a `"temperature"` sweep variable.
 pub fn simulate(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let temps = netlist_temps(netlist);
+    let mut result = if temps.len() > 1 {
+        simulate_multi_temp(netlist, &temps)?
+    } else {
+        simulate_single(netlist)?
+    };
+
+    // Evaluate .meas directives against the simulation results.
+    measure::evaluate_measurements(netlist, &mut result);
+
+    Ok(result)
+}
+
+/// Dispatch to the appropriate simulator for a single analysis run.
+fn simulate_single(netlist: &Netlist) -> Result<SimResult, MnaError> {
     match &netlist.analysis {
         Analysis::Op => simulate_op(netlist),
         Analysis::Dc { .. } => simulate_dc(netlist),
@@ -158,4 +198,32 @@ pub fn simulate(netlist: &Netlist) -> Result<SimResult, MnaError> {
         Analysis::Tf { .. } => simulate_tf(netlist),
         Analysis::Pz { .. } => simulate_pz(netlist),
     }
+}
+
+/// Run the analysis at each temperature, collecting results.
+///
+/// Creates a modified netlist for each temperature (stripping all `.temp`
+/// items and inserting a single one), runs the simulation, and produces one
+/// plot per temperature in the result.
+fn simulate_multi_temp(netlist: &Netlist, temps: &[f64]) -> Result<SimResult, MnaError> {
+    let mut plots = Vec::with_capacity(temps.len());
+
+    for (i, &temp) in temps.iter().enumerate() {
+        // Build a netlist with only this temperature.
+        let mut single_temp_netlist = netlist.clone();
+        single_temp_netlist
+            .items
+            .retain(|item| !matches!(item, Item::Temp(_)));
+        single_temp_netlist.items.push(Item::Temp(temp));
+
+        let result = simulate_single(&single_temp_netlist)?;
+
+        // Rename each plot to include the temperature and index.
+        for mut plot in result.plots {
+            plot.name = format!("{}_temp{}_{}", plot.name, i + 1, temp);
+            plots.push(plot);
+        }
+    }
+
+    Ok(SimResult { plots })
 }

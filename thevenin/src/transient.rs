@@ -8,7 +8,7 @@
 //! estimation using the difference between BE and Trap results for
 //! capacitor/inductor charges/fluxes.
 
-use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{Analysis, Item, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
 use crate::device_stamp::{DeviceVoltageState, stamp_current_source};
@@ -579,14 +579,20 @@ fn estimate_new_timestep(
 /// Uses adaptive timestep control with LTE estimation when reactive elements
 /// are present, falling back to fixed timestep for purely resistive circuits.
 pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let (tstep, tstop, tstart, tmax) = match &netlist.analysis {
+    let (tstep, tstop, tstart, tmax, uic) = match &netlist.analysis {
         Analysis::Tran {
             tstep,
             tstop,
             tstart,
             tmax,
-            ..
-        } => (tstep.clone(), tstop.clone(), tstart.clone(), tmax.clone()),
+            uic,
+        } => (
+            tstep.clone(),
+            tstop.clone(),
+            tstart.clone(),
+            tmax.clone(),
+            *uic,
+        ),
         _ => {
             return Err(MnaError::UnsupportedElement(
                 "no .tran analysis found".to_string(),
@@ -625,15 +631,36 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // the default GMIN (1e-12) overwhelms picoampere-range junction leakage.
     let circuit_nr_opts = nr_options_from_netlist(netlist);
 
-    // Compute DC operating point for initial conditions.
-    // Use solve_op_raw_with_opts to propagate circuit GMIN/tolerance options.
-    // The full solution vector including internal device node voltages
-    // (e.g. BJT internal base/collector) prevents transient disturbances
-    // at the first timestep.
-    let mut solution = solve_op_raw_with_opts(&mna, &circuit_nr_opts)?;
     let dim = mna.system.dim();
     let num_nodes = mna.total_num_nodes();
-    solution.resize(dim, 0.0);
+
+    // When UIC (Use Initial Conditions) is set, skip the DC operating point
+    // and start from zero with explicit .ic node voltages applied.
+    // Otherwise, compute the normal DC OP as the starting point.
+    let nodeset = crate::simulate::resolve_nodeset(netlist, &mna);
+    let mut solution = if uic {
+        vec![0.0; dim]
+    } else {
+        let mut sol = if nodeset.is_empty() {
+            solve_op_raw_with_opts(&mna, &circuit_nr_opts)?
+        } else {
+            crate::simulate::solve_op_raw_with_nodeset(&mna, &circuit_nr_opts, &nodeset)?
+        };
+        sol.resize(dim, 0.0);
+        sol
+    };
+
+    // Apply node-level .ic overrides from the netlist.
+    // These set explicit node voltages for the transient initial state.
+    for item in &netlist.items {
+        if let Item::Ic(pairs) = item {
+            for (node_name, val) in pairs {
+                if let Some(idx) = mna.node_map.get(node_name) {
+                    solution[idx] = *val;
+                }
+            }
+        }
+    }
 
     // Apply IC overrides for capacitors (override DC OP voltage).
     for cap in &mna.capacitors {
@@ -2147,6 +2174,19 @@ fn solve_timestep(
             system.rhs[ind.branch_idx] += veq;
         }
 
+        // 3b. Stamp mutual coupling cross-terms: M * (1/h) for BE, M * (2/h) for Trap.
+        {
+            let coeff = match method {
+                IntegrationMethod::BackwardEuler => 1.0 / h,
+                IntegrationMethod::Trapezoidal => 2.0 / h,
+            };
+            for mc in &mna.mutual_couplings {
+                let stamp = -mc.factor * coeff;
+                system.matrix.add(mc.branch1_idx, mc.branch2_idx, stamp);
+                system.matrix.add(mc.branch2_idx, mc.branch1_idx, stamp);
+            }
+        }
+
         // 4. Stamp all nonlinear device companions. Device stamps always use
         //    nominal gmin (not the elevated gmin from gmin stepping).
         //    Transient always uses Float mode (voltage limiting against previous
@@ -3451,5 +3491,49 @@ C1 out 0 1u IC=0
             })
             .unwrap()
             .0
+    }
+
+    #[test]
+    fn test_coupled_inductors_transformer() {
+        // Two coupled inductors with k=0.5, L1=L2=1mH.
+        // PULSE voltage source drives current through primary (V1→R1→L1→GND).
+        // Secondary has a load resistor (L2→R2→GND).
+        //
+        // During the pulse rise, dI1/dt induces voltage on secondary via
+        // M = k*sqrt(L1*L2). We verify that V(sec) becomes non-zero
+        // (energy transfer through mutual coupling) during the transient.
+        let netlist = Netlist::parse_single(
+            "Transformer transient test
+V1 in 0 PULSE(0 5 0 1n 1n 5u 10u)
+R1 in pri 100
+L1 pri 0 1m
+L2 sec 0 1m
+R2 sec 0 1k
+K1 L1 L2 0.5
+.tran 100n 10u
+.end
+",
+        )
+        .unwrap();
+
+        let result = crate::simulate(&netlist).unwrap();
+        let time = tran_vector(&result, "time");
+        let v_sec = tran_vector(&result, "v(sec)");
+
+        // Find peak absolute secondary voltage (should be non-zero due to coupling).
+        let peak = v_sec.iter().copied().fold(0.0_f64, |a, b| a.max(b.abs()));
+        assert!(
+            peak > 0.001,
+            "secondary should see induced voltage from coupling, peak was {peak}"
+        );
+
+        // At a late time when the pulse is flat (say 5us), dI/dt ≈ 0,
+        // so secondary voltage should be smaller than the peak.
+        let late_idx = find_nearest_time(time, 5.0e-6);
+        let v_sec_late = v_sec[late_idx].abs();
+        assert!(
+            v_sec_late < peak,
+            "secondary should decay when dI/dt→0: late={v_sec_late} vs peak={peak}"
+        );
     }
 }
