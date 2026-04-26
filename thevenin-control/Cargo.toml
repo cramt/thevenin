@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = ".control block interpreter for thevenin circuit simulator"
 license = "BSD-3-Clause"
-publish = false
+repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
-thevenin-types = { path = "../thevenin-types" }
-thevenin = { path = "../thevenin" }
+thevenin-types = { path = "../thevenin-types", version = "0.2.0" }
+thevenin = { path = "../thevenin", version = "0.2.0" }
 thiserror.workspace = true

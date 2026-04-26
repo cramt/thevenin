@@ -7,16 +7,16 @@ license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
-cirq-ast = { path = "../cirq-ast" }
-cirq-grammar = { path = "../cirq-grammar" }
-cirq-ir = { path = "../cirq-ir" }
-thevenin-types = { path = "../thevenin-types" }
+cirq-ast = { path = "../cirq-ast", version = "0.1.0" }
+cirq-grammar = { path = "../cirq-grammar", version = "0.1.0" }
+cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.2.0" }
 thiserror.workspace = true
 tree-sitter = "0.25"
 
 [dev-dependencies]
-thevenin = { path = "../thevenin" }
-thevenin-control = { path = "../thevenin-control" }
-cirq-spice-import = { path = "../cirq-spice-import" }
-thevenin-types = { path = "../thevenin-types" }
+thevenin = { path = "../thevenin", version = "0.2.0" }
+thevenin-control = { path = "../thevenin-control", version = "0.1.0" }
+cirq-spice-import = { path = "../cirq-spice-import", version = "0.1.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.2.0" }
 tempfile = "3"

@@ -7,10 +7,10 @@ license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
-cirq-ir = { path = "../cirq-ir" }
-thevenin = { path = "../thevenin" }
-thevenin-types = { path = "../thevenin-types" }
+cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
+thevenin = { path = "../thevenin", version = "0.2.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.2.0" }
 thiserror.workspace = true
 
 [dev-dependencies]
-cirq-frontend = { path = "../cirq-frontend" }
+cirq-frontend = { path = "../cirq-frontend", version = "0.1.0" }

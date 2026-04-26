@@ -21,8 +21,8 @@ approx = "0.5"
 wasm-bindgen-test.workspace = true
 getrandom = { version = "0.4", features = ["wasm_js"] }
 web-time = "1"
-thevenin-test-macro = { path = "../thevenin-test-macro" }
-thevenin-control = { path = "../thevenin-control" }
+thevenin-test-macro = { path = "../thevenin-test-macro", version = "0.1.1" }
+thevenin-control = { path = "../thevenin-control", version = "0.1.0" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
