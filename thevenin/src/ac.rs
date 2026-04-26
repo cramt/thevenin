@@ -2035,4 +2035,59 @@ L1 2 0 0.1
             "high freq magnitude should be ~1.0, got {high_mag}"
         );
     }
+
+    #[test]
+    fn test_ac_coupled_inductors_transformer() {
+        // AC analysis of a 1:1 transformer with k=0.999.
+        // At low frequency, the secondary is nearly an open circuit (inductor
+        // impedance is low, load sees little voltage). At high frequency, the
+        // coupling transfers energy effectively: |V(sec)| should increase with ω.
+        //
+        // Primary: V1(AC=1)→R1→L1→GND
+        // Secondary: L2→R2→GND
+        let netlist = Netlist::parse_single(
+            "AC transformer
+V1 in 0 AC 1
+R1 in pri 10
+L1 pri 0 100m
+L2 sec 0 100m
+R2 sec 0 100
+K1 L1 L2 0.999
+.ac dec 10 1 1meg
+.end
+",
+        )
+        .unwrap();
+
+        let result = crate::simulate(&netlist).unwrap();
+        let plot = &result.plots[0];
+
+        let freq_vec = plot.vecs.iter().find(|v| v.name == "frequency").unwrap();
+        let v_sec = plot.vecs.iter().find(|v| v.name == "v(sec)").unwrap();
+
+        let freq_data = freq_vec.data.as_real();
+        let v_sec_data = v_sec.data.as_complex();
+
+        // At the lowest frequency, secondary voltage should be small.
+        let low_mag = (v_sec_data[0].re.powi(2) + v_sec_data[0].im.powi(2)).sqrt();
+
+        // At a mid-high frequency, secondary should have more voltage.
+        let mid_idx = freq_data.len() / 2;
+        let mid_mag = (v_sec_data[mid_idx].re.powi(2) + v_sec_data[mid_idx].im.powi(2)).sqrt();
+
+        assert!(
+            mid_mag > low_mag,
+            "AC transformer: mid-freq |V(sec)|={mid_mag} should exceed low-freq {low_mag}"
+        );
+
+        // Verify the secondary isn't zero everywhere (coupling works).
+        let peak_mag = v_sec_data
+            .iter()
+            .map(|c| (c.re.powi(2) + c.im.powi(2)).sqrt())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            peak_mag > 0.01,
+            "AC transformer secondary should have non-zero response, peak={peak_mag}"
+        );
+    }
 }
