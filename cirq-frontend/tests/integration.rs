@@ -811,10 +811,9 @@ fn cirq_coupling_element_compile() {
         .find(|p| p.0 == "coupling")
         .expect("should have coupling param");
     match &coupling_param.1 {
-        cirq_ir::Value::Real(v) => assert!(
-            (*v - 0.99).abs() < 1e-6,
-            "coupling should be 0.99, got {v}"
-        ),
+        cirq_ir::Value::Real(v) => {
+            assert!((*v - 0.99).abs() < 1e-6, "coupling should be 0.99, got {v}")
+        }
         other => panic!("expected Real for coupling, got {other:?}"),
     }
 
@@ -834,9 +833,15 @@ fn cirq_coupling_element_compile() {
         })
         .collect();
 
-    let coupling_elem = elements.iter().find(|e| e.name == "K1").expect("K1 in netlist");
+    let coupling_elem = elements
+        .iter()
+        .find(|e| e.name == "K1")
+        .expect("K1 in netlist");
     assert!(
-        matches!(&coupling_elem.kind, thevenin_types::ElementKind::MutualCoupling { .. }),
+        matches!(
+            &coupling_elem.kind,
+            thevenin_types::ElementKind::MutualCoupling { .. }
+        ),
         "expected MutualCoupling, got {:?}",
         coupling_elem.kind
     );
@@ -924,7 +929,12 @@ fn cirq_mosfet_with_model_compile() {
         .expect("M1 in netlist");
     match &mosfet.kind {
         thevenin_types::ElementKind::Mosfet {
-            d, g, s, bulk, model, ..
+            d,
+            g,
+            s,
+            bulk,
+            model,
+            ..
         } => {
             assert_eq!(model, "nch");
             assert_eq!(g, "gate");
@@ -985,11 +995,7 @@ R1 in 0 1k
         .iter()
         .find_map(|i| {
             if let thevenin_types::Item::Element(e) = i {
-                if e.name == "V1" {
-                    Some(e)
-                } else {
-                    None
-                }
+                if e.name == "V1" { Some(e) } else { None }
             } else {
                 None
             }
@@ -1133,7 +1139,10 @@ V1 a 0 DC 5
     let nl = &round_tripped[0];
 
     // Verify options survived in the netlist.
-    let has_options = nl.items.iter().any(|i| matches!(i, thevenin_types::Item::Options(_)));
+    let has_options = nl
+        .items
+        .iter()
+        .any(|i| matches!(i, thevenin_types::Item::Options(_)));
     assert!(has_options, "netlist should have options");
 
     // Verify temp survived in the netlist.
@@ -1258,11 +1267,7 @@ R2 out 0 1k
         .iter()
         .find_map(|i| {
             if let thevenin_types::Item::Element(e) = i {
-                if e.name == "B1" {
-                    Some(e)
-                } else {
-                    None
-                }
+                if e.name == "B1" { Some(e) } else { None }
             } else {
                 None
             }
@@ -1386,8 +1391,8 @@ fn cirq_hierarchical_module_flattening() {
     );
 
     // Should still produce a valid netlist (no crash during to_netlist).
-    let netlists = cirq_frontend::compile_to_netlist(source)
-        .expect("compile_to_netlist should succeed");
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
     assert!(!netlists.is_empty());
 }
 
@@ -1442,8 +1447,8 @@ fn cirq_module_multiple_instances_top_level() {
     assert!(ir.params.iter().any(|p| p.name == "div2.r_top"));
 
     // Simulate and check: each divider should produce v(mid) = 5V.
-    let netlists = cirq_frontend::compile_to_netlist(source)
-        .expect("compile_to_netlist should succeed");
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
     let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
 
     let vmid1 = result.vector("v(mid1)").expect("should have v(mid1)");
@@ -1493,13 +1498,14 @@ fn cirq_control_block_round_trip() {
     assert_eq!(ir.code_blocks[0].lines[2], "print gain");
 
     // Compile to netlist — control block should appear as Item::Control.
-    let netlists = cirq_frontend::compile_to_netlist(source)
-        .expect("compile_to_netlist should succeed");
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
     let nl = &netlists[0];
 
-    let has_control = nl.items.iter().any(|item| {
-        matches!(item, thevenin_types::Item::Control(_))
-    });
+    let has_control = nl
+        .items
+        .iter()
+        .any(|item| matches!(item, thevenin_types::Item::Control(_)));
     assert!(has_control, "netlist should contain Item::Control");
 
     // Execute via control-block interpreter.
@@ -1514,7 +1520,10 @@ fn cirq_control_block_round_trip() {
         .iter()
         .flat_map(|p| &p.vecs)
         .find(|v| v.name == "gain");
-    assert!(gain_vec.is_some(), "should have gain vector from control let");
+    assert!(
+        gain_vec.is_some(),
+        "should have gain vector from control let"
+    );
     let gain_val = gain_vec.unwrap().data.as_real()[0];
     assert!(
         (gain_val - 0.5).abs() < 0.001,

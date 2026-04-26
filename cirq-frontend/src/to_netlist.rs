@@ -116,9 +116,7 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
         let pairs: Vec<(String, f64)> = circuit
             .initial_conditions
             .iter()
-            .filter_map(|(id, val)| {
-                net_names.get(id).map(|name| (name.clone(), *val))
-            })
+            .filter_map(|(id, val)| net_names.get(id).map(|name| (name.clone(), *val)))
             .collect();
         if !pairs.is_empty() {
             items.push(Item::Ic(pairs));

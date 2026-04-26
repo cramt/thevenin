@@ -2010,33 +2010,66 @@ R_load net_c 0 1k
             .connections
             .iter()
             .map(|conn| {
-                c.nets.iter().find(|n| n.id == conn.net).unwrap().name.as_str()
+                c.nets
+                    .iter()
+                    .find(|n| n.id == conn.net)
+                    .unwrap()
+                    .name
+                    .as_str()
             })
             .collect();
-        assert!(x1_r1_node_names.contains(&"net_a"), "x1.r1 should connect to net_a (remapped port)");
-        assert!(x1_r1_node_names.contains(&"x1.mid"), "x1.r1 should connect to x1.mid (prefixed internal node)");
+        assert!(
+            x1_r1_node_names.contains(&"net_a"),
+            "x1.r1 should connect to net_a (remapped port)"
+        );
+        assert!(
+            x1_r1_node_names.contains(&"x1.mid"),
+            "x1.r1 should connect to x1.mid (prefixed internal node)"
+        );
 
         // x1.r2 connects x1.mid -> net_b (outp->net_b)
         let x1_r2_node_names: Vec<&str> = x1_r2
             .connections
             .iter()
             .map(|conn| {
-                c.nets.iter().find(|n| n.id == conn.net).unwrap().name.as_str()
+                c.nets
+                    .iter()
+                    .find(|n| n.id == conn.net)
+                    .unwrap()
+                    .name
+                    .as_str()
             })
             .collect();
-        assert!(x1_r2_node_names.contains(&"x1.mid"), "x1.r2 should connect to x1.mid");
-        assert!(x1_r2_node_names.contains(&"net_b"), "x1.r2 should connect to net_b (remapped port)");
+        assert!(
+            x1_r2_node_names.contains(&"x1.mid"),
+            "x1.r2 should connect to x1.mid"
+        );
+        assert!(
+            x1_r2_node_names.contains(&"net_b"),
+            "x1.r2 should connect to net_b (remapped port)"
+        );
 
         // x2.r1 connects net_b -> x2.mid
         let x2_r1_node_names: Vec<&str> = x2_r1
             .connections
             .iter()
             .map(|conn| {
-                c.nets.iter().find(|n| n.id == conn.net).unwrap().name.as_str()
+                c.nets
+                    .iter()
+                    .find(|n| n.id == conn.net)
+                    .unwrap()
+                    .name
+                    .as_str()
             })
             .collect();
-        assert!(x2_r1_node_names.contains(&"net_b"), "x2.r1 should connect to net_b (remapped port)");
-        assert!(x2_r1_node_names.contains(&"x2.mid"), "x2.r1 should connect to x2.mid");
+        assert!(
+            x2_r1_node_names.contains(&"net_b"),
+            "x2.r1 should connect to net_b (remapped port)"
+        );
+        assert!(
+            x2_r1_node_names.contains(&"x2.mid"),
+            "x2.r1 should connect to x2.mid"
+        );
 
         // Verify top-level elements are not prefixed.
         assert!(c.elements.iter().any(|e| e.name == "V1"));

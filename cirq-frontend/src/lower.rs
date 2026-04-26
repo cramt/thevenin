@@ -4,9 +4,9 @@
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CodeDecl,
     CoupledLineDecl, CoupledLineField, ElementInst, Expr, FuncDecl, GlobalDecl, IcDecl, IcEntry,
-    Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting, OptionsDecl,
-    ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl, SaveTarget, SourceFile, TempDecl,
-    TopLevel, UnaryOp, span::Span,
+    Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting,
+    OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl, SaveTarget,
+    SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
