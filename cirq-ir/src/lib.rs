@@ -96,7 +96,10 @@ pub enum ElementKind {
     Vccs,
     Ccvs,
     Cccs,
+    /// Lossy transmission line (SPICE O element / LTRA model).
     TransmissionLine,
+    /// Single lossy transmission line (SPICE Y element / TXL model).
+    Txl,
     /// Coupled multiconductor transmission line (P element).
     /// Connections use terminal names `"in0"`, `"in1"`, ..., `"gnd"`,
     /// `"out0"`, `"out1"`, ... in the element's `connections` field.

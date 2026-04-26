@@ -255,6 +255,20 @@ fn get_conn(
         })
 }
 
+/// Like `get_conn` but returns `None` instead of an error when the terminal
+/// is absent. Used for optional terminals (BJT substrate, MOSFET body).
+fn try_get_conn(
+    elem: &IrElement,
+    terminal: &str,
+    net_names: &HashMap<Id, String>,
+) -> Option<String> {
+    elem.connections
+        .iter()
+        .find(|c| c.terminal == terminal)
+        .and_then(|c| net_names.get(&c.net))
+        .cloned()
+}
+
 fn get_param_value(elem: &IrElement) -> Option<Expr> {
     elem.params
         .iter()
@@ -520,18 +534,23 @@ fn convert_element(
             let c = get_conn(elem, "collector", net_names)?;
             let b = get_conn(elem, "base", net_names)?;
             let e = get_conn(elem, "emitter", net_names)?;
+            let substrate = try_get_conn(elem, "substrate", net_names);
             let model = resolve_model_name(elem, model_names)?;
-            let params = extra_params(elem, &["value"]);
+            let off = elem
+                .params
+                .iter()
+                .any(|(k, v)| k == "off" && matches!(v, Value::Bool(true)));
+            let params = extra_params(elem, &["value", "off"]);
             Ok(Element {
                 name: spice_name(&elem.name, 'Q'),
                 kind: ElementKind::Bjt {
                     c,
                     b,
                     e,
-                    substrate: None,
+                    substrate,
                     model,
                     params,
-                    off: false,
+                    off,
                 },
             })
         }
@@ -541,6 +560,7 @@ fn convert_element(
             let g = get_conn(elem, "gate", net_names)?;
             let s = get_conn(elem, "source", net_names)?;
             let bulk = get_conn(elem, "bulk", net_names)?;
+            let body = try_get_conn(elem, "body", net_names);
             let model = resolve_model_name(elem, model_names)?;
             let params = extra_params(elem, &["value"]);
             Ok(Element {
@@ -550,7 +570,7 @@ fn convert_element(
                     g,
                     s,
                     bulk,
-                    body: None,
+                    body,
                     model,
                     params,
                 },
@@ -701,22 +721,35 @@ fn convert_element(
             })
         }
 
-        IrElementKind::TransmissionLine => {
+        IrElementKind::TransmissionLine | IrElementKind::Txl => {
             let in_pos = get_conn(elem, "in_pos", net_names)?;
             let in_neg = get_conn(elem, "in_neg", net_names)?;
             let out_pos = get_conn(elem, "out_pos", net_names)?;
             let out_neg = get_conn(elem, "out_neg", net_names)?;
             let model = resolve_model_name(elem, model_names).unwrap_or_default();
             let params = extra_params(elem, &["value"]);
+            let is_txl = matches!(elem.kind, IrElementKind::Txl);
+            let prefix = if is_txl { 'Y' } else { 'O' };
             Ok(Element {
-                name: spice_name(&elem.name, 'O'),
-                kind: ElementKind::Ltra {
-                    pos1: in_pos,
-                    neg1: in_neg,
-                    pos2: out_pos,
-                    neg2: out_neg,
-                    model,
-                    params,
+                name: spice_name(&elem.name, prefix),
+                kind: if is_txl {
+                    ElementKind::Txl {
+                        pos1: in_pos,
+                        neg1: in_neg,
+                        pos2: out_pos,
+                        neg2: out_neg,
+                        model,
+                        params,
+                    }
+                } else {
+                    ElementKind::Ltra {
+                        pos1: in_pos,
+                        neg1: in_neg,
+                        pos2: out_pos,
+                        neg2: out_neg,
+                        model,
+                        params,
+                    }
                 },
             })
         }

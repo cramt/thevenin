@@ -1050,14 +1050,6 @@ fn convert_element(
             neg2,
             model,
             params,
-        }
-        | SpiceElementKind::Txl {
-            pos1,
-            neg1,
-            pos2,
-            neg2,
-            model,
-            params,
         } => {
             let model_id = model_ids.get(&model.to_ascii_uppercase()).copied();
             Ok(Some(IrElement {
@@ -1076,9 +1068,39 @@ fn convert_element(
             }))
         }
 
-        SpiceElementKind::SubcktCall { .. } => {
-            // Subcircuit flattening is a separate concern; skip for now.
-            Ok(None)
+        SpiceElementKind::Txl {
+            pos1,
+            neg1,
+            pos2,
+            neg2,
+            model,
+            params,
+        } => {
+            let model_id = model_ids.get(&model.to_ascii_uppercase()).copied();
+            Ok(Some(IrElement {
+                id,
+                name: name.clone(),
+                kind: IrElementKind::Txl,
+                connections: vec![
+                    connection("in_pos", nets.intern(pos1)),
+                    connection("in_neg", nets.intern(neg1)),
+                    connection("out_pos", nets.intern(pos2)),
+                    connection("out_neg", nets.intern(neg2)),
+                ],
+                params: convert_params(params),
+                model: model_id,
+                source_spec: None,
+            }))
+        }
+
+        SpiceElementKind::SubcktCall { subckt, .. } => {
+            // If we reach here, flatten_netlist() didn't fully resolve this
+            // call — the subcircuit definition is missing or flattening is
+            // incomplete.  Report an error rather than silently dropping
+            // the element (which would corrupt the circuit topology).
+            Err(ImportError::UnsupportedElement(format!(
+                "{name} (unresolved subcircuit call to `{subckt}`)"
+            )))
         }
 
         SpiceElementKind::BehavioralSource { pos, neg, spec } => {
@@ -1177,7 +1199,12 @@ fn convert_element(
             }))
         }
 
-        SpiceElementKind::Raw(_) => Err(ImportError::UnsupportedElement(name.clone())),
+        SpiceElementKind::Raw(_) => {
+            // Unrecognized element — skip gracefully rather than failing the
+            // entire import.  The element is lost but the rest of the circuit
+            // can still be simulated.
+            Ok(None)
+        }
     }
 }
 

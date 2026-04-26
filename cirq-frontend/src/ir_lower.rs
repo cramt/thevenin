@@ -105,7 +105,9 @@ fn standard_pins(kind: &ElementKind) -> &'static [&'static str] {
         ElementKind::Vcvs | ElementKind::Vccs | ElementKind::Ccvs | ElementKind::Cccs => {
             &["out_pos", "out_neg", "in_pos", "in_neg"]
         }
-        ElementKind::TransmissionLine => &["in_pos", "in_neg", "out_pos", "out_neg"],
+        ElementKind::TransmissionLine | ElementKind::Txl => {
+            &["in_pos", "in_neg", "out_pos", "out_neg"]
+        }
         ElementKind::Coupling => &[],
         // CoupledLine and Xspice have variable-width connections; no static pin list.
         ElementKind::CoupledLine { .. } | ElementKind::Xspice { .. } => &[],
@@ -132,7 +134,8 @@ fn element_kind_from_str(name: &str) -> Option<ElementKind> {
         "ccvs" => Some(ElementKind::Ccvs),
         "cccs" => Some(ElementKind::Cccs),
         "coupling" => Some(ElementKind::Coupling),
-        "tline" | "transmission_line" => Some(ElementKind::TransmissionLine),
+        "tline" | "transmission_line" | "ltra" => Some(ElementKind::TransmissionLine),
+        "txl" => Some(ElementKind::Txl),
         "nmesfet" => Some(ElementKind::NMesfet),
         "pmesfet" => Some(ElementKind::PMesfet),
         "behavioral" => Some(ElementKind::BehavioralSource {
@@ -1424,17 +1427,14 @@ impl IrCtx {
                 let source_id = if let Some(&eid) = self.element_by_name.get(&source.name) {
                     eid
                 } else {
-                    // The source might not be declared yet or may refer to a
-                    // net name — record a diagnostic but still produce an entry.
                     self.diags.push(
-                        Diagnostic::warning(format!(
+                        Diagnostic::error(format!(
                             "DC sweep source `{}` not found as an element",
                             source.name
                         ))
                         .with_span(source.span),
                     );
-                    // Use the net as a fallback reference.
-                    self.intern_net(&source.name, false)
+                    continue;
                 };
 
                 let start_val = self.eval_to_f64(start).unwrap_or(0.0);
