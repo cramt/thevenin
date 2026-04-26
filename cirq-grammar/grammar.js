@@ -48,7 +48,8 @@ module.exports = grammar({
         $.save_decl,
         $.func_decl,
         $.ic_decl,
-        $.coupled_line_decl
+        $.coupled_line_decl,
+        $.code_decl
       ),
 
     // ── Module ───────────────────────────────────────────────────────
@@ -200,6 +201,16 @@ module.exports = grammar({
         ":",
         field("value", $._expression)
       ),
+
+    // ── Code block (verbatim embedded language) ──────────────────────
+
+    code_decl: ($) =>
+      seq("code", field("language", $.string_literal), "{", optional(field("body", $.code_body)), "}"),
+
+    // Raw content between { and } — a single atomic token so that
+    // extras (whitespace, semicolons, comments) don't interfere with
+    // the embedded language lines inside.
+    code_body: (_$) => token(prec(-1, /[^}]+/)),
 
     // ── Options and Temperature ─────────────────────────────────────
 

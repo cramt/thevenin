@@ -575,6 +575,10 @@
           "named": true
         },
         {
+          "type": "code_decl",
+          "named": true
+        },
+        {
           "type": "coupled_line_decl",
           "named": true
         },
@@ -627,6 +631,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "code_decl",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "code_body",
+            "named": true
+          }
+        ]
+      },
+      "language": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1305,6 +1335,10 @@
         },
         {
           "type": "attribute",
+          "named": true
+        },
+        {
+          "type": "code_decl",
           "named": true
         },
         {
@@ -2345,6 +2379,14 @@
   {
     "type": "circuit",
     "named": false
+  },
+  {
+    "type": "code",
+    "named": false
+  },
+  {
+    "type": "code_body",
+    "named": true
   },
   {
     "type": "coupled_line",

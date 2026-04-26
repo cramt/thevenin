@@ -40,16 +40,21 @@ Run the Cirq pipeline alongside the direct SPICE path and verify equivalence.
 
 **Actions:**
 
-- [ ] Expand the integration test suite (`cirq-frontend/tests/integration.rs`)
+- [x] Expand the integration test suite (`cirq-frontend/tests/integration.rs`)
       to cover all supported element types and analysis modes.
+      19 integration tests now cover: OP/DC/AC/tran/noise/PZ analyses,
+      resistors/capacitors/inductors/MOSFETs/coupling/dependent-sources/
+      behavioral-sources, waveforms (PULSE/SIN), AC specs, SPICE round-trips,
+      options/temp, and semantic equivalence at IR level.
 - [ ] Add a CI job that runs Cirq-path simulation for the ngspice regression
       suite (ported circuits) and diffs results against the SPICE-path baseline.
-- [ ] Fix the param naming gap: SPICE import stores passive values as
-      `"resistance"`, `"capacitance"`, `"inductance"` while the to_netlist
-      adapter expects `"value"`. Either normalize in the importer or teach the
-      adapter to recognize both.
-- [ ] Add AC source parameter support to the Netlist adapter (currently only
-      `dc` is forwarded; `ac_mag`/`ac_phase` are dropped).
+- [x] Fix the param naming gap: SPICE import stores passive values as
+      `"value"` (normalized in the importer). Round-trip tests confirm the
+      Netlist adapter reads them correctly.
+- [x] Add AC source parameter support to the Netlist adapter. The `SourceSpec`
+      struct carries `dc`, `ac` (`AcSpec { mag, phase }`), and `waveform`.
+      Both the SPICE importer and Cirq ir_lower populate these fields. Verified
+      by `spice_ac_source_round_trip` integration test.
 
 **Exit criteria:** 100% of existing SPICE regression tests also pass through
 the Cirq IR path.
@@ -76,10 +81,13 @@ Cirq source ---------> cirq_ir::Circuit ------------+
 
 - [ ] Wire `thevenin::simulate()` or a wrapper to accept SPICE source and
       internally route through IR.
-- [ ] Ensure subcircuit flattening works at the IR level (currently the SPICE
-      importer skips subcircuit calls).
-- [ ] Handle behavioral sources, CPL, and XSPICE elements in the importer
-      (currently return `UnsupportedElement`).
+- [ ] Ensure subcircuit flattening works at the IR level (the SPICE importer
+      currently skips subcircuit calls; Cirq module inlining works for
+      single-level hierarchies).
+- [x] Handle behavioral sources, CPL, and XSPICE elements in the importer.
+      All three are now supported: `BehavioralSource` with V=/I= parsing,
+      `CoupledLine` with variable-width connections, and `Xspice` with
+      scalar/array connections. Verified by unit tests and integration tests.
 - [ ] Provide a `--legacy` flag or config to bypass IR for debugging.
 
 **Exit criteria:** removing the direct SPICE -> Netlist path causes no test
@@ -112,9 +120,9 @@ accept either Cirq source or Cirq IR.
 
 ## Risk Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Param naming inconsistency between SPICE import and Netlist adapter | Normalize during Stage 2; add round-trip tests that catch drift |
-| Subcircuit flattening divergence | Port ngspice subcircuit tests and diff IR-level flattening against Netlist-level |
-| Performance regression from extra IR layer | Profile in Stage 3; the IR conversion is negligible compared to matrix solve time |
-| Unsupported SPICE constructs (behavioral sources, XSPICE) | Maintain fallback path through Stage 3; incrementally add importer coverage |
+| Risk | Mitigation | Status |
+|------|------------|--------|
+| Param naming inconsistency between SPICE import and Netlist adapter | Normalize during Stage 2; add round-trip tests that catch drift | ✅ Resolved — importer uses `"value"` consistently; round-trip tests confirm |
+| Subcircuit flattening divergence | Port ngspice subcircuit tests and diff IR-level flattening against Netlist-level | Open — importer still skips subcircuit calls |
+| Performance regression from extra IR layer | Profile in Stage 3; the IR conversion is negligible compared to matrix solve time | Open |
+| Unsupported SPICE constructs (behavioral sources, XSPICE) | Maintain fallback path through Stage 3; incrementally add importer coverage | ✅ Resolved — behavioral, CPL, and XSPICE all supported |

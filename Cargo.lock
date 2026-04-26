@@ -161,6 +161,7 @@ dependencies = [
  "cirq-spice-import",
  "tempfile",
  "thevenin",
+ "thevenin-control",
  "thevenin-types",
  "thiserror 2.0.18",
  "tree-sitter",
@@ -188,6 +189,7 @@ version = "0.1.0"
 dependencies = [
  "cirq-frontend",
  "cirq-ir",
+ "thevenin",
  "thevenin-types",
  "thiserror 2.0.18",
 ]
@@ -1802,6 +1804,7 @@ dependencies = [
  "figue",
  "getrandom 0.3.4",
  "thevenin",
+ "thevenin-control",
  "thevenin-types",
  "wasm-bindgen-test",
 ]

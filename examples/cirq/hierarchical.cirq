@@ -10,8 +10,8 @@ module inverter {
     param wn = 1u
     param l = 180n
 
-    M1: pmos(vdd -> out, gate: in, bulk: vdd, model: pch, w: wp, l: l)
-    M2: nmos(out -> vss, gate: in, bulk: vss, model: nch, w: wn, l: l)
+    M1: pmos(drain: out, gate: in, source: vdd, bulk: vdd, model: pch, w: wp, l: l)
+    M2: nmos(drain: out, gate: in, source: vss, bulk: vss, model: nch, w: wn, l: l)
 }
 
 module buffer {
@@ -39,7 +39,7 @@ circuit buffer_test {
 
     Vdd: vsource(vdd -> gnd, dc: 1.8)
     Vin: vsource(in -> gnd,
-        pulse: { v1: 0, v2: 1.8, delay: 0, rise: 100p, fall: 100p, width: 5n, period: 10n }
+        pulse: { v1: 0, v2: 1.8, td: 0, tr: 100p, tf: 100p, pw: 5n, per: 10n }
     )
 
     buf1: buffer(a: in, z: out, vdd: vdd, vss: gnd)

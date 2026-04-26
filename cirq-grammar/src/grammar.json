@@ -132,6 +132,10 @@
         {
           "type": "SYMBOL",
           "name": "coupled_line_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "code_decl"
         }
       ]
     },
@@ -849,6 +853,58 @@
           }
         }
       ]
+    },
+    "code_decl": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "code"
+        },
+        {
+          "type": "FIELD",
+          "name": "language",
+          "content": {
+            "type": "SYMBOL",
+            "name": "string_literal"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "{"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "body",
+              "content": {
+                "type": "SYMBOL",
+                "name": "code_body"
+              }
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "}"
+        }
+      ]
+    },
+    "code_body": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": -1,
+        "content": {
+          "type": "PATTERN",
+          "value": "[^}]+"
+        }
+      }
     },
     "options_decl": {
       "type": "SEQ",

@@ -45,6 +45,7 @@ publish = false
 [dependencies]
 thevenin-types = { path = "thevenin-types" }
 thevenin = { path = "thevenin" }
+thevenin-control = { path = "thevenin-control" }
 cirq-frontend = { path = "cirq-frontend" }
 facet.workspace = true
 figue = "2"

@@ -38,11 +38,14 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         }
     });
 
-    // Also collect top-level models and functions (outside circuits).
+    // Also collect top-level models, functions, and modules (outside circuits).
     for item in &source_file.items {
         match item {
             TopLevel::Model(m) => ctx.lower_model_def(m),
             TopLevel::Func(f) => ctx.lower_func_decl(f),
+            TopLevel::Module(m) => {
+                ctx.module_defs.insert(m.name.name.clone(), m.clone());
+            }
             _ => {}
         }
     }
@@ -70,6 +73,7 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         save: ctx.save,
         funcs: ctx.funcs,
         initial_conditions: ctx.initial_conditions,
+        code_blocks: ctx.code_blocks,
     };
 
     let has_errors = ctx.diags.iter().any(|d| d.severity == Severity::Error);
@@ -193,6 +197,9 @@ struct IrCtx {
     // Stacked per module instantiation level.
     net_remap: HashMap<String, String>,
 
+    // Verbatim embedded code blocks (language + lines).
+    code_blocks: Vec<cirq_ir::CodeBlock>,
+
     // Simulation options, temperature, and save targets.
     options: Vec<(String, Value)>,
     temp: Option<f64>,
@@ -221,6 +228,7 @@ impl IrCtx {
             param_eval_stack: Vec::new(),
             module_inst_stack: Vec::new(),
             net_remap: HashMap::new(),
+            code_blocks: Vec::new(),
             options: Vec::new(),
             temp: None,
             save: Vec::new(),
@@ -283,8 +291,8 @@ impl IrCtx {
         // Pass 1: declarations (params, lets, models, globals, module defs).
         for item in items {
             match item {
-                CircuitItem::Param(p) => self.lower_param(p),
-                CircuitItem::Let(l) => self.lower_let(l),
+                CircuitItem::Param(p) => self.lower_param(p, prefix),
+                CircuitItem::Let(l) => self.lower_let(l, prefix),
                 CircuitItem::ModelDef(m) => self.lower_model_def(m),
                 CircuitItem::Global(g) => {
                     self.intern_net(&g.name.name, true);
@@ -308,6 +316,12 @@ impl IrCtx {
                 CircuitItem::Func(f) => self.lower_func_decl(f),
                 CircuitItem::Ic(ic) => self.lower_ic_decl(ic),
                 CircuitItem::CoupledLine(cl) => self.lower_coupled_line_decl(cl, prefix),
+                CircuitItem::Code(c) => {
+                    self.code_blocks.push(cirq_ir::CodeBlock {
+                        language: c.language.clone(),
+                        lines: c.lines.clone(),
+                    });
+                }
                 // Already handled in pass 1, or collected above.
                 CircuitItem::Param(_)
                 | CircuitItem::Let(_)
@@ -322,7 +336,7 @@ impl IrCtx {
     // Param / let lowering
     // -------------------------------------------------------------------
 
-    fn lower_param(&mut self, p: &ParamDecl) {
+    fn lower_param(&mut self, p: &ParamDecl, prefix: &str) {
         let name = &p.name.name;
 
         if self.param_values.contains_key(name) {
@@ -336,8 +350,17 @@ impl IrCtx {
         if let Some(ref default) = p.default {
             match self.eval_expr(default) {
                 Ok(val) => {
+                    // Use prefixed name for output (e.g. "buf1.inv1.wp") so
+                    // params from different module instances don't collide.
+                    // The bare name is used in param_values for expression
+                    // evaluation within the current module scope.
+                    let output_name = if prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{prefix}.{name}")
+                    };
                     self.resolved_params.push(ResolvedParam {
-                        name: name.clone(),
+                        name: output_name,
                         value: val.clone(),
                     });
                     self.param_values.insert(name.clone(), val);
@@ -353,7 +376,7 @@ impl IrCtx {
         // A param without a default is allowed (forward-declared for modules).
     }
 
-    fn lower_let(&mut self, l: &LetDecl) {
+    fn lower_let(&mut self, l: &LetDecl, prefix: &str) {
         let name = &l.name.name;
 
         if self.param_values.contains_key(name) {
@@ -366,8 +389,13 @@ impl IrCtx {
 
         match self.eval_expr(&l.value) {
             Ok(val) => {
+                let output_name = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}.{name}")
+                };
                 self.resolved_params.push(ResolvedParam {
-                    name: name.clone(),
+                    name: output_name,
                     value: val.clone(),
                 });
                 self.param_values.insert(name.clone(), val);
@@ -1096,15 +1124,24 @@ impl IrCtx {
         // this instantiation level.
         let saved_remap = std::mem::replace(&mut self.net_remap, port_remap);
 
+        // Save param scope — module-internal params must not leak to outer
+        // scope or collide across multiple instantiations of the same module.
+        let saved_params = self.param_values.clone();
+
         // Push onto the instantiation stack for cycle detection.
         self.module_inst_stack.push(module_name.clone());
 
         // Recursively lower the module body with the instance prefix.
+        // Params declared inside the module body will be prefixed by
+        // lower_param/lower_let using inst_prefix.
         self.lower_circuit_body_prefixed(&module_def.body, &inst_prefix);
 
         // Restore state.
         self.module_inst_stack.pop();
         self.net_remap = saved_remap;
+
+        // Restore outer param scope.
+        self.param_values = saved_params;
     }
 
     /// Handle a local module instantiation that was parsed as an `ElementInst`
@@ -1212,12 +1249,20 @@ impl IrCtx {
 
         // Save/restore net_remap, push/pop module stack, lower body.
         let saved_remap = std::mem::replace(&mut self.net_remap, port_remap);
+
+        // Save param scope — module-internal params must not leak to outer
+        // scope or collide across multiple instantiations of the same module.
+        let saved_params = self.param_values.clone();
+
         self.module_inst_stack.push(module_name.clone());
 
         self.lower_circuit_body_prefixed(&module_def.body, &inst_prefix);
 
         self.module_inst_stack.pop();
         self.net_remap = saved_remap;
+
+        // Restore outer param scope.
+        self.param_values = saved_params;
     }
 
     // -------------------------------------------------------------------

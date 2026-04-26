@@ -16,6 +16,7 @@ tree-sitter = "0.25"
 
 [dev-dependencies]
 thevenin = { path = "../thevenin" }
+thevenin-control = { path = "../thevenin-control" }
 cirq-spice-import = { path = "../cirq-spice-import" }
 thevenin-types = { path = "../thevenin-types" }
 tempfile = "3"

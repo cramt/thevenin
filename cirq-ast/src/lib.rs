@@ -59,6 +59,7 @@ pub enum CircuitItem {
     Func(FuncDecl),
     Ic(IcDecl),
     CoupledLine(CoupledLineDecl),
+    Code(CodeDecl),
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +253,20 @@ pub struct CoupledLineDecl {
 pub struct CoupledLineField {
     pub key: Ident,
     pub value: Expr,
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
+// Code block
+// ---------------------------------------------------------------------------
+
+/// `code "lang" { ... }` — verbatim embedded language block passed through
+/// without Cirq-level parsing. The `language` tag selects the interpreter
+/// (e.g. `"control"` for SPICE control language).
+#[derive(Debug, Clone)]
+pub struct CodeDecl {
+    pub language: String,
+    pub lines: Vec<String>,
     pub span: Span,
 }
 

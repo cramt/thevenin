@@ -457,3 +457,1067 @@ fn cirq_ac_analysis_simulate() {
         "v(out) should have multiple frequency points"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 7: Cirq transient with PULSE waveform -> simulate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_transient_pulse_waveform_simulate() {
+    // RC circuit with a PULSE voltage source.
+    // The pulse goes from 0V to 5V. With R=1k and C=1nF, the RC time constant
+    // is 1us. We simulate for 100ns total with a pulse period of 50ns.
+    let source = r#"
+        circuit pulse_test {
+            V1: vsource(in -> gnd, dc: 0, pulse: { v1: 0, v2: 5, td: 1e-9, tr: 0.5e-9, tf: 0.5e-9, pw: 20e-9, per: 50e-9 })
+            R1: resistor(in -> out, 1000)
+            C1: capacitor(out -> gnd, 1e-12)
+            analysis tran {
+                step: 1e-9
+                stop: 100e-9
+            }
+        }
+    "#;
+
+    // Verify compile to IR succeeds and has the waveform.
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+    assert_eq!(ir.elements.len(), 3); // V1, R1, C1
+    let v1 = ir.elements.iter().find(|e| e.name == "V1").expect("V1");
+    assert!(matches!(v1.kind, cirq_ir::ElementKind::VoltageSource));
+    assert!(v1.source_spec.is_some());
+    let spec = v1.source_spec.as_ref().unwrap();
+    assert!(spec.waveform.is_some());
+    assert!(matches!(
+        spec.waveform.as_ref().unwrap(),
+        cirq_ir::Waveform::Pulse { .. }
+    ));
+
+    // Verify transient analysis in IR.
+    assert_eq!(ir.analyses.len(), 1);
+    assert!(matches!(ir.analyses[0], cirq_ir::Analysis::Tran(_)));
+
+    // Compile to netlist and simulate.
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
+    assert_eq!(netlists.len(), 1);
+
+    let nl = &netlists[0];
+    assert!(matches!(nl.analysis, thevenin_types::Analysis::Tran { .. }));
+
+    let result = thevenin::simulate(nl).expect("transient simulation should succeed");
+
+    // Transient results should have multiple time points.
+    let plot = result.plot().expect("should have at least one plot");
+    let time_vec = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "time")
+        .expect("should have time vector");
+    assert!(
+        time_vec.len() > 10,
+        "transient should produce many time points, got {}",
+        time_vec.len()
+    );
+
+    // The output node should respond to the pulse.
+    let vout = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(out)")
+        .expect("should have v(out)");
+    assert!(
+        vout.len() > 10,
+        "v(out) should have many time points, got {}",
+        vout.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Cirq transient with SIN waveform -> compile
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_sin_waveform_compile() {
+    let source = r#"
+        circuit sin_test {
+            V1: vsource(in -> gnd, dc: 0, sin: { v0: 0, va: 1, freq: 1e6 })
+            R1: resistor(in -> gnd, 1000)
+            analysis tran {
+                step: 1e-9
+                stop: 10e-6
+            }
+        }
+    "#;
+
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+
+    // Verify the SIN waveform is in the IR.
+    let v1 = ir.elements.iter().find(|e| e.name == "V1").expect("V1");
+    assert!(matches!(v1.kind, cirq_ir::ElementKind::VoltageSource));
+    let spec = v1.source_spec.as_ref().expect("V1 should have source_spec");
+    match spec.waveform.as_ref().expect("should have waveform") {
+        cirq_ir::Waveform::Sin { v0, va, freq, .. } => {
+            assert!((*v0 - 0.0).abs() < 1e-12, "v0 should be 0, got {v0}");
+            assert!((*va - 1.0).abs() < 1e-12, "va should be 1, got {va}");
+            assert!(
+                (freq.unwrap() - 1e6).abs() < 1.0,
+                "freq should be 1MHz, got {:?}",
+                freq
+            );
+        }
+        other => panic!("expected Sin waveform, got {other:?}"),
+    }
+
+    // Verify the transient analysis.
+    assert_eq!(ir.analyses.len(), 1);
+    match &ir.analyses[0] {
+        cirq_ir::Analysis::Tran(tran) => {
+            assert!((tran.step - 1e-9).abs() < 1e-15);
+            assert!((tran.stop - 10e-6).abs() < 1e-12);
+        }
+        other => panic!("expected Tran analysis, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: Cirq noise analysis -> compile to netlist
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_noise_analysis_compile_to_netlist() {
+    let source = r#"
+        circuit noise_test {
+            V1: vsource(in -> gnd, dc: 0, ac_mag: 1)
+            R1: resistor(in -> out, 10000)
+            R2: resistor(out -> gnd, 10000)
+            analysis noise {
+                output: out
+                reference: gnd
+                source: V1
+                start: 1
+                stop: 1e6
+                points: 10
+                scale: decade
+            }
+        }
+    "#;
+
+    // Verify IR has Noise analysis.
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+    assert_eq!(ir.analyses.len(), 1);
+    match &ir.analyses[0] {
+        cirq_ir::Analysis::Noise(noise) => {
+            assert!(noise.start == 1.0, "start should be 1 Hz");
+            assert!((noise.stop - 1e6).abs() < 1.0, "stop should be 1 MHz");
+            assert_eq!(noise.points, 10);
+            assert_eq!(noise.scale, cirq_ir::FrequencyScale::Decade);
+        }
+        other => panic!("expected Noise analysis, got {other:?}"),
+    }
+
+    // Verify Netlist has Noise analysis.
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
+    assert_eq!(netlists.len(), 1);
+    let nl = &netlists[0];
+    match &nl.analysis {
+        thevenin_types::Analysis::Noise {
+            output,
+            src,
+            variation,
+            n,
+            ..
+        } => {
+            assert_eq!(output, "out");
+            assert_eq!(src, "V1");
+            assert_eq!(*variation, thevenin_types::AcVariation::Dec);
+            assert_eq!(*n, 10);
+        }
+        other => panic!("expected Noise analysis in netlist, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: Cirq PZ analysis -> compile to netlist
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_pz_analysis_compile_to_netlist() {
+    let source = r#"
+        circuit pz_test {
+            V1: vsource(in -> gnd, dc: 1)
+            R1: resistor(in -> out, 1000)
+            C1: capacitor(out -> gnd, 1e-9)
+            analysis pz {
+                input_pos: in
+                input_neg: gnd
+                output_pos: out
+                output_neg: gnd
+                transfer: voltage
+                type: both
+            }
+        }
+    "#;
+
+    // Verify IR has PZ analysis.
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+    assert_eq!(ir.analyses.len(), 1);
+    match &ir.analyses[0] {
+        cirq_ir::Analysis::Pz(pz) => {
+            assert_eq!(pz.transfer, cirq_ir::TransferType::Voltage);
+            assert_eq!(pz.analysis_type, cirq_ir::PzType::Both);
+        }
+        other => panic!("expected Pz analysis, got {other:?}"),
+    }
+
+    // Verify Netlist has PZ analysis with correct fields.
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
+    assert_eq!(netlists.len(), 1);
+    let nl = &netlists[0];
+    match &nl.analysis {
+        thevenin_types::Analysis::Pz {
+            node_i,
+            node_g,
+            node_j,
+            node_k,
+            input_type,
+            analysis_type,
+        } => {
+            assert_eq!(node_i, "in");
+            assert_eq!(node_g, "0"); // gnd maps to "0"
+            assert_eq!(node_j, "out");
+            assert_eq!(node_k, "0"); // gnd maps to "0"
+            assert_eq!(*input_type, thevenin_types::PzInputType::Vol);
+            assert_eq!(*analysis_type, thevenin_types::PzAnalysisType::Pz);
+        }
+        other => panic!("expected Pz analysis in netlist, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: Cirq RLC circuit (capacitor + inductor) -> simulate OP
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_rlc_circuit_simulate_op() {
+    // RLC circuit: V=5V, R=100, L=1mH, C=1uF.
+    // At DC (OP), the inductor is a short circuit and the capacitor is open.
+    // So v(mid) = 5V (inductor shorts out, all current through R to ground via C which is open).
+    // Actually: V -> R -> L -> C -> gnd. At DC: L is short, C is open.
+    // So no current flows, v(mid) = v(out) = 5V.
+    let source = r#"
+        circuit rlc_test {
+            V1: vsource(in -> gnd, dc: 5)
+            R1: resistor(in -> mid, 100)
+            L1: inductor(mid -> out, 1e-3)
+            C1: capacitor(out -> gnd, 1e-6)
+            analysis op {}
+        }
+    "#;
+
+    // Verify IR has all element kinds.
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+    assert_eq!(ir.elements.len(), 4);
+
+    let r1 = ir.elements.iter().find(|e| e.name == "R1").expect("R1");
+    assert!(matches!(r1.kind, cirq_ir::ElementKind::Resistor));
+
+    let l1 = ir.elements.iter().find(|e| e.name == "L1").expect("L1");
+    assert!(matches!(l1.kind, cirq_ir::ElementKind::Inductor));
+
+    let c1 = ir.elements.iter().find(|e| e.name == "C1").expect("C1");
+    assert!(matches!(c1.kind, cirq_ir::ElementKind::Capacitor));
+
+    // Simulate OP.
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
+    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+
+    // At DC steady state: inductor is short, capacitor is open.
+    // No current flows through the series path, so v(mid) = v(out) = v(in) = 5V.
+    let vin = result.vector("v(in)").expect("should have v(in)");
+    assert!(
+        (vin.data.as_real()[0] - 5.0).abs() < 0.01,
+        "v(in) should be ~5V, got {}",
+        vin.data.as_real()[0]
+    );
+
+    let vmid = result.vector("v(mid)").expect("should have v(mid)");
+    assert!(
+        (vmid.data.as_real()[0] - 5.0).abs() < 0.01,
+        "v(mid) should be ~5V at DC, got {}",
+        vmid.data.as_real()[0]
+    );
+
+    let vout = result.vector("v(out)").expect("should have v(out)");
+    assert!(
+        (vout.data.as_real()[0] - 5.0).abs() < 0.01,
+        "v(out) should be ~5V at DC, got {}",
+        vout.data.as_real()[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: Cirq coupling element -> compile
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_coupling_element_compile() {
+    let source = r#"
+        circuit coupling_test {
+            V1: vsource(in -> gnd, dc: 1)
+            L1: inductor(in -> mid, 1e-3)
+            L2: inductor(out -> gnd, 1e-3)
+            R1: resistor(mid -> gnd, 100)
+            R2: resistor(out -> gnd, 100)
+            K1: coupling(l1: "L1", l2: "L2", coupling: 0.99)
+            analysis op {}
+        }
+    "#;
+
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+
+    // Should have 6 elements: V1, L1, L2, R1, R2, K1.
+    assert_eq!(ir.elements.len(), 6);
+
+    let k1 = ir.elements.iter().find(|e| e.name == "K1").expect("K1");
+    assert!(matches!(k1.kind, cirq_ir::ElementKind::Coupling));
+
+    // Verify coupling params: l1, l2, coupling.
+    let l1_param = k1
+        .params
+        .iter()
+        .find(|p| p.0 == "l1")
+        .expect("should have l1 param");
+    match &l1_param.1 {
+        cirq_ir::Value::String(s) => assert_eq!(s, "L1"),
+        other => panic!("expected String for l1, got {other:?}"),
+    }
+
+    let l2_param = k1
+        .params
+        .iter()
+        .find(|p| p.0 == "l2")
+        .expect("should have l2 param");
+    match &l2_param.1 {
+        cirq_ir::Value::String(s) => assert_eq!(s, "L2"),
+        other => panic!("expected String for l2, got {other:?}"),
+    }
+
+    let coupling_param = k1
+        .params
+        .iter()
+        .find(|p| p.0 == "coupling")
+        .expect("should have coupling param");
+    match &coupling_param.1 {
+        cirq_ir::Value::Real(v) => assert!(
+            (*v - 0.99).abs() < 1e-6,
+            "coupling should be 0.99, got {v}"
+        ),
+        other => panic!("expected Real for coupling, got {other:?}"),
+    }
+
+    // Verify the netlist produces a MutualCoupling element.
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
+    let nl = &netlists[0];
+    let elements: Vec<&thevenin_types::Element> = nl
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let thevenin_types::Item::Element(e) = i {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let coupling_elem = elements.iter().find(|e| e.name == "K1").expect("K1 in netlist");
+    assert!(
+        matches!(&coupling_elem.kind, thevenin_types::ElementKind::MutualCoupling { .. }),
+        "expected MutualCoupling, got {:?}",
+        coupling_elem.kind
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: Cirq MOSFET with model -> compile
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_mosfet_with_model_compile() {
+    let source = r#"
+        circuit mosfet_test {
+            model nch: nmos { level = 1, vto = 0.7, kp = 110e-6 }
+            V1: vsource(vdd -> gnd, dc: 3.3)
+            V2: vsource(gate -> gnd, dc: 1.5)
+            M1: nmos(drain: out, gate: gate, source: gnd, bulk: gnd, model: nch, w: 1e-6, l: 180e-9)
+            R1: resistor(vdd -> out, 10000)
+            analysis op {}
+        }
+    "#;
+
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+
+    // Verify model.
+    assert_eq!(ir.models.len(), 1);
+    assert_eq!(ir.models[0].name, "nch");
+    assert_eq!(ir.models[0].device_type, cirq_ir::DeviceType::Nmos);
+
+    // Check model params.
+    let vto_param = ir.models[0]
+        .params
+        .iter()
+        .find(|p| p.0 == "vto")
+        .expect("should have vto param");
+    match &vto_param.1 {
+        cirq_ir::Value::Real(v) => assert!((*v - 0.7).abs() < 1e-6),
+        other => panic!("expected Real for vto, got {other:?}"),
+    }
+
+    // Verify MOSFET element.
+    let m1 = ir.elements.iter().find(|e| e.name == "M1").expect("M1");
+    assert!(matches!(m1.kind, cirq_ir::ElementKind::Nmos));
+    assert!(m1.model.is_some(), "M1 should reference a model");
+
+    // Verify MOSFET connections (all four terminals).
+    let drain_conn = m1.connections.iter().find(|c| c.terminal == "drain");
+    assert!(drain_conn.is_some(), "should have drain connection");
+
+    let gate_conn = m1.connections.iter().find(|c| c.terminal == "gate");
+    assert!(gate_conn.is_some(), "should have gate connection");
+
+    let source_conn = m1.connections.iter().find(|c| c.terminal == "source");
+    assert!(source_conn.is_some(), "should have source connection");
+
+    let bulk_conn = m1.connections.iter().find(|c| c.terminal == "bulk");
+    assert!(bulk_conn.is_some(), "should have bulk connection");
+
+    // Verify W/L params are present.
+    let w_param = m1.params.iter().find(|p| p.0 == "w");
+    assert!(w_param.is_some(), "M1 should have w param");
+
+    let l_param = m1.params.iter().find(|p| p.0 == "l");
+    assert!(l_param.is_some(), "M1 should have l param");
+
+    // Verify netlist produces a Mosfet element.
+    let netlists =
+        cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
+    let nl = &netlists[0];
+    let elements: Vec<&thevenin_types::Element> = nl
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let thevenin_types::Item::Element(e) = i {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mosfet = elements
+        .iter()
+        .find(|e| e.name == "M1")
+        .expect("M1 in netlist");
+    match &mosfet.kind {
+        thevenin_types::ElementKind::Mosfet {
+            d, g, s, bulk, model, ..
+        } => {
+            assert_eq!(model, "nch");
+            assert_eq!(g, "gate");
+            // drain should map to "out", source to "0" (gnd), bulk to "0" (gnd)
+            assert_eq!(d, "out");
+            assert_eq!(s, "0");
+            assert_eq!(bulk, "0");
+        }
+        other => panic!("expected Mosfet, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 14: SPICE waveform round-trip (PULSE source)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spice_pulse_waveform_round_trip() {
+    let spice_source = "\
+Pulse Source Test
+V1 in 0 PULSE(0 5 1e-9 0.5e-9 0.5e-9 20e-9 50e-9)
+R1 in 0 1k
+.tran 1n 100n
+.end
+";
+
+    // Parse SPICE -> Netlist.
+    let original_netlists =
+        thevenin_types::Netlist::parse(spice_source).expect("SPICE parse should succeed");
+    assert_eq!(original_netlists.len(), 1);
+
+    // Import to Cirq IR.
+    let ir = cirq_spice_import::import_netlist(&original_netlists[0])
+        .expect("import_netlist should succeed");
+
+    // Verify the waveform survived the import.
+    let v1 = ir.elements.iter().find(|e| e.name == "V1").expect("V1");
+    assert!(matches!(v1.kind, cirq_ir::ElementKind::VoltageSource));
+    assert!(v1.source_spec.is_some(), "V1 should have source_spec");
+    let spec = v1.source_spec.as_ref().unwrap();
+    match spec.waveform.as_ref() {
+        Some(cirq_ir::Waveform::Pulse { v1, v2, .. }) => {
+            assert!((*v1 - 0.0).abs() < 1e-12, "v1 should be 0");
+            assert!((*v2 - 5.0).abs() < 1e-12, "v2 should be 5");
+        }
+        other => panic!("expected Pulse waveform in IR, got {other:?}"),
+    }
+
+    // Convert back to Netlist.
+    let round_tripped = cirq_frontend::to_netlist::circuit_to_netlists(&ir)
+        .expect("circuit_to_netlists should succeed");
+    assert_eq!(round_tripped.len(), 1);
+
+    // Verify the waveform is preserved in the round-tripped netlist.
+    let nl = &round_tripped[0];
+    let v1_elem = nl
+        .items
+        .iter()
+        .find_map(|i| {
+            if let thevenin_types::Item::Element(e) = i {
+                if e.name == "V1" {
+                    Some(e)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("V1 in netlist");
+
+    match &v1_elem.kind {
+        thevenin_types::ElementKind::VoltageSource { source, .. } => {
+            assert!(
+                source.waveform.is_some(),
+                "round-tripped V1 should have a waveform"
+            );
+            assert!(matches!(
+                source.waveform.as_ref().unwrap(),
+                thevenin_types::Waveform::Pulse { .. }
+            ));
+        }
+        other => panic!("expected VoltageSource, got {other:?}"),
+    }
+
+    // Verify transient analysis survived.
+    assert!(matches!(nl.analysis, thevenin_types::Analysis::Tran { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: SPICE AC source round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spice_ac_source_round_trip() {
+    let spice_source = "\
+AC Source Test
+V1 in 0 DC 0 AC 1
+R1 in out 1k
+C1 out 0 1u
+.ac DEC 10 1 1MEG
+.end
+";
+
+    // Parse SPICE -> Netlist -> IR.
+    let original_netlists =
+        thevenin_types::Netlist::parse(spice_source).expect("SPICE parse should succeed");
+    let ir = cirq_spice_import::import_netlist(&original_netlists[0])
+        .expect("import_netlist should succeed");
+
+    // Verify the AC spec survived the import.
+    let v1 = ir.elements.iter().find(|e| e.name == "V1").expect("V1");
+    assert!(v1.source_spec.is_some(), "V1 should have source_spec");
+    let spec = v1.source_spec.as_ref().unwrap();
+    assert!(spec.ac.is_some(), "V1 should have AC spec");
+    let ac = spec.ac.as_ref().unwrap();
+    assert!(
+        (ac.mag - 1.0).abs() < 1e-12,
+        "AC magnitude should be 1, got {}",
+        ac.mag
+    );
+
+    // Verify AC analysis.
+    assert_eq!(ir.analyses.len(), 1);
+    match &ir.analyses[0] {
+        cirq_ir::Analysis::Ac(ac_analysis) => {
+            assert!(
+                (ac_analysis.start - 1.0).abs() < 1e-6,
+                "AC start should be 1 Hz"
+            );
+            assert!(
+                (ac_analysis.stop - 1e6).abs() < 1.0,
+                "AC stop should be 1 MHz"
+            );
+            assert_eq!(ac_analysis.points, 10);
+            assert_eq!(ac_analysis.scale, cirq_ir::FrequencyScale::Decade);
+        }
+        other => panic!("expected Ac analysis, got {other:?}"),
+    }
+
+    // Convert IR back to Netlist.
+    let round_tripped = cirq_frontend::to_netlist::circuit_to_netlists(&ir)
+        .expect("circuit_to_netlists should succeed");
+    assert_eq!(round_tripped.len(), 1);
+    let nl = &round_tripped[0];
+
+    // Verify AC analysis in the netlist.
+    match &nl.analysis {
+        thevenin_types::Analysis::Ac {
+            variation,
+            n,
+            fstart,
+            fstop,
+        } => {
+            assert_eq!(*variation, thevenin_types::AcVariation::Dec);
+            assert_eq!(*n, 10);
+            assert!(matches!(fstart, thevenin_types::Expr::Num(v) if (*v - 1.0).abs() < 1e-6));
+            assert!(matches!(fstop, thevenin_types::Expr::Num(v) if (*v - 1e6).abs() < 1.0));
+        }
+        other => panic!("expected Ac analysis in round-tripped netlist, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 16: SPICE options + temp round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spice_options_and_temp_round_trip() {
+    let spice_source = "\
+Options Test
+R1 a 0 1k
+V1 a 0 DC 5
+.options RELTOL=1e-3 ABSTOL=1e-12
+.temp 85
+.op
+.end
+";
+
+    // Parse SPICE -> Netlist -> IR.
+    let original_netlists =
+        thevenin_types::Netlist::parse(spice_source).expect("SPICE parse should succeed");
+    let ir = cirq_spice_import::import_netlist(&original_netlists[0])
+        .expect("import_netlist should succeed");
+
+    // Verify options are in IR.
+    assert!(
+        !ir.options.is_empty(),
+        "IR should have options, got {:?}",
+        ir.options
+    );
+    let reltol = ir.options.iter().find(|o| o.0.to_lowercase() == "reltol");
+    assert!(reltol.is_some(), "should have RELTOL option");
+
+    // Verify temp is in IR.
+    assert!(ir.temp.is_some(), "should have temperature");
+    assert!(
+        (ir.temp.unwrap() - 85.0).abs() < 0.01,
+        "temp should be 85C, got {:?}",
+        ir.temp
+    );
+
+    // Round-trip IR -> Netlist.
+    let round_tripped = cirq_frontend::to_netlist::circuit_to_netlists(&ir)
+        .expect("circuit_to_netlists should succeed");
+    let nl = &round_tripped[0];
+
+    // Verify options survived in the netlist.
+    let has_options = nl.items.iter().any(|i| matches!(i, thevenin_types::Item::Options(_)));
+    assert!(has_options, "netlist should have options");
+
+    // Verify temp survived in the netlist.
+    let has_temp = nl
+        .items
+        .iter()
+        .any(|i| matches!(i, thevenin_types::Item::Temp(t) if (*t - 85.0).abs() < 0.01));
+    assert!(has_temp, "netlist should have temperature 85C");
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: SPICE dependent sources round-trip (VCVS/VCCS)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spice_dependent_sources_round_trip() {
+    let spice_source = "\
+Dependent Source Test
+V1 in 0 DC 1
+R1 in 0 1k
+E1 out 0 in 0 2
+R2 out 0 1k
+.op
+.end
+";
+
+    // Parse SPICE -> Netlist -> IR.
+    let original_netlists =
+        thevenin_types::Netlist::parse(spice_source).expect("SPICE parse should succeed");
+    let ir = cirq_spice_import::import_netlist(&original_netlists[0])
+        .expect("import_netlist should succeed");
+
+    // Verify VCVS element.
+    let e1 = ir.elements.iter().find(|e| e.name == "E1").expect("E1");
+    assert!(
+        matches!(e1.kind, cirq_ir::ElementKind::Vcvs),
+        "E1 should be VCVS, got {:?}",
+        e1.kind
+    );
+
+    // Verify connections.
+    let out_pos = e1.connections.iter().find(|c| c.terminal == "out_pos");
+    assert!(out_pos.is_some(), "E1 should have out_pos connection");
+    let in_pos = e1.connections.iter().find(|c| c.terminal == "in_pos");
+    assert!(in_pos.is_some(), "E1 should have in_pos connection");
+
+    // Round-trip IR -> Netlist -> simulate.
+    let round_tripped = cirq_frontend::to_netlist::circuit_to_netlists(&ir)
+        .expect("circuit_to_netlists should succeed");
+    let nl = &round_tripped[0];
+
+    let result = thevenin::simulate(nl).expect("simulation should succeed");
+
+    // VCVS with gain=2: if V(in)=1V, V(out)=2V.
+    let vin = result.vector("v(in)").expect("should have v(in)");
+    assert!(
+        (vin.data.as_real()[0] - 1.0).abs() < 0.01,
+        "v(in) should be ~1V, got {}",
+        vin.data.as_real()[0]
+    );
+
+    let vout = result.vector("v(out)").expect("should have v(out)");
+    assert!(
+        (vout.data.as_real()[0] - 2.0).abs() < 0.01,
+        "v(out) should be ~2V (gain=2), got {}",
+        vout.data.as_real()[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 18: SPICE behavioral source -> IR
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spice_behavioral_source_to_ir() {
+    let spice_source = "\
+Behavioral Source Test
+V1 in 0 DC 1
+R1 in 0 1k
+B1 out 0 V=v(in)*2
+R2 out 0 1k
+.op
+.end
+";
+
+    // Parse SPICE -> Netlist -> IR.
+    let original_netlists =
+        thevenin_types::Netlist::parse(spice_source).expect("SPICE parse should succeed");
+    let ir = cirq_spice_import::import_netlist(&original_netlists[0])
+        .expect("import_netlist should succeed");
+
+    // Verify BehavioralSource element.
+    let b1 = ir.elements.iter().find(|e| e.name == "B1").expect("B1");
+    match &b1.kind {
+        cirq_ir::ElementKind::BehavioralSource { mode, spec } => {
+            assert_eq!(
+                *mode,
+                cirq_ir::BehavioralMode::Voltage,
+                "B1 should be voltage mode"
+            );
+            assert!(
+                !spec.is_empty(),
+                "B1 should have a non-empty expression spec"
+            );
+        }
+        other => panic!("expected BehavioralSource, got {other:?}"),
+    }
+
+    // Verify connections.
+    let pos = b1.connections.iter().find(|c| c.terminal == "pos");
+    assert!(pos.is_some(), "B1 should have pos connection");
+    let neg = b1.connections.iter().find(|c| c.terminal == "neg");
+    assert!(neg.is_some(), "B1 should have neg connection");
+
+    // Round-trip IR -> Netlist.
+    let round_tripped = cirq_frontend::to_netlist::circuit_to_netlists(&ir)
+        .expect("circuit_to_netlists should succeed");
+    let nl = &round_tripped[0];
+
+    let b1_elem = nl
+        .items
+        .iter()
+        .find_map(|i| {
+            if let thevenin_types::Item::Element(e) = i {
+                if e.name == "B1" {
+                    Some(e)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("B1 in netlist");
+
+    assert!(
+        matches!(&b1_elem.kind, thevenin_types::ElementKind::BehavioralSource { spec, .. } if spec.starts_with("V=")),
+        "B1 should be a voltage behavioral source in netlist, got {:?}",
+        b1_elem.kind
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 19: Hierarchical modules — multi-instance flattening
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_hierarchical_module_flattening() {
+    // Module `inverter` instantiated twice inside `buffer`, then `buffer`
+    // instantiated at circuit level. This exercises:
+    //  - Module definition collection
+    //  - Port-to-net remapping
+    //  - Param scoping (params inside a module must not collide across instances)
+    //  - Hierarchical element name prefixing (buf1.inv1.M1, buf1.inv2.M1)
+    let source = r#"
+        module inverter {
+            port in: in
+            port out: out
+            port vdd: inout
+            port vss: inout
+
+            param wp = 2u
+            param wn = 1u
+            param l = 180n
+
+            M1: pmos(drain: out, gate: in, source: vdd, bulk: vdd, model: pch, w: wp, l: l)
+            M2: nmos(drain: out, gate: in, source: vss, bulk: vss, model: nch, w: wn, l: l)
+        }
+
+        module buffer {
+            port a: in
+            port z: out
+            port vdd: inout
+            port vss: inout
+
+            inv1: inverter(in: a, out: mid, vdd: vdd, vss: vss)
+            inv2: inverter(in: mid, out: z, vdd: vdd, vss: vss)
+        }
+
+        circuit hierarchical_test {
+            model nch: nmos {
+                level = 1
+                vto = 0.7
+                kp = 110u
+            }
+
+            model pch: pmos {
+                level = 1
+                vto = -0.7
+                kp = 55u
+            }
+
+            Vdd: vsource(vdd -> gnd, dc: 1.8)
+            Vin: vsource(in -> gnd,
+                pulse: { v1: 0, v2: 1.8, td: 0, tr: 100p, tf: 100p, pw: 5n, per: 10n }
+            )
+
+            buf1: buffer(a: in, z: z, vdd: vdd, vss: gnd)
+
+            analysis tran {
+                step: 50p
+                stop: 30n
+            }
+        }
+    "#;
+
+    // Should compile without duplicate-param errors.
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+    assert_eq!(ir.name, "hierarchical_test");
+
+    // After flattening, we should have:
+    //   Vdd, Vin (top-level)
+    //   buf1.inv1.M1, buf1.inv1.M2 (first inverter)
+    //   buf1.inv2.M1, buf1.inv2.M2 (second inverter)
+    // Total: 6 elements.
+    assert_eq!(
+        ir.elements.len(),
+        6,
+        "expected 6 elements after flattening, got {}: {:?}",
+        ir.elements.len(),
+        ir.elements.iter().map(|e| &e.name).collect::<Vec<_>>()
+    );
+
+    // Check hierarchical names are correct.
+    assert!(
+        ir.elements.iter().any(|e| e.name == "buf1.inv1.M1"),
+        "should have buf1.inv1.M1"
+    );
+    assert!(
+        ir.elements.iter().any(|e| e.name == "buf1.inv2.M1"),
+        "should have buf1.inv2.M1"
+    );
+    assert!(
+        ir.elements.iter().any(|e| e.name == "buf1.inv1.M2"),
+        "should have buf1.inv1.M2"
+    );
+    assert!(
+        ir.elements.iter().any(|e| e.name == "buf1.inv2.M2"),
+        "should have buf1.inv2.M2"
+    );
+
+    // Params from both inverter instances should be prefixed and independent.
+    assert!(
+        ir.params.iter().any(|p| p.name == "buf1.inv1.wp"),
+        "should have prefixed param buf1.inv1.wp"
+    );
+    assert!(
+        ir.params.iter().any(|p| p.name == "buf1.inv2.wp"),
+        "should have prefixed param buf1.inv2.wp"
+    );
+
+    // Should still produce a valid netlist (no crash during to_netlist).
+    let netlists = cirq_frontend::compile_to_netlist(source)
+        .expect("compile_to_netlist should succeed");
+    assert!(!netlists.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Test 20: Single module with multiple instantiations at circuit level
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_module_multiple_instances_top_level() {
+    // Simpler case: two instances of the same module at the circuit level.
+    let source = r#"
+        module voltage_divider {
+            port vin: in
+            port vout: out
+            port gnd_ref: inout
+
+            param r_top = 10k
+            param r_bot = 10k
+            R_top: resistor(vin -> vout, r_top)
+            R_bot: resistor(vout -> gnd_ref, r_bot)
+        }
+
+        circuit multi_inst_test {
+            V1: vsource(vin -> gnd, dc: 10)
+
+            div1: voltage_divider(vin: vin, vout: mid1, gnd_ref: gnd)
+            div2: voltage_divider(vin: vin, vout: mid2, gnd_ref: gnd)
+
+            analysis op {}
+        }
+    "#;
+
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+
+    // 5 elements: V1, div1.R_top, div1.R_bot, div2.R_top, div2.R_bot
+    assert_eq!(
+        ir.elements.len(),
+        5,
+        "expected 5 elements, got {}: {:?}",
+        ir.elements.len(),
+        ir.elements.iter().map(|e| &e.name).collect::<Vec<_>>()
+    );
+
+    // Verify both instances have correctly prefixed elements.
+    assert!(ir.elements.iter().any(|e| e.name == "div1.R_top"));
+    assert!(ir.elements.iter().any(|e| e.name == "div1.R_bot"));
+    assert!(ir.elements.iter().any(|e| e.name == "div2.R_top"));
+    assert!(ir.elements.iter().any(|e| e.name == "div2.R_bot"));
+
+    // Params should be instance-scoped.
+    assert!(ir.params.iter().any(|p| p.name == "div1.r_top"));
+    assert!(ir.params.iter().any(|p| p.name == "div2.r_top"));
+
+    // Simulate and check: each divider should produce v(mid) = 5V.
+    let netlists = cirq_frontend::compile_to_netlist(source)
+        .expect("compile_to_netlist should succeed");
+    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+
+    let vmid1 = result.vector("v(mid1)").expect("should have v(mid1)");
+    assert!(
+        (vmid1.data.as_real()[0] - 5.0).abs() < 0.01,
+        "v(mid1) should be ~5V, got {}",
+        vmid1.data.as_real()[0]
+    );
+
+    let vmid2 = result.vector("v(mid2)").expect("should have v(mid2)");
+    assert!(
+        (vmid2.data.as_real()[0] - 5.0).abs() < 0.01,
+        "v(mid2) should be ~5V, got {}",
+        vmid2.data.as_real()[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 21: Control block — verbatim SPICE control lines pass through
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cirq_control_block_round_trip() {
+    let source = r#"
+        circuit control_round_trip {
+            V1: vsource(in -> gnd, dc: 10)
+            R1: resistor(in -> out, 1000)
+            R2: resistor(out -> gnd, 1000)
+
+            analysis op {}
+
+            code "control" {
+                run
+                let gain = v(out) / v(in)
+                print gain
+            }
+        }
+    "#;
+
+    // Compile to IR — code block should be preserved.
+    let ir = cirq_frontend::compile(source).expect("compile should succeed");
+    assert_eq!(ir.code_blocks.len(), 1);
+    assert_eq!(ir.code_blocks[0].language, "control");
+    assert_eq!(ir.code_blocks[0].lines.len(), 3);
+    assert_eq!(ir.code_blocks[0].lines[0], "run");
+    assert_eq!(ir.code_blocks[0].lines[1], "let gain = v(out) / v(in)");
+    assert_eq!(ir.code_blocks[0].lines[2], "print gain");
+
+    // Compile to netlist — control block should appear as Item::Control.
+    let netlists = cirq_frontend::compile_to_netlist(source)
+        .expect("compile_to_netlist should succeed");
+    let nl = &netlists[0];
+
+    let has_control = nl.items.iter().any(|item| {
+        matches!(item, thevenin_types::Item::Control(_))
+    });
+    assert!(has_control, "netlist should contain Item::Control");
+
+    // Execute via control-block interpreter.
+    assert!(thevenin_control::has_control_block(nl));
+    let ctrl_result = thevenin_control::execute_control_block(nl)
+        .expect("control block execution should succeed");
+
+    // The `run` command should have produced an OP plot with gain = 0.5.
+    let gain_vec = ctrl_result
+        .sim_result
+        .plots
+        .iter()
+        .flat_map(|p| &p.vecs)
+        .find(|v| v.name == "gain");
+    assert!(gain_vec.is_some(), "should have gain vector from control let");
+    let gain_val = gain_vec.unwrap().data.as_real()[0];
+    assert!(
+        (gain_val - 0.5).abs() < 0.001,
+        "gain should be ~0.5, got {gain_val}"
+    );
+}

@@ -48,6 +48,10 @@ pub enum ImportError {
     /// An expression could not be evaluated to a numeric value.
     #[error("unevaluable expression: {0}")]
     UnevaluableExpr(String),
+
+    /// Subcircuit flattening failed.
+    #[error("subcircuit flattening error: {0}")]
+    SubcktError(#[from] thevenin::subckt::SubcktError),
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +323,10 @@ fn mesfet_kind(
 
 /// Convert a parsed `thevenin_types::Netlist` into a `cirq_ir::Circuit`.
 pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
+    // 0. Flatten subcircuit calls so all elements are at the top level.
+    let flat_netlist = thevenin::subckt::flatten_netlist(netlist)?;
+    let netlist = &flat_netlist;
+
     // 1. Build model table: model name (uppercased) → DeviceType.
     //    Also collect model IR objects.
     let mut model_type_table: HashMap<String, cirq_ir::DeviceType> = HashMap::new();
@@ -454,7 +462,18 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 11. Build circuit.
+    // 11. Collect .control blocks as code blocks with "control" language tag.
+    let mut ir_code_blocks: Vec<cirq_ir::CodeBlock> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Control(lines) = item {
+            ir_code_blocks.push(cirq_ir::CodeBlock {
+                language: "control".to_owned(),
+                lines: lines.clone(),
+            });
+        }
+    }
+
+    // 12. Build circuit.
     let nets = net_table.into_nets();
 
     Ok(Circuit {
@@ -469,6 +488,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         save: ir_save,
         funcs: ir_funcs,
         initial_conditions: Vec::new(),
+        code_blocks: ir_code_blocks,
     })
 }
 
@@ -1528,7 +1548,7 @@ R1 vdd vss 1k
     }
 
     #[test]
-    fn subckt_call_skipped() {
+    fn subckt_call_expanded() {
         let spice = "\
 Subckt test
 .subckt INV in out vdd vss
@@ -1545,9 +1565,20 @@ R1 a 0 1k
         let circuits = import_spice(spice).unwrap();
         let c = &circuits[0];
 
-        // X1 subckt call is skipped; only R1 should appear as an element.
-        assert_eq!(c.elements.len(), 1);
-        assert_eq!(c.elements[0].name, "R1");
+        // X1 subckt call is expanded; R1 + two MOSFETs from the subcircuit body.
+        assert_eq!(c.elements.len(), 3);
+
+        // The expanded elements are prefixed with the instance name.
+        // M1 uses PMOD (PMOS) and M2 uses NMOD (NMOS).
+        let m1 = c.elements.iter().find(|e| e.name == "x1.m1").unwrap();
+        assert!(matches!(m1.kind, IrElementKind::Pmos));
+
+        let m2 = c.elements.iter().find(|e| e.name == "x1.m2").unwrap();
+        assert!(matches!(m2.kind, IrElementKind::Nmos));
+
+        // R1 is at top level, not prefixed.
+        let r1 = c.elements.iter().find(|e| e.name == "R1").unwrap();
+        assert!(matches!(r1.kind, IrElementKind::Resistor));
     }
 
     #[test]
@@ -1898,5 +1929,78 @@ R1 d 0 1k
             Value::String(s) => assert_eq!(s, "buf_model"),
             other => panic!("expected String, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn subckt_round_trip_port_remapping() {
+        // Verifies full round-trip: SPICE with subcircuit -> import -> IR
+        // with correct prefix names and port remapping.
+        let spice = "\
+Subcircuit round-trip test
+.subckt RBUF inp outp
+R1 inp mid 100
+R2 mid outp 200
+.ends RBUF
+X1 net_a net_b RBUF
+X2 net_b net_c RBUF
+V1 net_a 0 DC 5
+R_load net_c 0 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+
+        // Two instances expanded: X1 produces x1.r1, x1.r2; X2 produces x2.r1, x2.r2.
+        // Plus V1 and R_load at the top level = 6 elements total.
+        assert_eq!(c.elements.len(), 6);
+
+        // Verify prefixed element names exist.
+        let x1_r1 = c.elements.iter().find(|e| e.name == "x1.r1").unwrap();
+        assert!(matches!(x1_r1.kind, IrElementKind::Resistor));
+        let x1_r2 = c.elements.iter().find(|e| e.name == "x1.r2").unwrap();
+        assert!(matches!(x1_r2.kind, IrElementKind::Resistor));
+        let x2_r1 = c.elements.iter().find(|e| e.name == "x2.r1").unwrap();
+        assert!(matches!(x2_r1.kind, IrElementKind::Resistor));
+        let x2_r2 = c.elements.iter().find(|e| e.name == "x2.r2").unwrap();
+        assert!(matches!(x2_r2.kind, IrElementKind::Resistor));
+
+        // Verify port remapping: x1.r1 should connect to net_a (inp->net_a)
+        // and x1.mid (internal node), not to "inp" or "outp".
+        let x1_r1_node_names: Vec<&str> = x1_r1
+            .connections
+            .iter()
+            .map(|conn| {
+                c.nets.iter().find(|n| n.id == conn.net).unwrap().name.as_str()
+            })
+            .collect();
+        assert!(x1_r1_node_names.contains(&"net_a"), "x1.r1 should connect to net_a (remapped port)");
+        assert!(x1_r1_node_names.contains(&"x1.mid"), "x1.r1 should connect to x1.mid (prefixed internal node)");
+
+        // x1.r2 connects x1.mid -> net_b (outp->net_b)
+        let x1_r2_node_names: Vec<&str> = x1_r2
+            .connections
+            .iter()
+            .map(|conn| {
+                c.nets.iter().find(|n| n.id == conn.net).unwrap().name.as_str()
+            })
+            .collect();
+        assert!(x1_r2_node_names.contains(&"x1.mid"), "x1.r2 should connect to x1.mid");
+        assert!(x1_r2_node_names.contains(&"net_b"), "x1.r2 should connect to net_b (remapped port)");
+
+        // x2.r1 connects net_b -> x2.mid
+        let x2_r1_node_names: Vec<&str> = x2_r1
+            .connections
+            .iter()
+            .map(|conn| {
+                c.nets.iter().find(|n| n.id == conn.net).unwrap().name.as_str()
+            })
+            .collect();
+        assert!(x2_r1_node_names.contains(&"net_b"), "x2.r1 should connect to net_b (remapped port)");
+        assert!(x2_r1_node_names.contains(&"x2.mid"), "x2.r1 should connect to x2.mid");
+
+        // Verify top-level elements are not prefixed.
+        assert!(c.elements.iter().any(|e| e.name == "V1"));
+        assert!(c.elements.iter().any(|e| e.name == "R_load"));
     }
 }

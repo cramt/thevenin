@@ -2,11 +2,11 @@
 //! [`cirq_ast`] types.
 
 use cirq_ast::{
-    AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CoupledLineDecl,
-    CoupledLineField, ElementInst, Expr, FuncDecl, GlobalDecl, IcDecl, IcEntry, Ident, Import,
-    LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting, OptionsDecl, ParamDecl,
-    PortDecl, PortDirection, QualifiedName, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel,
-    UnaryOp, span::Span,
+    AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CodeDecl,
+    CoupledLineDecl, CoupledLineField, ElementInst, Expr, FuncDecl, GlobalDecl, IcDecl, IcEntry,
+    Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting, OptionsDecl,
+    ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl, SaveTarget, SourceFile, TempDecl,
+    TopLevel, UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -177,6 +177,7 @@ impl Ctx<'_> {
             "func_decl" => self.lower_func(node).map(CircuitItem::Func),
             "ic_decl" => self.lower_ic(node).map(CircuitItem::Ic),
             "coupled_line_decl" => self.lower_coupled_line(node).map(CircuitItem::CoupledLine),
+            "code_decl" => self.lower_code(node).map(CircuitItem::Code),
             "line_comment" | "block_comment" => None,
             "ERROR" => {
                 self.error_at(node, "syntax error in circuit body");
@@ -650,6 +651,32 @@ impl Ctx<'_> {
         Some(CoupledLineField {
             key,
             value,
+            span: span_of(node),
+        })
+    }
+    fn lower_code(&mut self, node: tree_sitter::Node) -> Option<CodeDecl> {
+        let lang_node = self.required_field(node, "language")?;
+        let raw_lang = self.text(lang_node);
+        // Strip surrounding quotes from the string literal.
+        let language = raw_lang
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(raw_lang)
+            .to_owned();
+
+        let mut lines = Vec::new();
+        if let Some(body_node) = node.child_by_field_name("body") {
+            let raw = self.text(body_node);
+            for line in raw.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    lines.push(trimmed.to_owned());
+                }
+            }
+        }
+        Some(CodeDecl {
+            language,
+            lines,
             span: span_of(node),
         })
     }

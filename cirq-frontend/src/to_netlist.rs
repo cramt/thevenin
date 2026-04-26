@@ -111,6 +111,13 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
         });
     }
 
+    // Code blocks — only "control" blocks are emitted as Item::Control.
+    for block in &circuit.code_blocks {
+        if block.language == "control" {
+            items.push(Item::Control(block.lines.clone()));
+        }
+    }
+
     // Build analyses.
     let analyses: Vec<Analysis> = if circuit.analyses.is_empty() {
         vec![Analysis::Op]
@@ -1048,6 +1055,7 @@ mod tests {
             save: Vec::new(),
             funcs: Vec::new(),
             initial_conditions: Vec::new(),
+            code_blocks: Vec::new(),
         }
     }
 

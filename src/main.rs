@@ -52,18 +52,45 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             };
 
             for netlist in &netlists {
-                let result = thevenin::simulate(netlist)?;
-                for plot in &result.plots {
-                    println!("{}:", plot.name);
-                    for vec in &plot.vecs {
-                        let preview: Vec<String> = vec
-                            .data
-                            .as_real()
-                            .iter()
-                            .take(5)
-                            .map(|v| format!("{v:.6}"))
-                            .collect();
-                        println!("  {} = [{}]", vec.name, preview.join(", "));
+                if thevenin_control::has_control_block(netlist) {
+                    // Route through the control-block interpreter, which
+                    // handles `run`, `print`, `let`, loops, etc.
+                    let ctrl_result = thevenin_control::execute_control_block(netlist)
+                        .map_err(|e| format!("control block error: {e}"))?;
+
+                    // Print any output produced by echo/print commands.
+                    if !ctrl_result.output.is_empty() {
+                        print!("{}", ctrl_result.output);
+                    }
+
+                    // Print simulation result plots (from `run` commands).
+                    for plot in &ctrl_result.sim_result.plots {
+                        println!("{}:", plot.name);
+                        for vec in &plot.vecs {
+                            let preview: Vec<String> = vec
+                                .data
+                                .as_real()
+                                .iter()
+                                .take(5)
+                                .map(|v| format!("{v:.6}"))
+                                .collect();
+                            println!("  {} = [{}]", vec.name, preview.join(", "));
+                        }
+                    }
+                } else {
+                    let result = thevenin::simulate(netlist)?;
+                    for plot in &result.plots {
+                        println!("{}:", plot.name);
+                        for vec in &plot.vecs {
+                            let preview: Vec<String> = vec
+                                .data
+                                .as_real()
+                                .iter()
+                                .take(5)
+                                .map(|v| format!("{v:.6}"))
+                                .collect();
+                            println!("  {} = [{}]", vec.name, preview.join(", "));
+                        }
                     }
                 }
             }

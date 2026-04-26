@@ -27,6 +27,16 @@ pub struct Circuit {
     pub funcs: Vec<FuncDef>,
     /// Initial node voltages (`.ic`).
     pub initial_conditions: Vec<(Id, f64)>,
+    /// Verbatim embedded code blocks — each entry is `(language, lines)`.
+    /// `"control"` blocks are passed to the SPICE control-block interpreter.
+    pub code_blocks: Vec<CodeBlock>,
+}
+
+/// A verbatim embedded code block with a language tag.
+#[derive(Debug, Clone)]
+pub struct CodeBlock {
+    pub language: String,
+    pub lines: Vec<String>,
 }
 
 /// A resolved electrical net.
