@@ -8,8 +8,8 @@ repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
 cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
-thevenin = { path = "../thevenin", version = "0.2.0" }
-thevenin-types = { path = "../thevenin-types", version = "0.2.0" }
+thevenin = { path = "../thevenin", version = "0.3.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.3.0" }
 thiserror.workspace = true
 
 [dev-dependencies]

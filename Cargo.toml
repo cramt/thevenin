@@ -43,8 +43,8 @@ repository = "https://github.com/cramt/thevenin"
 publish = false
 
 [dependencies]
-thevenin-types = { path = "thevenin-types", version = "0.2.0" }
-thevenin = { path = "thevenin", version = "0.2.0" }
+thevenin-types = { path = "thevenin-types", version = "0.3.0" }
+thevenin = { path = "thevenin", version = "0.3.0" }
 thevenin-control = { path = "thevenin-control", version = "0.1.0" }
 cirq-frontend = { path = "cirq-frontend", version = "0.1.0" }
 facet.workspace = true

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/cramt/thevenin/compare/thevenin-types-v0.2.0...thevenin-types-v0.3.0) - 2026-04-26
+
+### Added
+
+- behavioral resistor R n+ n- r={expr} to B-source conversion
+- *(control)* implement .control block interpreter
+- *(parser,output)* support non-parenthesized PULSE and arithmetic print expressions
+
+### Fixed
+
+- close three critical pipeline gaps (ic, uic, tline terminals)
+- add new_gmin stepping, source stepping InitJct, and SINE parser
+- un-ignore bugs-2 and test-noise-2 via vector indexing and flicker noise
+- un-ignore ac-zero and if-elseif tests via two targeted fixes
+
+### Other
+
+- fix 24 broken intra-doc links causing cargo doc warnings
+- fork netlists at analysis boundaries — one Netlist per analysis
+- ergonomic public API with VectorData enum, Index impls, and simulate() dispatcher
+- format
+
 ## [0.2.0](https://github.com/cramt/thevenin/compare/thevenin-types-v0.1.0...thevenin-types-v0.2.0) - 2026-03-22
 
 ### Added
