@@ -13,4 +13,4 @@ thevenin-types = { path = "../thevenin-types", version = "0.3.0" }
 thiserror.workspace = true
 
 [dev-dependencies]
-cirq-frontend = { path = "../cirq-frontend", version = "0.1.0" }
+cirq-frontend = { path = "../cirq-frontend" }
