@@ -1347,15 +1347,24 @@ fn parse_dot(
         }
 
         ".TRAN" => {
-            let tstep = parse_expr(tokens.get(1).map(|s| s.as_str()).unwrap_or("0"));
-            let tstop = parse_expr(tokens.get(2).map(|s| s.as_str()).unwrap_or("0"));
-            let tstart = tokens.get(3).map(|s| parse_expr(s));
-            let tmax = tokens.get(4).map(|s| parse_expr(s));
+            // .tran tstep tstop [tstart [tmax]] [UIC]
+            // UIC can appear as any trailing token.
+            let uic = tokens[1..].iter().any(|t| t.eq_ignore_ascii_case("UIC"));
+            let numeric: Vec<&str> = tokens[1..]
+                .iter()
+                .filter(|t| !t.eq_ignore_ascii_case("UIC"))
+                .map(|s| s.as_str())
+                .collect();
+            let tstep = parse_expr(numeric.first().copied().unwrap_or("0"));
+            let tstop = parse_expr(numeric.get(1).copied().unwrap_or("0"));
+            let tstart = numeric.get(2).map(|s| parse_expr(s));
+            let tmax = numeric.get(3).map(|s| parse_expr(s));
             Ok(ParsedLine::Analysis(Analysis::Tran {
                 tstep,
                 tstop,
                 tstart,
                 tmax,
+                uic,
             }))
         }
 
@@ -1620,6 +1629,25 @@ fn parse_dot(
                 .and_then(|t| parse_spice_number(t))
                 .unwrap_or(27.0);
             Ok(ParsedLine::Item(Item::Temp(val)))
+        }
+
+        ".IC" => {
+            // .ic V(node1)=val1 V(node2)=val2 ...
+            let mut pairs = Vec::new();
+            for tok in &tokens[1..] {
+                // Accept V(node)=val or v(node)=val
+                let upper = tok.to_uppercase();
+                if let Some(rest) = upper.strip_prefix("V(")
+                    && let Some(eq_pos) = rest.find(")=")
+                {
+                    let node = &tok[2..2 + eq_pos]; // preserve original case for node name
+                    let val_str = &tok[2 + eq_pos + 2..];
+                    if let Some(val) = parse_spice_number(val_str) {
+                        pairs.push((node.to_string(), val));
+                    }
+                }
+            }
+            Ok(ParsedLine::Item(Item::Ic(pairs)))
         }
 
         _ => Ok(ParsedLine::Item(Item::Raw(line.to_string()))),
@@ -1957,6 +1985,7 @@ mod tests {
             tstop,
             tstart,
             tmax,
+            uic,
         } = &n.analysis
         {
             assert_abs_diff_eq!(
@@ -1975,6 +2004,7 @@ mod tests {
             );
             assert!(tstart.is_none());
             assert!(tmax.is_none());
+            assert!(!uic);
         } else {
             panic!("{:?}", n.analysis);
         }

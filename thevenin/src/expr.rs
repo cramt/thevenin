@@ -1043,6 +1043,7 @@ fn resolve_analysis(
             tstop,
             tstart,
             tmax,
+            ..
         } => {
             try_resolve_expr(tstep, ctx);
             try_resolve_expr(tstop, ctx);

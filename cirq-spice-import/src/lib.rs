@@ -462,7 +462,18 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 11. Collect .control blocks as code blocks with "control" language tag.
+    // 11. Collect .ic initial conditions.
+    let mut ir_initial_conditions: Vec<(cirq_ir::Id, f64)> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Ic(pairs) = item {
+            for (node_name, val) in pairs {
+                let net_id = net_table.intern(node_name);
+                ir_initial_conditions.push((net_id, *val));
+            }
+        }
+    }
+
+    // 12. Collect .control blocks as code blocks with "control" language tag.
     let mut ir_code_blocks: Vec<cirq_ir::CodeBlock> = Vec::new();
     for item in &netlist.items {
         if let Item::Control(lines) = item {
@@ -473,7 +484,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 12. Build circuit.
+    // 13. Build circuit.
     let nets = net_table.into_nets();
 
     Ok(Circuit {
@@ -487,7 +498,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         temp: ir_temp,
         save: ir_save,
         funcs: ir_funcs,
-        initial_conditions: Vec::new(),
+        initial_conditions: ir_initial_conditions,
         code_blocks: ir_code_blocks,
     })
 }
@@ -1054,10 +1065,10 @@ fn convert_element(
                 name: name.clone(),
                 kind: IrElementKind::TransmissionLine,
                 connections: vec![
-                    connection("pos1", nets.intern(pos1)),
-                    connection("neg1", nets.intern(neg1)),
-                    connection("pos2", nets.intern(pos2)),
-                    connection("neg2", nets.intern(neg2)),
+                    connection("in_pos", nets.intern(pos1)),
+                    connection("in_neg", nets.intern(neg1)),
+                    connection("out_pos", nets.intern(pos2)),
+                    connection("out_neg", nets.intern(neg2)),
                 ],
                 params: convert_params(params),
                 model: model_id,
@@ -1238,11 +1249,12 @@ fn convert_analysis(
             tstop,
             tstart,
             tmax,
+            uic,
         } => IrAnalysis::Tran(TranAnalysis {
             step: expr_to_f64(tstep)?,
             stop: expr_to_f64(tstop)?,
             start: tstart.as_ref().map(expr_to_f64).transpose()?.unwrap_or(0.0),
-            uic: false,
+            uic: *uic,
             tmax: tmax.as_ref().and_then(|e| expr_to_f64(e).ok()),
         }),
 

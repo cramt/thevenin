@@ -556,6 +556,7 @@ fn parse_analysis_command(cmd: &str, args: &[&str]) -> Result<Analysis, String> 
                 } else {
                     None
                 },
+                uic: false,
             })
         }
         "sens" => {

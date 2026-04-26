@@ -678,12 +678,14 @@ fn analysis_tran() {
         tstop,
         tstart,
         tmax,
+        uic,
     } = &n.analysis
     {
         assert_num(tstep, 1e-9);
         assert_num(tstop, 100e-9);
         assert!(tstart.is_none());
         assert!(tmax.is_none());
+        assert!(!uic);
     } else {
         panic!()
     }

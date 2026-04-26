@@ -842,12 +842,14 @@ pub enum Analysis {
         /// Optional second source sweep.
         src2: Option<DcSweep>,
     },
-    /// `.tran tstep tstop [tstart [tmax]]`
+    /// `.tran tstep tstop [tstart [tmax]] [UIC]`
     Tran {
         tstep: Expr,
         tstop: Expr,
         tstart: Option<Expr>,
         tmax: Option<Expr>,
+        /// Use initial conditions — skip DC operating point.
+        uic: bool,
     },
     /// `.ac DEC|OCT|LIN n fstart fstop`
     Ac {
@@ -903,6 +905,7 @@ impl fmt::Display for Analysis {
                 tstop,
                 tstart,
                 tmax,
+                uic,
             } => {
                 write!(f, ".tran {tstep} {tstop}")?;
                 if let Some(ts) = tstart {
@@ -910,6 +913,9 @@ impl fmt::Display for Analysis {
                     if let Some(tm) = tmax {
                         write!(f, " {tm}")?;
                     }
+                }
+                if *uic {
+                    write!(f, " UIC")?;
                 }
                 Ok(())
             }
@@ -1043,6 +1049,8 @@ pub enum Item {
     Save(Vec<String>),
     /// `.temp value` — circuit simulation temperature in °C.
     Temp(f64),
+    /// `.ic V(node)=val ...` — initial node voltages for transient analysis with UIC.
+    Ic(Vec<(String, f64)>),
     /// A `.control` ... `.endc` block — raw command lines for the control interpreter.
     Control(Vec<String>),
     /// A full-line comment (`* ...`).
@@ -1091,6 +1099,13 @@ impl fmt::Display for Item {
                 Ok(())
             }
             Item::Temp(t) => write!(f, ".temp {t}"),
+            Item::Ic(pairs) => {
+                write!(f, ".ic")?;
+                for (node, val) in pairs {
+                    write!(f, " V({node})={}", format_si(*val))?;
+                }
+                Ok(())
+            }
             Item::Control(lines) => {
                 writeln!(f, ".control")?;
                 for l in lines {

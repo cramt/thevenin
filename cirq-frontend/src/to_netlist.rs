@@ -111,6 +111,20 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
         });
     }
 
+    // Initial conditions (.ic).
+    if !circuit.initial_conditions.is_empty() {
+        let pairs: Vec<(String, f64)> = circuit
+            .initial_conditions
+            .iter()
+            .filter_map(|(id, val)| {
+                net_names.get(id).map(|name| (name.clone(), *val))
+            })
+            .collect();
+        if !pairs.is_empty() {
+            items.push(Item::Ic(pairs));
+        }
+    }
+
     // Code blocks — only "control" blocks are emitted as Item::Control.
     for block in &circuit.code_blocks {
         if block.language == "control" {
@@ -939,6 +953,7 @@ fn convert_analysis(
                 tstop: Expr::Num(tran.stop),
                 tstart,
                 tmax: tran.tmax.map(Expr::Num),
+                uic: tran.uic,
             }
         }
 
@@ -1392,11 +1407,13 @@ mod tests {
                 tstop,
                 tstart,
                 tmax,
+                uic,
             } => {
                 assert!(matches!(tstep, Expr::Num(v) if (*v - 1e-9).abs() < 1e-15));
                 assert!(matches!(tstop, Expr::Num(v) if (*v - 100e-9).abs() < 1e-15));
                 assert!(tstart.is_none());
                 assert!(tmax.is_none());
+                assert!(!uic);
             }
             _ => panic!("expected Tran analysis"),
         }

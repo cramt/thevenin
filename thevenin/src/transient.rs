@@ -585,6 +585,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             tstop,
             tstart,
             tmax,
+            ..
         } => (tstep.clone(), tstop.clone(), tstart.clone(), tmax.clone()),
         _ => {
             return Err(MnaError::UnsupportedElement(
