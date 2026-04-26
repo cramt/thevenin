@@ -19,14 +19,22 @@ pub struct Circuit {
     pub params: Vec<ResolvedParam>,
     /// Simulation options (e.g. GMIN, ABSTOL, RELTOL).
     pub options: Vec<(String, Value)>,
-    /// Simulation temperature in °C. `None` means use default (27°C).
-    pub temp: Option<f64>,
+    /// Simulation temperatures in °C.
+    ///
+    /// Empty means use the default (27 °C). A single entry is the common case.
+    /// Multiple entries request the simulation be run at each temperature
+    /// (equivalent to SPICE `.temp 25 50 100`).
+    pub temps: Vec<f64>,
     /// Output save targets (e.g. `v(out)`, `i(R1)`).
     pub save: Vec<String>,
     /// User-defined functions.
     pub funcs: Vec<FuncDef>,
     /// Initial node voltages (`.ic`).
     pub initial_conditions: Vec<(Id, f64)>,
+    /// Suggested initial node voltages for convergence (`.nodeset`).
+    pub nodeset: Vec<(Id, f64)>,
+    /// Measurement specifications (`.meas`).
+    pub measures: Vec<MeasureSpec>,
     /// Verbatim embedded code blocks — each entry is `(language, lines)`.
     /// `"control"` blocks are passed to the SPICE control-block interpreter.
     pub code_blocks: Vec<CodeBlock>,
@@ -251,6 +259,21 @@ pub struct FuncDef {
     pub args: Vec<String>,
     /// The function body as a SPICE-compatible expression string.
     pub body: String,
+}
+
+/// A measurement specification (SPICE `.meas`).
+///
+/// Captures the measurement name, the analysis it applies to, and the
+/// measurement expression. The expression string is kept verbatim because
+/// the full `.meas` syntax is complex and context-dependent.
+#[derive(Debug, Clone)]
+pub struct MeasureSpec {
+    /// Name of the measurement result (e.g. `"vout_max"`).
+    pub name: String,
+    /// Analysis type (`"tran"`, `"dc"`, `"ac"`).
+    pub analysis_type: String,
+    /// The measurement expression verbatim (e.g. `"MAX v(out)"`).
+    pub spec: String,
 }
 
 /// A resolved analysis command.

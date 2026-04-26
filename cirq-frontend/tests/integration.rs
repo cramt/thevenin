@@ -1126,11 +1126,11 @@ V1 a 0 DC 5
     assert!(reltol.is_some(), "should have RELTOL option");
 
     // Verify temp is in IR.
-    assert!(ir.temp.is_some(), "should have temperature");
+    assert!(!ir.temps.is_empty(), "should have temperature");
     assert!(
-        (ir.temp.unwrap() - 85.0).abs() < 0.01,
+        (ir.temps[0] - 85.0).abs() < 0.01,
         "temp should be 85C, got {:?}",
-        ir.temp
+        ir.temps
     );
 
     // Round-trip IR -> Netlist.

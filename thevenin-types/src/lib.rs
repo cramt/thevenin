@@ -140,6 +140,25 @@ pub struct PwlPoint {
     pub value: Expr,
 }
 
+/// A `.meas` specification capturing the measurement name, the analysis
+/// it applies to, and the rest of the line verbatim (the measurement
+/// expression syntax is complex and context-dependent).
+#[derive(Debug, Clone, Facet)]
+pub struct MeasureSpec {
+    /// Name assigned to the measurement result (e.g., `"vout_max"`).
+    pub name: String,
+    /// Analysis type this measurement targets (e.g., `"tran"`, `"dc"`, `"ac"`).
+    pub analysis_type: String,
+    /// The rest of the measurement specification verbatim (e.g., `"MAX v(out)"`).
+    pub spec: String,
+}
+
+impl fmt::Display for MeasureSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {} {}", self.analysis_type, self.name, self.spec)
+    }
+}
+
 /// The nested source for a double DC sweep (`src2` in `.dc`).
 #[derive(Debug, Clone, Facet)]
 pub struct DcSweep {
@@ -1051,6 +1070,10 @@ pub enum Item {
     Temp(f64),
     /// `.ic V(node)=val ...` — initial node voltages for transient analysis with UIC.
     Ic(Vec<(String, f64)>),
+    /// `.nodeset V(node)=val ...` — suggested initial node voltages for convergence.
+    Nodeset(Vec<(String, f64)>),
+    /// `.meas analysis_type name ...` — measurement specification.
+    Meas(MeasureSpec),
     /// A `.control` ... `.endc` block — raw command lines for the control interpreter.
     Control(Vec<String>),
     /// A full-line comment (`* ...`).
@@ -1106,6 +1129,14 @@ impl fmt::Display for Item {
                 }
                 Ok(())
             }
+            Item::Nodeset(pairs) => {
+                write!(f, ".nodeset")?;
+                for (node, val) in pairs {
+                    write!(f, " V({node})={}", format_si(*val))?;
+                }
+                Ok(())
+            }
+            Item::Meas(spec) => write!(f, ".meas {spec}"),
             Item::Control(lines) => {
                 writeln!(f, ".control")?;
                 for l in lines {

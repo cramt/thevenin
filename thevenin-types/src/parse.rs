@@ -22,8 +22,9 @@
 //! | `MIL`                     | 25.4 × 10⁻⁶ |
 
 use crate::{
-    AcSpec, AcVariation, Analysis, DcSweep, Element, ElementKind, Expr, Item, ModelDef, Netlist,
-    Param, PwlPoint, PzAnalysisType, PzInputType, Source, SubcktDef, Waveform, XspiceConnection,
+    AcSpec, AcVariation, Analysis, DcSweep, Element, ElementKind, Expr, Item, MeasureSpec,
+    ModelDef, Netlist, Param, PwlPoint, PzAnalysisType, PzInputType, Source, SubcktDef, Waveform,
+    XspiceConnection,
 };
 
 /// Internal parsed line — either a circuit item or an analysis command.
@@ -31,6 +32,9 @@ use crate::{
 /// values with exactly one `Analysis` each.
 enum ParsedLine {
     Item(Item),
+    /// Multiple items from a single line (e.g., `.temp 25 50 100` produces
+    /// three `Item::Temp` values).
+    MultiItem(Vec<Item>),
     Analysis(Analysis),
 }
 
@@ -1623,12 +1627,22 @@ fn parse_dot(
         }
 
         ".TEMP" => {
-            // Temperature specification: .temp <value_in_celsius>
-            let val = tokens
-                .get(1)
-                .and_then(|t| parse_spice_number(t))
-                .unwrap_or(27.0);
-            Ok(ParsedLine::Item(Item::Temp(val)))
+            // Temperature specification: .temp <value1> [<value2> ...]
+            // Multiple values on one line produce multiple Item::Temp items.
+            // The caller will see a MultiItem variant for the multi-value case.
+            let vals: Vec<f64> = tokens[1..]
+                .iter()
+                .filter_map(|t| parse_spice_number(t))
+                .collect();
+            if vals.len() <= 1 {
+                Ok(ParsedLine::Item(Item::Temp(
+                    vals.first().copied().unwrap_or(27.0),
+                )))
+            } else {
+                Ok(ParsedLine::MultiItem(
+                    vals.into_iter().map(Item::Temp).collect(),
+                ))
+            }
         }
 
         ".IC" => {
@@ -1648,6 +1662,43 @@ fn parse_dot(
                 }
             }
             Ok(ParsedLine::Item(Item::Ic(pairs)))
+        }
+
+        ".NODESET" => {
+            // .nodeset V(node1)=val1 V(node2)=val2 ...
+            // Same syntax as .ic — suggested initial voltages for convergence aid.
+            let mut pairs = Vec::new();
+            for tok in &tokens[1..] {
+                let upper = tok.to_uppercase();
+                if let Some(rest) = upper.strip_prefix("V(")
+                    && let Some(eq_pos) = rest.find(")=")
+                {
+                    let node = &tok[2..2 + eq_pos];
+                    let val_str = &tok[2 + eq_pos + 2..];
+                    if let Some(val) = parse_spice_number(val_str) {
+                        pairs.push((node.to_string(), val));
+                    }
+                }
+            }
+            Ok(ParsedLine::Item(Item::Nodeset(pairs)))
+        }
+
+        ".MEAS" | ".MEASURE" => {
+            // .meas <analysis_type> <name> <spec...>
+            // e.g. .meas tran vout_max MAX v(out)
+            //      .meas dc res FIND v(out) AT=2.5
+            let analysis_type = tokens.get(1).cloned().unwrap_or_default();
+            let name = tokens.get(2).cloned().unwrap_or_default();
+            let spec = if tokens.len() > 3 {
+                tokens[3..].join(" ")
+            } else {
+                String::new()
+            };
+            Ok(ParsedLine::Item(Item::Meas(MeasureSpec {
+                name,
+                analysis_type,
+                spec,
+            })))
         }
 
         _ => Ok(ParsedLine::Item(Item::Raw(line.to_string()))),
@@ -1674,6 +1725,7 @@ fn parse_subckt_body(
         let (lineno, line) = lines.next().unwrap();
         match parse_line(lineno, &line, lines)? {
             ParsedLine::Item(item) => items.push(item),
+            ParsedLine::MultiItem(multi) => items.extend(multi),
             // Analysis commands inside subcircuits are ignored (not meaningful).
             ParsedLine::Analysis(_) => {}
         }
@@ -1741,6 +1793,7 @@ pub fn parse(input: &str) -> Result<Vec<Netlist>, ParseError> {
     for parsed in parsed_lines {
         match parsed {
             ParsedLine::Item(item) => accumulated_items.push(item),
+            ParsedLine::MultiItem(items) => accumulated_items.extend(items),
             ParsedLine::Analysis(analysis) => {
                 netlists.push(Netlist {
                     title: title.clone(),

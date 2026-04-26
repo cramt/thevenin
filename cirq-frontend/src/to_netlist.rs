@@ -92,8 +92,8 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
         items.push(Item::Options(params));
     }
 
-    // Temperature.
-    if let Some(temp) = circuit.temp {
+    // Temperatures.
+    for &temp in &circuit.temps {
         items.push(Item::Temp(temp));
     }
 
@@ -121,6 +121,27 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
         if !pairs.is_empty() {
             items.push(Item::Ic(pairs));
         }
+    }
+
+    // Nodeset (.nodeset).
+    if !circuit.nodeset.is_empty() {
+        let pairs: Vec<(String, f64)> = circuit
+            .nodeset
+            .iter()
+            .filter_map(|(id, val)| net_names.get(id).map(|name| (name.clone(), *val)))
+            .collect();
+        if !pairs.is_empty() {
+            items.push(Item::Nodeset(pairs));
+        }
+    }
+
+    // Measurements (.meas).
+    for m in &circuit.measures {
+        items.push(Item::Meas(thevenin_types::MeasureSpec {
+            name: m.name.clone(),
+            analysis_type: m.analysis_type.clone(),
+            spec: m.spec.clone(),
+        }));
     }
 
     // Code blocks — only "control" blocks are emitted as Item::Control.
@@ -1097,10 +1118,12 @@ mod tests {
             analyses,
             params,
             options: Vec::new(),
-            temp: None,
+            temps: Vec::new(),
             save: Vec::new(),
             funcs: Vec::new(),
             initial_conditions: Vec::new(),
+            nodeset: Vec::new(),
+            measures: Vec::new(),
             code_blocks: Vec::new(),
         }
     }

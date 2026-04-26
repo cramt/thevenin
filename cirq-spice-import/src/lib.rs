@@ -155,17 +155,295 @@ fn expr_to_f64(expr: &Expr, params: &HashMap<String, f64>) -> Result<f64, Import
             .get(name)
             .copied()
             .ok_or_else(|| ImportError::UnevaluableExpr(format!("unresolved parameter: {name}"))),
-        Expr::Brace(s) => {
-            // Try to resolve simple brace expressions like `{Rval}` that are
-            // just a parameter reference wrapped in braces.
-            let trimmed = s.trim();
-            if let Some(&v) = params.get(trimmed) {
-                return Ok(v);
+        Expr::Brace(s) => eval_brace_expr(s.trim(), params),
+    }
+}
+
+/// Evaluate a brace expression string against a parameter table.
+///
+/// Supports: numeric literals (with SI suffixes), parameter references,
+/// binary operators (+, -, *, /, **), unary minus, parentheses, and common
+/// SPICE math functions (sqrt, abs, log, exp, sin, cos, tan, pow, min, max).
+fn eval_brace_expr(input: &str, params: &HashMap<String, f64>) -> Result<f64, ImportError> {
+    let tokens = tokenize_expr(input);
+    let mut pos = 0;
+    let result = parse_add_sub(&tokens, &mut pos, params)?;
+    if pos < tokens.len() {
+        return Err(ImportError::UnevaluableExpr(format!(
+            "unexpected token in brace expression: {input}"
+        )));
+    }
+    Ok(result)
+}
+
+/// Token types for the mini expression evaluator.
+#[derive(Debug, Clone)]
+enum ExprToken {
+    Num(f64),
+    Ident(String),
+    Op(char), // +, -, *, /
+    Pow,      // **
+    LParen,
+    RParen,
+    Comma,
+}
+
+/// Tokenize a SPICE expression string.
+fn tokenize_expr(input: &str) -> Vec<ExprToken> {
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        match chars[i] {
+            ' ' | '\t' => {
+                i += 1;
             }
-            Err(ImportError::UnevaluableExpr(format!(
-                "brace expression: {{{s}}}"
-            )))
+            '(' => {
+                tokens.push(ExprToken::LParen);
+                i += 1;
+            }
+            ')' => {
+                tokens.push(ExprToken::RParen);
+                i += 1;
+            }
+            ',' => {
+                tokens.push(ExprToken::Comma);
+                i += 1;
+            }
+            '*' => {
+                if i + 1 < chars.len() && chars[i + 1] == '*' {
+                    tokens.push(ExprToken::Pow);
+                    i += 2;
+                } else {
+                    tokens.push(ExprToken::Op('*'));
+                    i += 1;
+                }
+            }
+            '+' | '-' | '/' => {
+                tokens.push(ExprToken::Op(chars[i]));
+                i += 1;
+            }
+            c if c.is_ascii_digit() || c == '.' => {
+                // Numeric literal — may include SI suffix
+                let start = i;
+                while i < chars.len()
+                    && (chars[i].is_ascii_alphanumeric()
+                        || chars[i] == '.'
+                        || chars[i] == 'e'
+                        || chars[i] == 'E'
+                        || (i > start
+                            && (chars[i] == '+' || chars[i] == '-')
+                            && (chars[i - 1] == 'e' || chars[i - 1] == 'E')))
+                {
+                    i += 1;
+                }
+                let s: String = chars[start..i].iter().collect();
+                if let Some(v) = thevenin_types::parse::parse_spice_number(&s) {
+                    tokens.push(ExprToken::Num(v));
+                } else if let Ok(v) = s.parse::<f64>() {
+                    tokens.push(ExprToken::Num(v));
+                } else {
+                    // Fallback: treat as identifier
+                    tokens.push(ExprToken::Ident(s));
+                }
+            }
+            c if c.is_ascii_alphabetic() || c == '_' => {
+                let start = i;
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+                tokens.push(ExprToken::Ident(chars[start..i].iter().collect()));
+            }
+            _ => {
+                i += 1;
+            } // skip unknown
         }
+    }
+    tokens
+}
+
+/// Parse addition and subtraction (lowest precedence).
+fn parse_add_sub(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+    params: &HashMap<String, f64>,
+) -> Result<f64, ImportError> {
+    let mut lhs = parse_mul_div(tokens, pos, params)?;
+    while *pos < tokens.len() {
+        match &tokens[*pos] {
+            ExprToken::Op('+') => {
+                *pos += 1;
+                lhs += parse_mul_div(tokens, pos, params)?;
+            }
+            ExprToken::Op('-') => {
+                *pos += 1;
+                lhs -= parse_mul_div(tokens, pos, params)?;
+            }
+            _ => break,
+        }
+    }
+    Ok(lhs)
+}
+
+/// Parse multiplication and division.
+fn parse_mul_div(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+    params: &HashMap<String, f64>,
+) -> Result<f64, ImportError> {
+    let mut lhs = parse_power(tokens, pos, params)?;
+    while *pos < tokens.len() {
+        match &tokens[*pos] {
+            ExprToken::Op('*') => {
+                *pos += 1;
+                lhs *= parse_power(tokens, pos, params)?;
+            }
+            ExprToken::Op('/') => {
+                *pos += 1;
+                lhs /= parse_power(tokens, pos, params)?;
+            }
+            _ => break,
+        }
+    }
+    Ok(lhs)
+}
+
+/// Parse exponentiation (right-associative, `**`).
+fn parse_power(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+    params: &HashMap<String, f64>,
+) -> Result<f64, ImportError> {
+    let base = parse_unary(tokens, pos, params)?;
+    if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::Pow) {
+        *pos += 1;
+        let exp = parse_power(tokens, pos, params)?; // right-assoc
+        Ok(base.powf(exp))
+    } else {
+        Ok(base)
+    }
+}
+
+/// Parse unary minus / plus.
+fn parse_unary(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+    params: &HashMap<String, f64>,
+) -> Result<f64, ImportError> {
+    if *pos < tokens.len() {
+        match &tokens[*pos] {
+            ExprToken::Op('-') => {
+                *pos += 1;
+                Ok(-parse_primary(tokens, pos, params)?)
+            }
+            ExprToken::Op('+') => {
+                *pos += 1;
+                parse_primary(tokens, pos, params)
+            }
+            _ => parse_primary(tokens, pos, params),
+        }
+    } else {
+        Err(ImportError::UnevaluableExpr(
+            "unexpected end of expression".to_owned(),
+        ))
+    }
+}
+
+/// SPICE built-in math functions.
+fn eval_function(name: &str, args: &[f64]) -> Result<f64, ImportError> {
+    let err = || ImportError::UnevaluableExpr(format!("function {name}: wrong arity"));
+    match name.to_ascii_lowercase().as_str() {
+        "sqrt" => Ok(args.first().ok_or_else(err)?.sqrt()),
+        "abs" => Ok(args.first().ok_or_else(err)?.abs()),
+        "log" | "ln" => Ok(args.first().ok_or_else(err)?.ln()),
+        "log10" => Ok(args.first().ok_or_else(err)?.log10()),
+        "exp" => Ok(args.first().ok_or_else(err)?.exp()),
+        "sin" => Ok(args.first().ok_or_else(err)?.sin()),
+        "cos" => Ok(args.first().ok_or_else(err)?.cos()),
+        "tan" => Ok(args.first().ok_or_else(err)?.tan()),
+        "asin" => Ok(args.first().ok_or_else(err)?.asin()),
+        "acos" => Ok(args.first().ok_or_else(err)?.acos()),
+        "atan" => Ok(args.first().ok_or_else(err)?.atan()),
+        "pow" => {
+            if args.len() < 2 {
+                return Err(err());
+            }
+            Ok(args[0].powf(args[1]))
+        }
+        "min" => {
+            if args.len() < 2 {
+                return Err(err());
+            }
+            Ok(args[0].min(args[1]))
+        }
+        "max" => {
+            if args.len() < 2 {
+                return Err(err());
+            }
+            Ok(args[0].max(args[1]))
+        }
+        "int" | "floor" => Ok(args.first().ok_or_else(err)?.floor()),
+        "ceil" => Ok(args.first().ok_or_else(err)?.ceil()),
+        _ => Err(ImportError::UnevaluableExpr(format!(
+            "unknown function: {name}"
+        ))),
+    }
+}
+
+/// Parse a primary: number, param reference, function call, or parenthesized expr.
+fn parse_primary(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+    params: &HashMap<String, f64>,
+) -> Result<f64, ImportError> {
+    if *pos >= tokens.len() {
+        return Err(ImportError::UnevaluableExpr(
+            "unexpected end of expression".to_owned(),
+        ));
+    }
+    match &tokens[*pos] {
+        ExprToken::Num(v) => {
+            let v = *v;
+            *pos += 1;
+            Ok(v)
+        }
+        ExprToken::Ident(name) => {
+            let name = name.clone();
+            *pos += 1;
+            // Check for function call: ident followed by '('
+            if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::LParen) {
+                *pos += 1; // consume '('
+                let mut args = Vec::new();
+                if *pos < tokens.len() && !matches!(&tokens[*pos], ExprToken::RParen) {
+                    args.push(parse_add_sub(tokens, pos, params)?);
+                    while *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::Comma) {
+                        *pos += 1;
+                        args.push(parse_add_sub(tokens, pos, params)?);
+                    }
+                }
+                if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::RParen) {
+                    *pos += 1;
+                }
+                eval_function(&name, &args)
+            } else {
+                // Parameter reference
+                params.get(&name).copied().ok_or_else(|| {
+                    ImportError::UnevaluableExpr(format!("unresolved parameter: {name}"))
+                })
+            }
+        }
+        ExprToken::LParen => {
+            *pos += 1;
+            let val = parse_add_sub(tokens, pos, params)?;
+            if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::RParen) {
+                *pos += 1;
+            }
+            Ok(val)
+        }
+        other => Err(ImportError::UnevaluableExpr(format!(
+            "unexpected token: {other:?}"
+        ))),
     }
 }
 
@@ -539,11 +817,11 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 9. Collect .temp.
-    let mut ir_temp: Option<f64> = None;
+    // 9. Collect .temp (multi-point: accumulate all values).
+    let mut ir_temps: Vec<f64> = Vec::new();
     for item in &netlist.items {
         if let Item::Temp(t) = item {
-            ir_temp = Some(*t);
+            ir_temps.push(*t);
         }
     }
 
@@ -593,7 +871,30 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 14. Build circuit.
+    // 14. Collect .nodeset convergence hints.
+    let mut ir_nodeset: Vec<(cirq_ir::Id, f64)> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Nodeset(pairs) = item {
+            for (node_name, val) in pairs {
+                let net_id = net_table.intern(node_name);
+                ir_nodeset.push((net_id, *val));
+            }
+        }
+    }
+
+    // 15. Collect .meas measurement specifications.
+    let mut ir_measures: Vec<cirq_ir::MeasureSpec> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Meas(spec) = item {
+            ir_measures.push(cirq_ir::MeasureSpec {
+                name: spec.name.clone(),
+                analysis_type: spec.analysis_type.clone(),
+                spec: spec.spec.clone(),
+            });
+        }
+    }
+
+    // 16. Build circuit.
     let nets = net_table.into_nets();
 
     Ok(Circuit {
@@ -604,10 +905,12 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         analyses: ir_analyses,
         params: ir_params,
         options: ir_options,
-        temp: ir_temp,
+        temps: ir_temps,
         save: ir_save,
         funcs: ir_funcs,
         initial_conditions: ir_initial_conditions,
+        nodeset: ir_nodeset,
+        measures: ir_measures,
         code_blocks: ir_code_blocks,
     })
 }
@@ -2344,5 +2647,239 @@ R1 vdd gnd_net 1k
             net_names.contains(&"gnd_net"),
             "alphabetic names should be unchanged"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Gap 1: Subcircuit .param passing (verify flatten handles it)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn subckt_param_passing() {
+        let spice = "\
+Subckt param test
+.subckt RES inp outp PARAMS: Rval=1k
+R1 inp outp Rval
+.ends RES
+X1 a 0 RES PARAMS: Rval=4.7k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+
+        // The expanded resistor from X1 should have the overridden value.
+        let r1 = c.elements.iter().find(|e| e.name == "x1.r1").unwrap();
+        let value = r1.params.iter().find(|p| p.0 == "value").unwrap();
+        match &value.1 {
+            Value::Real(v) => assert!(
+                (v - 4700.0).abs() < 1e-6,
+                "Rval should be 4.7k from instance override, got {v}"
+            ),
+            other => panic!("expected Real, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Gap 15: .nodeset convergence hints
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nodeset_imported() {
+        let spice = "\
+Nodeset test
+R1 a 0 1k
+R2 a b 2k
+.nodeset V(a)=2.5 V(b)=1.0
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+
+        assert_eq!(c.nodeset.len(), 2, "should have 2 nodeset entries");
+        // Find net IDs for 'a' and 'b'.
+        let net_a = c.nets.iter().find(|n| n.name == "a").unwrap();
+        let net_b = c.nets.iter().find(|n| n.name == "b").unwrap();
+        let ns_a = c.nodeset.iter().find(|ns| ns.0 == net_a.id).unwrap();
+        assert!((ns_a.1 - 2.5).abs() < 1e-12, "nodeset a should be 2.5V");
+        let ns_b = c.nodeset.iter().find(|ns| ns.0 == net_b.id).unwrap();
+        assert!((ns_b.1 - 1.0).abs() < 1e-12, "nodeset b should be 1.0V");
+    }
+
+    // -----------------------------------------------------------------------
+    // Gap 22: .meas measurement specifications
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn meas_imported() {
+        let spice = "\
+Measure test
+V1 a 0 PULSE(0 5 0 1n 1n 50n 100n)
+R1 a 0 1k
+.meas tran vout_max MAX v(a)
+.meas tran delay TRIG v(a) VAL=0.5 RISE=1 TARG v(a) VAL=4.5 RISE=1
+.tran 1n 200n
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+
+        assert_eq!(c.measures.len(), 2, "should have 2 measurements");
+        assert_eq!(c.measures[0].name, "vout_max");
+        assert_eq!(c.measures[0].analysis_type, "tran");
+        assert!(c.measures[0].spec.contains("MAX"));
+        assert_eq!(c.measures[1].name, "delay");
+        assert!(c.measures[1].spec.contains("TRIG"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Gap 4: .temp multi-point
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn temp_single_value() {
+        let spice = "\
+Single temp
+R1 a 0 1k
+.temp 85
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        assert_eq!(c.temps, vec![85.0]);
+    }
+
+    #[test]
+    fn temp_multi_value() {
+        let spice = "\
+Multi temp
+R1 a 0 1k
+.temp 25 50 100
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        assert_eq!(c.temps, vec![25.0, 50.0, 100.0]);
+    }
+
+    #[test]
+    fn temp_multiple_lines_accumulated() {
+        let spice = "\
+Accumulated temps
+R1 a 0 1k
+.temp 27
+.temp 85
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        assert_eq!(c.temps, vec![27.0, 85.0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Arithmetic .param expression evaluation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn brace_arithmetic_add_mul() {
+        let spice = "\
+Arithmetic params
+.param base = 1k
+.param doubled = {2*base}
+R1 a 0 doubled
+V1 a 0 DC {base + 500}
+.tran 1n 10u
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+
+        // doubled = 2 * 1000 = 2000; used in tran step via param resolution
+        match &c.analyses[0] {
+            IrAnalysis::Tran(tran) => {
+                // tstep is 1n (literal), tstop is 10u (literal)
+                assert!((tran.step - 1e-9).abs() < 1e-15);
+                assert!((tran.stop - 10e-6).abs() < 1e-12);
+            }
+            other => panic!("expected Tran, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn brace_arithmetic_division_and_parens() {
+        let params = HashMap::from([("R".to_string(), 10_000.0), ("N".to_string(), 5.0)]);
+        let result = eval_brace_expr("R / N", &params).unwrap();
+        assert!((result - 2000.0).abs() < 1e-6, "10k / 5 = 2k");
+
+        let result2 = eval_brace_expr("(R + 5k) / N", &params).unwrap();
+        assert!((result2 - 3000.0).abs() < 1e-6, "(10k + 5k) / 5 = 3k");
+    }
+
+    #[test]
+    fn brace_arithmetic_power() {
+        let params = HashMap::from([("x".to_string(), 3.0)]);
+        let result = eval_brace_expr("x ** 2", &params).unwrap();
+        assert!((result - 9.0).abs() < 1e-12, "3 ** 2 = 9");
+    }
+
+    #[test]
+    fn brace_arithmetic_functions() {
+        let params = HashMap::new();
+        let result = eval_brace_expr("sqrt(4)", &params).unwrap();
+        assert!((result - 2.0).abs() < 1e-12, "sqrt(4) = 2");
+
+        let result2 = eval_brace_expr("max(3, 7)", &params).unwrap();
+        assert!((result2 - 7.0).abs() < 1e-12, "max(3, 7) = 7");
+
+        let result3 = eval_brace_expr("abs(-5)", &params).unwrap();
+        assert!((result3 - 5.0).abs() < 1e-12, "abs(-5) = 5");
+    }
+
+    #[test]
+    fn brace_arithmetic_unary_minus() {
+        let params = HashMap::from([("v".to_string(), 3.3)]);
+        let result = eval_brace_expr("-v", &params).unwrap();
+        assert!((result - (-3.3)).abs() < 1e-12, "-v = -3.3");
+    }
+
+    #[test]
+    fn brace_arithmetic_chained_resolution() {
+        let spice = "\
+Chained arithmetic
+.param base = 100
+.param scaled = {base * 10}
+.param offset = {scaled + 50}
+R1 a 0 offset
+V1 a 0 DC 1
+.tran {offset} 10u
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        // base=100, scaled=1000, offset=1050
+        match &c.analyses[0] {
+            IrAnalysis::Tran(tran) => {
+                assert!(
+                    (tran.step - 1050.0).abs() < 1e-6,
+                    "offset should resolve to 1050 via chained arithmetic"
+                );
+            }
+            other => panic!("expected Tran, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn brace_si_suffixes_in_expr() {
+        let params = HashMap::new();
+        // 1k + 500 = 1500
+        let result = eval_brace_expr("1k + 500", &params).unwrap();
+        assert!((result - 1500.0).abs() < 1e-6, "1k + 500 = 1500");
+
+        // 2.5n * 4 = 10n
+        let result2 = eval_brace_expr("2.5n * 4", &params).unwrap();
+        assert!((result2 - 10e-9).abs() < 1e-18, "2.5n * 4 = 10n");
     }
 }

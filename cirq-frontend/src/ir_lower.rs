@@ -69,7 +69,9 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         analyses: ctx.analyses,
         params: ctx.resolved_params,
         options: ctx.options,
-        temp: ctx.temp,
+        temps: ctx.temps,
+        nodeset: Vec::new(),
+        measures: Vec::new(),
         save: ctx.save,
         funcs: ctx.funcs,
         initial_conditions: ctx.initial_conditions,
@@ -205,7 +207,7 @@ struct IrCtx {
 
     // Simulation options, temperature, and save targets.
     options: Vec<(String, Value)>,
-    temp: Option<f64>,
+    temps: Vec<f64>,
     save: Vec<String>,
     funcs: Vec<FuncDef>,
     initial_conditions: Vec<(Id, f64)>,
@@ -233,7 +235,7 @@ impl IrCtx {
             net_remap: HashMap::new(),
             code_blocks: Vec::new(),
             options: Vec::new(),
-            temp: None,
+            temps: Vec::new(),
             save: Vec::new(),
             funcs: Vec::new(),
             initial_conditions: Vec::new(),
@@ -1296,7 +1298,7 @@ impl IrCtx {
 
     fn lower_temp_decl(&mut self, t: &TempDecl) {
         match self.eval_to_f64(&t.value) {
-            Some(v) => self.temp = Some(v),
+            Some(v) => self.temps.push(v),
             None => {
                 self.diags
                     .push(Diagnostic::error("cannot evaluate temperature value").with_span(t.span));
@@ -3261,7 +3263,7 @@ mod tests {
             "#,
         );
 
-        assert_eq!(circuit.temp, Some(85.0));
+        assert_eq!(circuit.temps, vec![85.0]);
     }
 
     #[test]
@@ -3275,7 +3277,7 @@ mod tests {
             "#,
         );
 
-        assert_eq!(circuit.temp, Some(125.0));
+        assert_eq!(circuit.temps, vec![125.0]);
     }
 
     // -------------------------------------------------------------------
