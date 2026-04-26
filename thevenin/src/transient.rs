@@ -2174,16 +2174,34 @@ fn solve_timestep(
             system.rhs[ind.branch_idx] += veq;
         }
 
-        // 3b. Stamp mutual coupling cross-terms: M * (1/h) for BE, M * (2/h) for Trap.
+        // 3b. Stamp mutual coupling cross-terms.
+        //
+        // The coupled inductor branch equation is:
+        //   V1 = L1 * di1/dt + M * di2/dt
+        //
+        // For Backward Euler: V1 = L1/h*(i1_n - i1_prev) + M/h*(i2_n - i2_prev)
+        //   matrix: -L1/h on diag (self), -M/h on cross
+        //   rhs:    -L1/h * i1_prev (self) + (-M/h * i2_prev) (mutual)
+        //
+        // For Trapezoidal: V1 = 2L1/h*(i1_n-i1_prev)-v1_prev + 2M/h*(i2_n-i2_prev)
+        //   matrix: -2L1/h on diag, -2M/h on cross
+        //   rhs:    -(2L1/h*i1_prev + v1_prev) (self) + (-2M/h * i2_prev) (mutual)
         {
             let coeff = match method {
                 IntegrationMethod::BackwardEuler => 1.0 / h,
                 IntegrationMethod::Trapezoidal => 2.0 / h,
             };
             for mc in &mna.mutual_couplings {
-                let stamp = -mc.factor * coeff;
-                system.matrix.add(mc.branch1_idx, mc.branch2_idx, stamp);
-                system.matrix.add(mc.branch2_idx, mc.branch1_idx, stamp);
+                let m_coeff = mc.factor * coeff;
+                // Matrix cross-terms.
+                system.matrix.add(mc.branch1_idx, mc.branch2_idx, -m_coeff);
+                system.matrix.add(mc.branch2_idx, mc.branch1_idx, -m_coeff);
+
+                // RHS history contribution from partner inductor's previous current.
+                let i2_prev = ind_histories[mc.ind2_vec_idx].current;
+                let i1_prev = ind_histories[mc.ind1_vec_idx].current;
+                system.rhs[mc.branch1_idx] += -m_coeff * i2_prev;
+                system.rhs[mc.branch2_idx] += -m_coeff * i1_prev;
             }
         }
 
@@ -3534,6 +3552,38 @@ K1 L1 L2 0.5
         assert!(
             v_sec_late < peak,
             "secondary should decay when dI/dt→0: late={v_sec_late} vs peak={peak}"
+        );
+    }
+
+    #[test]
+    fn test_mutual_coupling_scales_with_k() {
+        // Higher coupling coefficient should produce larger secondary voltage.
+        // Run two simulations with k=0.2 and k=0.8, same circuit otherwise.
+        let run = |k: f64| -> f64 {
+            let netlist = Netlist::parse_single(&format!(
+                "Coupling scaling test
+V1 in 0 PULSE(0 5 0 1n 1n 5u 10u)
+R1 in pri 100
+L1 pri 0 1m
+L2 sec 0 1m
+R2 sec 0 1k
+K1 L1 L2 {k}
+.tran 50n 2u
+.end
+"
+            ))
+            .unwrap();
+            let result = crate::simulate(&netlist).unwrap();
+            let v_sec = tran_vector(&result, "v(sec)");
+            v_sec.iter().copied().fold(0.0_f64, |a, b| a.max(b.abs()))
+        };
+
+        let peak_low = run(0.2);
+        let peak_high = run(0.8);
+
+        assert!(
+            peak_high > peak_low * 1.5,
+            "higher k should produce larger secondary voltage: k=0.8 peak={peak_high}, k=0.2 peak={peak_low}"
         );
     }
 }

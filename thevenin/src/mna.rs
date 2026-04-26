@@ -163,6 +163,10 @@ pub struct MutualCouplingInstance {
     pub branch1_idx: usize,
     /// Branch index of the second coupled inductor.
     pub branch2_idx: usize,
+    /// Index into the `inductors` vec for the first inductor.
+    pub ind1_vec_idx: usize,
+    /// Index into the `inductors` vec for the second inductor.
+    pub ind2_vec_idx: usize,
     /// Mutual inductance factor: M = k * sqrt(L1 * L2).
     pub factor: f64,
 }
@@ -3142,20 +3146,22 @@ fn assemble_mna_flat(
         let branch1 = n + l1_offset;
         let branch2 = n + l2_offset;
 
-        // Find the inductance values to compute M = k * sqrt(L1 * L2).
-        let l1_val = inductors
+        // Find the inductance values and vec indices to compute M = k * sqrt(L1 * L2).
+        let (ind1_vec_idx, l1_val) = inductors
             .iter()
-            .find(|ind| ind.branch_idx == branch1)
-            .map(|ind| ind.inductance)
+            .enumerate()
+            .find(|(_, ind)| ind.branch_idx == branch1)
+            .map(|(idx, ind)| (idx, ind.inductance))
             .ok_or_else(|| {
                 MnaError::UnsupportedElement(format!(
                     "mutual coupling '{k_name}': inductor '{l1_name}' not found in instances"
                 ))
             })?;
-        let l2_val = inductors
+        let (ind2_vec_idx, l2_val) = inductors
             .iter()
-            .find(|ind| ind.branch_idx == branch2)
-            .map(|ind| ind.inductance)
+            .enumerate()
+            .find(|(_, ind)| ind.branch_idx == branch2)
+            .map(|(idx, ind)| (idx, ind.inductance))
             .ok_or_else(|| {
                 MnaError::UnsupportedElement(format!(
                     "mutual coupling '{k_name}': inductor '{l2_name}' not found in instances"
@@ -3167,6 +3173,8 @@ fn assemble_mna_flat(
         mutual_couplings.push(MutualCouplingInstance {
             branch1_idx: branch1,
             branch2_idx: branch2,
+            ind1_vec_idx,
+            ind2_vec_idx,
             factor,
         });
     }
