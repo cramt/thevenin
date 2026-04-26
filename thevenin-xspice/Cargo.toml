@@ -1,6 +1,6 @@
 [package]
 name = "thevenin-xspice"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "XSPICE code model framework for thevenin circuit simulator"
 license = "BSD-3-Clause"

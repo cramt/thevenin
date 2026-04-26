@@ -1776,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx",
  "faer",
@@ -1830,7 +1830,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-types"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx",
  "facet",
@@ -1840,7 +1840,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-xspice"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "thiserror"

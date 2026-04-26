@@ -7,6 +7,6 @@ license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
-thevenin-types = { path = "../thevenin-types", version = "0.2.0" }
-thevenin = { path = "../thevenin", version = "0.2.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.3.0" }
+thevenin = { path = "../thevenin", version = "0.3.0" }
 thiserror.workspace = true
