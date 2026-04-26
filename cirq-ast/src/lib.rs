@@ -25,6 +25,7 @@ pub enum TopLevel {
     Circuit(Circuit),
     Module(ModuleDef),
     Import(Import),
+    Export(ExportDecl),
     Model(ModelDef),
     Func(FuncDecl),
 }
@@ -407,10 +408,29 @@ pub enum UnaryOp {
 // ---------------------------------------------------------------------------
 
 /// `import "path.cirq"` or `import "path.cirq" as name`
+/// or `import { name1, name2 } from "path.cirq"`
 #[derive(Debug, Clone)]
 pub struct Import {
     pub path: String,
     pub alias: Option<Ident>,
+    /// Named imports: `import { tt, ff } from "pdk.cirq"`.
+    /// Empty means import all bare (non-exported) items.
+    pub names: Vec<Ident>,
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
+// Exports
+// ---------------------------------------------------------------------------
+
+/// `export name { model ..., module ..., func ... }`
+///
+/// Groups top-level declarations under a name for selective import.
+/// Analogous to SPICE `.lib section` / `.endl section`.
+#[derive(Debug, Clone)]
+pub struct ExportDecl {
+    pub name: Ident,
+    pub items: Vec<TopLevel>,
     pub span: Span,
 }
 

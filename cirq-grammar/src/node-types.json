@@ -830,6 +830,44 @@
     }
   },
   {
+    "type": "export_decl",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "func_decl",
+          "named": true
+        },
+        {
+          "type": "model_decl",
+          "named": true
+        },
+        {
+          "type": "module_decl",
+          "named": true
+        },
+        {
+          "type": "param_decl",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "func_decl",
     "named": true,
     "fields": {
@@ -1039,6 +1077,16 @@
           }
         ]
       },
+      "names": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "import_names",
+            "named": true
+          }
+        ]
+      },
       "path": {
         "multiple": false,
         "required": true,
@@ -1049,6 +1097,21 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "import_names",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -1933,6 +1996,10 @@
           "named": true
         },
         {
+          "type": "export_decl",
+          "named": true
+        },
+        {
           "type": "func_decl",
           "named": true
         },
@@ -2393,7 +2460,15 @@
     "named": false
   },
   {
+    "type": "export",
+    "named": false
+  },
+  {
     "type": "false",
+    "named": false
+  },
+  {
+    "type": "from",
     "named": false
   },
   {

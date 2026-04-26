@@ -41,6 +41,135 @@ import "models/pmos.cirq" as pmos_lib
     alias: (identifier)))
 
 ================================================================================
+Named import
+================================================================================
+
+import { tt } from "tsmc65nm.cirq"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_decl
+    names: (import_names
+      (identifier))
+    path: (string_literal)))
+
+================================================================================
+Named import with multiple names
+================================================================================
+
+import { tt, ff } from "pdk.cirq"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_decl
+    names: (import_names
+      (identifier)
+      (identifier))
+    path: (string_literal)))
+
+================================================================================
+Export block with models
+================================================================================
+
+export tt {
+    model nch: nmos {
+        vto = 0.4
+    }
+    model pch: pmos {
+        vto = -0.4
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (export_decl
+    name: (identifier)
+    (model_decl
+      name: (identifier)
+      device_type: (identifier)
+      (model_param
+        name: (identifier)
+        value: (number_literal)))
+    (model_decl
+      name: (identifier)
+      device_type: (identifier)
+      (model_param
+        name: (identifier)
+        value: (unary_expression
+          operand: (number_literal))))))
+
+================================================================================
+Multiple export blocks
+================================================================================
+
+export tt {
+    model nch: nmos { vto = 0.4 }
+}
+
+export ff {
+    model nch: nmos { vto = 0.35 }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (export_decl
+    name: (identifier)
+    (model_decl
+      name: (identifier)
+      device_type: (identifier)
+      (model_param
+        name: (identifier)
+        value: (number_literal))))
+  (export_decl
+    name: (identifier)
+    (model_decl
+      name: (identifier)
+      device_type: (identifier)
+      (model_param
+        name: (identifier)
+        value: (number_literal)))))
+
+================================================================================
+Export block with module
+================================================================================
+
+export cells {
+    module inv {
+        port i: inout
+        port o: inout
+        R1: resistor(i -> o, 1000)
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (export_decl
+    name: (identifier)
+    (module_decl
+      name: (identifier)
+      (port_decl
+        name: (identifier)
+        direction: (port_direction))
+      (port_decl
+        name: (identifier)
+        direction: (port_direction))
+      (element_inst
+        name: (identifier)
+        type: (identifier)
+        (argument_list
+          (argument
+            (connection
+              from: (identifier)
+              to: (identifier)))
+          (argument
+            (number_literal)))))))
+
+================================================================================
 Global declaration
 ================================================================================
 

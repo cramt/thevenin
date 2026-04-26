@@ -3,10 +3,10 @@
 
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CodeDecl,
-    CoupledLineDecl, CoupledLineField, ElementInst, Expr, FuncDecl, GlobalDecl, IcDecl, IcEntry,
-    Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting,
-    OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl, SaveTarget,
-    SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
+    CoupledLineDecl, CoupledLineField, ElementInst, ExportDecl, Expr, FuncDecl, GlobalDecl,
+    IcDecl, IcEntry, Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst,
+    OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl,
+    SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -42,6 +42,11 @@ pub fn lower(tree: &tree_sitter::Tree, source: &str) -> (SourceFile, Vec<Diagnos
             "import_decl" => {
                 if let Some(i) = ctx.lower_import(child) {
                     items.push(TopLevel::Import(i));
+                }
+            }
+            "export_decl" => {
+                if let Some(e) = ctx.lower_export(child) {
+                    items.push(TopLevel::Export(e));
                 }
             }
             "model_decl" => {
@@ -815,9 +820,65 @@ impl Ctx<'_> {
             .unwrap_or(raw)
             .to_owned();
         let alias = node.child_by_field_name("alias").map(|n| self.ident(n));
+
+        // Named imports: import { name1, name2 } from "path"
+        let names = node
+            .child_by_field_name("names")
+            .map(|names_node| {
+                let mut cursor = names_node.walk();
+                names_node
+                    .named_children(&mut cursor)
+                    .filter(|n| n.kind() == "identifier")
+                    .map(|n| self.ident(n))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Some(Import {
             path,
             alias,
+            names,
+            span: span_of(node),
+        })
+    }
+
+    fn lower_export(&mut self, node: tree_sitter::Node) -> Option<ExportDecl> {
+        let name_node = self.required_field(node, "name")?;
+        let name = self.ident(name_node);
+
+        let mut items = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "model_decl" => {
+                    if let Some(m) = self.lower_model(child) {
+                        items.push(TopLevel::Model(m));
+                    }
+                }
+                "module_decl" => {
+                    if let Some(m) = self.lower_module(child) {
+                        items.push(TopLevel::Module(m));
+                    }
+                }
+                "func_decl" => {
+                    if let Some(f) = self.lower_func(child) {
+                        items.push(TopLevel::Func(f));
+                    }
+                }
+                "param_decl" => {
+                    // Params inside exports are stored as top-level items.
+                    // They'll be available when the export is imported.
+                    // We don't have TopLevel::Param, so we skip these for now
+                    // since model and module are the primary use case.
+                }
+                "identifier" | "line_comment" | "block_comment" => {}
+                _ => {}
+            }
+        }
+
+        Some(ExportDecl {
+            name,
+            items,
             span: span_of(node),
         })
     }

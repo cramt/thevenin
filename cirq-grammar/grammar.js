@@ -19,7 +19,7 @@ module.exports = grammar({
     source_file: ($) => repeat($._top_level),
 
     _top_level: ($) =>
-      choice($.circuit_decl, $.module_decl, $.import_decl, $.model_decl, $.func_decl),
+      choice($.circuit_decl, $.module_decl, $.import_decl, $.export_decl, $.model_decl, $.func_decl),
 
     // ── Circuit ──────────────────────────────────────────────────────
 
@@ -305,11 +305,40 @@ module.exports = grammar({
     // ── Import ───────────────────────────────────────────────────────
 
     import_decl: ($) =>
-      seq(
-        "import",
-        field("path", $.string_literal),
-        optional(seq("as", field("alias", $.identifier)))
+      choice(
+        // Named import: import { name1, name2 } from "path"
+        seq(
+          "import",
+          "{",
+          field("names", $.import_names),
+          "}",
+          "from",
+          field("path", $.string_literal)
+        ),
+        // Plain or aliased import: import "path" [as alias]
+        seq(
+          "import",
+          field("path", $.string_literal),
+          optional(seq("as", field("alias", $.identifier)))
+        )
       ),
+
+    import_names: ($) =>
+      seq($.identifier, repeat(seq(",", $.identifier)), optional(",")),
+
+    // ── Export ───────────────────────────────────────────────────────
+
+    export_decl: ($) =>
+      seq(
+        "export",
+        field("name", $.identifier),
+        "{",
+        repeat($._export_item),
+        "}"
+      ),
+
+    _export_item: ($) =>
+      choice($.model_decl, $.module_decl, $.func_decl, $.param_decl),
 
     // ── Attributes ───────────────────────────────────────────────────
 

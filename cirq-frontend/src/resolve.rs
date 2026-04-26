@@ -84,22 +84,40 @@ fn resolve_items(
                             }
                         };
 
-                        if !visited.insert(canonical.clone()) {
-                            // Already imported — skip silently (not an error,
-                            // just a diamond dependency).
+                        // For named imports we still need to read the file even
+                        // if it has been visited before (different names may be
+                        // requested). For plain imports, diamond dedup applies.
+                        if import.names.is_empty() && !visited.insert(canonical.clone()) {
                             continue;
                         }
+                        // Record it for plain-import dedup regardless.
+                        visited.insert(canonical.clone());
 
                         match std::fs::read_to_string(&canonical) {
                             Ok(source) => {
-                                let imported_items = parse_and_extract(
-                                    &source,
-                                    &canonical,
-                                    search_paths,
-                                    visited,
-                                    diags,
-                                );
-                                result.extend(imported_items);
+                                if import.names.is_empty() {
+                                    // Plain import — merge bare items (not inside exports).
+                                    let imported_items = parse_and_extract(
+                                        &source,
+                                        &canonical,
+                                        search_paths,
+                                        visited,
+                                        diags,
+                                    );
+                                    result.extend(imported_items);
+                                } else {
+                                    // Named import — extract only named export blocks.
+                                    let imported_items = parse_and_extract_named(
+                                        &source,
+                                        &canonical,
+                                        &import.names,
+                                        import.span,
+                                        search_paths,
+                                        visited,
+                                        diags,
+                                    );
+                                    result.extend(imported_items);
+                                }
                             }
                             Err(e) => {
                                 diags.push(
@@ -127,9 +145,9 @@ fn resolve_items(
     result
 }
 
-/// Parse an imported file and extract its top-level declarations, recursively
-/// resolving any imports within.
-fn parse_and_extract(
+/// Parse an imported file and return its resolved items (with imports
+/// resolved recursively). Internal helper shared by plain and named import.
+fn parse_and_resolve(
     source: &str,
     file_path: &Path,
     search_paths: &[PathBuf],
@@ -153,10 +171,22 @@ fn parse_and_extract(
     let import_dir = file_path.parent().unwrap_or(Path::new("."));
 
     // Recursively resolve imports within the imported file.
-    let items = resolve_items(sf.items, import_dir, search_paths, visited, diags);
+    resolve_items(sf.items, import_dir, search_paths, visited, diags)
+}
 
-    // Filter to only exportable declarations: modules, models, circuits, funcs.
-    // We don't re-export imports (they've already been resolved above).
+/// Parse an imported file and extract bare (non-exported) top-level
+/// declarations. Export blocks are kept opaque — their contents are only
+/// reachable via named imports.
+fn parse_and_extract(
+    source: &str,
+    file_path: &Path,
+    search_paths: &[PathBuf],
+    visited: &mut HashSet<PathBuf>,
+    diags: &mut Vec<Diagnostic>,
+) -> Vec<TopLevel> {
+    let items = parse_and_resolve(source, file_path, search_paths, visited, diags);
+
+    // Keep bare modules, models, circuits, funcs — skip Export blocks.
     items
         .into_iter()
         .filter(|item| {
@@ -166,6 +196,53 @@ fn parse_and_extract(
             )
         })
         .collect()
+}
+
+/// Parse an imported file and extract only items from the named export blocks.
+///
+/// `import { tt, ff } from "pdk.cirq"` ↦ items from `export tt { ... }` and
+/// `export ff { ... }`.
+#[allow(clippy::too_many_arguments)]
+fn parse_and_extract_named(
+    source: &str,
+    file_path: &Path,
+    names: &[cirq_ast::Ident],
+    import_span: cirq_ast::span::Span,
+    search_paths: &[PathBuf],
+    visited: &mut HashSet<PathBuf>,
+    diags: &mut Vec<Diagnostic>,
+) -> Vec<TopLevel> {
+    let items = parse_and_resolve(source, file_path, search_paths, visited, diags);
+
+    let mut result = Vec::new();
+    let wanted: std::collections::HashSet<&str> =
+        names.iter().map(|n| n.name.as_str()).collect();
+    let mut found: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for item in &items {
+        if let TopLevel::Export(export) = item
+            && wanted.contains(export.name.name.as_str())
+        {
+            found.insert(&export.name.name);
+            result.extend(export.items.clone());
+        }
+    }
+
+    // Report any requested names that weren't found.
+    for name in names {
+        if !found.contains(name.name.as_str()) {
+            diags.push(
+                Diagnostic::error(format!(
+                    "export `{}` not found in `{}`",
+                    name.name,
+                    file_path.display()
+                ))
+                .with_span(import_span),
+            );
+        }
+    }
+
+    result
 }
 
 /// Try to find the import file, first relative to `base_dir`, then in each
@@ -407,6 +484,214 @@ mod tests {
             errors[0].message.contains("not found"),
             "error should mention file not found: {:?}",
             errors[0].message
+        );
+    }
+
+    #[test]
+    fn named_import_selects_export_block() {
+        let (sf, diags) = resolve_test(
+            &[
+                (
+                    "pdk.cirq",
+                    r#"
+                    export tt {
+                        model nch: nmos { vto = 0.4 }
+                        model pch: pmos { vto = -0.4 }
+                    }
+
+                    export ff {
+                        model nch: nmos { vto = 0.35 }
+                        model pch: pmos { vto = -0.35 }
+                    }
+
+                    // Bare item — not inside any export block.
+                    model common_diode: diode { is = 1e-14 }
+                    "#,
+                ),
+                (
+                    "main.cirq",
+                    r#"
+                    import { tt } from "pdk.cirq"
+
+                    circuit test {
+                        R1: resistor(a -> gnd, 1000)
+                    }
+                    "#,
+                ),
+            ],
+            "main.cirq",
+        );
+
+        let errors: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == crate::diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+
+        // Should have the two models from export tt.
+        let model_names: Vec<_> = sf
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                TopLevel::Model(m) => Some(m.name.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            model_names.contains(&"nch"),
+            "nch from export tt not found"
+        );
+        assert!(
+            model_names.contains(&"pch"),
+            "pch from export tt not found"
+        );
+
+        // Should NOT have the bare model (not in any export).
+        assert!(
+            !model_names.contains(&"common_diode"),
+            "bare model should not be imported via named import"
+        );
+    }
+
+    #[test]
+    fn named_import_missing_export_produces_error() {
+        let (_, diags) = resolve_test(
+            &[
+                (
+                    "pdk.cirq",
+                    r#"
+                    export tt {
+                        model nch: nmos { vto = 0.4 }
+                    }
+                    "#,
+                ),
+                (
+                    "main.cirq",
+                    r#"
+                    import { ss } from "pdk.cirq"
+                    circuit test {}
+                    "#,
+                ),
+            ],
+            "main.cirq",
+        );
+
+        let errors: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == crate::diagnostics::Severity::Error)
+            .collect();
+        assert!(
+            !errors.is_empty(),
+            "should produce error for missing export"
+        );
+        assert!(
+            errors[0].message.contains("export `ss` not found"),
+            "error should mention missing export: {:?}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn plain_import_skips_export_blocks() {
+        let (sf, diags) = resolve_test(
+            &[
+                (
+                    "lib.cirq",
+                    r#"
+                    model base_model: nmos { vto = 0.5 }
+
+                    export corner {
+                        model corner_model: nmos { vto = 0.4 }
+                    }
+                    "#,
+                ),
+                (
+                    "main.cirq",
+                    r#"
+                    import "lib.cirq"
+                    circuit test {}
+                    "#,
+                ),
+            ],
+            "main.cirq",
+        );
+
+        let errors: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == crate::diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+
+        let model_names: Vec<_> = sf
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                TopLevel::Model(m) => Some(m.name.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        // Plain import should get bare items.
+        assert!(
+            model_names.contains(&"base_model"),
+            "bare model should be imported"
+        );
+        // But NOT export block items.
+        assert!(
+            !model_names.contains(&"corner_model"),
+            "export block items should not be imported via plain import"
+        );
+    }
+
+    #[test]
+    fn named_import_multiple_exports() {
+        let (sf, diags) = resolve_test(
+            &[
+                (
+                    "pdk.cirq",
+                    r#"
+                    export tt {
+                        model nch_tt: nmos { vto = 0.4 }
+                    }
+                    export ff {
+                        model nch_ff: nmos { vto = 0.35 }
+                    }
+                    export ss {
+                        model nch_ss: nmos { vto = 0.45 }
+                    }
+                    "#,
+                ),
+                (
+                    "main.cirq",
+                    r#"
+                    import { tt, ff } from "pdk.cirq"
+                    circuit test {}
+                    "#,
+                ),
+            ],
+            "main.cirq",
+        );
+
+        let errors: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == crate::diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+
+        let model_names: Vec<_> = sf
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                TopLevel::Model(m) => Some(m.name.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(model_names.contains(&"nch_tt"), "tt export should be imported");
+        assert!(model_names.contains(&"nch_ff"), "ff export should be imported");
+        assert!(
+            !model_names.contains(&"nch_ss"),
+            "ss export should NOT be imported"
         );
     }
 
