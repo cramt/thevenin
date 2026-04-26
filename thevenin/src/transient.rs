@@ -1046,7 +1046,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             .iter()
             .map(|(n, i)| (n.to_string(), i))
             .collect();
-        nodes.sort_by(|a, b| b.1.cmp(&a.1));
+        nodes.sort_by_key(|n| std::cmp::Reverse(n.1));
         nodes
     };
     let mut node_vecs: Vec<SimVector> = sorted_nodes
