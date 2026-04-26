@@ -215,8 +215,7 @@ fn parse_and_extract_named(
     let items = parse_and_resolve(source, file_path, search_paths, visited, diags);
 
     let mut result = Vec::new();
-    let wanted: std::collections::HashSet<&str> =
-        names.iter().map(|n| n.name.as_str()).collect();
+    let wanted: std::collections::HashSet<&str> = names.iter().map(|n| n.name.as_str()).collect();
     let mut found: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
     for item in &items {
@@ -537,14 +536,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(
-            model_names.contains(&"nch"),
-            "nch from export tt not found"
-        );
-        assert!(
-            model_names.contains(&"pch"),
-            "pch from export tt not found"
-        );
+        assert!(model_names.contains(&"nch"), "nch from export tt not found");
+        assert!(model_names.contains(&"pch"), "pch from export tt not found");
 
         // Should NOT have the bare model (not in any export).
         assert!(
@@ -687,8 +680,14 @@ mod tests {
             })
             .collect();
 
-        assert!(model_names.contains(&"nch_tt"), "tt export should be imported");
-        assert!(model_names.contains(&"nch_ff"), "ff export should be imported");
+        assert!(
+            model_names.contains(&"nch_tt"),
+            "tt export should be imported"
+        );
+        assert!(
+            model_names.contains(&"nch_ff"),
+            "ff export should be imported"
+        );
         assert!(
             !model_names.contains(&"nch_ss"),
             "ss export should NOT be imported"

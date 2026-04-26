@@ -77,20 +77,30 @@ impl NetTable {
     }
 
     /// Intern a node name, returning its `Id`. Creates a new entry if unseen.
+    ///
+    /// Node names that start with a digit (common in SPICE) are prefixed with
+    /// `n` to produce valid Cirq identifiers (e.g., `"1"` → `"n1"`).
+    /// Ground `"0"` is pre-seeded and always maps to `Id(0)`.
     fn intern(&mut self, name: &str) -> Id {
+        // Check original name first (handles pre-seeded "0" and re-interning).
         if let Some(&id) = self.map.get(name) {
+            return id;
+        }
+        let sanitized = sanitize_net_name(name);
+        if let Some(&id) = self.map.get(&sanitized) {
             return id;
         }
         let id = Id(self.next_id);
         self.next_id += 1;
-        self.map.insert(name.to_owned(), id);
+        self.map.insert(sanitized, id);
         id
     }
 
     /// Mark a set of node names as global.
     fn mark_global(&mut self, names: &[String]) {
         for name in names {
-            self.globals.push(name.clone());
+            let sanitized = sanitize_net_name(name);
+            self.globals.push(sanitized);
             // Ensure the node is interned.
             self.intern(name);
         }
@@ -115,48 +125,132 @@ impl NetTable {
     }
 }
 
+/// Sanitize a SPICE node name to produce a valid Cirq identifier.
+///
+/// SPICE allows purely numeric node names (`1`, `42`, `100`). Cirq identifiers
+/// must start with a letter or underscore. This function prefixes `n` to any
+/// name that starts with a digit.
+///
+/// Ground `"0"` is handled separately (mapped to `gnd` in the IR) and is
+/// pre-seeded in `NetTable`, so it never reaches this function during normal
+/// interning.
+fn sanitize_net_name(name: &str) -> String {
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("n{name}")
+    } else {
+        name.to_owned()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Try to extract a numeric f64 from an `Expr`. Returns `Err` for parameter
-/// references and brace expressions that require evaluation.
-fn expr_to_f64(expr: &Expr) -> Result<f64, ImportError> {
+/// Try to extract a numeric f64 from an `Expr`, resolving parameter references
+/// against the supplied lookup table.
+fn expr_to_f64(expr: &Expr, params: &HashMap<String, f64>) -> Result<f64, ImportError> {
     match expr {
         Expr::Num(v) => Ok(*v),
-        Expr::Param(name) => Err(ImportError::UnevaluableExpr(format!(
-            "parameter reference: {name}"
-        ))),
-        Expr::Brace(s) => Err(ImportError::UnevaluableExpr(format!(
-            "brace expression: {{{s}}}"
-        ))),
+        Expr::Param(name) => params
+            .get(name)
+            .copied()
+            .ok_or_else(|| ImportError::UnevaluableExpr(format!("unresolved parameter: {name}"))),
+        Expr::Brace(s) => {
+            // Try to resolve simple brace expressions like `{Rval}` that are
+            // just a parameter reference wrapped in braces.
+            let trimmed = s.trim();
+            if let Some(&v) = params.get(trimmed) {
+                return Ok(v);
+            }
+            Err(ImportError::UnevaluableExpr(format!(
+                "brace expression: {{{s}}}"
+            )))
+        }
     }
 }
 
+/// Build a parameter resolution table from SPICE `.param` items.
+///
+/// Performs a simple multi-pass resolution to handle chained parameters
+/// (e.g., `.param a=1k` then `.param b=2*a`). Parameters whose values
+/// are numeric are resolved immediately; parameters referencing other
+/// params are resolved in subsequent passes until no more progress is made.
+fn build_param_table(netlist: &Netlist) -> HashMap<String, f64> {
+    let mut table = HashMap::new();
+    let mut pending: Vec<(&str, &Expr)> = Vec::new();
+
+    // First pass: collect all .param items.
+    for item in &netlist.items {
+        if let Item::Param(params) = item {
+            for p in params {
+                match &p.value {
+                    Expr::Num(v) => {
+                        table.insert(p.name.clone(), *v);
+                    }
+                    _ => {
+                        pending.push((&p.name, &p.value));
+                    }
+                }
+            }
+        }
+    }
+
+    // Multi-pass resolution: try to resolve pending params that reference
+    // already-resolved params. Stop when no progress is made.
+    let mut made_progress = true;
+    while made_progress {
+        made_progress = false;
+        pending.retain(|(name, expr)| {
+            if let Ok(v) = expr_to_f64(expr, &table) {
+                table.insert((*name).to_owned(), v);
+                made_progress = true;
+                false // remove from pending
+            } else {
+                true // keep for next pass
+            }
+        });
+    }
+
+    table
+}
+
 /// Build a `SourceSpec` from a `thevenin_types::Source`.
-fn build_source_spec(source: &thevenin_types::Source) -> Result<SourceSpec, ImportError> {
-    let dc = source.dc.as_ref().and_then(|e| expr_to_f64(e).ok());
+fn build_source_spec(
+    source: &thevenin_types::Source,
+    params: &HashMap<String, f64>,
+) -> Result<SourceSpec, ImportError> {
+    let dc = source.dc.as_ref().and_then(|e| expr_to_f64(e, params).ok());
     let ac = source
         .ac
         .as_ref()
         .map(|ac| {
             Ok::<IrAcSpec, ImportError>(IrAcSpec {
-                mag: expr_to_f64(&ac.mag).unwrap_or(0.0),
+                mag: expr_to_f64(&ac.mag, params).unwrap_or(0.0),
                 phase: ac
                     .phase
                     .as_ref()
-                    .map(expr_to_f64)
+                    .map(|e| expr_to_f64(e, params))
                     .transpose()?
                     .unwrap_or(0.0),
             })
         })
         .transpose()?;
-    let waveform = source.waveform.as_ref().map(convert_waveform).transpose()?;
+    let waveform = source
+        .waveform
+        .as_ref()
+        .map(|w| convert_waveform(w, params))
+        .transpose()?;
     Ok(SourceSpec { dc, ac, waveform })
 }
 
 /// Convert a `thevenin_types::Waveform` to an `IrWaveform`.
-fn convert_waveform(w: &thevenin_types::Waveform) -> Result<IrWaveform, ImportError> {
+fn convert_waveform(
+    w: &thevenin_types::Waveform,
+    params: &HashMap<String, f64>,
+) -> Result<IrWaveform, ImportError> {
+    let resolve = |e: &Expr| expr_to_f64(e, params);
+    let resolve_opt = |e: &Option<Expr>| e.as_ref().map(&resolve).transpose();
+
     match w {
         thevenin_types::Waveform::Pulse {
             v1,
@@ -167,13 +261,13 @@ fn convert_waveform(w: &thevenin_types::Waveform) -> Result<IrWaveform, ImportEr
             pw,
             per,
         } => Ok(IrWaveform::Pulse {
-            v1: expr_to_f64(v1)?,
-            v2: expr_to_f64(v2)?,
-            td: td.as_ref().map(expr_to_f64).transpose()?,
-            tr: tr.as_ref().map(expr_to_f64).transpose()?,
-            tf: tf.as_ref().map(expr_to_f64).transpose()?,
-            pw: pw.as_ref().map(expr_to_f64).transpose()?,
-            per: per.as_ref().map(expr_to_f64).transpose()?,
+            v1: resolve(v1)?,
+            v2: resolve(v2)?,
+            td: resolve_opt(td)?,
+            tr: resolve_opt(tr)?,
+            tf: resolve_opt(tf)?,
+            pw: resolve_opt(pw)?,
+            per: resolve_opt(per)?,
         }),
         thevenin_types::Waveform::Sin {
             v0,
@@ -183,12 +277,12 @@ fn convert_waveform(w: &thevenin_types::Waveform) -> Result<IrWaveform, ImportEr
             theta,
             phi,
         } => Ok(IrWaveform::Sin {
-            v0: expr_to_f64(v0)?,
-            va: expr_to_f64(va)?,
-            freq: freq.as_ref().map(expr_to_f64).transpose()?,
-            td: td.as_ref().map(expr_to_f64).transpose()?,
-            theta: theta.as_ref().map(expr_to_f64).transpose()?,
-            phi: phi.as_ref().map(expr_to_f64).transpose()?,
+            v0: resolve(v0)?,
+            va: resolve(va)?,
+            freq: resolve_opt(freq)?,
+            td: resolve_opt(td)?,
+            theta: resolve_opt(theta)?,
+            phi: resolve_opt(phi)?,
         }),
         thevenin_types::Waveform::Exp {
             v1,
@@ -198,33 +292,33 @@ fn convert_waveform(w: &thevenin_types::Waveform) -> Result<IrWaveform, ImportEr
             td2,
             tau2,
         } => Ok(IrWaveform::Exp {
-            v1: expr_to_f64(v1)?,
-            v2: expr_to_f64(v2)?,
-            td1: td1.as_ref().map(expr_to_f64).transpose()?,
-            tau1: tau1.as_ref().map(expr_to_f64).transpose()?,
-            td2: td2.as_ref().map(expr_to_f64).transpose()?,
-            tau2: tau2.as_ref().map(expr_to_f64).transpose()?,
+            v1: resolve(v1)?,
+            v2: resolve(v2)?,
+            td1: resolve_opt(td1)?,
+            tau1: resolve_opt(tau1)?,
+            td2: resolve_opt(td2)?,
+            tau2: resolve_opt(tau2)?,
         }),
         thevenin_types::Waveform::Pwl(points) => {
             let pairs = points
                 .iter()
-                .map(|pt| Ok((expr_to_f64(&pt.time)?, expr_to_f64(&pt.value)?)))
+                .map(|pt| Ok((resolve(&pt.time)?, resolve(&pt.value)?)))
                 .collect::<Result<Vec<(f64, f64)>, ImportError>>()?;
             Ok(IrWaveform::Pwl(pairs))
         }
         thevenin_types::Waveform::Sffm { v0, va, fc, fs, md } => Ok(IrWaveform::Sffm {
-            v0: expr_to_f64(v0)?,
-            va: expr_to_f64(va)?,
-            fc: fc.as_ref().map(expr_to_f64).transpose()?,
-            fs: fs.as_ref().map(expr_to_f64).transpose()?,
-            md: md.as_ref().map(expr_to_f64).transpose()?,
+            v0: resolve(v0)?,
+            va: resolve(va)?,
+            fc: resolve_opt(fc)?,
+            fs: resolve_opt(fs)?,
+            md: resolve_opt(md)?,
         }),
         thevenin_types::Waveform::Am { va, vo, fc, fs, td } => Ok(IrWaveform::Am {
-            va: expr_to_f64(va)?,
-            vo: expr_to_f64(vo)?,
-            fc: expr_to_f64(fc)?,
-            fs: expr_to_f64(fs)?,
-            td: td.as_ref().map(expr_to_f64).transpose()?,
+            va: resolve(va)?,
+            vo: resolve(vo)?,
+            fc: resolve(fc)?,
+            fs: resolve(fs)?,
+            td: resolve_opt(td)?,
         }),
     }
 }
@@ -373,10 +467,14 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     // Also intern nodes referenced in analyses (e.g. PZ node names).
     intern_analysis_nodes(&netlist.analysis, &mut net_table);
 
-    // 3. Build element name → Id table for source lookups in analyses.
+    // 3. Build parameter resolution table from .param items (before elements
+    //    so that parametric element values and waveforms can be resolved).
+    let param_table = build_param_table(netlist);
+
+    // 4. Build element name → Id table for source lookups in analyses.
     let mut element_name_to_id: HashMap<String, Id> = HashMap::new();
 
-    // 4. Convert elements.
+    // 5. Convert elements.
     let mut ir_elements: Vec<IrElement> = Vec::new();
     let mut elem_id_counter: u32 = 0;
 
@@ -391,18 +489,29 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
 
         element_name_to_id.insert(elem.name.to_ascii_uppercase(), id);
 
-        let ir_elem =
-            convert_element(id, elem, &mut net_table, &model_type_table, &model_id_table)?;
+        let ir_elem = convert_element(
+            id,
+            elem,
+            &mut net_table,
+            &model_type_table,
+            &model_id_table,
+            &param_table,
+        )?;
 
         if let Some(e) = ir_elem {
             ir_elements.push(e);
         }
     }
 
-    // 5. Convert analysis.
-    let ir_analyses = convert_analysis(&netlist.analysis, &element_name_to_id, &mut net_table)?;
+    // 6. Convert analysis.
+    let ir_analyses = convert_analysis(
+        &netlist.analysis,
+        &element_name_to_id,
+        &mut net_table,
+        &param_table,
+    )?;
 
-    // 6. Collect .param items.
+    // 7. Collect .param items.
     let mut ir_params: Vec<ResolvedParam> = Vec::new();
     for item in &netlist.items {
         if let Item::Param(params) = item {
@@ -415,7 +524,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 7. Collect .options items.
+    // 8. Collect .options items.
     let mut ir_options: Vec<(String, cirq_ir::Value)> = Vec::new();
     for item in &netlist.items {
         if let Item::Options(params) = item {
@@ -430,7 +539,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 8. Collect .temp.
+    // 9. Collect .temp.
     let mut ir_temp: Option<f64> = None;
     for item in &netlist.items {
         if let Item::Temp(t) = item {
@@ -438,7 +547,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 9. Collect .save targets.
+    // 10. Collect .save targets.
     let mut ir_save: Vec<String> = Vec::new();
     for item in &netlist.items {
         if let Item::Save(targets) = item {
@@ -450,7 +559,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 10. Collect .func definitions.
+    // 11. Collect .func definitions.
     let mut ir_funcs: Vec<cirq_ir::FuncDef> = Vec::new();
     for item in &netlist.items {
         if let Item::Func { name, args, body } = item {
@@ -462,7 +571,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 11. Collect .ic initial conditions.
+    // 12. Collect .ic initial conditions.
     let mut ir_initial_conditions: Vec<(cirq_ir::Id, f64)> = Vec::new();
     for item in &netlist.items {
         if let Item::Ic(pairs) = item {
@@ -473,7 +582,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 12. Collect .control blocks as code blocks with "control" language tag.
+    // 13. Collect .control blocks as code blocks with "control" language tag.
     let mut ir_code_blocks: Vec<cirq_ir::CodeBlock> = Vec::new();
     for item in &netlist.items {
         if let Item::Control(lines) = item {
@@ -484,7 +593,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
-    // 13. Build circuit.
+    // 14. Build circuit.
     let nets = net_table.into_nets();
 
     Ok(Circuit {
@@ -684,6 +793,7 @@ fn convert_element(
     nets: &mut NetTable,
     model_types: &HashMap<String, cirq_ir::DeviceType>,
     model_ids: &HashMap<String, Id>,
+    params: &HashMap<String, f64>,
 ) -> Result<Option<IrElement>, ImportError> {
     let name = &elem.name;
 
@@ -765,7 +875,7 @@ fn convert_element(
                     ir_params.push(("ac_phase".to_owned(), expr_to_value(phase)));
                 }
             }
-            let source_spec = Some(build_source_spec(source)?);
+            let source_spec = Some(build_source_spec(source, params)?);
             Ok(Some(IrElement {
                 id,
                 name: name.clone(),
@@ -791,7 +901,7 @@ fn convert_element(
                     ir_params.push(("ac_phase".to_owned(), expr_to_value(phase)));
                 }
             }
-            let source_spec = Some(build_source_spec(source)?);
+            let source_spec = Some(build_source_spec(source, params)?);
             Ok(Some(IrElement {
                 id,
                 name: name.clone(),
@@ -1216,7 +1326,9 @@ fn convert_analysis(
     analysis: &SpiceAnalysis,
     element_names: &HashMap<String, Id>,
     nets: &mut NetTable,
+    params: &HashMap<String, f64>,
 ) -> Result<Vec<IrAnalysis>, ImportError> {
+    let resolve = |e: &Expr| expr_to_f64(e, params);
     let ir = match analysis {
         SpiceAnalysis::Op => IrAnalysis::Op,
 
@@ -1233,9 +1345,9 @@ fn convert_analysis(
                 .ok_or_else(|| ImportError::SourceNotFound(src.clone()))?;
             let mut sweeps = vec![IrDcSweep {
                 source: src_id,
-                start: expr_to_f64(start)?,
-                stop: expr_to_f64(stop)?,
-                step: expr_to_f64(step)?,
+                start: resolve(start)?,
+                stop: resolve(stop)?,
+                step: resolve(step)?,
             }];
             if let Some(s2) = src2 {
                 let s2_id = element_names
@@ -1244,9 +1356,9 @@ fn convert_analysis(
                     .ok_or_else(|| ImportError::SourceNotFound(s2.src.clone()))?;
                 sweeps.push(IrDcSweep {
                     source: s2_id,
-                    start: expr_to_f64(&s2.start)?,
-                    stop: expr_to_f64(&s2.stop)?,
-                    step: expr_to_f64(&s2.step)?,
+                    start: resolve(&s2.start)?,
+                    stop: resolve(&s2.stop)?,
+                    step: resolve(&s2.step)?,
                 });
             }
             IrAnalysis::Dc(DcAnalysis { sweeps })
@@ -1264,8 +1376,8 @@ fn convert_analysis(
                 AcVariation::Lin => FrequencyScale::Linear,
             };
             IrAnalysis::Ac(AcAnalysis {
-                start: expr_to_f64(fstart)?,
-                stop: expr_to_f64(fstop)?,
+                start: resolve(fstart)?,
+                stop: resolve(fstop)?,
                 points: *n,
                 scale,
             })
@@ -1278,11 +1390,11 @@ fn convert_analysis(
             tmax,
             uic,
         } => IrAnalysis::Tran(TranAnalysis {
-            step: expr_to_f64(tstep)?,
-            stop: expr_to_f64(tstop)?,
-            start: tstart.as_ref().map(expr_to_f64).transpose()?.unwrap_or(0.0),
+            step: resolve(tstep)?,
+            stop: resolve(tstop)?,
+            start: tstart.as_ref().map(&resolve).transpose()?.unwrap_or(0.0),
             uic: *uic,
-            tmax: tmax.as_ref().and_then(|e| expr_to_f64(e).ok()),
+            tmax: tmax.as_ref().and_then(|e| resolve(e).ok()),
         }),
 
         SpiceAnalysis::Noise {
@@ -1309,8 +1421,8 @@ fn convert_analysis(
                 output_net: output_id,
                 reference_net: ref_id,
                 source: src_id,
-                start: expr_to_f64(fstart)?,
-                stop: expr_to_f64(fstop)?,
+                start: resolve(fstart)?,
+                stop: resolve(fstop)?,
                 points: *n,
                 scale,
             })
@@ -2074,5 +2186,163 @@ R_load net_c 0 1k
         // Verify top-level elements are not prefixed.
         assert!(c.elements.iter().any(|e| e.name == "V1"));
         assert!(c.elements.iter().any(|e| e.name == "R_load"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Gap 12: Parametric expression resolution
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn param_references_resolved_in_tran_analysis() {
+        let spice = "\
+Parametric tran
+.param tstep = 1n
+.param tstop = 10u
+R1 a 0 1k
+V1 a 0 DC 1
+.tran tstep tstop
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        assert_eq!(c.analyses.len(), 1);
+        match &c.analyses[0] {
+            IrAnalysis::Tran(tran) => {
+                assert!((tran.step - 1e-9).abs() < 1e-15, "step should be 1n");
+                assert!((tran.stop - 10e-6).abs() < 1e-12, "stop should be 10u");
+            }
+            other => panic!("expected Tran, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn param_references_resolved_in_source_waveform() {
+        let spice = "\
+Parametric pulse
+.param vhigh = 3.3
+.param trise = 10n
+V1 a 0 PULSE(0 vhigh 0 trise trise 50n 100n)
+R1 a 0 1k
+.tran 1n 200n
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        let v1 = c.elements.iter().find(|e| e.name == "V1").unwrap();
+        let spec = v1.source_spec.as_ref().expect("source spec");
+        match spec.waveform.as_ref().unwrap() {
+            IrWaveform::Pulse { v2, tr, tf, .. } => {
+                assert!((v2 - 3.3).abs() < 1e-10, "v2 should resolve to vhigh=3.3");
+                assert!(
+                    (tr.unwrap() - 10e-9).abs() < 1e-15,
+                    "tr should resolve to trise=10n"
+                );
+                assert!(
+                    (tf.unwrap() - 10e-9).abs() < 1e-15,
+                    "tf should resolve to trise=10n"
+                );
+            }
+            other => panic!("expected Pulse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn brace_param_reference_resolved() {
+        let spice = "\
+Brace param
+.param Rval = 4.7k
+R1 a 0 {Rval}
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        let r1 = c.elements.iter().find(|e| e.name == "R1").unwrap();
+        let value = r1.params.iter().find(|p| p.0 == "value").unwrap();
+        // Element values go through expr_to_value, not expr_to_f64, so they
+        // may store the string representation. The important thing is the import
+        // doesn't fail.
+        match &value.1 {
+            Value::Real(v) => assert!((v - 4700.0).abs() < 1e-6),
+            Value::String(s) => assert_eq!(s, "{Rval}"),
+            other => panic!("unexpected value: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chained_param_resolution() {
+        let spice = "\
+Chained params
+.param base = 1k
+.param doubled = base
+R1 a 0 doubled
+V1 a 0 DC doubled
+.tran doubled 10u
+.end
+";
+        // This should not fail — `doubled` depends on `base`.
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        match &c.analyses[0] {
+            IrAnalysis::Tran(tran) => {
+                assert!(
+                    (tran.step - 1000.0).abs() < 1e-6,
+                    "doubled should resolve to 1k via base"
+                );
+            }
+            other => panic!("expected Tran, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Gap 23: Numeric node name sanitization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn numeric_node_names_sanitized() {
+        let spice = "\
+Numeric nodes
+R1 1 0 1k
+R2 1 2 2k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+
+        // Node "1" should become "n1", node "2" should become "n2".
+        let net_names: Vec<&str> = c.nets.iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            net_names.contains(&"n1"),
+            "node '1' should be sanitized to 'n1', got: {net_names:?}"
+        );
+        assert!(
+            net_names.contains(&"n2"),
+            "node '2' should be sanitized to 'n2', got: {net_names:?}"
+        );
+        // Ground "0" is pre-seeded, not sanitized.
+        assert!(net_names.contains(&"0"), "ground should remain '0'");
+    }
+
+    #[test]
+    fn alpha_node_names_unchanged() {
+        let spice = "\
+Alpha nodes
+R1 vdd gnd_net 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+
+        let net_names: Vec<&str> = c.nets.iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            net_names.contains(&"vdd"),
+            "alphabetic names should be unchanged"
+        );
+        assert!(
+            net_names.contains(&"gnd_net"),
+            "alphabetic names should be unchanged"
+        );
     }
 }

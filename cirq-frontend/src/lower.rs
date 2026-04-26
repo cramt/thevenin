@@ -3,10 +3,10 @@
 
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CodeDecl,
-    CoupledLineDecl, CoupledLineField, ElementInst, ExportDecl, Expr, FuncDecl, GlobalDecl,
-    IcDecl, IcEntry, Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst,
-    OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl,
-    SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
+    CoupledLineDecl, CoupledLineField, ElementInst, ExportDecl, Expr, FuncDecl, GlobalDecl, IcDecl,
+    IcEntry, Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting,
+    OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl, SaveTarget,
+    SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
