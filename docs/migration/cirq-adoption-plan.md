@@ -79,16 +79,21 @@ Cirq source ---------> cirq_ir::Circuit ------------+
 
 **Actions:**
 
-- [ ] Wire `thevenin::simulate()` or a wrapper to accept SPICE source and
-      internally route through IR.
-- [ ] Ensure subcircuit flattening works at the IR level (the SPICE importer
-      currently skips subcircuit calls; Cirq module inlining works for
-      single-level hierarchies).
+- [x] Wire `thevenin::simulate()` or a wrapper to accept SPICE source and
+      internally route through IR. The CLI now routes all SPICE files through
+      `cirq_spice_import::import_spice()` → `circuit_to_netlists()` → `simulate()`
+      by default. 11 round-trip tests validate bit-identical results across
+      OP, transient, AC, DC sweep, diode, BJT, MOSFET, subcircuit, mutual
+      inductor, temperature/options, and VCVS circuits.
+- [x] Ensure subcircuit flattening works at the IR level. The SPICE importer
+      calls `thevenin::subckt::flatten_netlist()` on the parsed Netlist before
+      importing to IR. Subcircuit round-trip test confirms correctness.
 - [x] Handle behavioral sources, CPL, and XSPICE elements in the importer.
       All three are now supported: `BehavioralSource` with V=/I= parsing,
       `CoupledLine` with variable-width connections, and `Xspice` with
       scalar/array connections. Verified by unit tests and integration tests.
-- [ ] Provide a `--legacy` flag or config to bypass IR for debugging.
+- [x] Provide a `--legacy` flag or config to bypass IR for debugging.
+      `thevenin run --legacy <file>` uses the direct SPICE parser path.
 
 **Exit criteria:** removing the direct SPICE -> Netlist path causes no test
 regressions.

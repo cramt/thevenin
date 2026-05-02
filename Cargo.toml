@@ -46,7 +46,9 @@ publish = false
 thevenin-types = { path = "thevenin-types", version = "0.3.0" }
 thevenin = { path = "thevenin", version = "0.3.0" }
 thevenin-control = { path = "thevenin-control", version = "0.1.0" }
+cirq-ir = { path = "cirq-ir", version = "0.1.0" }
 cirq-frontend = { path = "cirq-frontend", version = "0.1.0" }
+cirq-spice-import = { path = "cirq-spice-import", version = "0.1.0" }
 facet.workspace = true
 figue = "2"
 
