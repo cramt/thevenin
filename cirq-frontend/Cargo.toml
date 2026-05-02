@@ -12,7 +12,7 @@ cirq-grammar = { path = "../cirq-grammar", version = "0.1.0" }
 cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
 thevenin-types = { path = "../thevenin-types", version = "0.3.0" }
 thiserror.workspace = true
-tree-sitter = "0.25"
+tree-sitter = "0.26"
 
 [dev-dependencies]
 thevenin = { path = "../thevenin" }
