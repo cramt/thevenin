@@ -13,8 +13,8 @@
   "license": "ISC",
   "packageManager": "pnpm@10.29.2",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.104",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.138",
     "tsx": "^4.21.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   }
 }
