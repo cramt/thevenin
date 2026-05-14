@@ -26,12 +26,19 @@
 
 use cirq_frontend::to_netlist::{ConvertError, circuit_to_netlists};
 use cirq_ir::Circuit;
+use cirq_spice_import::ImportError;
 use thevenin::MnaError;
 use thevenin_types::{Analysis, Netlist, SimPlot, SimResult};
 
 /// Errors that can occur when simulating a Cirq IR circuit.
 #[derive(Debug, thiserror::Error)]
 pub enum SimulateError {
+    #[error("failed to parse SPICE source: {0}")]
+    SpiceParse(String),
+
+    #[error("failed to import SPICE into Cirq IR: {0}")]
+    SpiceImport(#[from] ImportError),
+
     #[error("failed to lower Cirq IR to Netlist: {0}")]
     Convert(#[from] ConvertError),
 
@@ -115,6 +122,49 @@ pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, SimulateError> {
     let nls = lower(circuit)?;
     let nl = pick_for(&nls, "ac", |a| matches!(a, Analysis::Ac { .. }))?;
     Ok(thevenin::simulate_ac(nl)?)
+}
+
+// ---------------------------------------------------------------------------
+// SPICE source → SimResult convenience entry points
+// ---------------------------------------------------------------------------
+//
+// These let callers drive a simulation straight from SPICE text without
+// constructing a Circuit manually. The path is:
+//   SPICE source → Netlist (parse) → Circuit (cirq_spice_import) → simulate_*
+// which mirrors the canonical Stage 3 pipeline.
+//
+// `cirq_spice_import::import_spice` returns a `Vec<Circuit>` because a SPICE
+// file may declare multiple `.tran`/`.dc`/etc. analyses via control blocks,
+// producing one fork per analysis. The convenience helpers below pick the
+// first circuit; callers wanting all forks should call `import_spice`
+// directly and dispatch each circuit.
+
+fn import_first(source: &str) -> Result<Circuit, SimulateError> {
+    let mut circuits = cirq_spice_import::import_spice(source)?;
+    circuits
+        .drain(..)
+        .next()
+        .ok_or_else(|| SimulateError::SpiceParse("SPICE source produced no circuits".into()))
+}
+
+/// Parse SPICE source and run a DC operating-point analysis.
+pub fn simulate_spice_op(source: &str) -> Result<SimResult, SimulateError> {
+    simulate_op(&import_first(source)?)
+}
+
+/// Parse SPICE source and run a DC sweep.
+pub fn simulate_spice_dc(source: &str) -> Result<SimResult, SimulateError> {
+    simulate_dc(&import_first(source)?)
+}
+
+/// Parse SPICE source and run a transient analysis.
+pub fn simulate_spice_tran(source: &str) -> Result<SimResult, SimulateError> {
+    simulate_tran(&import_first(source)?)
+}
+
+/// Parse SPICE source and run an AC small-signal analysis.
+pub fn simulate_spice_ac(source: &str) -> Result<SimResult, SimulateError> {
+    simulate_ac(&import_first(source)?)
 }
 
 #[cfg(test)]
@@ -318,5 +368,54 @@ mod tests {
             scale: FrequencyScale::Decade,
         })];
         simulate_ac(&c).expect("ac");
+    }
+
+    // -----------------------------------------------------------------------
+    // SPICE-source convenience entry points
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn spice_op_voltage_divider() {
+        let src = "Voltage Divider\n\
+                   V1 in 0 1.0\n\
+                   R1 in mid 1k\n\
+                   R2 mid 0 2k\n\
+                   .op\n\
+                   .end\n";
+        let result = simulate_spice_op(src).expect("simulate spice op");
+        let v_mid = result.plots[0]
+            .vecs
+            .iter()
+            .find(|v| v.name == "v(mid)")
+            .expect("v(mid)");
+        let v = match &v_mid.data {
+            thevenin_types::VectorData::Real(r) => r[0],
+            _ => panic!(),
+        };
+        assert!((v - 2.0 / 3.0).abs() < 1e-6, "v(mid) = {v}");
+    }
+
+    #[test]
+    fn spice_dc_sweep() {
+        let src = "DC Sweep\n\
+                   V1 in 0 1.0\n\
+                   R1 in out 1k\n\
+                   R2 out 0 1k\n\
+                   .dc V1 0 5 0.1\n\
+                   .end\n";
+        let result = simulate_spice_dc(src).expect("simulate spice dc");
+        let v_out = result.plots[0]
+            .vecs
+            .iter()
+            .find(|v| v.name == "v(out)")
+            .expect("v(out)");
+        let pts = match &v_out.data {
+            thevenin_types::VectorData::Real(r) => r,
+            _ => panic!(),
+        };
+        // Sweep from 0V to 5V in 0.1V steps -> 51 samples; final V(out) = V_in/2.
+        assert!(pts.len() >= 50);
+        let last = *pts.last().unwrap();
+        assert!((last - 2.5).abs() < 1e-6, "last v(out) = {last}");
     }
 }
