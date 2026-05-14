@@ -16,24 +16,13 @@ failure so machine triage can distinguish import gaps from simulation drift.
 
 ## Current results
 
-98 / 0 / 9 (pass / fail / skip). 7 of the skips are historical ignores; the
-2 below are Cirq-only round-trip failures, quarantined in `ignore.toml`.
+99 / 0 / 8 (pass / fail / skip). 7 of the skips are historical ignores; the
+single Cirq-only round-trip failure below is quarantined in `ignore.toml`.
 
-## Cirq-only failures (2)
+## Cirq-only failures (1)
 
-Each of these passes on the direct `Netlist::parse → simulate` path; the
-failure is introduced by the `Netlist → cirq_ir::Circuit → Netlist`
-round-trip.
-
-### `bsim3soifd/RampVg2.cir` — numerical near-miss
-
-Phase: `compare`. Output values drift from the legacy baseline in the gate
-ramp region. The IR round-trip apparently changes ordering or representation
-in a way that nudges the BSIM3SOIFD CAPMOD=3 transient through a slightly
-different NR trajectory.
-
-Likely culprit: an element/model parameter losing precision via the
-`Value::Real` round-trip, or a `.options` token being reordered.
+This test passes on the direct `Netlist::parse → simulate` path; the failure
+is introduced by the `Netlist → cirq_ir::Circuit → Netlist` round-trip.
 
 ### `regression/model/binning-1.cir` — MOSFET model binning
 
@@ -45,7 +34,7 @@ table is keyed on the literal model name, so the suffix variants aren't
 findable by the base name. Needs binning-aware lookup in the importer
 (~50–200 LOC).
 
-## Resolved on the way to 98/100
+## Resolved on the way to 99/100
 
 These import/emit gaps were uncovered by routing the harness through Cirq
 and are closed in this branch:
@@ -58,6 +47,16 @@ and are closed in this branch:
   `{...}` wrapping and emits `Expr::Brace` so `temper` and other runtime
   references survive the round-trip. Closed `temper-1`, `temper-2`,
   `temper-3`.
+- **`.print @device[param]` queries silently dropped.** The simulator parses
+  `.print` device-parameter queries by scanning `netlist.source` line-by-line
+  (`transient::collect_device_param_queries`), but `circuit_to_netlists`
+  emitted a Netlist with `source: String::new()`. The `.print` directive
+  itself round-tripped through `Item::Raw`, but the simulator never read it,
+  so the requested vector (e.g. `@m1[vbs]`) simply didn't appear in the
+  output. `circuit_to_netlists` now sets `nl.source = format!("{nl}")` so
+  raw directives are visible to legacy text-scanning paths. Same fix
+  re-enables the `.options list` source echo for round-tripped netlists.
+  Closed `bsim3soifd/RampVg2`.
 
 - **`Item::Raw` directives** (`.print`, `.plot`) were silently dropped by the
   importer. Added `Circuit.raw_directives: Vec<String>` to preserve them
@@ -83,8 +82,7 @@ and are closed in this branch:
 
 ## Implementation order suggestion
 
-The remaining 2 items break into independent slices:
+One remaining item:
 
-1. **`bsim3soifd/RampVg2`** — bisect on parameter precision / option order.
-2. **`model/binning-1`** — implement model-binning lookup in the importer.
+1. **`model/binning-1`** — implement model-binning lookup in the importer.
    Lowest priority — niche SPICE feature, single test.

@@ -168,7 +168,7 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
             .collect()
     };
 
-    let netlists = analyses
+    let mut netlists: Vec<Netlist> = analyses
         .into_iter()
         .map(|analysis| Netlist {
             title: circuit.name.clone(),
@@ -177,6 +177,15 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
             source: String::new(),
         })
         .collect();
+
+    // The simulator parses `.print @device[param]` queries and `.options list`
+    // flags by scanning `netlist.source` line-by-line (see
+    // `transient::collect_device_param_queries` and `output::has_list_option`).
+    // Populate `source` from the netlist's Display impl so the round-trip
+    // surfaces those raw directives the same way `Netlist::parse` does.
+    for nl in &mut netlists {
+        nl.source = format!("{nl}");
+    }
 
     Ok(netlists)
 }
@@ -1977,6 +1986,40 @@ mod tests {
             }
             other => panic!("expected Cpl, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: emitted netlist populates `source` so `.print @device[param]`
+    // and `.options list` flags survive the round-trip. The simulator scans
+    // `netlist.source.lines()` for these — see
+    // `thevenin::transient::collect_device_param_queries` and
+    // `thevenin::output::has_list_option`.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn emitted_netlist_has_nonempty_source() {
+        let circuit = make_circuit(
+            "src_test",
+            vec![net(0, "gnd", true), net(1, "a", false)],
+            vec![IrElement {
+                id: Id(0),
+                name: "r1".to_string(),
+                kind: IrElementKind::Resistor,
+                connections: vec![conn("pos", 1), conn("neg", 0)],
+                params: vec![("value".to_string(), Value::Real(1000.0))],
+                model: None,
+                source_spec: None,
+            }],
+            vec![],
+            vec![cirq_ir::Analysis::Op],
+            vec![],
+        );
+
+        let netlists = circuit_to_netlists(&circuit).unwrap();
+        assert!(
+            !netlists[0].source.is_empty(),
+            "round-tripped Netlist must populate `source` for raw-directive scanners"
+        );
+        assert!(netlists[0].source.contains("r1"));
     }
 
     // -----------------------------------------------------------------------
