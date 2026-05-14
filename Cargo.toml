@@ -10,6 +10,7 @@ members = [
     "cirq-grammar",
     "cirq-frontend",
     "cirq-spice-import",
+    "thevenin-cirq",
 ]
 resolver = "3"
 

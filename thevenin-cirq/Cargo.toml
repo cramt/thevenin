@@ -1,0 +1,15 @@
+[package]
+name = "thevenin-cirq"
+version = "0.1.0"
+edition = "2024"
+description = "Cirq IR -> Thevenin simulation entry points (Stage 4 surface of the Cirq adoption plan)"
+license = "BSD-3-Clause"
+repository = "https://github.com/cramt/thevenin"
+
+[dependencies]
+cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
+cirq-frontend = { path = "../cirq-frontend", version = "0.1.0" }
+cirq-spice-import = { path = "../cirq-spice-import", version = "0.1.0" }
+thevenin = { path = "../thevenin", version = "0.3.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.3.0" }
+thiserror.workspace = true
