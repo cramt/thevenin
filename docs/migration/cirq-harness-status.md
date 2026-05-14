@@ -16,10 +16,10 @@ failure so machine triage can distinguish import gaps from simulation drift.
 
 ## Current results
 
-95 / 0 / 12 (pass / fail / skip). 7 of the skips are historical ignores; the
-5 below are Cirq-only round-trip failures, quarantined in `ignore.toml`.
+98 / 0 / 9 (pass / fail / skip). 7 of the skips are historical ignores; the
+2 below are Cirq-only round-trip failures, quarantined in `ignore.toml`.
 
-## Cirq-only failures (5)
+## Cirq-only failures (2)
 
 Each of these passes on the direct `Netlist::parse → simulate` path; the
 failure is introduced by the `Netlist → cirq_ir::Circuit → Netlist`
@@ -45,38 +45,19 @@ table is keyed on the literal model name, so the suffix variants aren't
 findable by the base name. Needs binning-aware lookup in the importer
 (~50–200 LOC).
 
-### `regression/temper/temper-1.cir` — `@dplain[is]` device-parameter access
-
-Phase: `simulate`. Error: `cannot resolve device parameter: @dplain[is]`.
-
-The test uses `.control` to read a device parameter via the `@elem[param]`
-syntax. Likely the device name (or its prefix) is being mangled through the
-IR adapter so the `.control` lookup misses.
-
-### `regression/temper/temper-2.cir` — `.control` computed assertion fails
-
-Phase: `simulate`. Error: `.control quit with exit code 1\nNote: err = 0.99`.
-
-The test runs a DC temperature sweep and computes `err = vecmax(abs(val/gold - 1))`,
-asserting `err < 1e-12`. Through the Cirq route, `err` evaluates to ~0.99 —
-the simulation produces materially different values. Probable cause: the
-`temper` runtime variable in a behavioural expression is constant-folded
-or lost during import.
-
-### `regression/temper/temper-3.cir` — parameter expressions in element values
-
-Phase: `simulate`. Error:
-`non-numeric value in element r_test: parameter expressions not yet supported`.
-
-The fixture has `.model rtest r r='1000 + temper'` (resistor model with a
-parametric resistance). The legacy simulator handles `'1000 + temper'`
-internally; via Cirq, the value reaches the simulator in a form it can't
-parse. Same root cause as temper-2.
-
-## Resolved on the way to 95/100
+## Resolved on the way to 98/100
 
 These import/emit gaps were uncovered by routing the harness through Cirq
 and are closed in this branch:
+
+- **Brace expressions reaching the simulator as opaque param names.** SPICE
+  `Expr::Brace("1000 + temper")` round-tripped via
+  `Value::String("{1000 + temper}")` and `value_to_expr` blindly remapped it
+  to `Expr::Param("{1000 + temper}")` — passing the literal `{` through to
+  the simulator's parametric-resistor reader. `value_to_expr` now strips the
+  `{...}` wrapping and emits `Expr::Brace` so `temper` and other runtime
+  references survive the round-trip. Closed `temper-1`, `temper-2`,
+  `temper-3`.
 
 - **`Item::Raw` directives** (`.print`, `.plot`) were silently dropped by the
   importer. Added `Circuit.raw_directives: Vec<String>` to preserve them
@@ -102,17 +83,8 @@ and are closed in this branch:
 
 ## Implementation order suggestion
 
-The remaining 5 items break into independent slices:
+The remaining 2 items break into independent slices:
 
-1. **`temper-3`** — wire parametric model-param expressions through the IR.
-   Probable fix is in `convert_params` / `convert_model`: SPICE `Expr::Brace`
-   values currently lower to `Value::String("{1000 + temper}")` which the
-   simulator can't read back. Likely fix: emit them back as `Expr::Brace` in
-   `value_to_expr`. ~30 LOC.
-2. **`temper-2`** — probably falls out of #1, since `temper-3` has the
-   simpler form of the same expression-loss bug.
-3. **`temper-1`** — investigate device-parameter name resolution after the
-   IR round-trip; element/model name preservation across `to_netlist`.
-4. **`bsim3soifd/RampVg2`** — bisect on parameter precision / option order.
-5. **`model/binning-1`** — implement model-binning lookup in the importer.
+1. **`bsim3soifd/RampVg2`** — bisect on parameter precision / option order.
+2. **`model/binning-1`** — implement model-binning lookup in the importer.
    Lowest priority — niche SPICE feature, single test.

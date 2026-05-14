@@ -223,7 +223,17 @@ fn value_to_expr(val: &Value) -> Expr {
         Value::Real(f) => Expr::Num(*f),
         Value::Integer(i) => Expr::Num(*i as f64),
         Value::Bool(b) => Expr::Num(if *b { 1.0 } else { 0.0 }),
-        Value::String(s) => Expr::Param(s.clone()),
+        Value::String(s) => {
+            // SPICE brace / single-quote expressions round-trip through
+            // `Value::String("{...}")` (see `cirq_spice_import::expr_to_value`).
+            // Restore them as `Expr::Brace` so the simulator's expression
+            // evaluator can read `temper` and other runtime references back.
+            if let Some(inner) = s.strip_prefix('{').and_then(|t| t.strip_suffix('}')) {
+                Expr::Brace(inner.to_string())
+            } else {
+                Expr::Param(s.clone())
+            }
+        }
     }
 }
 
@@ -1967,6 +1977,28 @@ mod tests {
             }
             other => panic!("expected Cpl, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: brace expressions round-trip back to Expr::Brace, not Expr::Param
+    // -----------------------------------------------------------------------
+    #[test]
+    fn brace_string_value_round_trips_as_brace_expr() {
+        // Mirrors what `cirq_spice_import::expr_to_value` produces for
+        // `Expr::Brace("1000 + temper")` — a string with the curly braces
+        // baked in.
+        let braced = Value::String("{1000 + temper}".to_string());
+        assert!(matches!(
+            value_to_expr(&braced),
+            Expr::Brace(ref s) if s == "1000 + temper"
+        ));
+
+        // A bare param ref (no braces) must still come back as Expr::Param.
+        let plain = Value::String("temper".to_string());
+        assert!(matches!(
+            value_to_expr(&plain),
+            Expr::Param(ref s) if s == "temper"
+        ));
     }
 
     // -----------------------------------------------------------------------
