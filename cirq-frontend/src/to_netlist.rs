@@ -69,7 +69,42 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
     }
 
     // Models.
+    //
+    // Skip synthetic binning aliases created by `cirq_spice_import` for SPICE
+    // BSIM4-style binning (`.model foo.1`, `.model foo.2`, … referenced as
+    // `foo` by elements). The simulator picks the bin by W/L from the original
+    // `.model foo.N` definitions; the alias only exists to make the IR
+    // element's `model: Option<Id>` field point somewhere meaningful. An alias
+    // is identified as an empty-param model whose name is the base of at
+    // least one sibling model named `<name>.<digits>`.
+    let alias_names: std::collections::HashSet<String> = {
+        let mut all_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for m in &circuit.models {
+            all_names.insert(m.name.to_ascii_uppercase());
+        }
+        let mut aliases = std::collections::HashSet::new();
+        for m in &circuit.models {
+            if !m.params.is_empty() {
+                continue;
+            }
+            let upper = m.name.to_ascii_uppercase();
+            let has_bin_sibling = all_names.iter().any(|n| {
+                if let Some(rest) = n.strip_prefix(&format!("{upper}.")) {
+                    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+                } else {
+                    false
+                }
+            });
+            if has_bin_sibling {
+                aliases.insert(upper);
+            }
+        }
+        aliases
+    };
     for model in &circuit.models {
+        if alias_names.contains(&model.name.to_ascii_uppercase()) {
+            continue;
+        }
         items.push(Item::Model(convert_model(model)));
     }
 

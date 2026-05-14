@@ -58,9 +58,3 @@
 # === VBIC ===
 # FO: moved to tolerances.toml (FP eval order amplified by avalanche; rel_tol=4e-1)
 
-# === Cirq IR round-trip drift ===
-# The harness routes every netlist through Netlist -> cirq_ir::Circuit ->
-# Netlist before simulation. These tests pass on the legacy direct path but
-# fail through the IR adapter pair. See docs/migration/cirq-harness-status.md
-# for the full failure analysis.
-"regression/model/binning-1.cir" = "Cirq round-trip: MOSFET model binning (`nmos_tst.1`/`.2`/...) not supported by importer model table"

@@ -49,9 +49,11 @@ Run the Cirq pipeline alongside the direct SPICE path and verify equivalence.
 - [x] Route the ngspice regression harness through the Cirq IR pipeline.
       `thevenin/tests/harness.rs` now passes every netlist through
       `cirq_spice_import::import_netlist` → `circuit_to_netlists` before
-      flattening and simulation. 95 / 0 / 12 (pass / fail / skip); 5 Cirq-only
-      round-trip failures are quarantined in `ignore.toml` and documented in
-      `docs/migration/cirq-harness-status.md`.
+      flattening and simulation. 100 / 0 / 7 (pass / fail / skip); all
+      Cirq-only round-trip failures are closed. The remaining 7 ignores are
+      unrelated historical issues (BSIM1/BSIM2 not implemented, `.control`
+      resume, BJT transient timing, BSIM3SOI-DD body discharge, HFET
+      reference bug). See `docs/migration/cirq-harness-status.md`.
 - [x] Fix the param naming gap: SPICE import stores passive values as
       `"value"` (normalized in the importer). Round-trip tests confirm the
       Netlist adapter reads them correctly.
@@ -61,7 +63,8 @@ Run the Cirq pipeline alongside the direct SPICE path and verify equivalence.
       by `spice_ac_source_round_trip` integration test.
 
 **Exit criteria:** 100% of existing SPICE regression tests also pass through
-the Cirq IR path.
+the Cirq IR path. ✅ Met — every non-ignored harness test passes via the
+Cirq round-trip; the remaining ignores are unrelated to the IR adapter.
 
 ## Stage 3 -- SPICE Import Convergence
 

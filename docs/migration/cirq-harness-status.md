@@ -16,28 +16,27 @@ failure so machine triage can distinguish import gaps from simulation drift.
 
 ## Current results
 
-99 / 0 / 8 (pass / fail / skip). 7 of the skips are historical ignores; the
-single Cirq-only round-trip failure below is quarantined in `ignore.toml`.
+100 / 0 / 7 (pass / fail / skip). All Cirq-only round-trip failures are
+closed. The remaining 7 skips are historical ignores unrelated to the Cirq
+adoption (unimplemented BSIM1/BSIM2, `.control` resume, two BJT transient
+timing issues, BSIM3SOI-DD body discharge gap, and an HFET fixture where
+ngspice's own reference output is wrong).
 
-## Cirq-only failures (1)
-
-This test passes on the direct `Netlist::parse → simulate` path; the failure
-is introduced by the `Netlist → cirq_ir::Circuit → Netlist` round-trip.
-
-### `regression/model/binning-1.cir` — MOSFET model binning
-
-Phase: `cirq_import`. Error: `model not found: nmos_tst`.
-
-The fixture defines several `.model nmos_tst.<n>` variants and references
-them as `nmos_tst` (SPICE picks the right bin by W/L). The importer's model
-table is keyed on the literal model name, so the suffix variants aren't
-findable by the base name. Needs binning-aware lookup in the importer
-(~50–200 LOC).
-
-## Resolved on the way to 99/100
+## Resolved on the way to 100/100
 
 These import/emit gaps were uncovered by routing the harness through Cirq
 and are closed in this branch:
+
+- **BSIM4 model binning ignored.** Elements that reference a base name like
+  `nmos_tst` while only `.model nmos_tst.1` / `.model nmos_tst.2` were
+  defined failed import with `model not found: nmos_tst`. The simulator
+  already knows how to pick the bin by W/L (`mna::resolve_model_with_bins`),
+  but the importer's model table is keyed by literal name so the base-name
+  lookup missed. The importer now registers a synthetic alias IrModel for
+  every base name whose only definitions are `.N`-suffixed bins; the alias
+  carries no params and is filtered out by `circuit_to_netlists` at emit
+  time so the original `.model foo.N` definitions reach the simulator
+  unchanged. Closed `regression/model/binning-1`.
 
 - **Brace expressions reaching the simulator as opaque param names.** SPICE
   `Expr::Brace("1000 + temper")` round-tripped via
@@ -82,7 +81,6 @@ and are closed in this branch:
 
 ## Implementation order suggestion
 
-One remaining item:
-
-1. **`model/binning-1`** — implement model-binning lookup in the importer.
-   Lowest priority — niche SPICE feature, single test.
+No remaining Cirq-only failures. Future work targets Stage 4 of the adoption
+plan (direct IR → simulation, retiring the Netlist adapter) — see
+`docs/migration/cirq-adoption-plan.md`.

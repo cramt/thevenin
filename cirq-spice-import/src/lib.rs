@@ -714,6 +714,51 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
+    // SPICE BSIM4-style model binning: `.model foo.1 nmos (... wmin=4.5u wmax=5.5u)`
+    // plus `.model foo.2 nmos (... wmin=5.5u wmax=6.5u)`. Elements reference the
+    // base name `foo`; the simulator picks the bin by W/L at sim time. Register
+    // synthetic alias entries (`foo` -> DeviceType, fresh Id) so element lookups
+    // by base name succeed during import. The aliases are filtered out at
+    // emission time in `circuit_to_netlists` so the simulator still sees the
+    // original `.model foo.N` definitions and runs its own bin selection.
+    let mut alias_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for item in &netlist.items {
+        if let Item::Model(mdef) = item {
+            let upper = mdef.name.to_ascii_uppercase();
+            if let Some(dot_pos) = upper.rfind('.') {
+                let suffix = &upper[dot_pos + 1..];
+                if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+                    let base_upper = upper[..dot_pos].to_string();
+                    // Skip if a real .model with the base name already exists,
+                    // or if we've already registered this alias.
+                    if model_type_table.contains_key(&base_upper) || alias_set.contains(&base_upper)
+                    {
+                        continue;
+                    }
+                    let base = mdef
+                        .name
+                        .rfind('.')
+                        .map(|i| mdef.name[..i].to_string())
+                        .unwrap_or_else(|| mdef.name.clone());
+                    let device_type = map_device_type(&mdef.kind);
+                    let id = Id(model_id_counter);
+                    model_id_counter += 1;
+                    model_type_table.insert(base_upper.clone(), device_type.clone());
+                    model_id_table.insert(base_upper.clone(), id);
+                    alias_set.insert(base_upper);
+                    ir_models.push(IrModel {
+                        id,
+                        name: base,
+                        device_type,
+                        // Empty params — see `circuit_to_netlists` for the
+                        // emit-time filter that recognises this as an alias.
+                        params: Vec::new(),
+                    });
+                }
+            }
+        }
+    }
+
     // 2. Discover nets: scan all elements for node names.
     let mut net_table = NetTable::new();
 
