@@ -76,6 +76,11 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         funcs: ctx.funcs,
         initial_conditions: ctx.initial_conditions,
         code_blocks: ctx.code_blocks,
+        // Cirq source has no Item::Raw analogue: every directive is typed in
+        // the AST. Round-tripping a SPICE Item::Raw through Cirq source is not
+        // supported (would require a syntax for it); the lossless preservation
+        // path is the SPICE importer ↔ to_netlist adapter.
+        raw_directives: Vec::new(),
     };
 
     let has_errors = ctx.diags.iter().any(|d| d.severity == Severity::Error);
@@ -435,14 +440,14 @@ impl IrCtx {
         // fall back.
         let device_type = device_type_from_str(&m.device_type.name);
 
-        let dev_type = match device_type {
-            Some(dt) => dt,
+        let dev_type = match &device_type {
+            Some(dt) => dt.clone(),
             None => {
                 // The device_type might be a base model name (inheritance).
                 // If so, look up the base model's device type.
                 if let Some(&base_id) = self.model_by_name.get(&m.device_type.name) {
                     if let Some(base) = self.models.iter().find(|model| model.id == base_id) {
-                        base.device_type
+                        base.device_type.clone()
                     } else {
                         self.diags.push(
                             Diagnostic::error(format!(

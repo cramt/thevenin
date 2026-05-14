@@ -19,6 +19,8 @@ enum Phase {
     Parse,
     LibProc,
     ExprResolve,
+    CirqImport,
+    CirqEmit,
     Flatten,
     Simulate,
     Compare,
@@ -30,11 +32,22 @@ impl Phase {
             Phase::Parse => "parse",
             Phase::LibProc => "lib_processing",
             Phase::ExprResolve => "expr_resolution",
+            Phase::CirqImport => "cirq_import",
+            Phase::CirqEmit => "cirq_emit",
             Phase::Flatten => "flatten",
             Phase::Simulate => "simulate",
             Phase::Compare => "compare",
         }
     }
+}
+
+/// Returns `true` when the harness should route each netlist through the Cirq IR
+/// pipeline (`Netlist -> import_netlist -> Circuit -> circuit_to_netlists`) before
+/// flattening and simulation. Toggled with `THEVENIN_VIA_CIRQ=1`.
+fn route_via_cirq() -> bool {
+    std::env::var("THEVENIN_VIA_CIRQ")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false)
 }
 
 /// Print a machine-readable JSON line to stdout, then panic.
@@ -124,7 +137,30 @@ fn run_embedded_test(
         }
     }
 
-    // Flatten subcircuits for each fork
+    // Optionally round-trip each netlist through the Cirq IR pipeline so that
+    // every ngspice harness test exercises `Netlist -> Circuit -> Netlist`. This
+    // is the only place we get continuous validation of the import + emit
+    // adapters against the full regression corpus.
+    let netlists: Vec<Netlist> = if route_via_cirq() {
+        let mut routed: Vec<Netlist> = Vec::new();
+        for netlist in &netlists {
+            let circuit = match cirq_spice_import::import_netlist(netlist) {
+                Ok(c) => c,
+                Err(e) => fail_test(path, Phase::CirqImport, &e.to_string()),
+            };
+            let emitted = match cirq_frontend::to_netlist::circuit_to_netlists(&circuit) {
+                Ok(n) => n,
+                Err(e) => fail_test(path, Phase::CirqEmit, &e.to_string()),
+            };
+            routed.extend(emitted);
+        }
+        routed
+    } else {
+        netlists
+    };
+
+    // Flatten subcircuits for each fork (idempotent on already-flat netlists,
+    // which is what the Cirq importer produces).
     let netlists: Vec<Netlist> = netlists
         .iter()
         .map(|netlist| match thevenin::flatten_netlist(netlist) {

@@ -38,6 +38,11 @@ pub struct Circuit {
     /// Verbatim embedded code blocks — each entry is `(language, lines)`.
     /// `"control"` blocks are passed to the SPICE control-block interpreter.
     pub code_blocks: Vec<CodeBlock>,
+    /// SPICE directives that have no typed IR representation yet, preserved
+    /// verbatim so the Netlist round-trip is lossless. The simulator output
+    /// formatter, for example, parses `.print` / `.plot` directives directly
+    /// from `Item::Raw` strings — those land here.
+    pub raw_directives: Vec<String>,
 }
 
 /// A verbatim embedded code block with a language tag.
@@ -149,7 +154,14 @@ pub struct Model {
 }
 
 /// Device types for models.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// SPICE has a large and growing menagerie of model kinds (BSIM variants,
+/// XSPICE code models, transmission line models, switches, …). The typed
+/// variants cover the well-known semiconductor kinds; everything else is
+/// preserved verbatim in [`DeviceType::Other`] so the simulator's string-keyed
+/// dispatch in `mna.rs` keeps working when the SPICE importer rebuilds a
+/// model that has no first-class IR representation.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceType {
     Diode,
     Npn,
@@ -160,6 +172,9 @@ pub enum DeviceType {
     PJfet,
     NMesfet,
     PMesfet,
+    /// Any model kind that has no typed variant — held as the original SPICE
+    /// kind string (e.g. `"TXL"`, `"LTRA"`, `"CPL"`, `"D_RAM"`, `"NHFET"`).
+    Other(String),
 }
 
 /// A resolved parameter value.

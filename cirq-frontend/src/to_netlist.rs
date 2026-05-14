@@ -151,6 +151,12 @@ pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertErr
         }
     }
 
+    // Verbatim SPICE directives that have no typed IR variant yet
+    // (e.g. `.print`, `.plot`).
+    for line in &circuit.raw_directives {
+        items.push(Item::Raw(line.clone()));
+    }
+
     // Build analyses.
     let analyses: Vec<Analysis> = if circuit.analyses.is_empty() {
         vec![Analysis::Op]
@@ -907,16 +913,17 @@ fn resolve_inductor_spice_name(
 // ---------------------------------------------------------------------------
 
 fn convert_model(model: &cirq_ir::Model) -> ModelDef {
-    let kind = match model.device_type {
-        DeviceType::Diode => "D",
-        DeviceType::Npn => "NPN",
-        DeviceType::Pnp => "PNP",
-        DeviceType::Nmos => "NMOS",
-        DeviceType::Pmos => "PMOS",
-        DeviceType::NJfet => "NJF",
-        DeviceType::PJfet => "PJF",
-        DeviceType::NMesfet => "NMF",
-        DeviceType::PMesfet => "PMF",
+    let kind: String = match &model.device_type {
+        DeviceType::Diode => "D".into(),
+        DeviceType::Npn => "NPN".into(),
+        DeviceType::Pnp => "PNP".into(),
+        DeviceType::Nmos => "NMOS".into(),
+        DeviceType::Pmos => "PMOS".into(),
+        DeviceType::NJfet => "NJF".into(),
+        DeviceType::PJfet => "PJF".into(),
+        DeviceType::NMesfet => "NMF".into(),
+        DeviceType::PMesfet => "PMF".into(),
+        DeviceType::Other(s) => s.clone(),
     };
 
     let params = model
@@ -930,7 +937,7 @@ fn convert_model(model: &cirq_ir::Model) -> ModelDef {
 
     ModelDef {
         name: model.name.clone(),
-        kind: kind.to_string(),
+        kind,
         params,
     }
 }
@@ -1125,6 +1132,7 @@ mod tests {
             nodeset: Vec::new(),
             measures: Vec::new(),
             code_blocks: Vec::new(),
+            raw_directives: Vec::new(),
         }
     }
 

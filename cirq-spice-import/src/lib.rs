@@ -78,30 +78,25 @@ impl NetTable {
 
     /// Intern a node name, returning its `Id`. Creates a new entry if unseen.
     ///
-    /// Node names that start with a digit (common in SPICE) are prefixed with
-    /// `n` to produce valid Cirq identifiers (e.g., `"1"` → `"n1"`).
-    /// Ground `"0"` is pre-seeded and always maps to `Id(0)`.
+    /// SPICE node names — including purely numeric ones like `"1"` — are
+    /// preserved verbatim. The IR is the semantic center and doesn't impose
+    /// Cirq surface-syntax constraints on net identifiers; any rewriting
+    /// needed to emit valid Cirq source happens at the Cirq emitter, not
+    /// here. Ground `"0"` is pre-seeded and always maps to `Id(0)`.
     fn intern(&mut self, name: &str) -> Id {
-        // Check original name first (handles pre-seeded "0" and re-interning).
         if let Some(&id) = self.map.get(name) {
-            return id;
-        }
-        let sanitized = sanitize_net_name(name);
-        if let Some(&id) = self.map.get(&sanitized) {
             return id;
         }
         let id = Id(self.next_id);
         self.next_id += 1;
-        self.map.insert(sanitized, id);
+        self.map.insert(name.to_owned(), id);
         id
     }
 
     /// Mark a set of node names as global.
     fn mark_global(&mut self, names: &[String]) {
         for name in names {
-            let sanitized = sanitize_net_name(name);
-            self.globals.push(sanitized);
-            // Ensure the node is interned.
+            self.globals.push(name.clone());
             self.intern(name);
         }
     }
@@ -122,23 +117,6 @@ impl NetTable {
             .collect();
         nets.sort_by_key(|n| n.id.0);
         nets
-    }
-}
-
-/// Sanitize a SPICE node name to produce a valid Cirq identifier.
-///
-/// SPICE allows purely numeric node names (`1`, `42`, `100`). Cirq identifiers
-/// must start with a letter or underscore. This function prefixes `n` to any
-/// name that starts with a digit.
-///
-/// Ground `"0"` is handled separately (mapped to `gnd` in the IR) and is
-/// pre-seeded in `NetTable`, so it never reaches this function during normal
-/// interning.
-fn sanitize_net_name(name: &str) -> String {
-    if name.starts_with(|c: char| c.is_ascii_digit()) {
-        format!("n{name}")
-    } else {
-        name.to_owned()
     }
 }
 
@@ -527,7 +505,16 @@ fn convert_waveform(
     params: &HashMap<String, f64>,
 ) -> Result<IrWaveform, ImportError> {
     let resolve = |e: &Expr| expr_to_f64(e, params);
-    let resolve_opt = |e: &Option<Expr>| e.as_ref().map(&resolve).transpose();
+    // Optional waveform fields default to `None` rather than failing the
+    // whole import when an expression doesn't resolve. SPICE source lines
+    // can pick up trailing keywords like `DISTOF1` into a positional slot
+    // because the parser greedily fills waveform arg lists; the simulator
+    // treats unresolved waveform tail values as unspecified, so we mirror
+    // that leniency here. Required fields (e.g. PULSE.v1) still propagate
+    // errors via `resolve` below.
+    let resolve_opt = |e: &Option<Expr>| -> Option<f64> {
+        e.as_ref().and_then(|expr| expr_to_f64(expr, params).ok())
+    };
 
     match w {
         thevenin_types::Waveform::Pulse {
@@ -541,11 +528,11 @@ fn convert_waveform(
         } => Ok(IrWaveform::Pulse {
             v1: resolve(v1)?,
             v2: resolve(v2)?,
-            td: resolve_opt(td)?,
-            tr: resolve_opt(tr)?,
-            tf: resolve_opt(tf)?,
-            pw: resolve_opt(pw)?,
-            per: resolve_opt(per)?,
+            td: resolve_opt(td),
+            tr: resolve_opt(tr),
+            tf: resolve_opt(tf),
+            pw: resolve_opt(pw),
+            per: resolve_opt(per),
         }),
         thevenin_types::Waveform::Sin {
             v0,
@@ -557,10 +544,10 @@ fn convert_waveform(
         } => Ok(IrWaveform::Sin {
             v0: resolve(v0)?,
             va: resolve(va)?,
-            freq: resolve_opt(freq)?,
-            td: resolve_opt(td)?,
-            theta: resolve_opt(theta)?,
-            phi: resolve_opt(phi)?,
+            freq: resolve_opt(freq),
+            td: resolve_opt(td),
+            theta: resolve_opt(theta),
+            phi: resolve_opt(phi),
         }),
         thevenin_types::Waveform::Exp {
             v1,
@@ -572,10 +559,10 @@ fn convert_waveform(
         } => Ok(IrWaveform::Exp {
             v1: resolve(v1)?,
             v2: resolve(v2)?,
-            td1: resolve_opt(td1)?,
-            tau1: resolve_opt(tau1)?,
-            td2: resolve_opt(td2)?,
-            tau2: resolve_opt(tau2)?,
+            td1: resolve_opt(td1),
+            tau1: resolve_opt(tau1),
+            td2: resolve_opt(td2),
+            tau2: resolve_opt(tau2),
         }),
         thevenin_types::Waveform::Pwl(points) => {
             let pairs = points
@@ -587,16 +574,16 @@ fn convert_waveform(
         thevenin_types::Waveform::Sffm { v0, va, fc, fs, md } => Ok(IrWaveform::Sffm {
             v0: resolve(v0)?,
             va: resolve(va)?,
-            fc: resolve_opt(fc)?,
-            fs: resolve_opt(fs)?,
-            md: resolve_opt(md)?,
+            fc: resolve_opt(fc),
+            fs: resolve_opt(fs),
+            md: resolve_opt(md),
         }),
         thevenin_types::Waveform::Am { va, vo, fc, fs, td } => Ok(IrWaveform::Am {
             va: resolve(va)?,
             vo: resolve(vo)?,
             fc: resolve(fc)?,
             fs: resolve(fs)?,
-            td: resolve_opt(td)?,
+            td: resolve_opt(td),
         }),
     }
 }
@@ -626,18 +613,23 @@ fn connection(terminal: &str, net: Id) -> Connection {
 }
 
 /// Map a SPICE model-kind string (e.g. "NPN", "D", "NMOS") to a `DeviceType`.
-fn map_device_type(kind: &str) -> Result<cirq_ir::DeviceType, ImportError> {
+///
+/// Unknown kinds are preserved as [`cirq_ir::DeviceType::Other`] rather than
+/// discarded — the simulator dispatches several model families (TXL, LTRA,
+/// CPL, XSPICE code models, HFETs, etc.) directly on the kind string, so a
+/// lossy import would silently drop entire device classes.
+fn map_device_type(kind: &str) -> cirq_ir::DeviceType {
     match kind.to_ascii_uppercase().as_str() {
-        "D" => Ok(cirq_ir::DeviceType::Diode),
-        "NPN" => Ok(cirq_ir::DeviceType::Npn),
-        "PNP" => Ok(cirq_ir::DeviceType::Pnp),
-        "NMOS" => Ok(cirq_ir::DeviceType::Nmos),
-        "PMOS" => Ok(cirq_ir::DeviceType::Pmos),
-        "NJF" => Ok(cirq_ir::DeviceType::NJfet),
-        "PJF" => Ok(cirq_ir::DeviceType::PJfet),
-        "NMF" | "GASFET" | "MESA" => Ok(cirq_ir::DeviceType::NMesfet),
-        "PMF" => Ok(cirq_ir::DeviceType::PMesfet),
-        other => Err(ImportError::UnknownModelKind(other.to_owned())),
+        "D" => cirq_ir::DeviceType::Diode,
+        "NPN" => cirq_ir::DeviceType::Npn,
+        "PNP" => cirq_ir::DeviceType::Pnp,
+        "NMOS" => cirq_ir::DeviceType::Nmos,
+        "PMOS" => cirq_ir::DeviceType::Pmos,
+        "NJF" => cirq_ir::DeviceType::NJfet,
+        "PJF" => cirq_ir::DeviceType::PJfet,
+        "NMF" | "GASFET" | "MESA" => cirq_ir::DeviceType::NMesfet,
+        "PMF" => cirq_ir::DeviceType::PMesfet,
+        _ => cirq_ir::DeviceType::Other(kind.to_owned()),
     }
 }
 
@@ -708,13 +700,10 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
 
     for item in &netlist.items {
         if let Item::Model(mdef) = item {
-            let device_type = match map_device_type(&mdef.kind) {
-                Ok(dt) => dt,
-                Err(_) => continue, // skip unknown model kinds
-            };
+            let device_type = map_device_type(&mdef.kind);
             let id = Id(model_id_counter);
             model_id_counter += 1;
-            model_type_table.insert(mdef.name.to_ascii_uppercase(), device_type);
+            model_type_table.insert(mdef.name.to_ascii_uppercase(), device_type.clone());
             model_id_table.insert(mdef.name.to_ascii_uppercase(), id);
             ir_models.push(IrModel {
                 id,
@@ -894,6 +883,22 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
+    // 15b. Preserve Item::Raw lines verbatim. Output-formatting directives
+    // like `.print` and `.plot` live here because they have no typed Item
+    // variant; the output formatter reads them out of Item::Raw strings.
+    // Blank lines and lone `.end` markers carry no semantic content, so we
+    // drop them to keep the IR tidy.
+    let mut ir_raw_directives: Vec<String> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Raw(line) = item {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case(".end") {
+                continue;
+            }
+            ir_raw_directives.push(line.clone());
+        }
+    }
+
     // 16. Build circuit.
     let nets = net_table.into_nets();
 
@@ -912,6 +917,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         nodeset: ir_nodeset,
         measures: ir_measures,
         code_blocks: ir_code_blocks,
+        raw_directives: ir_raw_directives,
     })
 }
 
@@ -1933,53 +1939,27 @@ R1 in 0 1k
     #[test]
     fn model_mapping_all_types() {
         // Verify map_device_type for all known kinds.
-        assert!(matches!(
-            map_device_type("D"),
-            Ok(cirq_ir::DeviceType::Diode)
-        ));
-        assert!(matches!(
-            map_device_type("NPN"),
-            Ok(cirq_ir::DeviceType::Npn)
-        ));
-        assert!(matches!(
-            map_device_type("PNP"),
-            Ok(cirq_ir::DeviceType::Pnp)
-        ));
-        assert!(matches!(
-            map_device_type("NMOS"),
-            Ok(cirq_ir::DeviceType::Nmos)
-        ));
-        assert!(matches!(
-            map_device_type("PMOS"),
-            Ok(cirq_ir::DeviceType::Pmos)
-        ));
-        assert!(matches!(
-            map_device_type("NJF"),
-            Ok(cirq_ir::DeviceType::NJfet)
-        ));
-        assert!(matches!(
-            map_device_type("PJF"),
-            Ok(cirq_ir::DeviceType::PJfet)
-        ));
-        assert!(matches!(
-            map_device_type("NMF"),
-            Ok(cirq_ir::DeviceType::NMesfet)
-        ));
-        assert!(matches!(
-            map_device_type("PMF"),
-            Ok(cirq_ir::DeviceType::PMesfet)
-        ));
-        assert!(matches!(
-            map_device_type("GASFET"),
-            Ok(cirq_ir::DeviceType::NMesfet)
-        ));
+        assert_eq!(map_device_type("D"), cirq_ir::DeviceType::Diode);
+        assert_eq!(map_device_type("NPN"), cirq_ir::DeviceType::Npn);
+        assert_eq!(map_device_type("PNP"), cirq_ir::DeviceType::Pnp);
+        assert_eq!(map_device_type("NMOS"), cirq_ir::DeviceType::Nmos);
+        assert_eq!(map_device_type("PMOS"), cirq_ir::DeviceType::Pmos);
+        assert_eq!(map_device_type("NJF"), cirq_ir::DeviceType::NJfet);
+        assert_eq!(map_device_type("PJF"), cirq_ir::DeviceType::PJfet);
+        assert_eq!(map_device_type("NMF"), cirq_ir::DeviceType::NMesfet);
+        assert_eq!(map_device_type("PMF"), cirq_ir::DeviceType::PMesfet);
+        assert_eq!(map_device_type("GASFET"), cirq_ir::DeviceType::NMesfet);
         // Case insensitive
-        assert!(matches!(
-            map_device_type("nmos"),
-            Ok(cirq_ir::DeviceType::Nmos)
-        ));
-        // Unknown
-        assert!(map_device_type("BOGUS").is_err());
+        assert_eq!(map_device_type("nmos"), cirq_ir::DeviceType::Nmos);
+        // Unknown kinds are preserved verbatim (no longer an error).
+        assert_eq!(
+            map_device_type("TXL"),
+            cirq_ir::DeviceType::Other("TXL".to_string())
+        );
+        assert_eq!(
+            map_device_type("D_RAM"),
+            cirq_ir::DeviceType::Other("D_RAM".to_string())
+        );
     }
 
     #[test]
@@ -2602,7 +2582,7 @@ V1 a 0 DC doubled
     // -----------------------------------------------------------------------
 
     #[test]
-    fn numeric_node_names_sanitized() {
+    fn numeric_node_names_preserved() {
         let spice = "\
 Numeric nodes
 R1 1 0 1k
@@ -2613,18 +2593,19 @@ R2 1 2 2k
         let circuits = import_spice(spice).unwrap();
         let c = &circuits[0];
 
-        // Node "1" should become "n1", node "2" should become "n2".
+        // SPICE numeric node names round-trip verbatim. Renaming them at
+        // import would break `.print v(2)` and other raw output directives
+        // that reference the original SPICE node names.
         let net_names: Vec<&str> = c.nets.iter().map(|n| n.name.as_str()).collect();
         assert!(
-            net_names.contains(&"n1"),
-            "node '1' should be sanitized to 'n1', got: {net_names:?}"
+            net_names.contains(&"1"),
+            "node '1' preserved: {net_names:?}"
         );
         assert!(
-            net_names.contains(&"n2"),
-            "node '2' should be sanitized to 'n2', got: {net_names:?}"
+            net_names.contains(&"2"),
+            "node '2' preserved: {net_names:?}"
         );
-        // Ground "0" is pre-seeded, not sanitized.
-        assert!(net_names.contains(&"0"), "ground should remain '0'");
+        assert!(net_names.contains(&"0"), "ground remains '0'");
     }
 
     #[test]
