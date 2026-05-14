@@ -135,12 +135,15 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
 - [~] Replace the internal `circuit_to_netlists` step in `thevenin::circuit`
       with direct IR -> MNA assembly. Start with linear devices (R/C/L/V/I,
       dependent sources) for `.op`, then nonlinear, then transient/AC.
-      First slice landed: `thevenin::circuit::simulate_op` now takes a
+      Linear DC OP slice landed: `thevenin::circuit::simulate_op` takes a
       direct path through `LinearSystem` (no Netlist intermediate) when the
-      circuit contains only R/V/I/C/L; otherwise it falls back to the
-      lowering path. Equivalence with the lowered path is pinned by
-      `direct_path_matches_lowered_path_voltage_divider`. Dependent sources
-      and the rest of the linear set come next, then nonlinear.
+      circuit contains only R/V/I/C/L/E/G/H/F. Otherwise it falls back to
+      the lowering path. Bit-for-bit equivalence with the lowered path is
+      pinned by `thevenin-cirq/tests/direct_path_equivalence.rs` (10 SPICE
+      fixtures: voltage divider, current source, RC/RL OP, VCVS/VCCS/
+      CCVS/CCCS, parallel R, ladder). Next: nonlinear device direct
+      stamping (diode, BJT, MOSFET companion models — requires NR loop on
+      the direct path) and AC/transient extensions.
 - [ ] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
 - [ ] Deprecate `thevenin_types::Netlist` as a public API; expose
