@@ -41,15 +41,6 @@ impl Phase {
     }
 }
 
-/// Returns `true` when the harness should route each netlist through the Cirq IR
-/// pipeline (`Netlist -> import_netlist -> Circuit -> circuit_to_netlists`) before
-/// flattening and simulation. Toggled with `THEVENIN_VIA_CIRQ=1`.
-fn route_via_cirq() -> bool {
-    std::env::var("THEVENIN_VIA_CIRQ")
-        .map(|v| !v.is_empty() && v != "0")
-        .unwrap_or(false)
-}
-
 /// Print a machine-readable JSON line to stdout, then panic.
 fn fail_test(path: &str, phase: Phase, error: &str) -> ! {
     // Categorize from the error message
@@ -137,11 +128,10 @@ fn run_embedded_test(
         }
     }
 
-    // Optionally round-trip each netlist through the Cirq IR pipeline so that
-    // every ngspice harness test exercises `Netlist -> Circuit -> Netlist`. This
-    // is the only place we get continuous validation of the import + emit
-    // adapters against the full regression corpus.
-    let netlists: Vec<Netlist> = if route_via_cirq() {
+    // Route every netlist through the Cirq IR pipeline before flattening, so
+    // that the ngspice regression corpus continuously validates the
+    // `Netlist -> Circuit -> Netlist` import + emit adapters.
+    let netlists: Vec<Netlist> = {
         let mut routed: Vec<Netlist> = Vec::new();
         for netlist in &netlists {
             let circuit = match cirq_spice_import::import_netlist(netlist) {
@@ -155,8 +145,6 @@ fn run_embedded_test(
             routed.extend(emitted);
         }
         routed
-    } else {
-        netlists
     };
 
     // Flatten subcircuits for each fork (idempotent on already-flat netlists,

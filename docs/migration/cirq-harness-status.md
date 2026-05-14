@@ -1,22 +1,14 @@
 # Cirq IR Harness Routing — Status
 
-The ngspice regression harness can be routed through the Cirq IR pipeline by
-setting `THEVENIN_VIA_CIRQ=1`. With the env var set, each parsed `Netlist` is
-passed through `cirq_spice_import::import_netlist` → `circuit_to_netlists`
-before flattening and simulation, exercising both adapter directions against
-the full regression corpus on every run.
-
-The default mode is still legacy (`Netlist::parse` → simulate). The Cirq route
-will become the default after the remaining drift items below are closed.
+Every ngspice regression harness test runs through the Cirq IR pipeline.
+Each parsed `Netlist` is passed through `cirq_spice_import::import_netlist`
+→ `circuit_to_netlists` before flattening and simulation, so the import +
+emit adapters are continuously validated against the full regression corpus.
 
 ## How to run
 
 ```bash
-# Legacy path (default)
 nix develop --command cargo nextest run -p thevenin --test harness
-
-# Cirq IR round-trip path
-THEVENIN_VIA_CIRQ=1 nix develop --command cargo nextest run -p thevenin --test harness
 ```
 
 The `cirq_import` / `cirq_emit` phases are visible in `TRIAGE_JSON:` lines on
@@ -24,15 +16,14 @@ failure so machine triage can distinguish import gaps from simulation drift.
 
 ## Current results
 
-| Mode | Pass | Fail | Skip | Notes |
-|------|-----:|-----:|-----:|-------|
-| Legacy | 100 | 0 | 7 | Same 7 historical ignores |
-| Via Cirq | 95 | 5 | 7 | Same 7 historical ignores + 5 Cirq-only failures |
+95 / 0 / 12 (pass / fail / skip). 7 of the skips are historical ignores; the
+5 below are Cirq-only round-trip failures, quarantined in `ignore.toml`.
 
 ## Cirq-only failures (5)
 
-Each of these passes on the legacy path; the failure is introduced by the
-`Netlist → cirq_ir::Circuit → Netlist` round-trip.
+Each of these passes on the direct `Netlist::parse → simulate` path; the
+failure is introduced by the `Netlist → cirq_ir::Circuit → Netlist`
+round-trip.
 
 ### `bsim3soifd/RampVg2.cir` — numerical near-miss
 
