@@ -1790,6 +1790,7 @@ version = "0.3.0"
 dependencies = [
  "approx",
  "cirq-frontend",
+ "cirq-ir",
  "cirq-spice-import",
  "faer",
  "getrandom 0.4.2",

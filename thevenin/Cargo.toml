@@ -11,6 +11,8 @@ thiserror.workspace = true
 faer.workspace = true
 thevenin-types = { path = "../thevenin-types", version = "0.3.0" }
 thevenin-xspice = { path = "../thevenin-xspice", version = "0.1.2" }
+cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
+cirq-frontend = { path = "../cirq-frontend", version = "0.1.0" }
 libm = "0.2"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
@@ -24,7 +26,6 @@ web-time = "1"
 thevenin-test-macro = { path = "../thevenin-test-macro" }
 thevenin-control = { path = "../thevenin-control" }
 cirq-spice-import = { path = "../cirq-spice-import" }
-cirq-frontend = { path = "../cirq-frontend" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }

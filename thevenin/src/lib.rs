@@ -79,6 +79,7 @@ pub mod txl;
 pub mod vbic;
 
 // ── Public modules (used by thevenin-control and test harness) ──────────────
+pub mod circuit;
 pub mod expr;
 pub mod libproc;
 pub mod output;

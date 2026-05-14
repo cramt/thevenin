@@ -1,0 +1,247 @@
+//! Cirq IR — direct simulation entry points.
+//!
+//! These are the **Stage 4 surface** of the Cirq adoption plan
+//! (`docs/migration/cirq-adoption-plan.md`). Callers pass a
+//! [`cirq_ir::Circuit`] directly instead of constructing a
+//! [`thevenin_types::Netlist`] themselves.
+//!
+//! For now, the entry points lower the circuit to one or more Netlists
+//! internally via [`cirq_frontend::to_netlist::circuit_to_netlists`] and then
+//! dispatch to the existing Netlist-shaped simulator. As Stage 4 progresses,
+//! individual analyses will gain direct IR → MNA paths that bypass the
+//! Netlist adapter entirely; callers see no behavioural change.
+//!
+//! ## Picking the right analysis
+//!
+//! A [`cirq_ir::Circuit`] can declare any number of analyses
+//! (`circuit.analyses`); each [`Self::simulate_op`]-style entry point picks
+//! the first analysis matching its discriminant. Callers wanting fine
+//! control over multi-analysis circuits should call
+//! [`cirq_frontend::to_netlist::circuit_to_netlists`] themselves and dispatch
+//! each resulting netlist with [`crate::simulate_op`] / etc.
+
+use cirq_frontend::to_netlist::{ConvertError, circuit_to_netlists};
+use cirq_ir::Circuit;
+use thevenin_types::{Analysis, Netlist, SimPlot, SimResult};
+
+use crate::MnaError;
+
+/// Errors that can occur when simulating a [`Circuit`] directly.
+#[derive(Debug, thiserror::Error)]
+pub enum CircuitSimError {
+    #[error("failed to lower Cirq IR to Netlist: {0}")]
+    Convert(#[from] ConvertError),
+
+    #[error("simulation failed: {0}")]
+    Mna(#[from] MnaError),
+
+    #[error("subcircuit flattening failed: {0}")]
+    Flatten(String),
+
+    #[error(
+        "circuit has no `{expected}` analysis (it has {found} declared); call the \
+         matching simulate_* for one of the declared analyses, or add the right \
+         Analysis variant to the circuit"
+    )]
+    WrongAnalysis {
+        expected: &'static str,
+        found: usize,
+    },
+}
+
+/// Lower a [`Circuit`] into per-analysis [`Netlist`]s, flattening subcircuits.
+/// The flatten step is idempotent on the netlists produced by
+/// [`circuit_to_netlists`] (which emits already-flat netlists), so this is
+/// cheap when there's nothing to flatten.
+fn lower(circuit: &Circuit) -> Result<Vec<Netlist>, CircuitSimError> {
+    let nls = circuit_to_netlists(circuit)?;
+    nls.into_iter()
+        .map(|nl| crate::flatten_netlist(&nl).map_err(|e| CircuitSimError::Flatten(e.to_string())))
+        .collect()
+}
+
+/// Pick the first netlist whose analysis matches the predicate.
+fn pick<'a>(
+    nls: &'a [Netlist],
+    expected: &'static str,
+    matches: impl Fn(&Analysis) -> bool,
+) -> Result<&'a Netlist, CircuitSimError> {
+    nls.iter()
+        .find(|nl| matches(&nl.analysis))
+        .ok_or(CircuitSimError::WrongAnalysis {
+            expected,
+            found: nls.len(),
+        })
+}
+
+/// Run a DC operating-point analysis on the circuit.
+pub fn simulate_op(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    let nls = lower(circuit)?;
+    let nl = pick(&nls, "op", |a| matches!(a, Analysis::Op))?;
+    Ok(crate::simulate_op(nl)?)
+}
+
+/// Run a DC sweep on the circuit's first declared `.dc` analysis.
+pub fn simulate_dc(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    let nls = lower(circuit)?;
+    let nl = pick(&nls, "dc", |a| matches!(a, Analysis::Dc { .. }))?;
+    Ok(crate::simulate_dc(nl)?)
+}
+
+/// Run a transient analysis on the circuit's first declared `.tran` analysis.
+///
+/// As with the harness, an operating-point solve is prepended so the
+/// transient starts from a valid steady state.
+pub fn simulate_tran(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    let nls = lower(circuit)?;
+    let nl = pick(&nls, "tran", |a| matches!(a, Analysis::Tran { .. }))?;
+    let mut plots: Vec<SimPlot> = Vec::new();
+    if let Ok(op) = crate::simulate_op(nl) {
+        plots.extend(op.plots);
+    }
+    plots.extend(crate::simulate_tran(nl)?.plots);
+    Ok(SimResult { plots })
+}
+
+/// Run an AC small-signal analysis on the circuit's first declared `.ac`.
+pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    let nls = lower(circuit)?;
+    let nl = pick(&nls, "ac", |a| matches!(a, Analysis::Ac { .. }))?;
+    Ok(crate::simulate_ac(nl)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cirq_ir::{
+        Analysis as IrAnalysis, Connection, Element, ElementKind, Id, Net, ResolvedParam,
+        SourceSpec, TranAnalysis, Value,
+    };
+
+    fn voltage_divider() -> Circuit {
+        Circuit {
+            name: "voltage_divider".into(),
+            nets: vec![
+                Net {
+                    id: Id(0),
+                    name: "gnd".into(),
+                    is_global: true,
+                },
+                Net {
+                    id: Id(1),
+                    name: "in".into(),
+                    is_global: false,
+                },
+                Net {
+                    id: Id(2),
+                    name: "mid".into(),
+                    is_global: false,
+                },
+            ],
+            elements: vec![
+                Element {
+                    id: Id(0),
+                    name: "V1".into(),
+                    kind: ElementKind::VoltageSource,
+                    connections: vec![
+                        Connection {
+                            terminal: "pos".into(),
+                            net: Id(1),
+                        },
+                        Connection {
+                            terminal: "neg".into(),
+                            net: Id(0),
+                        },
+                    ],
+                    params: vec![],
+                    model: None,
+                    source_spec: Some(SourceSpec {
+                        dc: Some(1.0),
+                        ac: None,
+                        waveform: None,
+                    }),
+                },
+                Element {
+                    id: Id(1),
+                    name: "R1".into(),
+                    kind: ElementKind::Resistor,
+                    connections: vec![
+                        Connection {
+                            terminal: "pos".into(),
+                            net: Id(1),
+                        },
+                        Connection {
+                            terminal: "neg".into(),
+                            net: Id(2),
+                        },
+                    ],
+                    params: vec![("value".into(), Value::Real(1_000.0))],
+                    model: None,
+                    source_spec: None,
+                },
+                Element {
+                    id: Id(2),
+                    name: "R2".into(),
+                    kind: ElementKind::Resistor,
+                    connections: vec![
+                        Connection {
+                            terminal: "pos".into(),
+                            net: Id(2),
+                        },
+                        Connection {
+                            terminal: "neg".into(),
+                            net: Id(0),
+                        },
+                    ],
+                    params: vec![("value".into(), Value::Real(2_000.0))],
+                    model: None,
+                    source_spec: None,
+                },
+            ],
+            models: vec![],
+            analyses: vec![IrAnalysis::Op],
+            params: Vec::<ResolvedParam>::new(),
+            options: vec![],
+            temps: vec![],
+            save: vec![],
+            funcs: vec![],
+            initial_conditions: vec![],
+            nodeset: vec![],
+            measures: vec![],
+            code_blocks: vec![],
+            raw_directives: vec![],
+        }
+    }
+
+    #[test]
+    fn op_voltage_divider() {
+        let result = simulate_op(&voltage_divider()).expect("op");
+        let v_mid = result.plots[0]
+            .vecs
+            .iter()
+            .find(|v| v.name == "v(mid)")
+            .expect("v(mid)");
+        let v = match &v_mid.data {
+            thevenin_types::VectorData::Real(r) => r[0],
+            _ => panic!(),
+        };
+        assert!((v - 2.0 / 3.0).abs() < 1e-6, "v(mid) = {v}");
+    }
+
+    #[test]
+    fn wrong_analysis_returns_error() {
+        let mut c = voltage_divider();
+        c.analyses = vec![IrAnalysis::Tran(TranAnalysis {
+            step: 1e-9,
+            stop: 1e-6,
+            start: 0.0,
+            uic: false,
+            tmax: None,
+        })];
+        let err = simulate_op(&c).unwrap_err();
+        assert!(matches!(
+            err,
+            CircuitSimError::WrongAnalysis { expected: "op", .. }
+        ));
+    }
+}
