@@ -319,28 +319,32 @@ mod tests {
     }
 
     /// A circuit with an element outside the IR-direct supported subset
-    /// must fall back to the lowering path. Uses a BJT (Npn) because diodes
-    /// are now supported directly; this test pins the fallback behaviour
-    /// for device classes still pending migration (see
+    /// must fall back to the lowering path. Uses a MOSFET (Nmos) because
+    /// BJTs are now supported directly; this test pins the fallback
+    /// behaviour for device classes still pending migration (see
     /// `docs/migration/mna-ir-pivot-plan.md`).
     #[test]
     fn direct_path_rejects_unsupported_circuits() {
         let mut c = voltage_divider();
         c.elements.push(cirq_ir::Element {
             id: Id(3),
-            name: "Q1".into(),
-            kind: ElementKind::Npn,
+            name: "M1".into(),
+            kind: ElementKind::Nmos,
             connections: vec![
                 cirq_ir::Connection {
-                    terminal: "collector".into(),
+                    terminal: "drain".into(),
                     net: Id(1),
                 },
                 cirq_ir::Connection {
-                    terminal: "base".into(),
+                    terminal: "gate".into(),
                     net: Id(2),
                 },
                 cirq_ir::Connection {
-                    terminal: "emitter".into(),
+                    terminal: "source".into(),
+                    net: Id(0),
+                },
+                cirq_ir::Connection {
+                    terminal: "bulk".into(),
                     net: Id(0),
                 },
             ],

@@ -24,12 +24,14 @@ use cirq_ir::{Circuit, Element as IrElement, ElementKind as IrElementKind, Id, M
 use thevenin_types::{Expr, Source};
 use thevenin_xspice::CodeModelRegistry;
 
+use crate::bjt::{BjtInstance, BjtModel};
 use crate::diode::DiodeModel;
 use crate::mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
-    NodeMap, ResistorInstance, VoltageSourceInstance, stamp_conductance,
+    NodeMap, ResistorInstance, VoltageSourceInstance, push_bjt_caps, stamp_conductance,
 };
 use crate::newton::NrOptions;
+use crate::vbic::{VbicInstance, VbicModel};
 
 /// Extract Newton-Raphson options from a circuit's `options` field.
 ///
@@ -125,6 +127,8 @@ fn circuit_is_supported_subset(circuit: &Circuit) -> bool {
                 | IrElementKind::Ccvs
                 | IrElementKind::Cccs
                 | IrElementKind::Diode
+                | IrElementKind::Npn
+                | IrElementKind::Pnp
         )
     })
 }
@@ -273,6 +277,84 @@ fn load_diode_model(circuit: &Circuit, elem: &IrElement) -> DiodeModel {
     base.with_instance_params(&extra_params(elem, &["value"]))
 }
 
+/// Circuit-side analogue of `crate::netlist_temp(&Netlist) -> f64`.
+///
+/// Reads the first `.temp` directive if present, else looks for a numeric
+/// `TEMP` entry in `circuit.options`, else returns 27 °C.
+fn circuit_temp(circuit: &Circuit) -> f64 {
+    if let Some(t) = circuit.temps.first() {
+        return *t;
+    }
+    for (name, value) in &circuit.options {
+        if name.eq_ignore_ascii_case("TEMP")
+            && let Some(v) = match value {
+                Value::Real(f) => Some(*f),
+                Value::Integer(i) => Some(*i as f64),
+                _ => None,
+            }
+        {
+            return v;
+        }
+    }
+    27.0
+}
+
+/// Determine the BJT model level from instance params first, then model
+/// params. Default is 1 (Gummel-Poon); level 4 is VBIC. Mirrors
+/// `crate::mna::get_bjt_level` exactly.
+fn bjt_level(model: Option<&Model>, instance_params: &[(String, Value)]) -> i32 {
+    for (name, value) in instance_params {
+        if name.eq_ignore_ascii_case("LEVEL")
+            && let Some(v) = numeric_value(value)
+        {
+            return v as i32;
+        }
+    }
+    if let Some(m) = model {
+        for (name, value) in &m.params {
+            if name.eq_ignore_ascii_case("LEVEL")
+                && let Some(v) = numeric_value(value)
+            {
+                return v as i32;
+            }
+        }
+    }
+    1
+}
+
+/// Extract a numeric value from a Cirq IR [`Value`], or `None` for strings.
+fn numeric_value(v: &Value) -> Option<f64> {
+    match v {
+        Value::Real(f) => Some(*f),
+        Value::Integer(i) => Some(*i as f64),
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Value::String(_) => None,
+    }
+}
+
+/// Build a fully-resolved [`BjtModel`] (level 1 Gummel-Poon) for an Npn/Pnp
+/// element with instance overrides applied. Mirrors the Netlist path's
+/// "default to NPN when no model is linked" behaviour exactly.
+fn load_bjt_model(circuit: &Circuit, elem: &IrElement) -> BjtModel {
+    let base = lookup_model(circuit, elem)
+        .map(|m| BjtModel::from_model_def(&convert_model(m)))
+        .unwrap_or_else(|| BjtModel::new(crate::bjt::BjtType::Npn));
+    base.with_instance_params(&extra_params(elem, &["value"]))
+}
+
+/// Build a fully-resolved [`VbicModel`] (level 4) with temperature applied.
+/// Mirrors `assemble_mna_flat`'s VBIC branch exactly: no
+/// `with_instance_params` call (the existing Netlist path doesn't apply
+/// instance IS/RCX/RBX/RE/RS overrides to VBIC even though the method
+/// exists).
+fn load_vbic_model(circuit: &Circuit, elem: &IrElement) -> VbicModel {
+    let mut vm = lookup_model(circuit, elem)
+        .map(|m| VbicModel::from_model_def(&convert_model(m)))
+        .unwrap_or_else(|| VbicModel::new(crate::vbic::VbicType::Npn));
+    vm.temperature_adjust(circuit_temp(circuit));
+    vm
+}
+
 fn stamp_circuit(
     circuit: &Circuit,
     modedc: bool,
@@ -341,6 +423,45 @@ fn stamp_circuit(
                 let dm = load_diode_model(circuit, elem);
                 if dm.has_series_resistance() {
                     internal_node_count += 1;
+                }
+            }
+            IrElementKind::Npn | IrElementKind::Pnp => {
+                let c = terminal_name(elem, "collector", &net_name)?;
+                let b = terminal_name(elem, "base", &net_name)?;
+                let e = terminal_name(elem, "emitter", &net_name)?;
+                node_map.index(c);
+                node_map.index(b);
+                node_map.index(e);
+                let has_substrate = elem
+                    .connections
+                    .iter()
+                    .any(|cn| cn.terminal == "substrate");
+                if has_substrate {
+                    let s = terminal_name(elem, "substrate", &net_name)?;
+                    node_map.index(s);
+                }
+                // Mirror `mna::assemble_mna_flat`'s first-pass counting:
+                // build the *unmodified* model and ask it for its internal
+                // node count. with_instance_params (BJT level 1) only
+                // touches IS/BF/BR — none of which affect the count.
+                let model = lookup_model(circuit, elem);
+                let level = bjt_level(model, &elem.params);
+                if level == 4 {
+                    let vm = model
+                        .map(|m| VbicModel::from_model_def(&convert_model(m)))
+                        .unwrap_or_else(|| VbicModel::new(crate::vbic::VbicType::Npn));
+                    // Mirror mna::assemble_mna_flat: it uses the substrate-
+                    // present variant unconditionally, and the second pass
+                    // allocates an SI internal node whenever vm.rs > 0
+                    // regardless of substrate being None. Consistency here
+                    // requires the same assumption.
+                    let _ = has_substrate;
+                    internal_node_count += vm.internal_node_count();
+                } else {
+                    let bm = model
+                        .map(|m| BjtModel::from_model_def(&convert_model(m)))
+                        .unwrap_or_else(|| BjtModel::new(crate::bjt::BjtType::Npn));
+                    internal_node_count += bm.internal_node_count();
                 }
             }
             _ => unreachable!("circuit_is_supported_subset filtered above"),
@@ -686,6 +807,180 @@ fn stamp_circuit(
                 // The conductance/current stamps are applied during NR
                 // iteration in `device_stamp::diode`, not here.
             }
+            IrElementKind::Npn | IrElementKind::Pnp => {
+                // Instance scalars (defaults match `mna::assemble_mna_flat`).
+                let mut area = 1.0;
+                let mut areab = 1.0;
+                let mut areac = 1.0;
+                let mut m_mult = 1.0;
+                let mut inst_temp = f64::NAN;
+                let mut off_flag = false;
+                for (name, value) in &elem.params {
+                    let key = name.to_uppercase();
+                    if let Some(v) = numeric_value(value) {
+                        match key.as_str() {
+                            "AREA" => area = v,
+                            "AREAB" => areab = v,
+                            "AREAC" => areac = v,
+                            "M" => m_mult = v,
+                            "TEMP" => inst_temp = v,
+                            _ => {}
+                        }
+                    }
+                    if key == "OFF"
+                        && let Value::Bool(b) = value
+                    {
+                        off_flag = *b;
+                    }
+                }
+
+                let coll_idx = mna.node_map.get(terminal_name(elem, "collector", &net_name)?);
+                let base_idx = mna.node_map.get(terminal_name(elem, "base", &net_name)?);
+                let emit_idx = mna.node_map.get(terminal_name(elem, "emitter", &net_name)?);
+                let subs_idx = if elem
+                    .connections
+                    .iter()
+                    .any(|cn| cn.terminal == "substrate")
+                {
+                    mna.node_map
+                        .get(terminal_name(elem, "substrate", &net_name)?)
+                } else {
+                    None
+                };
+
+                let level = bjt_level(lookup_model(circuit, elem), &elem.params);
+                if level == 4 {
+                    // VBIC: 3 always-internal nodes + 4 conditional + thermal.
+                    let vm = load_vbic_model(circuit, elem);
+
+                    let coll_ci_idx = Some({
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        idx
+                    });
+                    let base_bi_idx = Some({
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        idx
+                    });
+                    let base_bp_idx = Some({
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        idx
+                    });
+                    let coll_cx_idx = if vm.rcx > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        coll_idx
+                    };
+                    let base_bx_idx = if vm.rbx > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        base_idx
+                    };
+                    let emit_ei_idx = if vm.re > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        emit_idx
+                    };
+                    let subs_si_idx = if vm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        subs_idx
+                    };
+                    let rth_idx = if vm.rth > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        None
+                    };
+                    let t_ambient = circuit_temp(circuit);
+
+                    mna.vbics.push(VbicInstance {
+                        name: elem.name.clone(),
+                        coll_idx,
+                        base_idx,
+                        emit_idx,
+                        subs_idx,
+                        coll_ci_idx,
+                        base_bi_idx,
+                        base_bp_idx,
+                        coll_cx_idx,
+                        base_bx_idx,
+                        emit_ei_idx,
+                        subs_si_idx,
+                        rth_idx,
+                        model: vm,
+                        area,
+                        m: m_mult,
+                        t_ambient,
+                    });
+                    let _ = (areab, areac);
+                } else {
+                    // Level 1 Gummel-Poon.
+                    let bm = load_bjt_model(circuit, elem);
+
+                    let base_prime_idx = if bm.rb > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        base_idx
+                    };
+                    let col_prime_idx = if bm.rc > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        coll_idx
+                    };
+                    let emit_prime_idx = if bm.re > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        emit_idx
+                    };
+
+                    mna.bjts.push(BjtInstance {
+                        name: elem.name.clone(),
+                        col_idx: coll_idx,
+                        base_idx,
+                        emit_idx,
+                        base_prime_idx,
+                        col_prime_idx,
+                        emit_prime_idx,
+                        model: bm.clone(),
+                        area,
+                        areab,
+                        areac,
+                        m: m_mult,
+                        temp: inst_temp,
+                        off: off_flag,
+                    });
+
+                    let cap_idx = push_bjt_caps(
+                        &mut mna.capacitors,
+                        base_prime_idx,
+                        col_prime_idx,
+                        emit_prime_idx,
+                        &bm,
+                        area,
+                        m_mult,
+                    );
+                    mna.bjt_cap_indices.push(cap_idx);
+                }
+                // BJT/VBIC stamps are applied during NR iteration, not here.
+            }
             _ => unreachable!("circuit_is_supported_subset filtered above"),
         }
     }
@@ -815,27 +1110,32 @@ mod tests {
 
     #[test]
     fn unsupported_circuit_returns_none() {
-        // BJT (Npn) is not yet handled by the direct IR path — adding one
-        // should make `assemble_mna_from_circuit` return Ok(None) so the
-        // caller falls back to `assemble_mna(&Netlist)`. Diodes are now
-        // supported; this test pins the fallback for still-pending device
-        // classes (see `docs/migration/mna-ir-pivot-plan.md`).
+        // MOSFET (Nmos) is not yet handled by the direct IR path — adding
+        // one should make `assemble_mna_from_circuit` return Ok(None) so
+        // the caller falls back to `assemble_mna(&Netlist)`. Diodes and
+        // BJTs are now supported; this test pins the fallback for
+        // still-pending device classes (see
+        // `docs/migration/mna-ir-pivot-plan.md`).
         let mut c = divider();
         c.elements.push(Element {
             id: Id(3),
-            name: "Q1".into(),
-            kind: IrElementKind::Npn,
+            name: "M1".into(),
+            kind: IrElementKind::Nmos,
             connections: vec![
                 Connection {
-                    terminal: "collector".into(),
+                    terminal: "drain".into(),
                     net: Id(1),
                 },
                 Connection {
-                    terminal: "base".into(),
+                    terminal: "gate".into(),
                     net: Id(2),
                 },
                 Connection {
-                    terminal: "emitter".into(),
+                    terminal: "source".into(),
+                    net: Id(0),
+                },
+                Connection {
+                    terminal: "bulk".into(),
                     net: Id(0),
                 },
             ],

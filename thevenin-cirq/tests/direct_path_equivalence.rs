@@ -247,6 +247,84 @@ fn diode_clamp_pair() {
 }
 
 #[test]
+fn bjt_common_emitter_npn() {
+    // Single NPN in common-emitter config — exercises the level-1
+    // Gummel-Poon path with no series resistances (no internal nodes).
+    assert_paths_equal(
+        "BJT NPN CE\n\
+         .model qmod npn is=1e-15 bf=100\n\
+         VCC vcc 0 5\n\
+         VB  base 0 0.7\n\
+         RC  vcc collector 1k\n\
+         RB  base bint 10k\n\
+         Q1  collector bint 0 qmod\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn bjt_with_series_resistances() {
+    // NPN with RB / RC / RE > 0 forces 3 internal-node allocations and
+    // exercises push_bjt_caps for CJE / CJC > 0.
+    assert_paths_equal(
+        "BJT NPN RB RC RE\n\
+         .model qmod npn is=1e-15 bf=100 rb=10 rc=5 re=2 cje=1p cjc=2p\n\
+         VCC vcc 0 5\n\
+         VB  base 0 0.7\n\
+         RC  vcc collector 1k\n\
+         RB  base bint 10k\n\
+         Q1  collector bint 0 qmod\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn bjt_pnp_high_side() {
+    // PNP element kind — exercises the typed Pnp -> "PNP" kind through
+    // convert_model, plus the default-NPN fallback when no model is
+    // linked (it's not exercised here because we always supply a model,
+    // but the path is reachable).
+    assert_paths_equal(
+        "BJT PNP\n\
+         .model pmod pnp is=1e-15 bf=80\n\
+         VEE 0 vee 5\n\
+         VB  base 0 -0.7\n\
+         RE  0 emitter 1k\n\
+         RB  base bint 10k\n\
+         Q1  vee bint emitter pmod\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn bjt_vbic_level4() {
+    // VBIC (level=4) with the full set of conditional series resistances
+    // (RCX/RBX/RE/RS) and a thermal node (RTH > 0) — exercises every
+    // conditional-internal-node branch in the direct IR path. Mirrors the
+    // model parameters in ngspice-upstream/tests/vbic/CEamp.cir but trims
+    // to a .op-only circuit so we can assert exact equivalence against the
+    // lowered path.
+    assert_paths_equal(
+        "VBIC OP\n\
+         .model n1 npn level=4\n\
+         + is=1e-16 ibei=1e-18 ibci=2e-17 isp=1e-15\n\
+         + rcx=10 rci=60 rbx=10 rbi=40 re=2 rs=20 rbp=40\n\
+         + vef=10 ver=4 ikf=2e-3 ikr=2e-4 ikp=2e-4\n\
+         + cje=1e-13 cjc=2e-14 cjep=1e-13 cjcp=4e-13\n\
+         + rth=300\n\
+         vcc vcc 0 5\n\
+         vbb base 0 0.75\n\
+         rc vcc collector 1k\n\
+         q1 collector base 0 0 n1\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
 fn ladder_network() {
     // L-shaped R network with several internal nodes — stresses node
     // indexing.

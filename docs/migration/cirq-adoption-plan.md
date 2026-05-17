@@ -174,6 +174,15 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       downstream picks up diodes automatically via `has_nonlinear()`,
       so no further wiring was needed. Three new diode fixtures land
       bit-for-bit equivalence; harness 100/0/7 unchanged.
+      **Session C landed (BJT):** Npn / Pnp now route through the
+      direct IR path. Level 1 Gummel-Poon uses BjtModel + push_bjt_caps
+      (made pub(crate)) for CJE / CJC / CJS junction caps; level 4 VBIC
+      allocates the full 3-always + 4-conditional + thermal internal-
+      node set with `temperature_adjust(circuit_temp(circuit))`. New
+      `circuit_temp` helper mirrors `crate::netlist_temp` reading
+      `.temp` first then `Options.TEMP`. Four new equivalence
+      fixtures (NPN CE, NPN with RB/RC/RE, PNP, full VBIC); harness
+      stays 100/0/7. 998/998 workspace tests pass.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`

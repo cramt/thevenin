@@ -114,13 +114,35 @@ Verification:
 Verification: `cargo nextest run --workspace` → 995/995 pass; harness
 100/0/7 unchanged.
 
-**BJT pending.** Level 1 (Gummel-Poon default) and level 4 (VBIC) — VBIC
-has up to 7 conditional internal nodes (`rcx`, `rbx`, `re`, `rs`, `rth`,
-`base_bi`, `base_bp`, `coll_ci`). Mirror `mna.rs:1605-1700` exactly,
-using the same `convert_model` + `extra_params` shim pattern that diode
-follows. Add bjt and vbic fixtures to `direct_path_equivalence.rs`.
+**BJT landed (level 1 + VBIC).** `mna_ir.rs` now also accepts Npn / Pnp
+elements:
 
-Estimated remaining diff for BJT: +200 LOC.
+- Level 1 (Gummel-Poon) via `BjtModel::from_model_def` + `with_instance_params`
+  on `extra_params(elem, &["value"])`. Allocates `base_prime`,
+  `col_prime`, `emit_prime` internal nodes when RB / RC / RE > 0. Pushes
+  `BjtInstance` plus the synthetic CJE / CJC / CJS junction capacitors via
+  `push_bjt_caps` (re-exported as `pub(crate)`).
+- Level 4 (VBIC) via `VbicModel::from_model_def` + `temperature_adjust` —
+  no `with_instance_params` (matches the Netlist path's behaviour, which
+  doesn't apply VBIC instance overrides even though the method exists).
+  Always-internal: `collCI`, `baseBI`, `baseBP` (3 nodes). Conditional:
+  `collCX` (RCX > 0), `baseBX` (RBX > 0), `emitEI` (RE > 0), `subsSI`
+  (RS > 0), `rth` (RTH > 0). The first-pass count uses
+  `internal_node_count()` unconditionally — mirrors `assemble_mna_flat`'s
+  bookkeeping where the second pass allocates an SI internal node when
+  `vm.rs > 0` regardless of whether the substrate terminal is wired.
+- New helpers: `circuit_temp(&Circuit) -> f64` (mirrors `crate::netlist_temp`
+  reading first `.temp` then `Options.TEMP`); `bjt_level(model, &elem.params)
+  -> i32`; `load_bjt_model` / `load_vbic_model`; `numeric_value(&Value)
+  -> Option<f64>`.
+- Four new equivalence fixtures in `direct_path_equivalence.rs`:
+  `bjt_common_emitter_npn`, `bjt_with_series_resistances` (RB / RC / RE
+  internal-node exercise + push_bjt_caps), `bjt_pnp_high_side` (PNP
+  device kind), `bjt_vbic_level4` (full VBIC conditional internal-node
+  set including thermal node).
+
+Verification: `cargo nextest run --workspace` → 998/998 pass; harness
+100/0/7 unchanged.
 
 #### Session D — MOSFET family
 

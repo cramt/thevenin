@@ -919,7 +919,7 @@ pub struct BjtCapIndices {
 /// is added dynamically.
 ///
 /// Returns `BjtCapIndices` with the indices of the created caps.
-fn push_bjt_caps(
+pub(crate) fn push_bjt_caps(
     capacitors: &mut Vec<CapacitorInstance>,
     base_prime_idx: Option<usize>,
     col_prime_idx: Option<usize>,
