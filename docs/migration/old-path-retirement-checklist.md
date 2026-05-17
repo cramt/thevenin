@@ -37,12 +37,17 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
 
 ## Analysis and Control
 
-- [ ] **`.control` block interpreter dependency on SPICE Netlist shape**
+- [~] **`.control` block interpreter dependency on SPICE Netlist shape**
   The `thevenin-control` crate interprets `.control` blocks that reference
   SPICE-shaped Items and Analysis variants. A Cirq-native control flow
   mechanism (or an adapter that presents IR-based analysis to the interpreter)
   is needed before the Netlist-dependent interpreter can retire.
   *Depends on:* Stage 4.
+  **Phase A done:** `execute_control_block_ir(&Circuit)` /
+  `has_control_block_ir(&Circuit)` are the canonical entry points; CLI and
+  harness route `.control` through them. The interpreter's internals still
+  consume `Netlist` — Phases B and C of the adoption plan will lift
+  `SimContext` and `alter` onto the IR shape.
 
 ## Simulation Path
 

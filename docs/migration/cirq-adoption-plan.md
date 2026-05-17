@@ -144,8 +144,20 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       CCVS/CCCS, parallel R, ladder). Next: nonlinear device direct
       stamping (diode, BJT, MOSFET companion models — requires NR loop on
       the direct path) and AC/transient extensions.
-- [ ] Migrate the `.control` block interpreter to operate on Cirq IR or a
+- [~] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
+      **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`
+      and `has_control_block_ir(&Circuit)` are the canonical IR-shaped entry
+      points. Both the CLI (`src/main.rs`) and the regression harness
+      (`thevenin/tests/harness.rs`) route `.control` through them when a
+      `cirq_ir::Circuit` is on hand; the legacy `execute_control_block(&Netlist)`
+      stays available for `--legacy` SPICE input. The interpreter itself still
+      lowers Circuit → Netlist internally and runs against `Netlist`-shaped
+      `SimContext`. Phase B (Circuit-owning `SimContext`, IR-typed `Value`
+      flow into TEMPER / `@model[param]` paths) and Phase C (real `alter`
+      mutation against the IR, prerequisite for resume-1) are the remaining
+      slices. Harness still 100/0/7; 123 unit tests in `thevenin-control`
+      (3 new) pin Phase A equivalence with the Netlist path.
 - [ ] Deprecate `thevenin_types::Netlist` as a public API; expose
       `cirq_ir::Circuit` as the primary simulation input.
 - [ ] Remove SPICE element-prefix naming requirements from the simulator core.

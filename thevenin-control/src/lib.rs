@@ -10,6 +10,7 @@ pub mod exec;
 pub mod parse;
 pub mod vecexpr;
 
+use cirq_ir::Circuit;
 use context::SimContext;
 use exec::ControlResult;
 use thevenin_types::{Netlist, SimResult};
@@ -66,4 +67,227 @@ pub fn has_control_block(netlist: &Netlist) -> bool {
         .items
         .iter()
         .any(|item| matches!(item, thevenin_types::Item::Control(_)))
+}
+
+/// Check if a Cirq IR circuit contains a `.control` code block.
+///
+/// The Cirq IR stores `.control` source verbatim as a [`cirq_ir::CodeBlock`]
+/// with `language == "control"`; this is the IR-shaped equivalent of
+/// [`has_control_block`].
+pub fn has_control_block_ir(circuit: &Circuit) -> bool {
+    circuit.code_blocks.iter().any(|b| b.language == "control")
+}
+
+/// Execute a `.control` block from a Cirq IR circuit.
+///
+/// **Stage 4 / Phase A boundary.** Establishes the IR-shaped entry point
+/// callers should use as the canonical way to drive the `.control`
+/// interpreter from a [`Circuit`]. The interpreter still operates on
+/// `thevenin_types::Netlist` internally — this function lowers the circuit
+/// via [`cirq_frontend::to_netlist::circuit_to_netlists`] and then
+/// [`thevenin::flatten_netlist`] before delegating to
+/// [`execute_control_block`]. Later phases of the Stage 4 migration will
+/// replace the internal lowering with direct IR-based interpretation; the
+/// signature on this entry point won't change.
+///
+/// Control blocks accumulate to every netlist fork produced from a circuit
+/// (e.g. multi-temperature runs), so this function picks the first fork —
+/// the same convention the harness uses.
+pub fn execute_control_block_ir(circuit: &Circuit) -> Result<ControlResult, String> {
+    let netlists = cirq_frontend::to_netlist::circuit_to_netlists(circuit)
+        .map_err(|e| format!("circuit_to_netlists: {e}"))?;
+    let netlist = netlists
+        .into_iter()
+        .next()
+        .ok_or_else(|| "circuit produced no netlists".to_string())?;
+    let netlist =
+        thevenin::flatten_netlist(&netlist).map_err(|e| format!("flatten_netlist: {e}"))?;
+    execute_control_block(&netlist)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cirq_ir::{
+        Analysis as IrAnalysis, CodeBlock, Connection, Element, ElementKind, Id, Net,
+        ResolvedParam, SourceSpec, Value,
+    };
+
+    /// Build a minimal divider Circuit carrying a `.control` block. Picked so
+    /// every step the interpreter touches has a deterministic, easy-to-check
+    /// answer (V(mid) = 2/3 V at the OP).
+    fn divider_with_control(control: Vec<String>) -> Circuit {
+        Circuit {
+            name: "divider".into(),
+            nets: vec![
+                Net {
+                    id: Id(0),
+                    name: "0".into(),
+                    is_global: true,
+                },
+                Net {
+                    id: Id(1),
+                    name: "in".into(),
+                    is_global: false,
+                },
+                Net {
+                    id: Id(2),
+                    name: "mid".into(),
+                    is_global: false,
+                },
+            ],
+            elements: vec![
+                Element {
+                    id: Id(0),
+                    name: "V1".into(),
+                    kind: ElementKind::VoltageSource,
+                    connections: vec![
+                        Connection {
+                            terminal: "pos".into(),
+                            net: Id(1),
+                        },
+                        Connection {
+                            terminal: "neg".into(),
+                            net: Id(0),
+                        },
+                    ],
+                    params: vec![],
+                    model: None,
+                    source_spec: Some(SourceSpec {
+                        dc: Some(1.0),
+                        ac: None,
+                        waveform: None,
+                    }),
+                },
+                Element {
+                    id: Id(1),
+                    name: "R1".into(),
+                    kind: ElementKind::Resistor,
+                    connections: vec![
+                        Connection {
+                            terminal: "pos".into(),
+                            net: Id(1),
+                        },
+                        Connection {
+                            terminal: "neg".into(),
+                            net: Id(2),
+                        },
+                    ],
+                    params: vec![("value".into(), Value::Real(1_000.0))],
+                    model: None,
+                    source_spec: None,
+                },
+                Element {
+                    id: Id(2),
+                    name: "R2".into(),
+                    kind: ElementKind::Resistor,
+                    connections: vec![
+                        Connection {
+                            terminal: "pos".into(),
+                            net: Id(2),
+                        },
+                        Connection {
+                            terminal: "neg".into(),
+                            net: Id(0),
+                        },
+                    ],
+                    params: vec![("value".into(), Value::Real(2_000.0))],
+                    model: None,
+                    source_spec: None,
+                },
+            ],
+            models: vec![],
+            analyses: vec![IrAnalysis::Op],
+            params: Vec::<ResolvedParam>::new(),
+            options: vec![],
+            temps: vec![],
+            save: vec![],
+            funcs: vec![],
+            initial_conditions: vec![],
+            nodeset: vec![],
+            measures: vec![],
+            code_blocks: vec![CodeBlock {
+                language: "control".into(),
+                lines: control,
+            }],
+            raw_directives: vec![],
+        }
+    }
+
+    #[test]
+    fn has_control_block_ir_detects_control_code_block() {
+        let with_control = divider_with_control(vec!["op".into(), "quit 0".into()]);
+        assert!(has_control_block_ir(&with_control));
+
+        let mut without = with_control.clone();
+        without.code_blocks.clear();
+        assert!(!has_control_block_ir(&without));
+
+        // Other languages don't count.
+        let other = Circuit {
+            code_blocks: vec![CodeBlock {
+                language: "scheme".into(),
+                lines: vec!["(display 42)".into()],
+            }],
+            ..without
+        };
+        assert!(!has_control_block_ir(&other));
+    }
+
+    /// The IR-shaped entry point must produce the same `ControlResult` as
+    /// lowering the circuit and running the legacy Netlist-shaped entry
+    /// point — they share the interpreter, so any drift means the IR
+    /// lowering or the entry-point wrapper introduced a difference. This is
+    /// the Phase A equivalence contract.
+    #[test]
+    fn ir_entry_point_matches_netlist_entry_point() {
+        let circuit = divider_with_control(vec![
+            "op".into(),
+            "let half = v(mid) * 2".into(),
+            "echo result: $&half".into(),
+            "quit 0".into(),
+        ]);
+
+        let via_ir = execute_control_block_ir(&circuit).expect("IR path");
+
+        let nl = cirq_frontend::to_netlist::circuit_to_netlists(&circuit)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let nl = thevenin::flatten_netlist(&nl).unwrap();
+        let via_netlist = execute_control_block(&nl).expect("Netlist path");
+
+        assert_eq!(via_ir.exit_code, via_netlist.exit_code);
+        assert_eq!(via_ir.output, via_netlist.output);
+        assert_eq!(
+            via_ir.sim_result.plots.len(),
+            via_netlist.sim_result.plots.len()
+        );
+        for (a, b) in via_ir
+            .sim_result
+            .plots
+            .iter()
+            .zip(via_netlist.sim_result.plots.iter())
+        {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.vecs.len(), b.vecs.len());
+        }
+    }
+
+    /// An empty `.control` block is a parse error in the legacy path; the IR
+    /// path should surface the same error rather than swallowing it.
+    #[test]
+    fn ir_entry_point_errors_when_no_control_block() {
+        let mut circuit = divider_with_control(vec!["op".into(), "quit 0".into()]);
+        circuit.code_blocks.clear();
+        let err = match execute_control_block_ir(&circuit) {
+            Ok(_) => panic!("expected error for missing .control block"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("no .control block"),
+            "expected missing-control error, got: {err}"
+        );
+    }
 }

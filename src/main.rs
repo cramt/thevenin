@@ -42,74 +42,99 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let src = std::fs::read_to_string(&input)
                 .map_err(|e| format!("failed to read {input}: {e}"))?;
 
-            let netlists = if is_cirq_file(&input) {
-                if legacy {
+            if legacy {
+                if is_cirq_file(&input) {
                     return Err("--legacy is not supported for .cirq files".into());
                 }
+                // Legacy path: parse SPICE directly into Netlist, bypass IR.
+                let netlist = thevenin_types::Netlist::parse_single(&src)?;
+                return run_netlists(&[netlist]);
+            }
+
+            // Default path: keep Cirq IR circuits in hand so we can route
+            // `.control` blocks through the IR-shaped interpreter entry
+            // point (Stage 4 / Phase A).
+            let circuits: Vec<cirq_ir::Circuit> = if is_cirq_file(&input) {
                 let base_dir = Path::new(&input)
                     .parent()
                     .unwrap_or(Path::new("."))
                     .to_owned();
-                cirq_frontend::compile_file_to_netlist(&src, &base_dir).map_err(|diags| {
+                let circuit = cirq_frontend::compile_file(&src, &base_dir).map_err(|diags| {
                     let msgs: Vec<String> = diags.iter().map(|d| d.message.clone()).collect();
                     msgs.join("\n")
-                })?
-            } else if legacy {
-                // Legacy path: parse SPICE directly into Netlist, bypass IR.
-                vec![thevenin_types::Netlist::parse_single(&src)?]
+                })?;
+                vec![circuit]
             } else {
-                // Default path: route SPICE through Cirq IR.
-                spice_through_ir(&src)?
+                cirq_spice_import::import_spice(&src)
+                    .map_err(|e| format!("SPICE import to Cirq IR failed: {e}"))?
             };
+            run_circuits(&circuits)
+        }
+    }
+}
 
-            for netlist in &netlists {
-                if thevenin_control::has_control_block(netlist) {
-                    let ctrl_result = thevenin_control::execute_control_block(netlist)
-                        .map_err(|e| format!("control block error: {e}"))?;
+/// Dispatch each Cirq IR circuit through the IR-shaped entry points.
+fn run_circuits(circuits: &[cirq_ir::Circuit]) -> Result<(), Box<dyn std::error::Error>> {
+    for circuit in circuits {
+        if thevenin_control::has_control_block_ir(circuit) {
+            let ctrl_result = thevenin_control::execute_control_block_ir(circuit)
+                .map_err(|e| format!("control block error: {e}"))?;
+            print_control_result(&ctrl_result);
+        } else {
+            let netlists = cirq_frontend::to_netlist::circuit_to_netlists(circuit)
+                .map_err(|e| format!("IR-to-netlist conversion failed: {e}"))?;
+            run_netlists(&netlists)?;
+        }
+    }
+    Ok(())
+}
 
-                    if !ctrl_result.output.is_empty() {
-                        print!("{}", ctrl_result.output);
-                    }
+/// Dispatch raw `Netlist` values — the legacy path, used when `--legacy` is set
+/// or when an IR-routed circuit has no `.control` block.
+fn run_netlists(netlists: &[thevenin_types::Netlist]) -> Result<(), Box<dyn std::error::Error>> {
+    for netlist in netlists {
+        if thevenin_control::has_control_block(netlist) {
+            let ctrl_result = thevenin_control::execute_control_block(netlist)
+                .map_err(|e| format!("control block error: {e}"))?;
+            print_control_result(&ctrl_result);
+        } else {
+            let result = thevenin::simulate(netlist)?;
+            print_plots(&result.plots);
+        }
+    }
+    Ok(())
+}
 
-                    for plot in &ctrl_result.sim_result.plots {
-                        println!("{}:", plot.name);
-                        for vec in &plot.vecs {
-                            let preview: Vec<String> = vec
-                                .data
-                                .as_real()
-                                .iter()
-                                .take(5)
-                                .map(|v| format!("{v:.6}"))
-                                .collect();
-                            println!("  {} = [{}]", vec.name, preview.join(", "));
-                        }
-                    }
-                } else {
-                    let result = thevenin::simulate(netlist)?;
-                    for plot in &result.plots {
-                        println!("{}:", plot.name);
-                        for vec in &plot.vecs {
-                            let preview: Vec<String> = vec
-                                .data
-                                .as_real()
-                                .iter()
-                                .take(5)
-                                .map(|v| format!("{v:.6}"))
-                                .collect();
-                            println!("  {} = [{}]", vec.name, preview.join(", "));
-                        }
-                    }
-                }
-            }
-            Ok(())
+fn print_control_result(ctrl_result: &thevenin_control::exec::ControlResult) {
+    if !ctrl_result.output.is_empty() {
+        print!("{}", ctrl_result.output);
+    }
+    print_plots(&ctrl_result.sim_result.plots);
+}
+
+fn print_plots(plots: &[thevenin_types::SimPlot]) {
+    for plot in plots {
+        println!("{}:", plot.name);
+        for vec in &plot.vecs {
+            let preview: Vec<String> = vec
+                .data
+                .as_real()
+                .iter()
+                .take(5)
+                .map(|v| format!("{v:.6}"))
+                .collect();
+            println!("  {} = [{}]", vec.name, preview.join(", "));
         }
     }
 }
 
 /// Route SPICE source text through the Cirq IR pipeline.
 ///
-/// Parses SPICE → imports into Cirq IR → converts back to Netlist for simulation.
-/// This validates the IR round-trip and is the default path for SPICE files.
+/// Parses SPICE → imports into Cirq IR → converts back to Netlist for
+/// simulation. This is the IR round-trip the tests exercise. The runtime
+/// `run_circuits` path keeps the IR in hand instead of flattening to
+/// Netlists here, so this helper is only used by the integration tests.
+#[cfg(test)]
 fn spice_through_ir(
     source: &str,
 ) -> Result<Vec<thevenin_types::Netlist>, Box<dyn std::error::Error>> {

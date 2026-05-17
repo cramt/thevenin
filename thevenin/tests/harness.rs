@@ -130,15 +130,22 @@ fn run_embedded_test(
 
     // Route every netlist through the Cirq IR pipeline before flattening, so
     // that the ngspice regression corpus continuously validates the
-    // `Netlist -> Circuit -> Netlist` import + emit adapters.
+    // `Netlist -> Circuit -> Netlist` import + emit adapters. We keep the
+    // imported Circuits alongside the emitted Netlists so the `.control`
+    // branch can run through the IR-shaped interpreter entry point
+    // (Stage 4 / Phase A).
+    let circuits: Vec<cirq_ir::Circuit> = netlists
+        .iter()
+        .map(|netlist| match cirq_spice_import::import_netlist(netlist) {
+            Ok(c) => c,
+            Err(e) => fail_test(path, Phase::CirqImport, &e.to_string()),
+        })
+        .collect();
+
     let netlists: Vec<Netlist> = {
         let mut routed: Vec<Netlist> = Vec::new();
-        for netlist in &netlists {
-            let circuit = match cirq_spice_import::import_netlist(netlist) {
-                Ok(c) => c,
-                Err(e) => fail_test(path, Phase::CirqImport, &e.to_string()),
-            };
-            let emitted = match cirq_frontend::to_netlist::circuit_to_netlists(&circuit) {
+        for circuit in &circuits {
+            let emitted = match cirq_frontend::to_netlist::circuit_to_netlists(circuit) {
                 Ok(n) => n,
                 Err(e) => fail_test(path, Phase::CirqEmit, &e.to_string()),
             };
@@ -157,9 +164,10 @@ fn run_embedded_test(
         })
         .collect();
 
-    // Check for .control block (use the first fork — control blocks accumulate into all forks)
-    if thevenin_control::has_control_block(&netlists[0]) {
-        let ctrl_result = match thevenin_control::execute_control_block(&netlists[0]) {
+    // Check for .control block on the IR (control blocks accumulate into
+    // every fork; pick the first imported circuit).
+    if thevenin_control::has_control_block_ir(&circuits[0]) {
+        let ctrl_result = match thevenin_control::execute_control_block_ir(&circuits[0]) {
             Ok(r) => r,
             Err(e) => fail_test(path, Phase::Simulate, &e),
         };

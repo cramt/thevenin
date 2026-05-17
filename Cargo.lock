@@ -1840,6 +1840,8 @@ dependencies = [
 name = "thevenin-control"
 version = "0.1.0"
 dependencies = [
+ "cirq-frontend",
+ "cirq-ir",
  "thevenin",
  "thevenin-types",
  "thiserror 2.0.18",

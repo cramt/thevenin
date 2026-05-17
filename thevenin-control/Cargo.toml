@@ -9,4 +9,6 @@ repository = "https://github.com/cramt/thevenin"
 [dependencies]
 thevenin-types = { path = "../thevenin-types", version = "0.3.0" }
 thevenin = { path = "../thevenin", version = "0.3.0" }
+cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
+cirq-frontend = { path = "../cirq-frontend", version = "0.1.0" }
 thiserror.workspace = true
