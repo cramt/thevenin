@@ -91,6 +91,12 @@ fn run_circuits(circuits: &[cirq_ir::Circuit]) -> Result<(), Box<dyn std::error:
 
 /// Dispatch raw `Netlist` values — the legacy path, used when `--legacy` is set
 /// or when an IR-routed circuit has no `.control` block.
+///
+/// The `.control` branch reaches the deprecated Netlist-shaped entry points
+/// because this is exactly the `--legacy` fallback they exist to support
+/// (Stage 4 / Phase D). `alter` mutation only works through the IR-shaped
+/// path; callers depending on it should drop `--legacy`.
+#[allow(deprecated)]
 fn run_netlists(netlists: &[thevenin_types::Netlist]) -> Result<(), Box<dyn std::error::Error>> {
     for netlist in netlists {
         if thevenin_control::has_control_block(netlist) {

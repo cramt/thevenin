@@ -19,6 +19,20 @@ use thevenin_types::{Netlist, SimResult};
 ///
 /// Finds the first `Item::Control` in the netlist, parses it, and executes
 /// all commands. Returns the merged simulation results and exit code.
+///
+/// **Legacy entry point.** Prefer [`execute_control_block_ir`] when a
+/// `cirq_ir::Circuit` is available — the IR-shaped path is canonical as
+/// of Stage 4 / Phase B, and `alter` only mutates the IR (Phase C) so
+/// callers that route through this Netlist-shaped entry point lose
+/// `alter`'s mutation effects on subsequent analyses. This wrapper is
+/// kept available for the CLI's `--legacy` fallback and will retire
+/// alongside `thevenin_types::Netlist` as a public API surface.
+#[deprecated(
+    since = "0.1.0",
+    note = "use execute_control_block_ir(&cirq_ir::Circuit) for IR-shaped \
+            interpretation; this Netlist-shaped entry point is retained \
+            only for the CLI's --legacy SPICE fallback"
+)]
 pub fn execute_control_block(netlist: &Netlist) -> Result<ControlResult, String> {
     // Find .control block(s)
     let control_lines: Vec<&Vec<String>> = netlist
@@ -62,6 +76,16 @@ pub fn execute_control_block(netlist: &Netlist) -> Result<ControlResult, String>
 }
 
 /// Check if a netlist contains a `.control` block.
+///
+/// **Legacy entry point.** Prefer [`has_control_block_ir`] when a
+/// `cirq_ir::Circuit` is available. This wrapper exists for the CLI's
+/// `--legacy` SPICE fallback.
+#[deprecated(
+    since = "0.1.0",
+    note = "use has_control_block_ir(&cirq_ir::Circuit); this \
+            Netlist-shaped check is retained only for the CLI's --legacy \
+            SPICE fallback"
+)]
 pub fn has_control_block(netlist: &Netlist) -> bool {
     netlist
         .items
@@ -256,8 +280,10 @@ mod tests {
     /// lowering the circuit and running the legacy Netlist-shaped entry
     /// point — they share the interpreter, so any drift means the IR
     /// lowering or the entry-point wrapper introduced a difference. This is
-    /// the Phase A equivalence contract.
+    /// the Phase A equivalence contract; the comparison still uses the
+    /// deprecated Netlist entry point because that's the point.
     #[test]
+    #[allow(deprecated)]
     fn ir_entry_point_matches_netlist_entry_point() {
         let circuit = divider_with_control(vec![
             "op".into(),

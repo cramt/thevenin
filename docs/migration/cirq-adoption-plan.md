@@ -144,7 +144,7 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       CCVS/CCCS, parallel R, ladder). Next: nonlinear device direct
       stamping (diode, BJT, MOSFET companion models — requires NR loop on
       the direct path) and AC/transient extensions.
-- [~] Migrate the `.control` block interpreter to operate on Cirq IR or a
+- [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`
       and `has_control_block_ir(&Circuit)` are the canonical IR-shaped entry
@@ -171,11 +171,18 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       Vector alters still take the legacy stored-vector path because
       waveform parameters don't have a flat-coefficient IR shape. The
       legacy `SimContext::new(&Netlist)` path keeps the historical
-      stash-as-named-vector behavior unchanged. 3 new tests pin the
-      mutation contract (128/128 unit tests in `thevenin-control`).
-      Harness still 100/0/7. This unblocks one of the three
-      prerequisites for `regression/misc/resume-1.cir`; `stop when` and
-      `resume` are the remaining two.
+      stash-as-named-vector behavior unchanged. This unblocks one of
+      the three prerequisites for `regression/misc/resume-1.cir`;
+      `stop when` and `resume` are the remaining two.
+      **Phase D landed:** `execute_control_block(&Netlist)` and
+      `has_control_block(&Netlist)` are now `#[deprecated]` pointing at
+      their IR-shaped counterparts. The CLI's `--legacy` SPICE fallback
+      (the only remaining caller in production code) carries
+      `#[allow(deprecated)]`; the `cirq-frontend` integration test that
+      deliberately exercises the legacy round-trip does the same.
+      Removing the Netlist-shaped entry points entirely waits on the
+      broader `thevenin_types::Netlist` public-API retirement listed
+      below. Stage 4 `.control` work is otherwise complete.
 - [ ] Deprecate `thevenin_types::Netlist` as a public API; expose
       `cirq_ir::Circuit` as the primary simulation input.
 - [ ] Remove SPICE element-prefix naming requirements from the simulator core.

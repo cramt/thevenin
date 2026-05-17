@@ -1470,7 +1470,14 @@ fn cirq_module_multiple_instances_top_level() {
 // Test 21: Control block — verbatim SPICE control lines pass through
 // ---------------------------------------------------------------------------
 
+// Uses both the IR-shaped `compile()` path and the deprecated
+// Netlist-shaped `execute_control_block` to validate that round-tripping
+// a Cirq code block through `compile_to_netlist` produces a netlist the
+// legacy control-block interpreter can still consume. The IR-shaped
+// `execute_control_block_ir` is exercised in thevenin-control's own
+// tests.
 #[test]
+#[allow(deprecated)]
 fn cirq_control_block_round_trip() {
     let source = r#"
         circuit control_round_trip {

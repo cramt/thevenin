@@ -37,17 +37,28 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
 
 ## Analysis and Control
 
-- [~] **`.control` block interpreter dependency on SPICE Netlist shape**
+- [x] **`.control` block interpreter dependency on SPICE Netlist shape**
   The `thevenin-control` crate interprets `.control` blocks that reference
   SPICE-shaped Items and Analysis variants. A Cirq-native control flow
   mechanism (or an adapter that presents IR-based analysis to the interpreter)
   is needed before the Netlist-dependent interpreter can retire.
-  *Depends on:* Stage 4.
-  **Phase A done:** `execute_control_block_ir(&Circuit)` /
-  `has_control_block_ir(&Circuit)` are the canonical entry points; CLI and
-  harness route `.control` through them. The interpreter's internals still
-  consume `Netlist` — Phases B and C of the adoption plan will lift
-  `SimContext` and `alter` onto the IR shape.
+  *Depends on:* Stage 4. *Resolved across Stage 4 Phases A–D.*
+  - Phase A: `execute_control_block_ir(&Circuit)` / `has_control_block_ir(&Circuit)`
+    are the canonical entry points; CLI and harness route `.control` through them.
+  - Phase B: `SimContext` optionally owns the driving `cirq_ir::Circuit`;
+    `SimContext::from_circuit` is the Stage 4 constructor.
+  - Phase C: `alter` mutates `Circuit.elements` / `Circuit.models` when the
+    context owns a Circuit; the cached netlist is re-derived so the next
+    analysis sees the new state. Plain-form `alter v1=-5` accepted.
+  - Phase D: `execute_control_block(&Netlist)` / `has_control_block(&Netlist)`
+    are `#[deprecated]`; CLI's `--legacy` fallback is the only remaining
+    caller and carries `#[allow(deprecated)]`. Full removal of the
+    Netlist-shaped entry points is gated on the broader Netlist API
+    retirement above.
+  TEMPER evaluation and `@device[param]` instance-parameter lookups still
+  consume the cached `Netlist` because they're intrinsic to the SPICE
+  `Expr` shape; lifting them onto the IR's typed `Value` belongs to the
+  later Netlist-API retirement work, not Stage 4.
 
 ## Simulation Path
 
