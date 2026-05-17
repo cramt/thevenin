@@ -445,6 +445,27 @@ Final state after Session I:
 
 Verification: 1014/1014 workspace tests pass; harness still 100/0/7.
 
+#### Session I continued — Circuit-input top-level dispatcher + CLI
+
+- Added `thevenin::circuit::simulate(&Circuit) -> Result<SimResult>`
+  as a top-level dispatcher that iterates `circuit.analyses` and
+  routes each through the appropriate `simulate_*(&Circuit)` entry.
+  Matches what `thevenin::simulate(&Netlist)` does for the
+  single-analysis-per-Netlist shape.
+- `thevenin-cirq` re-exports `simulate` (plus the new noise / pz /
+  sens / tf entries from earlier in Session I).
+- The CLI (`src/main.rs`) updated: `run_circuits` now calls
+  `thevenin::circuit::simulate(&Circuit)` directly instead of lowering
+  to Netlist and dispatching to `thevenin::simulate(&Netlist)`. For
+  non-`.control` circuits this is the first time the CLI exercises the
+  Circuit-input simulator end-to-end.
+
+Multi-temperature sweeps (`circuit.temps.len() > 1`) are not yet
+supported in the Circuit dispatcher; the Netlist-shaped `simulate`
+handles that by mutating Netlist items per temperature. Lifting it
+onto Circuit requires the same TEMPER work the `.control` interpreter
+is waiting on.
+
 #### Session J (open) — Final Netlist-API retirement
 
 The remaining Stage 4 work is removing `thevenin_types::Netlist` from

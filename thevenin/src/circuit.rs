@@ -193,6 +193,44 @@ pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
     Ok(crate::simulate_ac(nl)?)
 }
 
+/// Top-level dispatcher: run every analysis declared on `circuit.analyses`
+/// and concatenate the result plots.
+///
+/// This is the Circuit-input analogue of [`thevenin::simulate(&Netlist)`],
+/// covering the same eight analysis kinds. Per the Stage 4 plan
+/// (`docs/migration/cirq-adoption-plan.md`) this is the recommended entry
+/// for new code; the Netlist-shaped wrapper remains available for legacy
+/// callers.
+///
+/// Multi-temperature sweeps (`circuit.temps.len() > 1`) are not yet
+/// supported here; the existing `thevenin::simulate(&Netlist)` handles
+/// that by re-running each analysis at every temperature. Lifting that
+/// onto a Circuit requires mutating element parameters per temperature
+/// — the same TEMPER work that `.control` interpretation is waiting on
+/// (see `docs/migration/old-path-retirement-checklist.md`).
+pub fn simulate(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    let mut plots = Vec::new();
+    let analyses = if circuit.analyses.is_empty() {
+        std::borrow::Cow::Owned(vec![cirq_ir::Analysis::Op])
+    } else {
+        std::borrow::Cow::Borrowed(&circuit.analyses)
+    };
+    for analysis in analyses.iter() {
+        let result = match analysis {
+            cirq_ir::Analysis::Op => simulate_op(circuit)?,
+            cirq_ir::Analysis::Dc(_) => simulate_dc(circuit)?,
+            cirq_ir::Analysis::Tran(_) => simulate_tran(circuit)?,
+            cirq_ir::Analysis::Ac(_) => simulate_ac(circuit)?,
+            cirq_ir::Analysis::Noise(_) => simulate_noise(circuit)?,
+            cirq_ir::Analysis::Sens(_) => simulate_sens(circuit)?,
+            cirq_ir::Analysis::Pz(_) => simulate_pz(circuit)?,
+            cirq_ir::Analysis::Tf(_) => simulate_tf(circuit)?,
+        };
+        plots.extend(result.plots);
+    }
+    Ok(SimResult { plots })
+}
+
 /// Run a transfer function (`.tf`) analysis on a Circuit. Fully
 /// Netlist-free on the happy path.
 pub fn simulate_tf(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {

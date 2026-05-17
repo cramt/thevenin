@@ -28,7 +28,10 @@ use thevenin_types::SimResult;
 
 // Re-export the Circuit-shaped API from thevenin so existing callers writing
 // `thevenin_cirq::simulate_op(&circuit)` continue to work.
-pub use thevenin::circuit::{simulate_ac, simulate_dc, simulate_op, simulate_tran};
+pub use thevenin::circuit::{
+    simulate, simulate_ac, simulate_dc, simulate_noise, simulate_op, simulate_pz, simulate_sens,
+    simulate_tf, simulate_tran,
+};
 
 /// Errors that can arise when driving the simulator from raw SPICE source.
 #[derive(Debug, thiserror::Error)]

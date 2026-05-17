@@ -74,6 +74,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Dispatch each Cirq IR circuit through the IR-shaped entry points.
+///
+/// Non-`.control` circuits go through [`thevenin::circuit::simulate`], the
+/// Stage 4 Circuit-input dispatcher that bypasses the lowered Netlist on
+/// the happy path. `.control` blocks still need the Netlist-shaped
+/// interpreter context (TEMPER + `@device[param]` are not yet on IR — see
+/// `docs/migration/old-path-retirement-checklist.md`).
 fn run_circuits(circuits: &[cirq_ir::Circuit]) -> Result<(), Box<dyn std::error::Error>> {
     for circuit in circuits {
         if thevenin_control::has_control_block_ir(circuit) {
@@ -81,9 +87,9 @@ fn run_circuits(circuits: &[cirq_ir::Circuit]) -> Result<(), Box<dyn std::error:
                 .map_err(|e| format!("control block error: {e}"))?;
             print_control_result(&ctrl_result);
         } else {
-            let netlists = cirq_frontend::to_netlist::circuit_to_netlists(circuit)
-                .map_err(|e| format!("IR-to-netlist conversion failed: {e}"))?;
-            run_netlists(&netlists)?;
+            let result = thevenin::circuit::simulate(circuit)
+                .map_err(|e| format!("simulation error: {e}"))?;
+            print_plots(&result.plots);
         }
     }
     Ok(())
