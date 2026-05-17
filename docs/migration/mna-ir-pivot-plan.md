@@ -201,18 +201,39 @@ Verification: `cargo nextest run --workspace` → 1006/1006 pass; harness
 Verification: `cargo nextest run --workspace` → 1006/1006 pass; harness
 100/0/7 unchanged; `cargo clippy -p thevenin --lib` clean.
 
-#### Session F — Distributed + behavioral + XSPICE
+#### Session F — Behavioral + MutualCoupling (landed); distributed/XSPICE deferred
 
-- `Ltra`, `Txl`, `Cpl` — transmission line variants. Each adds 2+ branch
-  equations; the existing code is the reference.
-- `BehavioralSource` (V= and I= modes) — parses spec string already at the
-  stamp site; same logic.
-- `Xspice` — `circuit.xspice_registry` lookup unchanged.
-- `Coupling` (`MutualCoupling`) — handled in a separate post-pass in `mna.rs`
-  via `mutual_couplings_raw`; the equivalent in IR is `ElementKind::Coupling`
-  with `params: [("k", _), ("l1", _), ("l2", _)]`. Port that post-pass.
+- **BehavioralSource** (V= and I= modes): added to `mna_ir` with full
+  `parse_bsrc_params` semantics (tc1/tc2/reciproctc trailing-param
+  parsing). V= mode stamps a vsource branch + KCL topology and pushes
+  `BehavioralVoltageSourceInstance`; I= mode pushes
+  `BehavioralSourceInstance` (no branch). Temperature coefficient
+  computed via `circuit_temp(circuit) - 27.0` matching the Netlist
+  path's `netlist_temp - 27.0` convention.
+- **Coupling** (K-element / mutual inductance): added as a post-pass
+  that runs after the main stamping loop, once every inductor has its
+  `branch_idx` and inductance allocated. Reads `l1` / `l2` string
+  params, finds them via the same `vsource_offset_map` the inductors
+  populated, and pushes `MutualCouplingInstance` with
+  `factor = k * sqrt(|L1 * L2|)`.
+- Bumped both element-kind `match` sites to `match &elem.kind` so the
+  new `BehavioralSource { mode, spec }` arm can pattern-match the
+  String spec by reference. The pre-existing arms use unit variants and
+  are unaffected.
+- Promoted `crate::mna::{parse_bsrc_params, BsrcParams}` to `pub(crate)`
+  so `mna_ir` can reuse the parser unchanged.
+- Three new equivalence fixtures (`behavioural_voltage_source`,
+  `behavioural_current_source`, `mutual_coupling_two_inductors`).
 
-Estimated diff: +400 LOC.
+Verification: `cargo nextest run --workspace` → 1008/1008 pass; harness
+100/0/7 unchanged; `cargo clippy -p thevenin --lib` clean.
+
+**Deferred to a follow-up session:** LTRA, TXL, CPL, and XSPICE. These
+distributed-element kinds need multi-branch allocation (LTRA/TXL add 2,
+CPL adds `2 * width`) plus the XSPICE registry lookup with per-port
+voltage/current branch allocation. Coverage gap remains tractable —
+mutual coupling and behavioural sources cover the most-used cases for
+analog circuits.
 
 #### Session G — Netlist callers + final cutover
 

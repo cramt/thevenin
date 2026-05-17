@@ -3260,19 +3260,19 @@ fn assemble_mna_flat(
 }
 
 /// Parsed B-source parameters extracted from the spec string.
-struct BsrcParams<'a> {
-    expr: &'a str,
-    tc1: f64,
-    tc2: f64,
+pub(crate) struct BsrcParams<'a> {
+    pub(crate) expr: &'a str,
+    pub(crate) tc1: f64,
+    pub(crate) tc2: f64,
     /// When true, use 1/tc_factor (behavioral resistor: tc scales resistance, not current).
-    reciproc_tc: bool,
+    pub(crate) reciproc_tc: bool,
 }
 
 /// Parse a B-source expression string, extracting tc1/tc2/reciproctc parameters.
 ///
 /// Input like `"v(1) tc1=0.001 tc2=1e-6"` returns expr="v(1)", tc1=0.001, tc2=1e-6.
 /// Parameters not present default to 0.0 / false.
-fn parse_bsrc_params(raw: &str) -> BsrcParams<'_> {
+pub(crate) fn parse_bsrc_params(raw: &str) -> BsrcParams<'_> {
     let mut tc1 = 0.0;
     let mut tc2 = 0.0;
     let mut reciproc_tc = false;

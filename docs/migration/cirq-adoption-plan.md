@@ -205,6 +205,14 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       `circuit_tnom` helper mirrors crate::netlist_tnom. Two new
       equivalence fixtures (JFET, MESFET); HFET/MESA generic paths
       validated once the harness routes through mna_ir.
+      **Session F landed (behavioural + mutual coupling):**
+      BehavioralSource (V= and I= modes with full parse_bsrc_params
+      tc1/tc2/reciproctc semantics) and Coupling (K-element mutual
+      inductance via post-pass over already-allocated inductor
+      branches) now route through the direct path. Three new
+      equivalence fixtures; distributed elements (LTRA/TXL/CPL) and
+      XSPICE deferred to a follow-up session. 1008/1008 workspace
+      tests pass; harness still 100/0/7.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`

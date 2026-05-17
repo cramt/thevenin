@@ -452,6 +452,56 @@ fn mesfet_nmf_op() {
 }
 
 #[test]
+fn behavioural_voltage_source() {
+    // B-element with V= behaviour — direct path stamps a vsource branch
+    // and registers a BehavioralVoltageSourceInstance; NR resolves the
+    // expression via the existing solver path.
+    assert_paths_equal(
+        "Behavioural V\n\
+         V1 in 0 1.5\n\
+         R1 in 0 1k\n\
+         B1 out 0 V=v(in)*2\n\
+         R2 out 0 1k\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn behavioural_current_source() {
+    // B-element with I= behaviour — direct path registers a
+    // BehavioralSourceInstance (no branch row, RHS injection).
+    assert_paths_equal(
+        "Behavioural I\n\
+         V1 in 0 1.0\n\
+         R1 in 0 1k\n\
+         B1 0 out I=v(in)*1m\n\
+         R2 out 0 1k\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn mutual_coupling_two_inductors() {
+    // K-element coupling two inductors. Direct path defers resolution to
+    // the post-pass; the resulting MutualCouplingInstance must match the
+    // Netlist path bit-for-bit. AC analysis exercises the off-diagonal
+    // coupling matrix entries.
+    assert_paths_equal(
+        "Mutual coupling OP\n\
+         V1 in 0 1\n\
+         L1 in mid 1m\n\
+         L2 out 0 4m\n\
+         K1 L1 L2 0.5\n\
+         R1 mid 0 1k\n\
+         R2 out 0 1k\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
 fn ladder_network() {
     // L-shaped R network with several internal nodes — stresses node
     // indexing.

@@ -20,7 +20,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use cirq_frontend::to_netlist::{convert_model, convert_source_spec, extra_params};
-use cirq_ir::{Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Model, Value};
+use cirq_ir::{
+    BehavioralMode, Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Model, Value,
+};
 use thevenin_types::{Expr, ModelDef, Source};
 use thevenin_xspice::CodeModelRegistry;
 
@@ -36,9 +38,11 @@ use crate::jfet::{JfetInstance, JfetModel};
 use crate::mesa::{MesaInstance, MesaModel, MesaPrecomp};
 use crate::mesfet::{MesfetInstance, MesfetModel};
 use crate::mna::{
-    CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
-    NodeMap, ResistorInstance, VoltageSourceInstance, get_mosfet_level, get_mosfet_lw,
-    get_nrd_nrs, push_bjt_caps, push_mosfet_caps, resolve_model_with_bins, stamp_conductance,
+    BehavioralSourceInstance, BehavioralVoltageSourceInstance, CapacitorInstance,
+    CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
+    MutualCouplingInstance, NodeMap, ResistorInstance, VoltageSourceInstance, get_mosfet_level,
+    get_mosfet_lw, get_nrd_nrs, parse_bsrc_params, push_bjt_caps, push_mosfet_caps,
+    resolve_model_with_bins, stamp_conductance,
 };
 use crate::mos2::{Mos2Instance, Mos2Model};
 use crate::mos6::{Mos6Instance, Mos6Model};
@@ -148,6 +152,8 @@ fn circuit_is_supported_subset(circuit: &Circuit) -> bool {
                 | IrElementKind::PJfet
                 | IrElementKind::NMesfet
                 | IrElementKind::PMesfet
+                | IrElementKind::Coupling
+                | IrElementKind::BehavioralSource { .. }
         )
     })
 }
@@ -485,7 +491,7 @@ fn stamp_circuit(
     let mut vsource_offset_map: BTreeMap<String, usize> = BTreeMap::new();
 
     for elem in &circuit.elements {
-        match elem.kind {
+        match &elem.kind {
             IrElementKind::Resistor
             | IrElementKind::Capacitor
             | IrElementKind::CurrentSource => {
@@ -587,6 +593,22 @@ fn stamp_circuit(
                     .map(|m| JfetModel::from_model_def(&convert_model(m)))
                     .unwrap_or_else(|| JfetModel::new(crate::jfet::JfetType::Njf));
                 internal_node_count += jm.internal_node_count();
+            }
+            IrElementKind::BehavioralSource { mode, .. } => {
+                let pos = terminal_name(elem, "pos", &net_name)?;
+                let neg = terminal_name(elem, "neg", &net_name)?;
+                node_map.index(pos);
+                node_map.index(neg);
+                // V= behavioural sources need a branch current variable; I=
+                // injects current directly into the RHS.
+                if matches!(mode, BehavioralMode::Voltage) {
+                    vsource_offset_map.insert(elem.name.to_lowercase(), vsource_count);
+                    vsource_count += 1;
+                }
+            }
+            IrElementKind::Coupling => {
+                // K-element: no nodes of its own and no branch — the post-
+                // pass below resolves it against the inductor branches.
             }
             IrElementKind::NMesfet | IrElementKind::PMesfet => {
                 let d = terminal_name(elem, "drain", &net_name)?;
@@ -702,7 +724,7 @@ fn stamp_circuit(
     // Second pass: stamp every element.
     // -----------------------------------------------------------------
     for elem in &circuit.elements {
-        match elem.kind {
+        match &elem.kind {
             IrElementKind::Resistor => {
                 let pos = terminal_name(elem, "pos", &net_name)?;
                 let neg = terminal_name(elem, "neg", &net_name)?;
@@ -1029,6 +1051,69 @@ fn stamp_circuit(
                 }
                 // The conductance/current stamps are applied during NR
                 // iteration in `device_stamp::diode`, not here.
+            }
+            IrElementKind::BehavioralSource { mode, spec } => {
+                let pos_idx = mna.node_map.get(terminal_name(elem, "pos", &net_name)?);
+                let neg_idx = mna.node_map.get(terminal_name(elem, "neg", &net_name)?);
+
+                // Parse tc1= / tc2= / reciproctc= out of the expression tail
+                // exactly the way the Netlist path does.
+                let params = parse_bsrc_params(spec.as_str());
+                let expr_trimmed = params.expr.trim();
+                let expr_clean = if let Some(inner) = expr_trimmed
+                    .strip_prefix('{')
+                    .and_then(|s| s.strip_suffix('}'))
+                {
+                    inner.trim()
+                } else if let Some(inner) = expr_trimmed
+                    .strip_prefix('\'')
+                    .and_then(|s| s.strip_suffix('\''))
+                {
+                    inner.trim()
+                } else {
+                    expr_trimmed
+                };
+                let dt = circuit_temp(circuit) - 27.0;
+                let raw_factor = 1.0 + params.tc1 * dt + params.tc2 * dt * dt;
+                let tc_factor = if params.reciproc_tc {
+                    1.0 / raw_factor
+                } else {
+                    raw_factor
+                };
+
+                match mode {
+                    BehavioralMode::Current => {
+                        mna.behavioral_sources.push(BehavioralSourceInstance {
+                            pos_idx,
+                            neg_idx,
+                            expr: expr_clean.to_string(),
+                            tc_factor,
+                        });
+                    }
+                    BehavioralMode::Voltage => {
+                        let branch = n_nodes + vsource_idx;
+                        if let Some(i) = pos_idx {
+                            mna.system.matrix.add(i, branch, 1.0);
+                            mna.system.matrix.add(branch, i, 1.0);
+                        }
+                        if let Some(j) = neg_idx {
+                            mna.system.matrix.add(j, branch, -1.0);
+                            mna.system.matrix.add(branch, j, -1.0);
+                        }
+                        mna.behavioral_voltage_sources
+                            .push(BehavioralVoltageSourceInstance {
+                                expr: expr_clean.to_string(),
+                                branch_idx: branch,
+                                tc_factor,
+                            });
+                        mna.vsource_names.push(elem.name.clone());
+                        vsource_idx += 1;
+                    }
+                }
+            }
+            IrElementKind::Coupling => {
+                // K-element: deferred to the post-pass below — needs every
+                // inductor's branch_idx and inductance already allocated.
             }
             IrElementKind::NJfet | IrElementKind::PJfet => {
                 let drain_idx = mna.node_map.get(terminal_name(elem, "drain", &net_name)?);
@@ -1981,6 +2066,90 @@ fn stamp_circuit(
     }
 
     debug_assert_eq!(vsource_idx, vsource_count);
+
+    // Post-pass: resolve Coupling (K-elements) now that every inductor has
+    // a `branch_idx` and inductance assigned. Mirrors `assemble_mna_flat`'s
+    // mutual_couplings_raw resolution.
+    for elem in &circuit.elements {
+        if !matches!(elem.kind, IrElementKind::Coupling) {
+            continue;
+        }
+        let l1_name = string_param(elem, "l1").ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                "Coupling `{}` missing `l1` inductor reference",
+                elem.name
+            ))
+        })?;
+        let l2_name = string_param(elem, "l2").ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                "Coupling `{}` missing `l2` inductor reference",
+                elem.name
+            ))
+        })?;
+        let k = numeric_param(elem, &["coupling", "value"]).ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                "Coupling `{}` missing numeric `coupling`",
+                elem.name
+            ))
+        })?;
+
+        let l1_offset = vsource_offset_map
+            .get(&l1_name.to_lowercase())
+            .copied()
+            .ok_or_else(|| {
+                MnaError::UnsupportedElement(format!(
+                    "Coupling `{}` references unknown inductor `{l1_name}`",
+                    elem.name
+                ))
+            })?;
+        let l2_offset = vsource_offset_map
+            .get(&l2_name.to_lowercase())
+            .copied()
+            .ok_or_else(|| {
+                MnaError::UnsupportedElement(format!(
+                    "Coupling `{}` references unknown inductor `{l2_name}`",
+                    elem.name
+                ))
+            })?;
+
+        let branch1 = n_nodes + l1_offset;
+        let branch2 = n_nodes + l2_offset;
+
+        let (ind1_vec_idx, l1_val) = mna
+            .inductors
+            .iter()
+            .enumerate()
+            .find(|(_, ind)| ind.branch_idx == branch1)
+            .map(|(idx, ind)| (idx, ind.inductance))
+            .ok_or_else(|| {
+                MnaError::UnsupportedElement(format!(
+                    "Coupling `{}`: inductor `{l1_name}` not found in instances",
+                    elem.name
+                ))
+            })?;
+        let (ind2_vec_idx, l2_val) = mna
+            .inductors
+            .iter()
+            .enumerate()
+            .find(|(_, ind)| ind.branch_idx == branch2)
+            .map(|(idx, ind)| (idx, ind.inductance))
+            .ok_or_else(|| {
+                MnaError::UnsupportedElement(format!(
+                    "Coupling `{}`: inductor `{l2_name}` not found in instances",
+                    elem.name
+                ))
+            })?;
+
+        let factor = k * (l1_val * l2_val).abs().sqrt();
+        mna.mutual_couplings.push(MutualCouplingInstance {
+            branch1_idx: branch1,
+            branch2_idx: branch2,
+            ind1_vec_idx,
+            ind2_vec_idx,
+            factor,
+        });
+    }
+
     Ok(mna)
 }
 
@@ -2105,27 +2274,34 @@ mod tests {
 
     #[test]
     fn unsupported_circuit_returns_none() {
-        // A behavioural source is not yet handled by the direct IR path —
-        // adding one should make `assemble_mna_from_circuit` return Ok(None)
-        // so the caller falls back to `assemble_mna(&Netlist)`. All
-        // diodes / BJTs / MOSFETs / JFETs / MESA family devices are now
-        // supported; this test pins the fallback for still-pending
-        // device classes (see `docs/migration/mna-ir-pivot-plan.md`).
+        // A lossy transmission line (TransmissionLine / LTRA) is not yet
+        // handled by the direct IR path — adding one should make
+        // `assemble_mna_from_circuit` return Ok(None) so the caller falls
+        // back to `assemble_mna(&Netlist)`. Diodes / BJTs / MOSFETs /
+        // JFETs / MESA / behavioural / mutual-coupling are all supported
+        // now; this test pins the fallback for the still-pending
+        // distributed elements and XSPICE (see
+        // `docs/migration/mna-ir-pivot-plan.md`).
         let mut c = divider();
         c.elements.push(Element {
             id: Id(3),
-            name: "B1".into(),
-            kind: IrElementKind::BehavioralSource {
-                mode: cirq_ir::BehavioralMode::Voltage,
-                spec: "v(in)".into(),
-            },
+            name: "O1".into(),
+            kind: IrElementKind::TransmissionLine,
             connections: vec![
                 Connection {
-                    terminal: "pos".into(),
+                    terminal: "in_pos".into(),
                     net: Id(1),
                 },
                 Connection {
-                    terminal: "neg".into(),
+                    terminal: "in_neg".into(),
+                    net: Id(0),
+                },
+                Connection {
+                    terminal: "out_pos".into(),
+                    net: Id(2),
+                },
+                Connection {
+                    terminal: "out_neg".into(),
                     net: Id(0),
                 },
             ],
