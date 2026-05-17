@@ -6,16 +6,29 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
 
 ## Primary Interface
 
-- [ ] **`thevenin_types::Netlist` as the primary input interface**
+- [~] **`thevenin_types::Netlist` as the primary input interface**
   The simulator currently requires a `Netlist` to run. As the Cirq IR matures,
   the simulator should accept `cirq_ir::Circuit` directly. The Netlist type
   would become an internal intermediate or compatibility layer.
   *Depends on:* Stage 4 of the adoption plan.
-  *In progress on `feat/mna-circuit-input`* — session-by-session migration
+  *Mostly landed on `feat/mna-circuit-input`* — session-by-session migration
   plan in [`docs/migration/mna-ir-pivot-plan.md`](mna-ir-pivot-plan.md).
-  Session A (enabler) landed: `cirq_frontend::to_netlist::convert_model`
-  and `value_to_expr` are now `pub` so the future MNA-on-IR path can reuse
-  them without rewriting every device's `from_model_def` loader.
+  As of the last commit on that branch:
+  - Every `IrElementKind` variant assembles into an `MnaSystem` directly
+    via `thevenin::mna_ir::assemble_mna_from_circuit` (no Netlist
+    conversion needed). The full ngspice regression corpus
+    (100 fixtures) runs through `mna_ir` end-to-end on every commit.
+  - All eight analyses (op / dc / tran / ac / noise / sens / pz / tf)
+    have Circuit-input entry points in `thevenin::circuit::*`. Seven
+    of them (everything but sens) are Netlist-free on the happy path;
+    sens requires an IR-shape change to preserve the tokenized
+    `Vec<String>` it currently joins.
+  - Top-level `thevenin::circuit::simulate(&Circuit)` dispatcher mirrors
+    `thevenin::simulate(&Netlist)`. The CLI uses it for non-`.control`
+    circuits.
+  - Netlist-shaped public APIs still exist for the `.control`
+    interpreter, which mutates a Netlist in-place for TEMPER
+    expression evaluation (see the `.control` item below).
 
 ## Naming Conventions
 
