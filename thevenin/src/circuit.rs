@@ -318,22 +318,29 @@ mod tests {
         }
     }
 
-    /// A circuit with any non-linear element must fall back to the lowering
-    /// path. `simulate_op_direct` returns `None`.
+    /// A circuit with an element outside the IR-direct supported subset
+    /// must fall back to the lowering path. Uses a BJT (Npn) because diodes
+    /// are now supported directly; this test pins the fallback behaviour
+    /// for device classes still pending migration (see
+    /// `docs/migration/mna-ir-pivot-plan.md`).
     #[test]
-    fn direct_path_rejects_nonlinear_circuits() {
+    fn direct_path_rejects_unsupported_circuits() {
         let mut c = voltage_divider();
         c.elements.push(cirq_ir::Element {
             id: Id(3),
-            name: "D1".into(),
-            kind: ElementKind::Diode,
+            name: "Q1".into(),
+            kind: ElementKind::Npn,
             connections: vec![
                 cirq_ir::Connection {
-                    terminal: "anode".into(),
+                    terminal: "collector".into(),
+                    net: Id(1),
+                },
+                cirq_ir::Connection {
+                    terminal: "base".into(),
                     net: Id(2),
                 },
                 cirq_ir::Connection {
-                    terminal: "cathode".into(),
+                    terminal: "emitter".into(),
                     net: Id(0),
                 },
             ],

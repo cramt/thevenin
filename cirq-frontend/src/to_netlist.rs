@@ -371,7 +371,15 @@ fn get_param_f64(elem: &IrElement, name: &str) -> Option<f64> {
         .map(|p| value_to_f64(&p.1))
 }
 
-fn extra_params(elem: &IrElement, exclude: &[&str]) -> Vec<Param> {
+/// Project the IR element's `(String, Value)` params into a Netlist-shaped
+/// `Vec<Param>`, skipping any name in `exclude` (typically `"value"`).
+///
+/// Promoted to `pub` for the MNA-on-IR pivot
+/// (`docs/migration/mna-ir-pivot-plan.md`) so `thevenin::mna_ir` can hand
+/// instance params straight to existing `*Model::with_instance_params` and
+/// helpers like `apply_multipliers` / `get_bjt_level` / `get_mosfet_lw`
+/// without rewriting them per device.
+pub fn extra_params(elem: &IrElement, exclude: &[&str]) -> Vec<Param> {
     elem.params
         .iter()
         .filter(|p| !exclude.contains(&p.0.as_str()))

@@ -19,14 +19,15 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use cirq_frontend::to_netlist::convert_source_spec;
-use cirq_ir::{Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Value};
+use cirq_frontend::to_netlist::{convert_model, convert_source_spec, extra_params};
+use cirq_ir::{Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Model, Value};
 use thevenin_types::{Expr, Source};
 use thevenin_xspice::CodeModelRegistry;
 
+use crate::diode::DiodeModel;
 use crate::mna::{
-    CapacitorInstance, CurrentSourceInstance, InductorInstance, MnaError, MnaSystem, NodeMap,
-    ResistorInstance, VoltageSourceInstance, stamp_conductance,
+    CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
+    NodeMap, ResistorInstance, VoltageSourceInstance, stamp_conductance,
 };
 use crate::newton::NrOptions;
 
@@ -99,20 +100,18 @@ pub fn assemble_mna_from_circuit(
     modedc: bool,
     xspice_registry: Option<Arc<CodeModelRegistry>>,
 ) -> Result<Option<MnaSystem>, MnaError> {
-    if !circuit_is_linear_subset(circuit) {
+    if !circuit_is_supported_subset(circuit) {
         return Ok(None);
     }
-    Ok(Some(stamp_linear_circuit(
-        circuit,
-        modedc,
-        xspice_registry,
-    )?))
+    Ok(Some(stamp_circuit(circuit, modedc, xspice_registry)?))
 }
 
-/// Whether every element in `circuit` is in the linear subset this module
-/// handles. Anything outside — diodes, BJTs, MOSFETs, behavioural sources,
-/// distributed elements, XSPICE — sends the caller back to the Netlist path.
-fn circuit_is_linear_subset(circuit: &Circuit) -> bool {
+/// Whether every element in `circuit` is in the device subset this module
+/// currently handles. Anything outside — BJTs, MOSFETs, JFETs, behavioural
+/// sources, distributed elements, XSPICE — sends the caller back to the
+/// Netlist path. Coverage grows session by session per
+/// `docs/migration/mna-ir-pivot-plan.md`.
+fn circuit_is_supported_subset(circuit: &Circuit) -> bool {
     circuit.elements.iter().all(|e| {
         matches!(
             e.kind,
@@ -125,6 +124,7 @@ fn circuit_is_linear_subset(circuit: &Circuit) -> bool {
                 | IrElementKind::Vccs
                 | IrElementKind::Ccvs
                 | IrElementKind::Cccs
+                | IrElementKind::Diode
         )
     })
 }
@@ -252,7 +252,28 @@ fn evaluate_source_dc(source: &Source, modedc: bool) -> f64 {
     }
 }
 
-fn stamp_linear_circuit(
+/// Resolve an element's IR model reference (`Element.model: Option<Id>`)
+/// against `circuit.models`. Returns `None` when the element carries no
+/// model link or the linked id isn't in the model table — callers fall
+/// back to the model's default (e.g. `DiodeModel::default()`).
+fn lookup_model<'a>(circuit: &'a Circuit, elem: &IrElement) -> Option<&'a Model> {
+    let id = elem.model?;
+    circuit.models.iter().find(|m| m.id == id)
+}
+
+/// Build a fully-resolved [`DiodeModel`] for a diode element, layering
+/// instance parameters (e.g. `AREA`, `IC`, `TEMP`) over the model defaults
+/// the way `mna::assemble_mna_flat` does. When the element has no model
+/// reference, falls back to `DiodeModel::default()` — mirroring the
+/// Netlist path's behaviour for "naked" diodes.
+fn load_diode_model(circuit: &Circuit, elem: &IrElement) -> DiodeModel {
+    let base = lookup_model(circuit, elem)
+        .map(|m| DiodeModel::from_model_def(&convert_model(m)))
+        .unwrap_or_default();
+    base.with_instance_params(&extra_params(elem, &["value"]))
+}
+
+fn stamp_circuit(
     circuit: &Circuit,
     modedc: bool,
     xspice_registry: Option<Arc<CodeModelRegistry>>,
@@ -260,12 +281,13 @@ fn stamp_linear_circuit(
     let net_name = build_net_name_map(circuit);
 
     // -----------------------------------------------------------------
-    // First pass: index nodes, count vsource branches, build the
-    // name → branch-offset map that F/H reference for their controlling
-    // source.
+    // First pass: index nodes, count vsource branches and internal nodes,
+    // build the name → branch-offset map that F/H reference for their
+    // controlling source.
     // -----------------------------------------------------------------
     let mut node_map = NodeMap::new();
     let mut vsource_count = 0usize;
+    let mut internal_node_count = 0usize;
     let mut vsource_offset_map: BTreeMap<String, usize> = BTreeMap::new();
 
     for elem in &circuit.elements {
@@ -310,15 +332,27 @@ fn stamp_linear_circuit(
                 node_map.index(op);
                 node_map.index(on);
             }
-            _ => unreachable!("circuit_is_linear_subset filtered above"),
+            IrElementKind::Diode => {
+                let anode = terminal_name(elem, "anode", &net_name)?;
+                let cathode = terminal_name(elem, "cathode", &net_name)?;
+                node_map.index(anode);
+                node_map.index(cathode);
+                // Internal node only when the resolved DiodeModel has RS > 0.
+                let dm = load_diode_model(circuit, elem);
+                if dm.has_series_resistance() {
+                    internal_node_count += 1;
+                }
+            }
+            _ => unreachable!("circuit_is_supported_subset filtered above"),
         }
     }
 
-    let n_nodes = node_map.len();
+    let n_nodes = node_map.len() + internal_node_count;
     let dim = n_nodes + vsource_count;
     let mut mna = MnaSystem::empty(dim, xspice_registry);
     mna.node_map = node_map;
     let mut vsource_idx = 0usize;
+    let mut internal_idx = mna.node_map.len();
 
     // -----------------------------------------------------------------
     // Second pass: stamp every element.
@@ -617,7 +651,42 @@ fn stamp_linear_circuit(
                     mna.system.matrix.add(j, ctrl_branch, -gain);
                 }
             }
-            _ => unreachable!("circuit_is_linear_subset filtered above"),
+            IrElementKind::Diode => {
+                let dm = load_diode_model(circuit, elem);
+                let anode_idx = mna.node_map.get(terminal_name(elem, "anode", &net_name)?);
+                let cathode_idx = mna.node_map.get(terminal_name(elem, "cathode", &net_name)?);
+
+                let int_idx = if dm.has_series_resistance() {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    None
+                };
+
+                mna.diodes.push(DiodeInstance {
+                    anode_idx,
+                    cathode_idx,
+                    internal_idx: int_idx,
+                    model: dm.clone(),
+                });
+
+                // Synthetic capacitor for diode junction cap (CJO at zero bias).
+                // Junction node is `internal_idx` when RS > 0, else the anode.
+                let jct_node = int_idx.or(anode_idx);
+                if dm.cjo > 0.0 {
+                    mna.capacitors.push(CapacitorInstance {
+                        name: None,
+                        pos_idx: jct_node,
+                        neg_idx: cathode_idx,
+                        capacitance: dm.cjo,
+                        ic: None,
+                    });
+                }
+                // The conductance/current stamps are applied during NR
+                // iteration in `device_stamp::diode`, not here.
+            }
+            _ => unreachable!("circuit_is_supported_subset filtered above"),
         }
     }
 
@@ -745,7 +814,45 @@ mod tests {
     }
 
     #[test]
-    fn nonlinear_circuit_returns_none() {
+    fn unsupported_circuit_returns_none() {
+        // BJT (Npn) is not yet handled by the direct IR path — adding one
+        // should make `assemble_mna_from_circuit` return Ok(None) so the
+        // caller falls back to `assemble_mna(&Netlist)`. Diodes are now
+        // supported; this test pins the fallback for still-pending device
+        // classes (see `docs/migration/mna-ir-pivot-plan.md`).
+        let mut c = divider();
+        c.elements.push(Element {
+            id: Id(3),
+            name: "Q1".into(),
+            kind: IrElementKind::Npn,
+            connections: vec![
+                Connection {
+                    terminal: "collector".into(),
+                    net: Id(1),
+                },
+                Connection {
+                    terminal: "base".into(),
+                    net: Id(2),
+                },
+                Connection {
+                    terminal: "emitter".into(),
+                    net: Id(0),
+                },
+            ],
+            params: vec![],
+            model: None,
+            source_spec: None,
+        });
+        let result = assemble_mna_from_circuit(&c, false, None).unwrap();
+        assert!(result.is_none());
+    }
+
+    /// A diode-bearing circuit must be accepted by the direct path now that
+    /// Session C support has landed. The produced `MnaSystem` carries one
+    /// `DiodeInstance` so downstream `solve_op_raw_with_opts` routes through
+    /// `solve_nonlinear_op` via `has_nonlinear()`.
+    #[test]
+    fn diode_circuit_accepted_and_carries_instance() {
         let mut c = divider();
         c.elements.push(Element {
             id: Id(3),
@@ -765,8 +872,11 @@ mod tests {
             model: None,
             source_spec: None,
         });
-        let result = assemble_mna_from_circuit(&c, false, None).unwrap();
-        assert!(result.is_none());
+        let mna = assemble_mna_from_circuit(&c, false, None)
+            .unwrap()
+            .expect("diode-bearing circuit");
+        assert_eq!(mna.diodes.len(), 1);
+        assert!(mna.has_nonlinear());
     }
 
     #[test]

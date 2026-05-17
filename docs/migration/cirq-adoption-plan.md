@@ -161,6 +161,19 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       is now a 40-line wrapper around the new module instead of a
       ~300-line bespoke linear stamper. All 13 direct-path equivalence
       tests and 100/0/7 harness state preserved.
+      **Session B follow-up:** `simulate_op` extracted a public
+      `simulate_op_with_mna(&MnaSystem, &NrOptions, &[(usize, f64)])`
+      helper so Netlist and IR paths share the post-assembly solve +
+      formatter. `simulate_op_with_xspice` routes through the same
+      helper. `mna_ir` gained `nr_options_from_circuit` and
+      `resolve_nodeset_from_circuit` Circuit-side equivalents.
+      **Session C landed (diode):** `mna_ir` now also accepts diode
+      elements — model lookup via `cirq_frontend::to_netlist::convert_model`
+      + `extra_params` shims, internal-node allocation when RS > 0,
+      synthetic CJO capacitor, and `DiodeInstance` push. The NR loop
+      downstream picks up diodes automatically via `has_nonlinear()`,
+      so no further wiring was needed. Three new diode fixtures land
+      bit-for-bit equivalence; harness 100/0/7 unchanged.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`

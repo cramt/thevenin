@@ -89,19 +89,38 @@ Verification:
 - `cargo nextest run --workspace` → 994/994 pass.
 - `cargo clippy -p thevenin --lib` → clean.
 
-#### Session C — Diode + BJT
+#### Session C — Diode (landed) + BJT
 
-- Add `Diode` first-pass + stamp branch to `mna_ir.rs`. Internal-node
-  bookkeeping mirrors `mna.rs:1146-1163`. Reuse `DiodeModel::from_model_def`
-  via the `convert_model_for_loaders` shim.
-- Same for `Bjt` (level 1 default + level 4 VBIC). VBIC has 7 conditional
-  internal nodes — mirror the existing logic exactly.
-- Extend `direct_path_equivalence.rs` with diode and BJT fixtures (port
-  `ngspice-upstream/tests/diode/*.cir` and `bjt/*.cir`).
-- Run full harness: must stay 100/0/7. Any regression points at a stamp
-  detail that drifted between the two paths.
+**Diode landed.** `mna_ir.rs` now accepts circuits containing `IrElementKind::Diode`:
 
-Estimated diff: +400 LOC.
+- First pass: indexes anode/cathode nets and increments `internal_node_count`
+  when the resolved `DiodeModel::has_series_resistance()`.
+- Second pass: builds the `DiodeModel` via the
+  `cirq_frontend::to_netlist::convert_model` shim (preserving the existing
+  `DiodeModel::from_model_def` loader unchanged), layers instance params
+  with `with_instance_params(&extra_params(elem, &["value"]))`, allocates an
+  internal node when RS > 0, and pushes both a `DiodeInstance` and the
+  synthetic CJO junction capacitor. The NR loop downstream picks up the
+  diodes automatically via `MnaSystem::has_nonlinear()` →
+  `solve_op_raw_with_opts` → `solve_nonlinear_op`.
+- New helpers in `mna_ir`: `lookup_model(&Circuit, &Element)` resolves
+  `Element.model: Option<Id>` against `circuit.models`;
+  `load_diode_model(&Circuit, &Element)` returns a fully-resolved model.
+- `cirq_frontend::to_netlist::extra_params` promoted to `pub` so the
+  instance-param projection lives in one place.
+- Three new equivalence fixtures in `direct_path_equivalence.rs`:
+  `diode_voltage_drop`, `diode_with_series_resistance`, `diode_clamp_pair`.
+
+Verification: `cargo nextest run --workspace` → 995/995 pass; harness
+100/0/7 unchanged.
+
+**BJT pending.** Level 1 (Gummel-Poon default) and level 4 (VBIC) — VBIC
+has up to 7 conditional internal nodes (`rcx`, `rbx`, `re`, `rs`, `rth`,
+`base_bi`, `base_bp`, `coll_ci`). Mirror `mna.rs:1605-1700` exactly,
+using the same `convert_model` + `extra_params` shim pattern that diode
+follows. Add bjt and vbic fixtures to `direct_path_equivalence.rs`.
+
+Estimated remaining diff for BJT: +200 LOC.
 
 #### Session D — MOSFET family
 

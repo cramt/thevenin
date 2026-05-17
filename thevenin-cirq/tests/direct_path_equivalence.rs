@@ -199,6 +199,54 @@ fn parallel_resistors() {
 }
 
 #[test]
+fn diode_voltage_drop() {
+    // Single diode forward-biased through a 1k series resistor. The direct
+    // IR path produces a MnaSystem with one DiodeInstance; downstream
+    // NR converges via solve_op_raw_with_opts -> solve_nonlinear_op.
+    assert_paths_equal(
+        "Diode OP\n\
+         .model dmod d is=1e-14\n\
+         V1 in 0 1.0\n\
+         R1 in mid 1k\n\
+         D1 mid 0 dmod\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn diode_with_series_resistance() {
+    // Diode model with RS > 0 forces allocation of an internal node — the
+    // direct path's internal-node counter and stamping must match the
+    // Netlist path's bookkeeping.
+    assert_paths_equal(
+        "Diode RS OP\n\
+         .model dmod d is=1e-14 rs=10\n\
+         V1 in 0 0.7\n\
+         R1 in mid 100\n\
+         D1 mid 0 dmod\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn diode_clamp_pair() {
+    // Two diodes back-to-back clamp the centre node. Exercises multiple
+    // DiodeInstance entries in mna.diodes.
+    assert_paths_equal(
+        "Diode Clamp\n\
+         .model dmod d is=1e-14\n\
+         V1 in 0 0.3\n\
+         R1 in mid 1k\n\
+         D1 mid 0 dmod\n\
+         D2 0 mid dmod\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
 fn ladder_network() {
     // L-shaped R network with several internal nodes — stresses node
     // indexing.
