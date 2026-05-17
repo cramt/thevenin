@@ -162,8 +162,20 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       `Expr` shape — lifting TEMPER onto the IR's typed `Value` belongs
       to a later phase. Harness still 100/0/7; 125 unit tests in
       `thevenin-control` (2 new) pin the new constructor.
-      Phase C (real `alter` mutation against `Circuit.elements` /
-      `Circuit.models`, prerequisite for resume-1) is the next slice.
+      **Phase C landed:** `alter` now mutates `Circuit.elements`
+      (source DC values, R/C/L `value` params, generic element params)
+      and `Circuit.models` (named params) when the context owns a
+      Circuit; the cached netlist is re-derived after mutation so the
+      next analysis sees the new state. Plain-form `alter v1=-5` (no
+      `@`, no `[param]`) is now accepted alongside the bracketed form.
+      Vector alters still take the legacy stored-vector path because
+      waveform parameters don't have a flat-coefficient IR shape. The
+      legacy `SimContext::new(&Netlist)` path keeps the historical
+      stash-as-named-vector behavior unchanged. 3 new tests pin the
+      mutation contract (128/128 unit tests in `thevenin-control`).
+      Harness still 100/0/7. This unblocks one of the three
+      prerequisites for `regression/misc/resume-1.cir`; `stop when` and
+      `resume` are the remaining two.
 - [ ] Deprecate `thevenin_types::Netlist` as a public API; expose
       `cirq_ir::Circuit` as the primary simulation input.
 - [ ] Remove SPICE element-prefix naming requirements from the simulator core.

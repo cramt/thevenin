@@ -639,25 +639,170 @@ fn parse_num(s: &str) -> Result<f64, String> {
 
 /// Execute an `alter` command.
 ///
-/// Stores the altered value as a named vector in the context so subsequent
-/// `@device[param]` queries find the updated value.
+/// **Stage 4 / Phase C.** Mutates the driving [`cirq_ir::Circuit`] when one
+/// is present so subsequent analyses see the new value; otherwise (legacy
+/// `--legacy` Netlist callers) falls back to the historical behavior of
+/// stashing a named vector for `@device[param]` lookups.
+///
+/// Accepted spec shapes:
+/// - `@device[param] = value` — explicit param (e.g. `@r1[resistance]`)
+/// - `@device = value` — defaults to the kind's primary param (`dc` for
+///   sources, `value` for R/C/L)
+/// - `device[param] = value` / `device = value` — same, without the `@`
+///   prefix (the resume-1 plain form)
+///
+/// Vector alters (e.g. `@v1[pulse] = [ ... ]`) still take the legacy
+/// stored-vector path because waveform parameters are not first-class on
+/// the IR yet — they live inside `Element.source_spec.waveform` with a
+/// typed shape that doesn't accept a flat coefficient vector.
 fn execute_alter(spec: &str, value: &AlterValue, ctx: &mut SimContext) -> Result<(), String> {
     let spec_trimmed = spec.trim();
-    if !spec_trimmed.starts_with('@') {
-        return Err(format!(
-            "alter: expected @device[param], got: {spec_trimmed}"
-        ));
-    }
+    let (device, param) = parse_alter_spec(spec_trimmed)?;
 
-    let data = match value {
-        AlterValue::Scalar(v) => vec![*v],
-        AlterValue::Vector(v) => v.clone(),
+    // Vector alters keep the legacy stash-as-named-vector behavior; the
+    // IR doesn't represent waveform params as a flat coefficient vector
+    // we could push back into Element.source_spec.
+    let scalar = match value {
+        AlterValue::Scalar(v) => *v,
+        AlterValue::Vector(v) => {
+            ctx.store_vector(SimVector::real(spec_trimmed.to_lowercase(), v.clone()));
+            return Ok(());
+        }
     };
 
-    // Store as a named vector so @device[param] lookups find it
-    ctx.store_vector(SimVector::real(spec_trimmed.to_lowercase(), data));
+    // Try mutating the Circuit first. If the circuit doesn't have the
+    // referenced device/model, fall through to the legacy vector stash
+    // so old behavior is preserved.
+    if let Some(circuit) = ctx.circuit.as_mut() {
+        if alter_circuit(circuit, &device, param.as_deref(), scalar) {
+            // Re-derive the cached netlist so the next analysis (which
+            // reads ctx.netlist) sees the mutation.
+            let netlists = cirq_frontend::to_netlist::circuit_to_netlists(circuit)
+                .map_err(|e| format!("alter: circuit_to_netlists: {e}"))?;
+            let netlist = netlists
+                .into_iter()
+                .next()
+                .ok_or_else(|| "alter: circuit produced no netlists".to_string())?;
+            let netlist = thevenin::flatten_netlist(&netlist)
+                .map_err(|e| format!("alter: flatten_netlist: {e}"))?;
+            ctx.netlist = netlist;
+            // Also stash the new value as a named vector so expressions
+            // that look up `@device[param]` via find_vector keep working.
+            ctx.store_vector(SimVector::real(spec_trimmed.to_lowercase(), vec![scalar]));
+            return Ok(());
+        }
+    }
 
+    // Fall-through: legacy stored-vector behavior.
+    ctx.store_vector(SimVector::real(spec_trimmed.to_lowercase(), vec![scalar]));
     Ok(())
+}
+
+/// Parse an `alter` spec into `(device_name, optional_param_name)`.
+///
+/// Accepts `@device[param]`, `@device`, `device[param]`, and `device`. The
+/// `@` prefix is optional — both ngspice's bracketed form and the plain
+/// form used in resume-1 (`alter v1 = -5`) are valid.
+fn parse_alter_spec(spec: &str) -> Result<(String, Option<String>), String> {
+    let s = spec.strip_prefix('@').unwrap_or(spec).trim();
+    if s.is_empty() {
+        return Err(format!("alter: missing device name in spec: {spec}"));
+    }
+    if let Some(bracket) = s.find('[') {
+        let end = s
+            .find(']')
+            .ok_or_else(|| format!("alter: unmatched '[' in spec: {spec}"))?;
+        if end <= bracket {
+            return Err(format!("alter: malformed [param] in spec: {spec}"));
+        }
+        let device = s[..bracket].trim().to_string();
+        let param = s[bracket + 1..end].trim().to_string();
+        if device.is_empty() || param.is_empty() {
+            return Err(format!("alter: empty device or param in spec: {spec}"));
+        }
+        Ok((device, Some(param)))
+    } else {
+        Ok((s.to_string(), None))
+    }
+}
+
+/// Apply an `alter` to a Circuit. Returns `true` if a matching element or
+/// model was found and mutated, `false` otherwise (so the caller can fall
+/// back to legacy behavior).
+fn alter_circuit(
+    circuit: &mut cirq_ir::Circuit,
+    device: &str,
+    param: Option<&str>,
+    value: f64,
+) -> bool {
+    for elem in &mut circuit.elements {
+        if elem.name.eq_ignore_ascii_case(device) {
+            return apply_element_alter(elem, param, value);
+        }
+    }
+    for model in &mut circuit.models {
+        if model.name.eq_ignore_ascii_case(device) {
+            return apply_model_alter(model, param, value);
+        }
+    }
+    false
+}
+
+fn apply_element_alter(elem: &mut cirq_ir::Element, param: Option<&str>, value: f64) -> bool {
+    use cirq_ir::{ElementKind, SourceSpec, Value};
+
+    // Pick a default param name when the alter is plain-form (no
+    // explicit `[param]`). Sources default to `dc`; R/C/L default to
+    // `value`. Anything else without an explicit param fails so callers
+    // know to be explicit (e.g. M1 needs `m1[w]`, not `m1`).
+    let default_param = match elem.kind {
+        ElementKind::VoltageSource | ElementKind::CurrentSource => Some("dc"),
+        ElementKind::Resistor | ElementKind::Capacitor | ElementKind::Inductor => Some("value"),
+        _ => None,
+    };
+    let Some(p) = param.or(default_param) else {
+        return false;
+    };
+    let p_lower = p.to_lowercase();
+
+    // Source DC value lives in source_spec.dc, not in params.
+    if matches!(
+        elem.kind,
+        ElementKind::VoltageSource | ElementKind::CurrentSource
+    ) && p_lower == "dc"
+    {
+        let spec = elem.source_spec.get_or_insert_with(SourceSpec::default);
+        spec.dc = Some(value);
+        return true;
+    }
+
+    // Otherwise it's a typed param. Update in place if present, else
+    // append so element ordering of existing params is preserved.
+    for (name, v) in &mut elem.params {
+        if name.to_lowercase() == p_lower {
+            *v = Value::Real(value);
+            return true;
+        }
+    }
+    elem.params.push((p.to_string(), Value::Real(value)));
+    true
+}
+
+fn apply_model_alter(model: &mut cirq_ir::Model, param: Option<&str>, value: f64) -> bool {
+    use cirq_ir::Value;
+
+    // Model alters require an explicit param — there is no sensible
+    // default since a model is a bag of named coefficients.
+    let Some(p) = param else { return false };
+    let p_lower = p.to_lowercase();
+    for (name, v) in &mut model.params {
+        if name.to_lowercase() == p_lower {
+            *v = Value::Real(value);
+            return true;
+        }
+    }
+    model.params.push((p.to_string(), Value::Real(value)));
+    true
 }
 
 /// Resolve echo fragments into a string.

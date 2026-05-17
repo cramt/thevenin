@@ -308,4 +308,96 @@ mod tests {
             "expected missing-control error, got: {err}"
         );
     }
+
+    /// Helper: pull the (last) value of a real vector out of a control
+    /// result by name, panicking if it isn't there or isn't real.
+    fn vec_value(result: &ControlResult, plot_idx: usize, name: &str) -> f64 {
+        let plot = &result.sim_result.plots[plot_idx];
+        let v = plot
+            .vecs
+            .iter()
+            .find(|v| v.name.to_lowercase() == name.to_lowercase())
+            .unwrap_or_else(|| panic!("missing vec {name} in plot {}", plot.name));
+        match &v.data {
+            thevenin_types::VectorData::Real(r) => *r.last().unwrap(),
+            _ => panic!("expected real vec for {name}"),
+        }
+    }
+
+    /// Plain-form `alter v1 = -5` must mutate V1's DC value in the
+    /// driving Circuit, so the subsequent OP sees -5 V instead of the
+    /// original 1 V. Without IR-side mutation, V(mid) would still be
+    /// 0.667 V; with mutation, it should be -5 * 2/3 ≈ -3.333 V.
+    #[test]
+    fn alter_plain_form_mutates_voltage_source() {
+        let circuit =
+            divider_with_control(vec!["alter v1 = -5".into(), "op".into(), "quit 0".into()]);
+        let result = execute_control_block_ir(&circuit).expect("alter+op");
+        assert_eq!(result.exit_code, 0);
+        let v_mid = vec_value(&result, 0, "v(mid)");
+        assert!(
+            (v_mid - (-5.0 * 2.0 / 3.0)).abs() < 1e-6,
+            "expected v(mid) ≈ -3.333 (from V1=-5), got {v_mid}"
+        );
+    }
+
+    /// `alter @r1[resistance] = 4k` mutates R1's `value` param via the
+    /// bracketed form. The divider becomes 4k:2k, so V(mid) = 1V * 2/(4+2) = 0.333 V.
+    #[test]
+    fn alter_bracketed_form_mutates_resistor_value() {
+        let circuit = divider_with_control(vec![
+            "alter @r1[value] = 4k".into(),
+            "op".into(),
+            "quit 0".into(),
+        ]);
+        let result = execute_control_block_ir(&circuit).expect("alter+op");
+        assert_eq!(result.exit_code, 0);
+        let v_mid = vec_value(&result, 0, "v(mid)");
+        assert!(
+            (v_mid - (2.0 / 6.0)).abs() < 1e-6,
+            "expected v(mid) ≈ 0.333 (R1=4k, R2=2k), got {v_mid}"
+        );
+    }
+
+    /// Without a Circuit on the SimContext (legacy `--legacy` SPICE
+    /// callers), `alter` keeps its historical stored-vector behavior so
+    /// callers don't observe a regression. We verify by constructing a
+    /// SimContext via `new(netlist)` and inspecting the stashed vector
+    /// directly — the `$&@v1[dc]` echo syntax only reads alphanumerics,
+    /// so the bracketed key has to be looked up directly.
+    #[test]
+    fn alter_legacy_path_stashes_named_vector() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+        use thevenin_types::{Analysis, Netlist};
+
+        let nl = Netlist {
+            title: String::new(),
+            items: vec![],
+            analysis: Analysis::Op,
+            source: String::new(),
+        };
+        let lines = vec!["alter @v1[dc] = 2.5".into(), "quit 0".into()];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        let mut ctx = SimContext::new(nl);
+        exec::execute(&stmts, &mut ctx).unwrap();
+
+        // Legacy path: no Circuit, so nothing was mutated; the value is
+        // only available as a named vector.
+        assert!(
+            ctx.circuit.is_none(),
+            "legacy ctor should leave circuit None"
+        );
+        let stash = ctx
+            .find_vector("@v1[dc]")
+            .expect("legacy stash for @v1[dc]");
+        let v = match &stash.data {
+            thevenin_types::VectorData::Real(r) => r[0],
+            _ => panic!("expected real"),
+        };
+        assert!(
+            (v - 2.5).abs() < 1e-12,
+            "expected stashed v1[dc] = 2.5, got {v}"
+        );
+    }
 }
