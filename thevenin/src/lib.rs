@@ -43,6 +43,7 @@ pub(crate) fn expr_val_or(expr: &Expr, default: f64) -> f64 {
 // ── Solver internals ────────────────────────────────────────────────────────
 pub(crate) mod device_stamp;
 pub(crate) mod mna;
+pub(crate) mod mna_ir;
 pub(crate) mod newton;
 pub(crate) mod physics;
 pub(crate) mod simulate;

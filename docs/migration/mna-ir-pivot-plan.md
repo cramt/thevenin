@@ -48,31 +48,46 @@ extend it as device classes are migrated.
 - Document the plan (this file).
 - No functional code change.
 
-#### Session B — Skeleton + linear devices
+#### Session B — Skeleton + linear devices — landed
 
-- New file `thevenin/src/mna_ir.rs`:
-  - `pub fn assemble_mna_from_circuit(&Circuit, modedc, xspice_registry)`
-  - Helpers: `terminal_id`, `terminal_idx`, `numeric_param`, `string_param`,
-    `bool_param`, `convert_model_for_loaders` (wraps `to_netlist::convert_model`),
-    `convert_instance_params`, `model_lookup` (build the BTreeMap from `circuit.models`).
-- First-pass loop (node sizing, vsource counting) handling **only** the linear
-  subset: `Resistor`, `VoltageSource`, `CurrentSource`, `Capacitor`,
-  `Inductor`, `Vcvs`, `Vccs`, `Ccvs`, `Cccs`. All other `ElementKind`
-  variants short-circuit to `assemble_mna_flat(&Netlist)` via
-  `circuit_to_netlists`.
-- Second-pass stamping for the same linear subset, producing identical
-  `MnaSystem` shape (matrix entries, `voltage_sources`, `current_sources`,
-  `resistors`, `capacitors`, `inductors` vecs).
-- Wire `thevenin::circuit::lower()` (and the per-analysis entry points) to
-  call `assemble_mna_from_circuit` first; fall back to the existing
-  `lower()` path on the all-or-nothing linear gate.
-- Extend `direct_path_equivalence.rs` with the same 10 SPICE fixtures it
-  already has, asserting `simulate_op` and any other analysis goes through
-  the direct path.
-- Delete `thevenin::circuit::simulate_op_direct` — superseded by
-  `assemble_mna_from_circuit` for all analyses.
+Landed on `feat/mna-circuit-input` as follow-up commits after the Session A
+plan doc.
 
-Estimated diff: +600 LOC (mna_ir.rs), -150 LOC (simulate_op_direct removal).
+- New file `thevenin/src/mna_ir.rs` (≈500 LOC) exporting
+  `assemble_mna_from_circuit(&Circuit, modedc, xspice_registry) -> Result<Option<MnaSystem>, MnaError>`.
+  Internal helpers: `circuit_is_linear_subset`, `build_net_name_map`
+  (with `gnd` → `0` rewrite to match `circuit_to_netlists`),
+  `terminal_name`, `numeric_param`, `string_param`, `resistor_multipliers`,
+  `evaluate_source_dc` (mirrors the MODEDC / MODEDCOP convention in
+  `mna::stamp_element`).
+- First-pass loop handles the linear subset: `Resistor`, `VoltageSource`,
+  `CurrentSource`, `Capacitor`, `Inductor`, `Vcvs`, `Vccs`, `Ccvs`, `Cccs`.
+  Any other `ElementKind` returns `Ok(None)` so the caller falls back to
+  `assemble_mna(&Netlist)`.
+- Second-pass stamping produces an `MnaSystem` (via the new
+  `MnaSystem::empty(dim, xspice_registry)` constructor that initialises
+  every device-instance vec to empty) with matrix entries, `vsource_names`,
+  `voltage_sources`, `current_sources`, `resistors`, `capacitors`, and
+  `inductors` populated. Bit-for-bit equivalent with the lowered path on
+  the existing 10-fixture `direct_path_equivalence.rs` suite.
+- `thevenin::circuit::simulate_op_direct` deleted — replaced by a 40-line
+  thin wrapper that calls `mna_ir::assemble_mna_from_circuit` + solves +
+  formats the `SimResult` exactly like `simulate::simulate_op` does
+  (descending matrix-index node order, element-insertion vsource branch
+  order). Net delete of ~300 LOC of bespoke linear stamping that
+  `mna_ir` now subsumes.
+- `cirq_frontend::to_netlist::convert_source_spec` and `convert_waveform`
+  promoted to `pub` so `mna_ir` can read IR sources via the existing
+  conversion path (avoids duplicating waveform / AC spec handling).
+- `NodeMap::new` and `NodeMap::index` exposed `pub(crate)` so the new
+  module can build the same string-keyed map as the Netlist path.
+
+Verification:
+
+- `cargo nextest run -p thevenin-cirq` → 13/13 pass (direct-path equivalence).
+- `cargo nextest run -p thevenin --test harness` → 100/0/7 (unchanged).
+- `cargo nextest run --workspace` → 994/994 pass.
+- `cargo clippy -p thevenin --lib` → clean.
 
 #### Session C — Diode + BJT
 

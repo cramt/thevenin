@@ -20,13 +20,12 @@
 //! [`cirq_frontend::to_netlist::circuit_to_netlists`] themselves and dispatch
 //! each resulting netlist with [`crate::simulate_op`] / etc.
 
-use std::collections::HashMap;
-
 use cirq_frontend::to_netlist::{ConvertError, circuit_to_netlists};
-use cirq_ir::{Circuit, ElementKind as IrElementKind, Id, Value};
+use cirq_ir::Circuit;
 use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
 
-use crate::{LinearSystem, MnaError};
+use crate::MnaError;
+use crate::mna_ir;
 
 /// Errors that can occur when simulating a [`Circuit`] directly.
 #[derive(Debug, thiserror::Error)]
@@ -108,309 +107,34 @@ fn has_op_analysis(circuit: &Circuit) -> bool {
 
 /// Direct IR → MNA path for the linear-only DC operating point.
 ///
-/// Returns `Some(result)` if every element in the circuit is one of
-/// R / V / I / C / L (treating C as DC-open, L as DC-short). Otherwise
-/// returns `None` and the caller should fall back to the lowering path.
+/// Returns `Some(result)` if [`mna_ir::assemble_mna_from_circuit`] accepts
+/// the circuit — i.e. every element is in the linear subset (R / V / I /
+/// C / L / E / G / H / F). Otherwise returns `None` and the caller falls
+/// back to the lowering path.
 ///
-/// The assembled `LinearSystem` matches what `assemble_mna_flat` would
-/// produce for the same circuit on the linear path: node indices are
-/// assigned in element-traversal order (pos before neg), voltage source
-/// branch rows follow the node rows in element order, and the solver is
-/// the same `LinearSystem::solve` used by `solve_op_raw`. Output vectors
-/// follow the same `v(node)` / `name#branch` naming and the same
-/// descending-matrix-index node ordering as `simulate::simulate_op`.
+/// The output vectors follow the same `v(node)` / `name#branch` naming and
+/// descending-matrix-index ordering as [`crate::simulate::simulate_op`],
+/// so SimResult lookup by vector name is consistent across paths.
 fn simulate_op_direct(circuit: &Circuit) -> Option<SimResult> {
-    // Fast-fail if any element kind isn't part of the linear subset.
-    for elem in &circuit.elements {
-        match elem.kind {
-            IrElementKind::Resistor
-            | IrElementKind::VoltageSource
-            | IrElementKind::CurrentSource
-            | IrElementKind::Capacitor
-            | IrElementKind::Inductor
-            | IrElementKind::Vcvs
-            | IrElementKind::Vccs
-            | IrElementKind::Ccvs
-            | IrElementKind::Cccs => {}
-            _ => return None,
-        }
-    }
+    let mna = mna_ir::assemble_mna_from_circuit(circuit, false, None).ok()??;
+    let solution = mna.system.solve().ok()?;
 
-    // Treat the net named "0" or "gnd" as ground (no matrix row).
-    // SPICE-imported circuits use "0"; Cirq-source-compiled circuits use
-    // "gnd" — both must work because the harness routes through Cirq IR.
-    let gnd_id: Option<Id> = circuit
-        .nets
-        .iter()
-        .find(|n| n.name == "0" || n.name == "gnd")
-        .map(|n| n.id);
-
-    let net_name = |id: Id| -> &str {
-        circuit
-            .nets
-            .iter()
-            .find(|n| n.id == id)
-            .map(|n| n.name.as_str())
-            .unwrap_or("?")
-    };
-
-    // First pass: collect node indices in element-traversal order and count
-    // voltage sources (V and L both add a branch row).
-    let mut node_idx: HashMap<Id, usize> = HashMap::new();
-    let mut node_order: Vec<Id> = Vec::new();
-    let intern = |id: Id, node_idx: &mut HashMap<Id, usize>, node_order: &mut Vec<Id>| {
-        if Some(id) == gnd_id {
-            return;
-        }
-        if !node_idx.contains_key(&id) {
-            let i = node_idx.len();
-            node_idx.insert(id, i);
-            node_order.push(id);
-        }
-    };
-
-    let mut vsource_names: Vec<String> = Vec::new();
-    let mut vsource_branch_by_name: HashMap<String, usize> = HashMap::new();
-    for elem in &circuit.elements {
-        // Two-terminal elements use pos/neg; four-terminal use
-        // out_pos/out_neg/in_pos/in_neg.
-        match elem.kind {
-            IrElementKind::Resistor
-            | IrElementKind::VoltageSource
-            | IrElementKind::CurrentSource
-            | IrElementKind::Capacitor
-            | IrElementKind::Inductor => {
-                let pos = terminal_net(elem, "pos")?;
-                let neg = terminal_net(elem, "neg")?;
-                intern(pos, &mut node_idx, &mut node_order);
-                intern(neg, &mut node_idx, &mut node_order);
-            }
-            IrElementKind::Vcvs | IrElementKind::Vccs => {
-                let op = terminal_net(elem, "out_pos")?;
-                let on = terminal_net(elem, "out_neg")?;
-                let ip = terminal_net(elem, "in_pos")?;
-                let in_ = terminal_net(elem, "in_neg")?;
-                intern(op, &mut node_idx, &mut node_order);
-                intern(on, &mut node_idx, &mut node_order);
-                intern(ip, &mut node_idx, &mut node_order);
-                intern(in_, &mut node_idx, &mut node_order);
-            }
-            IrElementKind::Ccvs | IrElementKind::Cccs => {
-                let op = terminal_net(elem, "out_pos")?;
-                let on = terminal_net(elem, "out_neg")?;
-                intern(op, &mut node_idx, &mut node_order);
-                intern(on, &mut node_idx, &mut node_order);
-            }
-            _ => unreachable!("filtered above"),
-        }
-        // V, L, E, H all contribute a branch row. F/G/I/R/C/etc. do not.
-        if matches!(
-            elem.kind,
-            IrElementKind::VoltageSource
-                | IrElementKind::Inductor
-                | IrElementKind::Vcvs
-                | IrElementKind::Ccvs
-        ) {
-            let idx = vsource_names.len();
-            vsource_branch_by_name.insert(elem.name.to_lowercase(), idx);
-            vsource_names.push(elem.name.clone());
-        }
-    }
-
-    let n_nodes = node_idx.len();
-    let dim = n_nodes + vsource_names.len();
-    if dim == 0 {
-        // Empty circuit — fall back so the lowering path can produce the
-        // standard empty SimResult shape.
-        return None;
-    }
-    let mut system = LinearSystem::new(dim);
-
-    // Second pass: stamp every element.
-    let mut vsi = 0usize;
-    for elem in &circuit.elements {
-        // Resolve the relevant terminals up front per element kind. Index
-        // None means ground (no matrix row).
-        let to_idx = |id: Id| -> Option<usize> {
-            if Some(id) == gnd_id {
-                None
-            } else {
-                node_idx.get(&id).copied()
-            }
-        };
-
-        // For two-terminal elements (R/V/I/C/L) we use pos/neg; the
-        // 4-terminal dependent sources read their own terminals below.
-        let (p, n) = match elem.kind {
-            IrElementKind::Resistor
-            | IrElementKind::VoltageSource
-            | IrElementKind::CurrentSource
-            | IrElementKind::Capacitor
-            | IrElementKind::Inductor => {
-                let pos_id = terminal_net(elem, "pos")?;
-                let neg_id = terminal_net(elem, "neg")?;
-                (to_idx(pos_id), to_idx(neg_id))
-            }
-            _ => (None, None),
-        };
-
-        match &elem.kind {
-            IrElementKind::Resistor => {
-                let value = param_real(elem, "value")?;
-                if value == 0.0 {
-                    return None; // 0-ohm resistor: fall back (handled as short elsewhere).
-                }
-                let g = 1.0 / value;
-                if let Some(p) = p {
-                    system.matrix.add(p, p, g);
-                }
-                if let Some(n) = n {
-                    system.matrix.add(n, n, g);
-                }
-                if let (Some(p), Some(n)) = (p, n) {
-                    system.matrix.add(p, n, -g);
-                    system.matrix.add(n, p, -g);
-                }
-            }
-            IrElementKind::VoltageSource => {
-                let dc = elem.source_spec.as_ref().and_then(|s| s.dc).unwrap_or(0.0);
-                let branch = n_nodes + vsi;
-                vsi += 1;
-                if let Some(p) = p {
-                    system.matrix.add(p, branch, 1.0);
-                    system.matrix.add(branch, p, 1.0);
-                }
-                if let Some(n) = n {
-                    system.matrix.add(n, branch, -1.0);
-                    system.matrix.add(branch, n, -1.0);
-                }
-                system.rhs[branch] = dc;
-            }
-            IrElementKind::Inductor => {
-                // DC: inductor is a short — same stamping as 0V vsource.
-                let branch = n_nodes + vsi;
-                vsi += 1;
-                if let Some(p) = p {
-                    system.matrix.add(p, branch, 1.0);
-                    system.matrix.add(branch, p, 1.0);
-                }
-                if let Some(n) = n {
-                    system.matrix.add(n, branch, -1.0);
-                    system.matrix.add(branch, n, -1.0);
-                }
-            }
-            IrElementKind::CurrentSource => {
-                let dc = elem.source_spec.as_ref().and_then(|s| s.dc).unwrap_or(0.0);
-                if let Some(p) = p {
-                    system.rhs[p] -= dc;
-                }
-                if let Some(n) = n {
-                    system.rhs[n] += dc;
-                }
-            }
-            IrElementKind::Capacitor => {
-                // DC: open circuit — no stamp.
-            }
-            IrElementKind::Vcvs => {
-                let gain = param_real_any(elem, &["gain", "value"])?;
-                let op = to_idx(terminal_net(elem, "out_pos")?);
-                let on = to_idx(terminal_net(elem, "out_neg")?);
-                let ip = to_idx(terminal_net(elem, "in_pos")?);
-                let in_ = to_idx(terminal_net(elem, "in_neg")?);
-                let branch = n_nodes + vsi;
-                vsi += 1;
-                if let Some(i) = op {
-                    system.matrix.add(i, branch, 1.0);
-                    system.matrix.add(branch, i, 1.0);
-                }
-                if let Some(j) = on {
-                    system.matrix.add(j, branch, -1.0);
-                    system.matrix.add(branch, j, -1.0);
-                }
-                if let Some(cp) = ip {
-                    system.matrix.add(branch, cp, -gain);
-                }
-                if let Some(cn) = in_ {
-                    system.matrix.add(branch, cn, gain);
-                }
-            }
-            IrElementKind::Vccs => {
-                let gm = param_real_any(elem, &["gm", "value"])?;
-                let op = to_idx(terminal_net(elem, "out_pos")?);
-                let on = to_idx(terminal_net(elem, "out_neg")?);
-                let ip = to_idx(terminal_net(elem, "in_pos")?);
-                let in_ = to_idx(terminal_net(elem, "in_neg")?);
-                if let Some(i) = op {
-                    if let Some(cp) = ip {
-                        system.matrix.add(i, cp, gm);
-                    }
-                    if let Some(cn) = in_ {
-                        system.matrix.add(i, cn, -gm);
-                    }
-                }
-                if let Some(j) = on {
-                    if let Some(cp) = ip {
-                        system.matrix.add(j, cp, -gm);
-                    }
-                    if let Some(cn) = in_ {
-                        system.matrix.add(j, cn, gm);
-                    }
-                }
-            }
-            IrElementKind::Ccvs => {
-                let rm = param_real_any(elem, &["rm", "value"])?;
-                let vsrc_name = param_string(elem, "vsrc")?;
-                let ctrl_branch_offset = vsource_branch_by_name.get(&vsrc_name.to_lowercase())?;
-                let ctrl_branch = n_nodes + ctrl_branch_offset;
-                let op = to_idx(terminal_net(elem, "out_pos")?);
-                let on = to_idx(terminal_net(elem, "out_neg")?);
-                let branch = n_nodes + vsi;
-                vsi += 1;
-                if let Some(i) = op {
-                    system.matrix.add(i, branch, 1.0);
-                    system.matrix.add(branch, i, 1.0);
-                }
-                if let Some(j) = on {
-                    system.matrix.add(j, branch, -1.0);
-                    system.matrix.add(branch, j, -1.0);
-                }
-                system.matrix.add(branch, ctrl_branch, -rm);
-            }
-            IrElementKind::Cccs => {
-                let gain = param_real_any(elem, &["gain", "value"])?;
-                let vsrc_name = param_string(elem, "vsrc")?;
-                let ctrl_branch_offset = vsource_branch_by_name.get(&vsrc_name.to_lowercase())?;
-                let ctrl_branch = n_nodes + ctrl_branch_offset;
-                let op = to_idx(terminal_net(elem, "out_pos")?);
-                let on = to_idx(terminal_net(elem, "out_neg")?);
-                if let Some(i) = op {
-                    system.matrix.add(i, ctrl_branch, gain);
-                }
-                if let Some(j) = on {
-                    system.matrix.add(j, ctrl_branch, -gain);
-                }
-            }
-            _ => unreachable!("filtered above"),
-        }
-    }
-
-    let solution = system.solve().ok()?;
-
-    // Build SimResult to match simulate::simulate_op:
-    //   - Node voltages in descending matrix-index order (LIFO).
-    //   - Voltage source branch currents in element-insertion order.
     let mut vecs: Vec<SimVector> = Vec::new();
-    let mut node_list: Vec<(Id, usize)> = node_order
-        .iter()
-        .map(|id| (*id, *node_idx.get(id).unwrap()))
-        .collect();
-    node_list.sort_by_key(|(_, i)| std::cmp::Reverse(*i));
-    for (id, idx) in &node_list {
+
+    // Node voltages — emit in descending matrix-index order to match
+    // `simulate::simulate_op`'s LIFO node-list traversal.
+    let mut nodes: Vec<(&str, usize)> = mna.node_map.iter().collect();
+    nodes.sort_by_key(|n| std::cmp::Reverse(n.1));
+    for (name, idx) in &nodes {
         let v = solution.get(*idx).copied().unwrap_or(0.0);
-        vecs.push(SimVector::real(format!("v({})", net_name(*id)), vec![v]));
+        vecs.push(SimVector::real(format!("v({})", name), vec![v]));
     }
-    for (i, vsrc) in vsource_names.iter().enumerate() {
-        let idx = n_nodes + i;
+
+    // Voltage source branch currents — element-insertion order, exactly as
+    // `vsource_names` was populated during the second stamping pass.
+    let num_nodes = mna.total_num_nodes();
+    for (i, vsrc) in mna.vsource_names.iter().enumerate() {
+        let idx = num_nodes + i;
         let current = solution.get(idx).copied().unwrap_or(0.0);
         vecs.push(SimVector::real(
             format!("{}#branch", vsrc.to_lowercase()),
@@ -424,52 +148,6 @@ fn simulate_op_direct(circuit: &Circuit) -> Option<SimResult> {
             vecs,
         }],
     })
-}
-
-/// Look up the Id of an element's terminal connection. Returns `None` if the
-/// element doesn't declare the named terminal (which should be impossible
-/// for the linear element kinds this module handles, but is reported back
-/// so the caller falls back to the lowering path rather than panicking).
-fn terminal_net(elem: &cirq_ir::Element, terminal: &str) -> Option<Id> {
-    elem.connections
-        .iter()
-        .find(|c| c.terminal == terminal)
-        .map(|c| c.net)
-}
-
-/// Read a numeric element parameter by name.
-fn param_real(elem: &cirq_ir::Element, name: &str) -> Option<f64> {
-    elem.params
-        .iter()
-        .find(|(k, _)| k == name)
-        .and_then(|(_, v)| match v {
-            Value::Real(f) => Some(*f),
-            Value::Integer(i) => Some(*i as f64),
-            _ => None,
-        })
-}
-
-/// Read a numeric element parameter by trying several candidate names in
-/// order. Useful for dependent sources where the coefficient lives under
-/// either a kind-specific key (`gain`, `gm`, `rm`) or the generic `value`.
-fn param_real_any(elem: &cirq_ir::Element, names: &[&str]) -> Option<f64> {
-    for name in names {
-        if let Some(v) = param_real(elem, name) {
-            return Some(v);
-        }
-    }
-    None
-}
-
-/// Read a string element parameter (used for controlled-source `vsrc` refs).
-fn param_string(elem: &cirq_ir::Element, name: &str) -> Option<String> {
-    elem.params
-        .iter()
-        .find(|(k, _)| k == name)
-        .and_then(|(_, v)| match v {
-            Value::String(s) => Some(s.clone()),
-            _ => None,
-        })
 }
 
 /// Run a DC sweep on the circuit's first declared `.dc` analysis.
@@ -675,7 +353,7 @@ mod tests {
         c.elements.push(cirq_ir::Element {
             id: Id(3),
             name: "D1".into(),
-            kind: IrElementKind::Diode,
+            kind: ElementKind::Diode,
             connections: vec![
                 cirq_ir::Connection {
                     terminal: "anode".into(),

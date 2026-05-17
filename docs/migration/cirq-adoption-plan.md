@@ -152,6 +152,15 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       [`docs/migration/mna-ir-pivot-plan.md`](mna-ir-pivot-plan.md).
       Session A (enabler) landed: those two helpers are now `pub` so the
       future `thevenin::mna_ir` module can use them without copying.
+      **Session B landed:** new `thevenin::mna_ir` module provides
+      `assemble_mna_from_circuit(&Circuit, modedc, xspice_registry)`
+      that builds a full `MnaSystem` directly from IR for the linear
+      subset (R/V/I/C/L/E/G/H/F), returning `Ok(None)` for circuits
+      containing any other element kind so the caller falls back to
+      `assemble_mna(&Netlist)`. `thevenin::circuit::simulate_op_direct`
+      is now a 40-line wrapper around the new module instead of a
+      ~300-line bespoke linear stamper. All 13 direct-path equivalence
+      tests and 100/0/7 harness state preserved.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`

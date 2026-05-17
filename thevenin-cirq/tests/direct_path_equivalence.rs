@@ -1,5 +1,6 @@
 //! Equivalence tests: `thevenin::circuit::simulate_op` (which auto-picks
-//! the direct IR → MNA path for linear circuits) must produce results
+//! the direct IR → MNA path for linear circuits via
+//! [`thevenin::mna_ir::assemble_mna_from_circuit`]) must produce results
 //! identical to going through `circuit_to_netlists` + the Netlist-shaped
 //! simulator.
 //!
@@ -8,7 +9,8 @@
 //! When the direct path doesn't apply, `simulate_op` falls back to the
 //! lowered path — the test passes trivially but doesn't validate direct
 //! stamping. Use this file to grow the direct-path coverage as more device
-//! kinds gain direct stamping.
+//! kinds gain direct stamping (per
+//! `docs/migration/mna-ir-pivot-plan.md`).
 
 use cirq_frontend::to_netlist::circuit_to_netlists;
 use thevenin_types::VectorData;

@@ -48,14 +48,14 @@ pub struct NodeMap {
 }
 
 impl NodeMap {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             map: BTreeMap::new(),
         }
     }
 
     /// Get or assign an index for a node. Returns `None` for ground.
-    fn index(&mut self, node: &str) -> Option<usize> {
+    pub(crate) fn index(&mut self, node: &str) -> Option<usize> {
         if node == GROUND {
             return None;
         }
@@ -290,6 +290,50 @@ pub struct MnaSystem {
 }
 
 impl MnaSystem {
+    /// Construct an empty `MnaSystem` with a `LinearSystem` of the given
+    /// dimension and every device-instance vec initialised to empty.
+    ///
+    /// Used by `crate::mna_ir` (the Stage 4 direct IR → MNA path) to
+    /// avoid duplicating the long field list on every call. Callers
+    /// fill `node_map`, `vsource_names`, the matrix/RHS, and whichever
+    /// device-instance vecs are relevant after construction.
+    pub fn empty(dim: usize, xspice_registry: Option<Arc<CodeModelRegistry>>) -> Self {
+        Self {
+            system: crate::LinearSystem::new(dim),
+            node_map: NodeMap::new(),
+            vsource_names: Vec::new(),
+            resistors: Vec::new(),
+            diodes: Vec::new(),
+            capacitors: Vec::new(),
+            inductors: Vec::new(),
+            mutual_couplings: Vec::new(),
+            bjts: Vec::new(),
+            bjt_cap_indices: Vec::new(),
+            mosfets: Vec::new(),
+            mos2s: Vec::new(),
+            mos6s: Vec::new(),
+            jfets: Vec::new(),
+            mesas: Vec::new(),
+            mesfets: Vec::new(),
+            hfets: Vec::new(),
+            bsim3s: Vec::new(),
+            bsim3soi_dds: Vec::new(),
+            bsim3soi_fds: Vec::new(),
+            bsim3soi_pds: Vec::new(),
+            bsim4s: Vec::new(),
+            vbics: Vec::new(),
+            ltras: Vec::new(),
+            txls: Vec::new(),
+            cpls: Vec::new(),
+            voltage_sources: Vec::new(),
+            current_sources: Vec::new(),
+            behavioral_sources: Vec::new(),
+            behavioral_voltage_sources: Vec::new(),
+            xspice_instances: Vec::new(),
+            xspice_registry,
+        }
+    }
+
     /// Solve the MNA system, returning an `MnaSolution`.
     pub fn solve(&self) -> Result<MnaSolution<'_>, MnaError> {
         let x = self.system.solve()?;

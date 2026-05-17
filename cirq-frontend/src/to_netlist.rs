@@ -382,7 +382,14 @@ fn extra_params(elem: &IrElement, exclude: &[&str]) -> Vec<Param> {
         .collect()
 }
 
-fn convert_waveform(w: &IrWaveform) -> Waveform {
+/// Convert a Cirq IR [`cirq_ir::Waveform`] into a Netlist-shaped [`Waveform`].
+///
+/// Promoted from private so the MNA-on-IR pivot
+/// (`docs/migration/mna-ir-pivot-plan.md`) can hand a Netlist-shaped waveform
+/// directly to `thevenin::waveform::evaluate` without rebuilding the whole
+/// element record. Every numeric field in IR is already an `f64`, so this is
+/// a straight enum-to-enum translation through [`Expr::Num`].
+pub fn convert_waveform(w: &IrWaveform) -> Waveform {
     match w {
         IrWaveform::Pulse {
             v1,
@@ -468,7 +475,16 @@ fn convert_ac_spec(ac: &IrAcSpec) -> AcSpec {
     }
 }
 
-fn convert_source_spec(elem: &IrElement) -> Source {
+/// Convert a Cirq IR element's source specification into a Netlist [`Source`].
+///
+/// Mirrors the logic the importer/exporter use for V/I sources: if the IR
+/// element carries an explicit `source_spec`, translate `dc`/`ac`/`waveform`
+/// fields; otherwise fall back to reading `value` / `dc` from the param list.
+///
+/// Promoted to `pub` for the MNA-on-IR pivot
+/// (`docs/migration/mna-ir-pivot-plan.md`) so the new direct path can read
+/// IR-shaped sources and hand them to `thevenin::waveform::evaluate`.
+pub fn convert_source_spec(elem: &IrElement) -> Source {
     if let Some(spec) = &elem.source_spec {
         Source {
             dc: spec.dc.map(Expr::Num),
