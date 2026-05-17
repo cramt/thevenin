@@ -178,6 +178,19 @@ fn solve_dense(jacobian: &Mat<f64>, rhs: &[f64]) -> Vec<f64> {
 /// - Inject unit excitation at input, solve Y*x = rhs, extract TF + input Z
 /// - Inject unit excitation at output, solve Y*x = rhs, extract output Z
 pub fn simulate_tf(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let mna = assemble_mna(netlist)?;
+    simulate_tf_with_mna(mna, netlist)
+}
+
+/// Run `.tf` analysis on an already-assembled [`MnaSystem`].
+///
+/// Shared between the Netlist path (`simulate_tf` above) and the Stage 4
+/// IR-direct path. The Netlist is still needed for `.tf` output / input
+/// spec lookups.
+pub fn simulate_tf_with_mna(
+    mna: MnaSystem,
+    netlist: &Netlist,
+) -> Result<SimResult, MnaError> {
     let (output, input) = match &netlist.analysis {
         Analysis::Tf { output, input } => (output.clone(), input.clone()),
         _ => {
@@ -187,8 +200,6 @@ pub fn simulate_tf(netlist: &Netlist) -> Result<SimResult, MnaError> {
         }
     };
 
-    // Assemble MNA and solve DC OP
-    let mna = assemble_mna(netlist)?;
     let solution = solve_op_raw(&mna)?;
 
     // Build linearized Jacobian at OP

@@ -68,6 +68,11 @@ impl NodeMap {
         self.map.len()
     }
 
+    /// Whether the NodeMap has no non-ground nodes.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
     /// Look up a node's index (returns None for ground or unknown nodes).
     /// SPICE is case-insensitive, so this does a case-insensitive lookup.
     pub fn get(&self, node: &str) -> Option<usize> {
@@ -604,7 +609,7 @@ fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
 ///
 /// Handles: numeric value, model-name reference (with RSH+L/W or R= params),
 /// `m` (multiplicity) and `scale` instance parameters.
-fn resolve_resistor_value(
+pub(crate) fn resolve_resistor_value(
     value: &Expr,
     element_name: &str,
     params: &[thevenin_types::Param],
@@ -673,7 +678,7 @@ fn resolve_resistor_value(
 
 /// Extract resistor flicker noise parameters (KF, AF, EF, effective noise area)
 /// from the resistor model definition and instance parameters.
-fn extract_resistor_noise_params(
+pub(crate) fn extract_resistor_noise_params(
     value: &Expr,
     params: &[thevenin_types::Param],
     models: &std::collections::BTreeMap<String, &thevenin_types::ModelDef>,

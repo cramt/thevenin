@@ -193,47 +193,22 @@ pub(crate) fn solve_op_raw_with_nodeset(
 /// exactly, with output formatted for `.op` analysis.
 pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
+    simulate_op_dc_with_mna(&mna)
+}
+
+/// Run the `.op` (CKT-mode DC) analysis on an already-assembled
+/// [`MnaSystem`].
+///
+/// Differs from [`simulate_op_with_mna`] in that it pins `diag_gmin = 0.0`
+/// (matching ngspice's `.op` branch-current convention from `cktop.c`) and
+/// does not consult `.OPTIONS` or `.nodeset`. Used by the regression
+/// harness via `Analysis::Op`. Shared between Netlist and IR-direct paths.
+pub fn simulate_op_dc_with_mna(mna: &MnaSystem) -> Result<SimResult, MnaError> {
     let opts = NrOptions {
         diag_gmin: 0.0,
         ..NrOptions::default()
     };
-    let solution_vec = if !mna.has_nonlinear() {
-        solve_op_raw(&mna)?
-    } else {
-        solve_nonlinear_op(&mna, &opts)?
-    };
-
-    let mut vecs = Vec::new();
-    // Descending matrix-index order to match ngspice's LIFO node output.
-    let mut nodes: Vec<(&str, usize)> = mna.node_map.iter().collect();
-    nodes.sort_by_key(|n| std::cmp::Reverse(n.1));
-    for (name, idx) in &nodes {
-        let v = if *idx < solution_vec.len() {
-            solution_vec[*idx]
-        } else {
-            0.0
-        };
-        vecs.push(SimVector::real(format!("v({})", name), vec![v]));
-    }
-    let num_nodes = mna.total_num_nodes();
-    for (i, vsrc) in mna.vsource_names.iter().enumerate() {
-        let idx = num_nodes + i;
-        let current = if idx < solution_vec.len() {
-            solution_vec[idx]
-        } else {
-            0.0
-        };
-        vecs.push(SimVector::real(
-            format!("{}#branch", vsrc.to_lowercase()),
-            vec![current],
-        ));
-    }
-    Ok(SimResult {
-        plots: vec![SimPlot {
-            name: "op1".to_string(),
-            vecs,
-        }],
-    })
+    simulate_op_with_mna(mna, &opts, &[])
 }
 
 /// Solve a nonlinear DC operating point using Newton-Raphson.

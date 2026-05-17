@@ -239,6 +239,25 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       iterates all plots and compares both Real and Complex vector
       data element-wise. 1014/1014 workspace tests pass; harness
       still 100/0/7.
+      **Session H landed (_with_mna surface complete; harness via
+      mna_ir):** every analysis the simulator supports now has a
+      _with_mna variant (op_dc, noise, sens, tf, pz on top of the
+      Session G additions). The regression harness was reshaped to
+      track each emitted Netlist's source `cirq_ir::Circuit` and
+      route every fixture's MnaSystem through
+      `mna_ir::assemble_mna_from_circuit` + the appropriate
+      _with_mna dispatcher — so the entire ngspice regression
+      corpus (100 fixtures × ~8 analysis kinds) now exercises mna_ir
+      end-to-end. Two real mna_ir bugs surfaced and were fixed
+      along the way: model-based resistors (R3 4 0 rmodel1 L=... W=...)
+      and CPL/XSPICE model lookups (which store the model name in a
+      string param rather than `Element.model: Option<Id>`).
+      mna_ir reuses resolve_resistor_value /
+      extract_resistor_noise_params (promoted to pub(crate)) and
+      adds lookup_model_by_string_param for the CPL/XSPICE case.
+      `crate::mna` and `crate::mna_ir` are now pub so the harness
+      can call them directly. 1014/1014 workspace tests pass;
+      harness still 100/0/7.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`

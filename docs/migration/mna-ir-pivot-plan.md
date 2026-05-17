@@ -305,7 +305,63 @@ both Real and Complex vector data element-wise.
 Verification: `cargo nextest run --workspace` → 1014/1014 pass;
 harness 100/0/7 unchanged; `cargo clippy -p thevenin --lib` clean.
 
-#### Session H (open) — Netlist-API retirement
+#### Session H landed — `_with_mna` surface complete + harness routes via mna_ir
+
+The remaining analysis functions (`simulate_op_dc`, `simulate_noise`,
+`simulate_sens`, `simulate_tf`, `simulate_pz`) gained `_with_mna`
+siblings matching the pattern from Session G. After Session H, every
+analysis the simulator supports has a Netlist-input wrapper that hands
+off to a Circuit-friendly `_with_mna` helper for the actual work:
+
+  simulate_op_dc_with_mna   (op_dc-style, diag_gmin=0)
+  simulate_noise_with_mna
+  simulate_sens_with_mna
+  simulate_tf_with_mna
+  simulate_pz_with_mna
+
+**The regression harness now routes every fixture through `mna_ir`.**
+`thevenin/tests/harness.rs::run_all_analyses` was reshaped:
+
+- Tracks each emitted Netlist's source `cirq_ir::Circuit` via a
+  `Vec<(usize, Netlist)>` pairing (one emitted netlist per analysis
+  declared on the circuit).
+- For every (circuit, netlist) pair, assembles the MnaSystem via
+  `mna_ir::assemble_mna_from_circuit(&circuit, false, None)` and
+  dispatches to the appropriate `_with_mna` helper. The Netlist-shaped
+  `assemble_mna` is no longer called from the harness — the full
+  ngspice regression corpus (100 fixtures across OP, DC sweep,
+  transient, AC, noise, TF, sens, PZ) exercises mna_ir end-to-end.
+
+Two real mna_ir bugs surfaced through this routing and were fixed:
+
+1. **Model-based resistors** (`R3 4 0 rmodel1 L=11u W=2u`): the IR
+   resistor stores the model name in `params: [("value", Value::String)]`,
+   not in `Element.model`. mna_ir was insisting on a numeric `value`
+   and erroring. Fixed by reusing the existing
+   `resolve_resistor_value` (made `pub(crate)`) which understands
+   model-based RSH * L / W computation; same for
+   `extract_resistor_noise_params` to populate the
+   `ResistorInstance` noise fields correctly.
+2. **CPL and XSPICE model lookups**: both store their model name as a
+   `params: [("model", Value::String)]` string param (per
+   cirq_spice_import's encoding), not in `Element.model: Option<Id>`.
+   Added `lookup_model_by_string_param(&Circuit, &Element)` and use
+   it (with the typed-Id lookup as a fallback) for those two device
+   classes.
+
+Visibility changes for harness reach:
+- `crate::mna` and `crate::mna_ir` modules promoted to `pub` so the
+  test harness can call `mna_ir::assemble_mna_from_circuit` and
+  reference `mna::MnaSystem` directly.
+- `crate::mna::{resolve_resistor_value, extract_resistor_noise_params}`
+  promoted to `pub(crate)` for mna_ir reuse.
+- `NodeMap` gained `is_empty()` to satisfy clippy now that it's `pub`.
+
+Verification: `cargo nextest run --workspace` → 1014/1014 pass;
+harness 100/0/7 unchanged (still 100 pass / 0 fail / 7 ignored);
+`cargo clippy -p thevenin --lib` clean.
+
+#### Session I (open) — Netlist-API retirement
 
 The remaining Stage 4 work is removing `thevenin_types::Netlist` from
 the public API surface entirely. Concretely:

@@ -42,8 +42,8 @@ pub(crate) fn expr_val_or(expr: &Expr, default: f64) -> f64 {
 
 // ── Solver internals ────────────────────────────────────────────────────────
 pub(crate) mod device_stamp;
-pub(crate) mod mna;
-pub(crate) mod mna_ir;
+pub mod mna;
+pub mod mna_ir;
 pub(crate) mod newton;
 pub(crate) mod physics;
 pub(crate) mod simulate;
@@ -94,14 +94,14 @@ pub(crate) use sparse::{LinearSystem, SparseMatrix, SparseMatrixError};
 
 // Analysis functions
 pub use ac::{simulate_ac, simulate_ac_with_mna};
-pub use noise::simulate_noise;
-pub use pz::simulate_pz;
-pub use sens::simulate_sens;
+pub use noise::{simulate_noise, simulate_noise_with_mna};
+pub use pz::{simulate_pz, simulate_pz_with_mna};
+pub use sens::{simulate_sens, simulate_sens_with_mna};
 pub use simulate::{
-    simulate_dc, simulate_dc_with_mna, simulate_op, simulate_op_dc, simulate_op_with_mna,
-    simulate_op_with_xspice,
+    simulate_dc, simulate_dc_with_mna, simulate_op, simulate_op_dc, simulate_op_dc_with_mna,
+    simulate_op_with_mna, simulate_op_with_xspice,
 };
-pub use tf::simulate_tf;
+pub use tf::{simulate_tf, simulate_tf_with_mna};
 pub use transient::{simulate_tran, simulate_tran_with_mna};
 
 // Utilities

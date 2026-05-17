@@ -142,24 +142,31 @@ fn run_embedded_test(
         })
         .collect();
 
-    let netlists: Vec<Netlist> = {
-        let mut routed: Vec<Netlist> = Vec::new();
-        for circuit in &circuits {
+    // Track which source circuit each emitted netlist came from so the
+    // analysis dispatch can assemble its MnaSystem via mna_ir directly
+    // from the IR (Stage 4 / Session H direct path). `circuit_to_netlists`
+    // produces one netlist per analysis declared on the circuit, so the
+    // mapping is one-to-many in general but already-correct here.
+    let netlists: Vec<(usize, Netlist)> = {
+        let mut routed: Vec<(usize, Netlist)> = Vec::new();
+        for (idx, circuit) in circuits.iter().enumerate() {
             let emitted = match cirq_frontend::to_netlist::circuit_to_netlists(circuit) {
                 Ok(n) => n,
                 Err(e) => fail_test(path, Phase::CirqEmit, &e.to_string()),
             };
-            routed.extend(emitted);
+            for nl in emitted {
+                routed.push((idx, nl));
+            }
         }
         routed
     };
 
     // Flatten subcircuits for each fork (idempotent on already-flat netlists,
     // which is what the Cirq importer produces).
-    let netlists: Vec<Netlist> = netlists
-        .iter()
-        .map(|netlist| match thevenin::flatten_netlist(netlist) {
-            Ok(n) => n,
+    let netlists: Vec<(usize, Netlist)> = netlists
+        .into_iter()
+        .map(|(idx, netlist)| match thevenin::flatten_netlist(&netlist) {
+            Ok(n) => (idx, n),
             Err(e) => fail_test(path, Phase::Flatten, &e.to_string()),
         })
         .collect();
@@ -188,13 +195,14 @@ fn run_embedded_test(
         // (Output format may differ from ngspice due to missing format features.)
     } else {
         // Standard analysis path (no .control) — simulate each fork
-        let result = match run_all_analyses(&netlists) {
+        let result = match run_all_analyses(&circuits, &netlists) {
             Ok(r) => r,
             Err(e) => fail_test(path, Phase::Simulate, &e),
         };
 
-        // Format output in ngspice batch mode and compare
-        let actual_output = format_batch_output_multi(&netlists, &result);
+        // Format output in ngspice batch mode and compare.
+        let netlists_only: Vec<Netlist> = netlists.iter().map(|(_, nl)| nl.clone()).collect();
+        let actual_output = format_batch_output_multi(&netlists_only, &result);
         if let Err(e) = compare_filtered(out, &actual_output, rel_tol_override, abs_tol_override) {
             fail_test(path, Phase::Compare, &e);
         }
@@ -202,54 +210,91 @@ fn run_embedded_test(
 }
 
 /// Run all analyses across all netlist forks and merge results.
-fn run_all_analyses(netlists: &[Netlist]) -> Result<SimResult, String> {
+///
+/// Stage 4: every fork's MnaSystem is assembled directly from the source
+/// `cirq_ir::Circuit` via `thevenin::mna_ir`, and the analysis is dispatched
+/// through the corresponding `_with_mna` helper. This routes the full
+/// ngspice regression corpus through the direct IR path end-to-end —
+/// validating mna_ir against every supported device class without going
+/// back through `assemble_mna(&Netlist)`.
+fn run_all_analyses(
+    circuits: &[cirq_ir::Circuit],
+    netlists: &[(usize, Netlist)],
+) -> Result<SimResult, String> {
     let mut all_plots: Vec<SimPlot> = Vec::new();
 
-    for netlist in netlists {
+    for (circuit_idx, netlist) in netlists {
+        let circuit = &circuits[*circuit_idx];
+
+        // Build the MnaSystem once via mna_ir. Some analyses (DC sweep,
+        // transient) need a mutable handle to mutate the RHS in their
+        // sweep loop; we re-assemble per analysis to keep that simple
+        // (mna_ir assembly is cheap relative to the analysis solve).
+        let assemble = || -> Result<thevenin::mna::MnaSystem, String> {
+            thevenin::mna_ir::assemble_mna_from_circuit(circuit, false, None)
+                .map_err(|e| format!("mna_ir assembly error: {e}"))?
+                .ok_or_else(|| {
+                    "mna_ir rejected circuit (every IrElementKind should be supported)"
+                        .to_string()
+                })
+        };
+
         match &netlist.analysis {
             Analysis::Op => {
-                // Use simulate_op_dc (diag_gmin=0) to match ngspice .op branch currents.
-                let result =
-                    thevenin::simulate_op_dc(netlist).map_err(|e| format!("OP error: {e}"))?;
+                let mna = assemble()?;
+                let result = thevenin::simulate_op_dc_with_mna(&mna)
+                    .map_err(|e| format!("OP error: {e}"))?;
                 all_plots.extend(result.plots);
             }
             Analysis::Dc { .. } => {
-                let result =
-                    thevenin::simulate_dc(netlist).map_err(|e| format!("DC error: {e}"))?;
+                let mna = assemble()?;
+                let result = thevenin::simulate_dc_with_mna(mna, netlist)
+                    .map_err(|e| format!("DC error: {e}"))?;
                 all_plots.extend(result.plots);
             }
             Analysis::Tran { .. } => {
-                // Also get OP for initial transient solution
-                if let Ok(op_result) = thevenin::simulate_op(netlist) {
+                // Also get OP for initial transient solution.
+                let mna_op = assemble()?;
+                if let Ok(op_result) = thevenin::simulate_op_with_mna(
+                    &mna_op,
+                    &thevenin::nr_options_from_netlist(netlist),
+                    &[],
+                ) {
                     all_plots.extend(op_result.plots);
                 }
-                let result =
-                    thevenin::simulate_tran(netlist).map_err(|e| format!("Tran error: {e}"))?;
+                let mna_tran = assemble()?;
+                let result = thevenin::simulate_tran_with_mna(mna_tran, netlist)
+                    .map_err(|e| format!("Tran error: {e}"))?;
                 all_plots.extend(result.plots);
             }
             Analysis::Ac { .. } => {
-                let result =
-                    thevenin::simulate_ac(netlist).map_err(|e| format!("AC error: {e}"))?;
+                let mna = assemble()?;
+                let result = thevenin::simulate_ac_with_mna(mna, netlist)
+                    .map_err(|e| format!("AC error: {e}"))?;
                 all_plots.extend(result.plots);
             }
             Analysis::Noise { .. } => {
-                let result =
-                    thevenin::simulate_noise(netlist).map_err(|e| format!("Noise error: {e}"))?;
+                let mna = assemble()?;
+                let result = thevenin::simulate_noise_with_mna(mna, netlist)
+                    .map_err(|e| format!("Noise error: {e}"))?;
                 all_plots.extend(result.plots);
             }
             Analysis::Tf { .. } => {
-                let result =
-                    thevenin::simulate_tf(netlist).map_err(|e| format!("TF error: {e}"))?;
+                let mna = assemble()?;
+                let result = thevenin::simulate_tf_with_mna(mna, netlist)
+                    .map_err(|e| format!("TF error: {e}"))?;
                 all_plots.extend(result.plots);
             }
             Analysis::Sens { .. } => {
-                let result =
-                    thevenin::simulate_sens(netlist).map_err(|e| format!("Sens error: {e}"))?;
+                let mna = assemble()?;
+                let result = thevenin::simulate_sens_with_mna(mna, netlist)
+                    .map_err(|e| format!("Sens error: {e}"))?;
                 all_plots.extend(result.plots);
             }
             Analysis::Pz { .. } => {
-                let result =
-                    thevenin::simulate_pz(netlist).map_err(|e| format!("PZ error: {e}"))?;
+                let mna = assemble()?;
+                let result = thevenin::simulate_pz_with_mna(mna, netlist)
+                    .map_err(|e| format!("PZ error: {e}"))?;
                 all_plots.extend(result.plots);
             }
         }

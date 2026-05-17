@@ -19,7 +19,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use cirq_frontend::to_netlist::{convert_model, convert_source_spec, extra_params};
+use cirq_frontend::to_netlist::{
+    convert_model, convert_source_spec, extra_params, value_to_expr,
+};
 use cirq_ir::{
     BehavioralMode, Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Model, Value,
     XspiceConnection as IrXspiceConnection,
@@ -47,9 +49,10 @@ use crate::mesfet::{MesfetInstance, MesfetModel};
 use crate::mna::{
     BehavioralSourceInstance, BehavioralVoltageSourceInstance, CapacitorInstance,
     CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
-    MutualCouplingInstance, NodeMap, ResistorInstance, VoltageSourceInstance, get_mosfet_level,
-    get_mosfet_lw, get_nrd_nrs, parse_bsrc_params, push_bjt_caps, push_mosfet_caps,
-    resolve_model_with_bins, stamp_conductance,
+    MutualCouplingInstance, NodeMap, ResistorInstance, VoltageSourceInstance,
+    extract_resistor_noise_params, get_mosfet_level, get_mosfet_lw, get_nrd_nrs,
+    parse_bsrc_params, push_bjt_caps, push_mosfet_caps, resolve_model_with_bins,
+    resolve_resistor_value, stamp_conductance,
 };
 use crate::mos2::{Mos2Instance, Mos2Model};
 use crate::mos6::{Mos6Instance, Mos6Model};
@@ -246,14 +249,6 @@ fn string_param(elem: &IrElement, name: &str) -> Option<String> {
     None
 }
 
-/// Resistor multiplier handling: `R_eff = R * scale / m`, matching the
-/// existing `apply_multipliers` in `crate::mna`.
-fn resistor_multipliers(elem: &IrElement) -> f64 {
-    let m = numeric_param(elem, &["m"]).unwrap_or(1.0);
-    let scale = numeric_param(elem, &["scale"]).unwrap_or(1.0);
-    scale / m
-}
-
 /// Evaluate a source's DC contribution following the same MODEDC /
 /// MODEDCOP convention as `crate::mna::stamp_element`.
 fn evaluate_source_dc(source: &Source, modedc: bool) -> f64 {
@@ -299,6 +294,21 @@ fn evaluate_source_dc(source: &Source, modedc: bool) -> f64 {
 fn lookup_model<'a>(circuit: &'a Circuit, elem: &IrElement) -> Option<&'a Model> {
     let id = elem.model?;
     circuit.models.iter().find(|m| m.id == id)
+}
+
+/// Resolve a model reference stored in a `"model"` string param.
+///
+/// CPL and XSPICE elements store their model name as
+/// `params: [("model", Value::String("LOSSYMODE"))]` rather than in the
+/// typed `Element.model: Option<Id>` field. (The Netlist path looks up by
+/// name string for these device classes.)
+fn lookup_model_by_string_param<'a>(circuit: &'a Circuit, elem: &IrElement) -> Option<&'a Model> {
+    let name = string_param(elem, "model")?;
+    let upper = name.to_ascii_uppercase();
+    circuit
+        .models
+        .iter()
+        .find(|m| m.name.eq_ignore_ascii_case(&upper))
 }
 
 /// Build a fully-resolved [`DiodeModel`] for a diode element, layering
@@ -657,7 +667,8 @@ fn stamp_circuit(
                 let Some(registry) = xspice_registry.as_ref() else {
                     continue;
                 };
-                let model_type = lookup_model(circuit, elem)
+                let model_type = lookup_model_by_string_param(circuit, elem)
+                    .or_else(|| lookup_model(circuit, elem))
                     .map(|m| convert_model(m).kind.to_uppercase())
                     .unwrap_or_default();
                 let Some(cm_def) = registry.get(&model_type) else {
@@ -821,19 +832,27 @@ fn stamp_circuit(
             IrElementKind::Resistor => {
                 let pos = terminal_name(elem, "pos", &net_name)?;
                 let neg = terminal_name(elem, "neg", &net_name)?;
-                let r_raw = numeric_param(elem, &["value"]).ok_or_else(|| {
-                    MnaError::UnsupportedElement(format!(
-                        "resistor `{}` missing numeric `value`",
-                        elem.name
-                    ))
-                })?;
-                let r = r_raw * resistor_multipliers(elem);
-                if r == 0.0 {
-                    return Err(MnaError::UnsupportedElement(format!(
-                        "resistor `{}` has zero resistance",
-                        elem.name
-                    )));
-                }
+
+                // Project the IR value param into a Netlist-shaped Expr so
+                // we can reuse the existing model-based resistor resolver
+                // (handles `.model rmod r RSH=... NARROW=...` via L/W and
+                // direct `r=` / `resistance=` model params). The Netlist
+                // path's value field accepts Expr::Num, Expr::Param (model
+                // name), or Expr::Brace; value_to_expr produces all three.
+                let value_expr = elem
+                    .params
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("value"))
+                    .map(|(_, v)| value_to_expr(v))
+                    .ok_or_else(|| {
+                        MnaError::UnsupportedElement(format!(
+                            "resistor `{}` missing `value` param",
+                            elem.name
+                        ))
+                    })?;
+                let instance_params = extra_params(elem, &["value"]);
+                let r =
+                    resolve_resistor_value(&value_expr, &elem.name, &instance_params, &models_map)?;
                 let g = 1.0 / r;
                 let pi = mna.node_map.get(pos);
                 let ni = mna.node_map.get(neg);
@@ -841,16 +860,18 @@ fn stamp_circuit(
 
                 let ac_resistance = numeric_param(elem, &["ac"]);
                 let m_val = numeric_param(elem, &["m"]).unwrap_or(1.0);
+                let (kf, af, ef, noise_area) =
+                    extract_resistor_noise_params(&value_expr, &instance_params, &models_map);
                 mna.resistors.push(ResistorInstance {
                     name: elem.name.clone(),
                     pos_idx: pi,
                     neg_idx: ni,
                     resistance: r,
                     ac_resistance,
-                    kf: 0.0,
-                    af: 1.0,
-                    ef: 1.0,
-                    noise_area: 0.0,
+                    kf,
+                    af,
+                    ef,
+                    noise_area,
                     m: m_val,
                 });
             }
@@ -1294,12 +1315,17 @@ fn stamp_circuit(
                 });
             }
             IrElementKind::CoupledLine { width } => {
-                let model = lookup_model(circuit, elem).ok_or_else(|| {
-                    MnaError::UnsupportedElement(format!(
-                        "CPL `{}` requires a `.model` reference",
-                        elem.name
-                    ))
-                })?;
+                // CPL stores its model name in the `model` string param, not
+                // in `Element.model: Option<Id>` — see cirq_spice_import's
+                // SpiceElementKind::Cpl handler.
+                let model = lookup_model_by_string_param(circuit, elem)
+                    .or_else(|| lookup_model(circuit, elem))
+                    .ok_or_else(|| {
+                        MnaError::UnsupportedElement(format!(
+                            "CPL `{}` requires a `.model` reference",
+                            elem.name
+                        ))
+                    })?;
                 let no_l = *width;
                 let cpl_model = CplModel::from_model_def(&convert_model(model), no_l);
 
@@ -1372,7 +1398,9 @@ fn stamp_circuit(
                     continue;
                 };
                 let (model_type, model_params): (String, Vec<thevenin_types::Param>) =
-                    match lookup_model(circuit, elem) {
+                    match lookup_model_by_string_param(circuit, elem)
+                        .or_else(|| lookup_model(circuit, elem))
+                    {
                         Some(m) => {
                             let mdef = convert_model(m);
                             (mdef.kind.to_uppercase(), mdef.params)

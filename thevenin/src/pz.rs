@@ -18,6 +18,18 @@ use crate::tf::build_jacobian;
 /// - Poles = -1/eigenvalues of G^{-1}*C (for non-zero eigenvalues)
 /// - Zeros via cofactor submatrix eigenvalues
 pub fn simulate_pz(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let mna = assemble_mna(netlist)?;
+    simulate_pz_with_mna(mna, netlist)
+}
+
+/// Run `.pz` (pole-zero) analysis on an already-assembled [`MnaSystem`].
+///
+/// Shared between the Netlist path (`simulate_pz` above) and the Stage 4
+/// IR-direct path. The Netlist is still needed for `.pz` port-spec lookups.
+pub fn simulate_pz_with_mna(
+    mna: MnaSystem,
+    netlist: &Netlist,
+) -> Result<SimResult, MnaError> {
     let (node_i, node_g, node_j, node_k, input_type, analysis_type) = match &netlist.analysis {
         Analysis::Pz {
             node_i,
@@ -41,8 +53,6 @@ pub fn simulate_pz(netlist: &Netlist) -> Result<SimResult, MnaError> {
         }
     };
 
-    // Assemble MNA and solve DC operating point.
-    let mna = assemble_mna(netlist)?;
     let solution = solve_op_raw(&mna)?;
     let dim = mna.system.dim();
 

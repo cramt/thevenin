@@ -178,6 +178,22 @@ fn parse_sens_output(
 /// because the near-cancellation happens inside the sparse linear solve rather
 /// than in a dot product with a potentially-inaccurate adjoint vector.
 pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let mna = assemble_mna(netlist)?;
+    simulate_sens_with_mna(mna, netlist)
+}
+
+/// Run `.sens` analysis on an already-assembled [`MnaSystem`].
+///
+/// Shared between the Netlist path (`simulate_sens` above) and the Stage 4
+/// IR-direct path. The Netlist is still needed for `.sens` analysis params
+/// and the AC variant's frequency-sweep configuration.
+///
+/// The AC-sens branch internally re-assembles the MNA (it builds a complex
+/// stamping that differs from the DC stamping) — see `simulate_ac_sens`.
+pub fn simulate_sens_with_mna(
+    mna: MnaSystem,
+    netlist: &Netlist,
+) -> Result<SimResult, MnaError> {
     let sens_output = match &netlist.analysis {
         Analysis::Sens { output } => output.clone(),
         _ => {
@@ -197,10 +213,6 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
     }
 
     // ---------- DC sensitivity path ----------
-
-    // Assemble MNA and solve DC OP.
-    // Use diag_gmin = 0 to match ngspice's CKTdiagGmin = 0 for DC analysis.
-    let mna = assemble_mna(netlist)?;
     let solution = if !mna.has_nonlinear() {
         solve_op_raw(&mna)?
     } else {

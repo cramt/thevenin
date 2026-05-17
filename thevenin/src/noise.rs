@@ -30,6 +30,19 @@ const T_NOM: f64 = 300.15;
 
 /// Perform noise analysis.
 pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let mna = assemble_mna(netlist)?;
+    simulate_noise_with_mna(mna, netlist)
+}
+
+/// Run `.noise` analysis on an already-assembled [`MnaSystem`].
+///
+/// Shared between the Netlist path (`simulate_noise` above) and the
+/// Stage 4 IR-direct path. The Netlist is still needed for `.noise`
+/// analysis params and source resolution.
+pub fn simulate_noise_with_mna(
+    mna: MnaSystem,
+    netlist: &Netlist,
+) -> Result<SimResult, MnaError> {
     let (output, ref_node, src_name, variation, n, fstart, fstop) = match &netlist.analysis {
         Analysis::Noise {
             output,
@@ -60,9 +73,6 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
     // Parse output node specification: "v(node)" or "v(node1,node2)".
     let (out_pos, out_neg) = parse_output_spec(&output)?;
-
-    // DC operating point.
-    let mna = assemble_mna(netlist)?;
     let nr_opts = nr_options_from_netlist(netlist);
     let nodeset = resolve_nodeset(netlist, &mna);
     let op_solution = if mna.has_nonlinear() {
