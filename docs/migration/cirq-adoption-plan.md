@@ -141,9 +141,17 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       the lowering path. Bit-for-bit equivalence with the lowered path is
       pinned by `thevenin-cirq/tests/direct_path_equivalence.rs` (10 SPICE
       fixtures: voltage divider, current source, RC/RL OP, VCVS/VCCS/
-      CCVS/CCCS, parallel R, ladder). Next: nonlinear device direct
-      stamping (diode, BJT, MOSFET companion models — requires NR loop on
-      the direct path) and AC/transient extensions.
+      CCVS/CCCS, parallel R, ladder).
+      **Next:** generalise the direct path from "linear-only OP" to a real
+      `assemble_mna_from_circuit(&Circuit)` covering every device class,
+      working on branch `feat/mna-circuit-input`. The session-by-session
+      breakdown — including which device families migrate in what order
+      and the shim strategy that reuses existing `*Model::from_model_def`
+      loaders via `cirq_frontend::to_netlist::convert_model` /
+      `value_to_expr` — is laid out in
+      [`docs/migration/mna-ir-pivot-plan.md`](mna-ir-pivot-plan.md).
+      Session A (enabler) landed: those two helpers are now `pub` so the
+      future `thevenin::mna_ir` module can use them without copying.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`

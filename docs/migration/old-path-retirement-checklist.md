@@ -11,6 +11,11 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
   the simulator should accept `cirq_ir::Circuit` directly. The Netlist type
   would become an internal intermediate or compatibility layer.
   *Depends on:* Stage 4 of the adoption plan.
+  *In progress on `feat/mna-circuit-input`* — session-by-session migration
+  plan in [`docs/migration/mna-ir-pivot-plan.md`](mna-ir-pivot-plan.md).
+  Session A (enabler) landed: `cirq_frontend::to_netlist::convert_model`
+  and `value_to_expr` are now `pub` so the future MNA-on-IR path can reuse
+  them without rewriting every device's `from_model_def` loader.
 
 ## Naming Conventions
 

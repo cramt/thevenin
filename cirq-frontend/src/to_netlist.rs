@@ -262,7 +262,16 @@ fn build_model_name_map(circuit: &Circuit) -> HashMap<Id, String> {
 // Value / Expr conversion
 // ---------------------------------------------------------------------------
 
-fn value_to_expr(val: &Value) -> Expr {
+/// Convert a Cirq IR [`Value`] into a Netlist-shaped [`Expr`].
+///
+/// `Value::String("{expr}")` (the round-trip shape for SPICE brace expressions
+/// from `cirq_spice_import::expr_to_value`) is restored as [`Expr::Brace`] so
+/// the simulator's expression evaluator can still resolve `temper` and other
+/// runtime references. Bare strings become [`Expr::Param`].
+///
+/// Public so the MNA-on-IR pivot (`docs/migration/mna-ir-pivot-plan.md`) can
+/// reuse this conversion in `thevenin::mna_ir` without duplicating it.
+pub fn value_to_expr(val: &Value) -> Expr {
     match val {
         Value::Real(f) => Expr::Num(*f),
         Value::Integer(i) => Expr::Num(*i as f64),
@@ -966,7 +975,17 @@ fn resolve_inductor_spice_name(
 // Model conversion
 // ---------------------------------------------------------------------------
 
-fn convert_model(model: &cirq_ir::Model) -> ModelDef {
+/// Convert a Cirq IR [`cirq_ir::Model`] into a Netlist-shaped [`ModelDef`].
+///
+/// Maps the typed `DeviceType` enum to the SPICE-shaped kind string
+/// (`"D"`, `"NPN"`, `"NMOS"`, …; `DeviceType::Other(s)` passes through
+/// verbatim) and translates each `(String, Value)` param via
+/// [`value_to_expr`].
+///
+/// Public so the MNA-on-IR pivot (`docs/migration/mna-ir-pivot-plan.md`) can
+/// reuse it to feed `thevenin`'s existing `*Model::from_model_def` loaders
+/// without rewriting them per device family.
+pub fn convert_model(model: &cirq_ir::Model) -> ModelDef {
     let kind: String = match &model.device_type {
         DeviceType::Diode => "D".into(),
         DeviceType::Npn => "NPN".into(),
