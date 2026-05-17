@@ -93,13 +93,16 @@ pub(crate) use sparse::{LinearSystem, SparseMatrix, SparseMatrixError};
 // ── Public API ──────────────────────────────────────────────────────────────
 
 // Analysis functions
-pub use ac::simulate_ac;
+pub use ac::{simulate_ac, simulate_ac_with_mna};
 pub use noise::simulate_noise;
 pub use pz::simulate_pz;
 pub use sens::simulate_sens;
-pub use simulate::{simulate_dc, simulate_op, simulate_op_dc, simulate_op_with_xspice};
+pub use simulate::{
+    simulate_dc, simulate_dc_with_mna, simulate_op, simulate_op_dc, simulate_op_with_mna,
+    simulate_op_with_xspice,
+};
 pub use tf::simulate_tf;
-pub use transient::simulate_tran;
+pub use transient::{simulate_tran, simulate_tran_with_mna};
 
 // Utilities
 pub use mna::MnaError;

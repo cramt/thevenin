@@ -17,6 +17,20 @@ use crate::sparse::ComplexLinearSystem;
 /// 3. Apply AC source excitation.
 /// 4. Solve for complex node voltages.
 pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let mna = assemble_mna(netlist)?;
+    simulate_ac_with_mna(mna, netlist)
+}
+
+/// Run a `.ac` sweep on an already-assembled [`MnaSystem`].
+///
+/// Shared between the Netlist path (`simulate_ac` above) and the Stage 4
+/// IR-direct path (`thevenin::circuit::simulate_ac` via `mna_ir`). The
+/// Netlist is still needed for `.ac` analysis params, nodeset resolution,
+/// and AC source excitation lookups.
+pub fn simulate_ac_with_mna(
+    mna: MnaSystem,
+    netlist: &Netlist,
+) -> Result<SimResult, MnaError> {
     let (variation, n, fstart, fstop) = match &netlist.analysis {
         Analysis::Ac {
             variation,
@@ -34,9 +48,8 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let fstart_val = expr_val(&fstart, ".ac")?;
     let fstop_val = expr_val(&fstop, ".ac")?;
 
-    // Assemble the MNA system and solve DC operating point directly
-    // to get the full solution vector including internal device nodes.
-    let mna = assemble_mna(netlist)?;
+    // Solve DC operating point directly to get the full solution vector
+    // including internal device nodes.
     let nr_opts = nr_options_from_netlist(netlist);
     let nodeset = resolve_nodeset(netlist, &mna);
     let op_solution = if mna.has_nonlinear() {

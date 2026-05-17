@@ -272,23 +272,62 @@ One new equivalence fixture (`ltra_lossy_line_op`); TXL/CPL/XSPICE
 paths land in code but rely on the existing harness fixtures for
 broader coverage once Session G routes the harness through mna_ir.
 
-#### Session G — Netlist callers + final cutover
+#### Session G — DC / AC / TRAN routing through mna_ir (landed)
 
-- Update remaining Netlist callers (`ac.rs`, `tf.rs`, `pz.rs`, `noise.rs`,
-  `sens.rs`, `simulate.rs`) to either:
-  - Accept `&Circuit` directly (preferred — pivots the whole simulator API),
-    or
-  - Wrap their `&Netlist` input via `cirq_spice_import::import_netlist`
-    before calling the new `assemble_mna_from_circuit`.
-- Delete the old `assemble_mna_flat(&Netlist)` and surrounding helpers.
-- `mna_ir.rs` becomes `mna.rs`; the old `mna.rs` is removed.
-- The `assemble_mna(&Netlist)` public API is gone. SPICE input goes
-  through `cirq_spice_import::import_netlist` (already the harness's path).
-- The `.control` interpreter's TEMPER / `@device[param]` paths still build
-  a `Netlist` view from the current `Circuit`; that's the next Stage 4 work
-  item, tracked separately.
+The three primary analysis functions (`simulate_dc`, `simulate_ac`,
+`simulate_tran`) now have `_with_mna` siblings that accept a pre-
+assembled `MnaSystem` + the Netlist (still needed for analysis params /
+source resolution / nodeset / `.OPTIONS`):
 
-Estimated diff: +200 LOC, -2,500 LOC (deleting the old assemble_mna_flat).
+  pub fn simulate_dc_with_mna  (mut mna: MnaSystem, &Netlist) -> Result<...>
+  pub fn simulate_ac_with_mna  (    mna: MnaSystem, &Netlist) -> Result<...>
+  pub fn simulate_tran_with_mna(mut mna: MnaSystem, &Netlist) -> Result<...>
+
+`thevenin::circuit::simulate_dc/ac/tran` (the Circuit-input entry points)
+build the MnaSystem via `mna_ir::assemble_mna_from_circuit` whenever it
+accepts the circuit and dispatch to the corresponding `_with_mna`
+helper. The IR → Netlist conversion still happens once per call (we
+need the lowered netlist for `.dc` source resolution, `.ac` AC source
+excitation, `.tran` `.ic` overrides), but the simulator no longer
+re-runs `assemble_mna(&Netlist)` on it — a meaningful chunk of work
+saved on every Circuit-input simulation.
+
+Four new equivalence fixtures in `direct_path_equivalence`:
+  - dc_sweep_voltage_divider:   linear DC sweep over V1
+  - dc_sweep_diode_iv:          nonlinear DC sweep (NR + diode model)
+  - ac_sweep_rc_lowpass:        complex AC small-signal sweep
+  - tran_pulse_through_rc:      time-domain pulse + reactive elements
+
+The equivalence helper grew an `assert_results_equal` core that
+iterates all plots (transient prepends the OP plot) and compares
+both Real and Complex vector data element-wise.
+
+Verification: `cargo nextest run --workspace` → 1014/1014 pass;
+harness 100/0/7 unchanged; `cargo clippy -p thevenin --lib` clean.
+
+#### Session H (open) — Netlist-API retirement
+
+The remaining Stage 4 work is removing `thevenin_types::Netlist` from
+the public API surface entirely. Concretely:
+
+- Pivot `simulate_dc/ac/tran` (Netlist-shaped wrappers) to take
+  `&Circuit` directly. The current `_with_mna` helpers still need
+  a Netlist for source resolution / analysis params; those reads
+  would lift onto `Circuit` fields (`circuit.analyses`,
+  `circuit.options`, instance lookups via `Element.name`).
+- Same for the other analyses: `noise`, `sens`, `pz`, `tf`.
+- `.control` interpreter's TEMPER / `@device[param]` paths still
+  build a `Netlist` view from the current `Circuit`; that's a
+  parallel work item that can run in any order against this one.
+- After all simulator entry points accept `&Circuit`:
+  - `crate::mna::assemble_mna(&Netlist)` becomes pub(crate) (used
+    only by the Netlist wrapper that calls `cirq_spice_import::import_netlist`
+    first).
+  - The Netlist-shaped public API can be deprecated / removed.
+
+Estimated diff: +400 LOC of Circuit-side analysis helpers, -200 LOC of
+Netlist-shaped wrappers, possibly minus another chunk if the
+`.control` work overlaps.
 
 ### Risk register
 

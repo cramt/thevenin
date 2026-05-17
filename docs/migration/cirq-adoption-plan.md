@@ -226,6 +226,19 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       harness fixtures for broader coverage once Session G routes
       the harness through mna_ir). 1009/1009 workspace tests pass;
       harness still 100/0/7.
+      **Session G landed (DC/AC/TRAN routing):** simulate_dc /
+      simulate_ac / simulate_tran extracted to _with_mna helpers
+      that accept a pre-assembled MnaSystem. thevenin::circuit's
+      per-analysis Circuit-input entry points now build the
+      MnaSystem via mna_ir and dispatch to those helpers, skipping
+      the assemble_mna(&Netlist) re-assembly step that previously
+      ran on every Circuit-input simulation. Four new equivalence
+      fixtures (linear DC sweep, nonlinear DC sweep with diode, AC
+      complex sweep, transient pulse through RC) pin the end-to-end
+      bit-for-bit equivalence; the assert_results_equal helper
+      iterates all plots and compares both Real and Complex vector
+      data element-wise. 1014/1014 workspace tests pass; harness
+      still 100/0/7.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`

@@ -579,6 +579,20 @@ fn estimate_new_timestep(
 /// Uses adaptive timestep control with LTE estimation when reactive elements
 /// are present, falling back to fixed timestep for purely resistive circuits.
 pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let mna = assemble_mna(netlist)?;
+    simulate_tran_with_mna(mna, netlist)
+}
+
+/// Run a `.tran` analysis on an already-assembled [`MnaSystem`].
+///
+/// Shared between the Netlist path (`simulate_tran` above) and the Stage 4
+/// IR-direct path (`thevenin::circuit::simulate_tran` via `mna_ir`). The
+/// Netlist is still needed for `.tran` analysis params, `.ic` overrides,
+/// nodeset resolution, and `.OPTIONS` lookups.
+pub fn simulate_tran_with_mna(
+    mut mna: MnaSystem,
+    netlist: &Netlist,
+) -> Result<SimResult, MnaError> {
     let (tstep, tstop, tstart, tmax, uic) = match &netlist.analysis {
         Analysis::Tran {
             tstep,
@@ -620,9 +634,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
     // Maximum internal timestep: tmax if specified, otherwise min(tstep, tstop/50).
     let h_max = t_max.unwrap_or_else(|| h_print.min(t_stop / 50.0));
-
-    // Assemble MNA system.
-    let mut mna = assemble_mna(netlist)?;
 
     // Parse circuit .OPTIONS (GMIN, ABSTOL, RELTOL, VNTOL, ITL1, ITL2) so
     // that transient analysis respects the same settings as DC sweep analysis.

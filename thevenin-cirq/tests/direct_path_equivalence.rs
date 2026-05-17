@@ -13,7 +13,7 @@
 //! `docs/migration/mna-ir-pivot-plan.md`).
 
 use cirq_frontend::to_netlist::circuit_to_netlists;
-use thevenin_types::VectorData;
+use thevenin_types::{SimResult, VectorData};
 
 /// Run a SPICE source through both paths and assert every output vector
 /// matches bit-for-bit.
@@ -78,6 +78,208 @@ fn assert_paths_equal(spice: &str) {
             direct_vec.name,
         );
     }
+}
+
+/// Generic helper: runs `run_via_circuit` and `run_via_netlist` for the same
+/// SPICE source and asserts every result vector matches element-wise across
+/// the full length. Handles both Real and Complex VectorData.
+fn assert_results_equal<C, N>(
+    spice: &str,
+    label: &str,
+    run_via_circuit: C,
+    run_via_netlist: N,
+) where
+    C: FnOnce(&cirq_ir::Circuit) -> SimResult,
+    N: FnOnce(&thevenin_types::Netlist) -> SimResult,
+{
+    let circuits = cirq_spice_import::import_spice(spice)
+        .unwrap_or_else(|e| panic!("import_spice failed: {e}\nsource:\n{spice}"));
+    let circuit = &circuits[0];
+
+    let via_direct = run_via_circuit(circuit);
+
+    let nl = circuit_to_netlists(circuit)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let nl = thevenin::flatten_netlist(&nl).unwrap();
+    let via_netlist = run_via_netlist(&nl);
+
+    assert_eq!(
+        via_direct.plots.len(),
+        via_netlist.plots.len(),
+        "[{label}] plot count mismatch for source:\n{spice}"
+    );
+
+    for (plot_idx, (direct_plot, netlist_plot)) in via_direct
+        .plots
+        .iter()
+        .zip(via_netlist.plots.iter())
+        .enumerate()
+    {
+        for direct_vec in &direct_plot.vecs {
+            let netlist_vec = netlist_plot
+                .vecs
+                .iter()
+                .find(|v| v.name == direct_vec.name)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "[{label}] plot {plot_idx}: direct has vec '{}' but netlist path does not; source:\n{spice}",
+                        direct_vec.name
+                    )
+                });
+        match (&direct_vec.data, &netlist_vec.data) {
+            (VectorData::Real(d), VectorData::Real(n)) => {
+                assert_eq!(
+                    d.len(),
+                    n.len(),
+                    "[{label}] length mismatch in {}: direct={} netlist={}",
+                    direct_vec.name,
+                    d.len(),
+                    n.len(),
+                );
+                for (i, (dv, nv)) in d.iter().zip(n.iter()).enumerate() {
+                    assert_eq!(
+                        dv, nv,
+                        "[{label}] drift in {}[{i}]: direct={dv} netlist={nv}",
+                        direct_vec.name,
+                    );
+                }
+            }
+            (VectorData::Complex(d), VectorData::Complex(n)) => {
+                assert_eq!(
+                    d.len(),
+                    n.len(),
+                    "[{label}] length mismatch in {}: direct={} netlist={}",
+                    direct_vec.name,
+                    d.len(),
+                    n.len(),
+                );
+                for (i, (dv, nv)) in d.iter().zip(n.iter()).enumerate() {
+                    assert_eq!(
+                        (dv.re, dv.im),
+                        (nv.re, nv.im),
+                        "[{label}] drift in {}[{i}]: direct={dv:?} netlist={nv:?}",
+                        direct_vec.name,
+                    );
+                }
+            }
+            _ => panic!(
+                "[{label}] vec type mismatch in {}: direct={:?} netlist={:?}",
+                direct_vec.name, direct_vec.data, netlist_vec.data,
+            ),
+            }
+        }
+    }
+}
+
+fn assert_dc_paths_equal(spice: &str) {
+    assert_results_equal(
+        spice,
+        "dc",
+        |c| {
+            thevenin_cirq::simulate_dc(c)
+                .unwrap_or_else(|e| panic!("direct simulate_dc failed: {e}\nsource:\n{spice}"))
+        },
+        |nl| {
+            thevenin::simulate_dc(nl)
+                .unwrap_or_else(|e| panic!("netlist simulate_dc failed: {e}\nsource:\n{spice}"))
+        },
+    );
+}
+
+fn assert_ac_paths_equal(spice: &str) {
+    assert_results_equal(
+        spice,
+        "ac",
+        |c| {
+            thevenin_cirq::simulate_ac(c)
+                .unwrap_or_else(|e| panic!("direct simulate_ac failed: {e}\nsource:\n{spice}"))
+        },
+        |nl| {
+            thevenin::simulate_ac(nl)
+                .unwrap_or_else(|e| panic!("netlist simulate_ac failed: {e}\nsource:\n{spice}"))
+        },
+    );
+}
+
+fn assert_tran_paths_equal(spice: &str) {
+    // thevenin::circuit::simulate_tran prepends the OP plot to the
+    // transient result; mirror that on the Netlist side by combining
+    // simulate_op + simulate_tran so the plot vecs match position-by-
+    // position.
+    assert_results_equal(
+        spice,
+        "tran",
+        |c| {
+            thevenin_cirq::simulate_tran(c)
+                .unwrap_or_else(|e| panic!("direct simulate_tran failed: {e}\nsource:\n{spice}"))
+        },
+        |nl| {
+            let mut plots = Vec::new();
+            if let Ok(op) = thevenin::simulate_op(nl) {
+                plots.extend(op.plots);
+            }
+            plots.extend(
+                thevenin::simulate_tran(nl)
+                    .unwrap_or_else(|e| {
+                        panic!("netlist simulate_tran failed: {e}\nsource:\n{spice}")
+                    })
+                    .plots,
+            );
+            SimResult { plots }
+        },
+    );
+}
+
+#[test]
+fn dc_sweep_voltage_divider() {
+    assert_dc_paths_equal(
+        "DC sweep\n\
+         V1 in 0 1\n\
+         R1 in mid 1k\n\
+         R2 mid 0 2k\n\
+         .dc V1 0 5 0.5\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn dc_sweep_diode_iv() {
+    assert_dc_paths_equal(
+        "DC sweep diode IV\n\
+         .model dmod d is=1e-14\n\
+         V1 a 0 0\n\
+         R1 a b 100\n\
+         D1 b 0 dmod\n\
+         .dc V1 0 1 0.05\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn ac_sweep_rc_lowpass() {
+    assert_ac_paths_equal(
+        "RC lowpass AC\n\
+         V1 in 0 ac 1\n\
+         R1 in out 1k\n\
+         C1 out 0 1u\n\
+         .ac dec 5 1 100k\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn tran_pulse_through_rc() {
+    assert_tran_paths_equal(
+        "RC transient pulse\n\
+         V1 in 0 PULSE(0 1 1n 1n 1n 5n 10n)\n\
+         R1 in out 1k\n\
+         C1 out 0 1n\n\
+         .tran 0.5n 20n\n\
+         .end\n",
+    );
 }
 
 #[test]

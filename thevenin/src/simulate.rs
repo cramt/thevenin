@@ -785,6 +785,21 @@ fn get_source_dc_value(netlist: &Netlist, src_name: &str) -> f64 {
 /// Sweeps a source across a range of values, computing the DC operating point
 /// at each step. Supports single and double (nested) sweeps.
 pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let mna = assemble_mna(netlist)?;
+    simulate_dc_with_mna(mna, netlist)
+}
+
+/// Run a `.dc` sweep on an already-assembled [`MnaSystem`].
+///
+/// Shared between the Netlist path (`simulate_dc` above) and the Stage 4
+/// IR-direct path (`thevenin::circuit::simulate_dc` via `mna_ir`) so both
+/// produce identically-shaped `SimResult` values regardless of how the MNA
+/// was assembled. The Netlist is still needed for `.dc` analysis params,
+/// source resolution, and option lookups.
+pub fn simulate_dc_with_mna(
+    mut mna: MnaSystem,
+    netlist: &Netlist,
+) -> Result<SimResult, MnaError> {
     let mut nr_opts = nr_options_from_netlist(netlist);
     // Match ngspice: CKTdiagGmin starts at 0 for DC analysis (cktop.c).
     // Device models already include options.gmin in their junction
@@ -817,8 +832,7 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let stop_val = expr_val(&stop, ".dc")?;
     let step_val = expr_val(&step, ".dc")?;
 
-    // Assemble the MNA system and stamp LTRA DC equations into the base matrix.
-    let mut mna = assemble_mna(netlist)?;
+    // Stamp LTRA / TXL / CPL DC equations into the base matrix.
     let n = mna.total_num_nodes();
     for inst in &mna.ltras {
         crate::ltra::stamp_ltra_dc(inst, &mut mna.system, n);
