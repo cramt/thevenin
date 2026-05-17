@@ -213,6 +213,19 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       equivalence fixtures; distributed elements (LTRA/TXL/CPL) and
       XSPICE deferred to a follow-up session. 1008/1008 workspace
       tests pass; harness still 100/0/7.
+      **Session F-distributed landed (LTRA/TXL/CPL/XSPICE):** the
+      final four element kinds — TransmissionLine (O), Txl (Y),
+      CoupledLine (P, variable width), and Xspice (A, registry-
+      driven) — now route through mna_ir. With these,
+      `mna_ir::circuit_is_supported_subset` returns true for every
+      existing IrElementKind variant; every Cirq IR circuit can be
+      assembled directly. Both stamping passes are exhaustive (no
+      wildcard arms) so a future IrElementKind addition would
+      compile-error rather than silently misroute. One new LTRA
+      equivalence fixture (TXL/CPL/XSPICE land in code, rely on
+      harness fixtures for broader coverage once Session G routes
+      the harness through mna_ir). 1009/1009 workspace tests pass;
+      harness still 100/0/7.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`

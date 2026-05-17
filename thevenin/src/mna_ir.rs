@@ -22,12 +22,19 @@ use std::sync::Arc;
 use cirq_frontend::to_netlist::{convert_model, convert_source_spec, extra_params};
 use cirq_ir::{
     BehavioralMode, Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Model, Value,
+    XspiceConnection as IrXspiceConnection,
 };
 use thevenin_types::{Expr, ModelDef, Source};
-use thevenin_xspice::CodeModelRegistry;
+use thevenin_xspice::{
+    CodeModelRegistry, ParamValue, PortConnection, PortDirection, PortType, XspiceInstance,
+};
 
 use crate::bjt::{BjtInstance, BjtModel};
 use crate::bsim3::{Bsim3Instance, Bsim3Model};
+use crate::cpl::{CplInstance, CplModel, setup_cpline};
+use crate::expr_val_or;
+use crate::ltra::{LtraInstance, LtraModel};
+use crate::txl::{TxlInstance, TxlModel, setup_txline};
 use crate::bsim3soi_dd::{Bsim3SoiDdInstance, Bsim3SoiDdModel};
 use crate::bsim3soi_fd::{Bsim3SoiFdInstance, Bsim3SoiFdModel};
 use crate::bsim3soi_pd::{Bsim3SoiPdInstance, Bsim3SoiPdModel};
@@ -154,6 +161,10 @@ fn circuit_is_supported_subset(circuit: &Circuit) -> bool {
                 | IrElementKind::PMesfet
                 | IrElementKind::Coupling
                 | IrElementKind::BehavioralSource { .. }
+                | IrElementKind::TransmissionLine
+                | IrElementKind::Txl
+                | IrElementKind::CoupledLine { .. }
+                | IrElementKind::Xspice { .. }
         )
     })
 }
@@ -610,6 +621,89 @@ fn stamp_circuit(
                 // K-element: no nodes of its own and no branch — the post-
                 // pass below resolves it against the inductor branches.
             }
+            IrElementKind::TransmissionLine | IrElementKind::Txl => {
+                for term in ["in_pos", "in_neg", "out_pos", "out_neg"] {
+                    let n = terminal_name(elem, term, &net_name)?;
+                    node_map.index(n);
+                }
+                // Both LTRA and TXL add 2 branch equations (one per port).
+                vsource_count += 2;
+            }
+            IrElementKind::CoupledLine { width } => {
+                for i in 0..*width {
+                    let n = terminal_name(elem, &format!("in{i}"), &net_name)?;
+                    node_map.index(n);
+                }
+                for i in 0..*width {
+                    let n = terminal_name(elem, &format!("out{i}"), &net_name)?;
+                    node_map.index(n);
+                }
+                // P-element ground terminal is indexed but stays ground.
+                if elem.connections.iter().any(|cn| cn.terminal == "gnd") {
+                    let g = terminal_name(elem, "gnd", &net_name)?;
+                    node_map.index(g);
+                }
+                // CPL adds 2 branch equations per line.
+                vsource_count += 2 * width;
+            }
+            IrElementKind::Xspice {
+                connections: xspice_conns,
+            } => {
+                // XSPICE port allocation depends on the registry: skip the
+                // whole element if no registry is supplied (matches the
+                // Netlist path's silent backward-compat fallback). Models
+                // come from elem.model (typed registry-name lookup) — or
+                // from the element's own model id when present.
+                let Some(registry) = xspice_registry.as_ref() else {
+                    continue;
+                };
+                let model_type = lookup_model(circuit, elem)
+                    .map(|m| convert_model(m).kind.to_uppercase())
+                    .unwrap_or_default();
+                let Some(cm_def) = registry.get(&model_type) else {
+                    // Defer the error to the second pass so unknown
+                    // models produce a useful diagnostic rather than a
+                    // silent skip.
+                    continue;
+                };
+                for (ci, conn) in xspice_conns.iter().enumerate() {
+                    if ci >= cm_def.ports.len() {
+                        break;
+                    }
+                    match conn {
+                        IrXspiceConnection::Scalar(id) => {
+                            let name = net_name.get(id).map(String::as_str).ok_or_else(|| {
+                                MnaError::UnsupportedElement(format!(
+                                    "XSPICE `{}`: connection `{ci}` references unknown net id",
+                                    elem.name
+                                ))
+                            })?;
+                            node_map.index(name);
+                        }
+                        IrXspiceConnection::Array(ids) => {
+                            for id in ids {
+                                let name =
+                                    net_name.get(id).map(String::as_str).ok_or_else(|| {
+                                        MnaError::UnsupportedElement(format!(
+                                            "XSPICE `{}`: array connection references unknown net id",
+                                            elem.name
+                                        ))
+                                    })?;
+                                node_map.index(name);
+                            }
+                        }
+                    }
+                }
+                for port_def in &cm_def.ports {
+                    if matches!(
+                        (port_def.port_type, port_def.direction),
+                        (PortType::Voltage, PortDirection::Out)
+                            | (PortType::Current, PortDirection::In)
+                    ) {
+                        vsource_count += 1;
+                    }
+                }
+            }
             IrElementKind::NMesfet | IrElementKind::PMesfet => {
                 let d = terminal_name(elem, "drain", &net_name)?;
                 let g = terminal_name(elem, "gate", &net_name)?;
@@ -709,13 +803,12 @@ fn stamp_circuit(
                     internal_node_count += mm.internal_node_count();
                 }
             }
-            _ => unreachable!("circuit_is_supported_subset filtered above"),
         }
     }
 
     let n_nodes = node_map.len() + internal_node_count;
     let dim = n_nodes + vsource_count;
-    let mut mna = MnaSystem::empty(dim, xspice_registry);
+    let mut mna = MnaSystem::empty(dim, xspice_registry.clone());
     mna.node_map = node_map;
     let mut vsource_idx = 0usize;
     let mut internal_idx = mna.node_map.len();
@@ -1114,6 +1207,264 @@ fn stamp_circuit(
             IrElementKind::Coupling => {
                 // K-element: deferred to the post-pass below — needs every
                 // inductor's branch_idx and inductance already allocated.
+            }
+            IrElementKind::TransmissionLine => {
+                let model = lookup_model(circuit, elem).ok_or_else(|| {
+                    MnaError::UnsupportedElement(format!(
+                        "LTRA `{}` requires a `.model` reference",
+                        elem.name
+                    ))
+                })?;
+                let ltra_model = LtraModel::from_model_def(&convert_model(model));
+
+                let pos1_idx = mna.node_map.get(terminal_name(elem, "in_pos", &net_name)?);
+                let neg1_idx = mna.node_map.get(terminal_name(elem, "in_neg", &net_name)?);
+                let pos2_idx = mna.node_map.get(terminal_name(elem, "out_pos", &net_name)?);
+                let neg2_idx = mna.node_map.get(terminal_name(elem, "out_neg", &net_name)?);
+
+                let br1 = vsource_idx;
+                let br2 = vsource_idx + 1;
+                vsource_idx += 2;
+                mna.vsource_names
+                    .push(format!("{}#branch1", elem.name.to_lowercase()));
+                mna.vsource_names
+                    .push(format!("{}#branch2", elem.name.to_lowercase()));
+
+                mna.ltras.push(LtraInstance {
+                    name: elem.name.clone(),
+                    pos1_idx,
+                    neg1_idx,
+                    pos2_idx,
+                    neg2_idx,
+                    br_eq1: br1,
+                    br_eq2: br2,
+                    model: ltra_model,
+                });
+                // LTRA DC stamps are added separately in the DC solver
+                // path — see `MnaSystem::stamp_ltra_dc_all`.
+            }
+            IrElementKind::Txl => {
+                let model = lookup_model(circuit, elem).ok_or_else(|| {
+                    MnaError::UnsupportedElement(format!(
+                        "TXL `{}` requires a `.model` reference",
+                        elem.name
+                    ))
+                })?;
+                let txl_model = TxlModel::from_model_def(&convert_model(model));
+
+                // Y-element uses (n1+, n2+) — the n1-/n2- terminals are
+                // typically ground (ignored by the TXL stamps).
+                let pos_idx = mna.node_map.get(terminal_name(elem, "in_pos", &net_name)?);
+                let neg_idx = mna.node_map.get(terminal_name(elem, "out_pos", &net_name)?);
+
+                let br1 = vsource_idx;
+                let br2 = vsource_idx + 1;
+                vsource_idx += 2;
+                mna.vsource_names
+                    .push(format!("{}#branch1", elem.name.to_lowercase()));
+                mna.vsource_names
+                    .push(format!("{}#branch2", elem.name.to_lowercase()));
+
+                // Instance-level length override.
+                let params_nl = extra_params(elem, &["value"]);
+                let length = params_nl
+                    .iter()
+                    .find(|p| {
+                        let u = p.name.to_uppercase();
+                        u == "LEN" || u == "LENGTH"
+                    })
+                    .map_or(txl_model.length, |p| {
+                        expr_val_or(&p.value, txl_model.length)
+                    });
+
+                let txline = setup_txline(&txl_model, length);
+                let txline2 = txline.clone();
+
+                mna.txls.push(TxlInstance {
+                    name: elem.name.clone(),
+                    pos_idx,
+                    neg_idx,
+                    ibr1: br1,
+                    ibr2: br2,
+                    model: txl_model,
+                    txline,
+                    txline2,
+                    length,
+                    dc_given: false,
+                });
+            }
+            IrElementKind::CoupledLine { width } => {
+                let model = lookup_model(circuit, elem).ok_or_else(|| {
+                    MnaError::UnsupportedElement(format!(
+                        "CPL `{}` requires a `.model` reference",
+                        elem.name
+                    ))
+                })?;
+                let no_l = *width;
+                let cpl_model = CplModel::from_model_def(&convert_model(model), no_l);
+
+                let mut pos_nodes = Vec::with_capacity(no_l);
+                let mut neg_nodes = Vec::with_capacity(no_l);
+                for i in 0..no_l {
+                    pos_nodes.push(mna.node_map.get(terminal_name(
+                        elem,
+                        &format!("in{i}"),
+                        &net_name,
+                    )?));
+                }
+                for i in 0..no_l {
+                    neg_nodes.push(mna.node_map.get(terminal_name(
+                        elem,
+                        &format!("out{i}"),
+                        &net_name,
+                    )?));
+                }
+
+                let mut ibr1 = Vec::with_capacity(no_l);
+                let mut ibr2 = Vec::with_capacity(no_l);
+                for m in 0..no_l {
+                    ibr1.push(vsource_idx);
+                    vsource_idx += 1;
+                    mna.vsource_names
+                        .push(format!("{}#branch1_{}", elem.name.to_lowercase(), m));
+                }
+                for m in 0..no_l {
+                    ibr2.push(vsource_idx);
+                    vsource_idx += 1;
+                    mna.vsource_names
+                        .push(format!("{}#branch2_{}", elem.name.to_lowercase(), m));
+                }
+
+                let params_nl = extra_params(elem, &["value"]);
+                let length = params_nl
+                    .iter()
+                    .find(|p| {
+                        let u = p.name.to_uppercase();
+                        u == "LEN" || u == "LENGTH"
+                    })
+                    .map_or(cpl_model.length, |p| {
+                        expr_val_or(&p.value, cpl_model.length)
+                    });
+
+                let mut model_with_length = cpl_model.clone();
+                model_with_length.length = length;
+                let cpline = setup_cpline(&model_with_length);
+                let cpline2 = cpline.clone();
+
+                mna.cpls.push(CplInstance {
+                    name: elem.name.clone(),
+                    no_l,
+                    pos_nodes,
+                    neg_nodes,
+                    ibr1,
+                    ibr2,
+                    model: model_with_length,
+                    cpline,
+                    cpline2,
+                    dc_given: false,
+                    length,
+                });
+            }
+            IrElementKind::Xspice {
+                connections: xspice_conns,
+            } => {
+                let Some(registry) = xspice_registry.as_ref() else {
+                    continue;
+                };
+                let (model_type, model_params): (String, Vec<thevenin_types::Param>) =
+                    match lookup_model(circuit, elem) {
+                        Some(m) => {
+                            let mdef = convert_model(m);
+                            (mdef.kind.to_uppercase(), mdef.params)
+                        }
+                        None => (String::new(), Vec::new()),
+                    };
+                let cm_def = registry
+                    .get(&model_type)
+                    .ok_or_else(|| MnaError::XspiceModelNotFound(model_type.clone()))?;
+
+                let mut port_connections = Vec::new();
+                let mut branch_indices = Vec::new();
+                let mut conn_iter = xspice_conns.iter();
+                for (pi, port_def) in cm_def.ports.iter().enumerate() {
+                    let conn = conn_iter.next().ok_or_else(|| MnaError::XspiceError {
+                        instance: elem.name.clone(),
+                        detail: format!("not enough connections for port `{}`", port_def.name),
+                    })?;
+                    let (pos_idx, neg_idx) = match conn {
+                        IrXspiceConnection::Scalar(id) => {
+                            let name = net_name.get(id).map(String::as_str).unwrap_or("0");
+                            (mna.node_map.get(name), None)
+                        }
+                        IrXspiceConnection::Array(ids) => {
+                            let resolve = |i: usize| {
+                                ids.get(i).and_then(|id| {
+                                    net_name
+                                        .get(id)
+                                        .and_then(|name| mna.node_map.get(name.as_str()))
+                                })
+                            };
+                            (resolve(0), resolve(1))
+                        }
+                    };
+                    let branch_idx = match (port_def.port_type, port_def.direction) {
+                        (PortType::Voltage, PortDirection::Out)
+                        | (PortType::Current, PortDirection::In) => {
+                            let br = n_nodes + vsource_idx;
+                            vsource_idx += 1;
+                            mna.vsource_names
+                                .push(format!("{}#{}", elem.name, port_def.name));
+                            branch_indices.push(br);
+                            Some(br)
+                        }
+                        _ => None,
+                    };
+                    port_connections.push(PortConnection {
+                        port_def_index: pi,
+                        pos_idx,
+                        neg_idx,
+                        branch_idx,
+                    });
+                }
+
+                let params: Vec<ParamValue> = cm_def
+                    .params
+                    .iter()
+                    .map(|pdef| {
+                        model_params
+                            .iter()
+                            .find(|p| p.name.eq_ignore_ascii_case(&pdef.name))
+                            .and_then(|p| {
+                                if let thevenin_types::Expr::Num(v) = &p.value {
+                                    match pdef.param_type {
+                                        thevenin_xspice::ParamType::Real => {
+                                            Some(ParamValue::Real(*v))
+                                        }
+                                        thevenin_xspice::ParamType::Integer => {
+                                            Some(ParamValue::Integer(*v as i64))
+                                        }
+                                        thevenin_xspice::ParamType::Boolean => {
+                                            Some(ParamValue::Boolean(*v != 0.0))
+                                        }
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| pdef.default.clone())
+                    })
+                    .collect();
+
+                let state = std::cell::RefCell::new(cm_def.create_state());
+                mna.xspice_instances.push(XspiceInstance {
+                    name: elem.name.clone(),
+                    model_type,
+                    port_connections,
+                    params,
+                    state,
+                    branch_indices,
+                });
             }
             IrElementKind::NJfet | IrElementKind::PJfet => {
                 let drain_idx = mna.node_map.get(terminal_name(elem, "drain", &net_name)?);
@@ -2061,7 +2412,6 @@ fn stamp_circuit(
                 }
                 // BJT/VBIC stamps are applied during NR iteration, not here.
             }
-            _ => unreachable!("circuit_is_supported_subset filtered above"),
         }
     }
 
@@ -2270,47 +2620,6 @@ mod tests {
         let mid_idx = mna.node_map.get("mid").unwrap();
         assert!((solution[in_idx] - 3.0).abs() < 1e-9);
         assert!((solution[mid_idx] - 2.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn unsupported_circuit_returns_none() {
-        // A lossy transmission line (TransmissionLine / LTRA) is not yet
-        // handled by the direct IR path — adding one should make
-        // `assemble_mna_from_circuit` return Ok(None) so the caller falls
-        // back to `assemble_mna(&Netlist)`. Diodes / BJTs / MOSFETs /
-        // JFETs / MESA / behavioural / mutual-coupling are all supported
-        // now; this test pins the fallback for the still-pending
-        // distributed elements and XSPICE (see
-        // `docs/migration/mna-ir-pivot-plan.md`).
-        let mut c = divider();
-        c.elements.push(Element {
-            id: Id(3),
-            name: "O1".into(),
-            kind: IrElementKind::TransmissionLine,
-            connections: vec![
-                Connection {
-                    terminal: "in_pos".into(),
-                    net: Id(1),
-                },
-                Connection {
-                    terminal: "in_neg".into(),
-                    net: Id(0),
-                },
-                Connection {
-                    terminal: "out_pos".into(),
-                    net: Id(2),
-                },
-                Connection {
-                    terminal: "out_neg".into(),
-                    net: Id(0),
-                },
-            ],
-            params: vec![],
-            model: None,
-            source_spec: None,
-        });
-        let result = assemble_mna_from_circuit(&c, false, None).unwrap();
-        assert!(result.is_none());
     }
 
     /// A diode-bearing circuit must be accepted by the direct path now that

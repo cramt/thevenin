@@ -318,41 +318,4 @@ mod tests {
         }
     }
 
-    /// A circuit with an element outside the IR-direct supported subset
-    /// must fall back to the lowering path. Uses a TransmissionLine
-    /// (LTRA) since diodes / BJTs / MOSFETs / JFETs / MESA family /
-    /// behavioural / mutual-coupling are all supported. This test pins
-    /// the fallback for still-pending distributed elements and XSPICE
-    /// (see `docs/migration/mna-ir-pivot-plan.md`).
-    #[test]
-    fn direct_path_rejects_unsupported_circuits() {
-        let mut c = voltage_divider();
-        c.elements.push(cirq_ir::Element {
-            id: Id(3),
-            name: "O1".into(),
-            kind: ElementKind::TransmissionLine,
-            connections: vec![
-                cirq_ir::Connection {
-                    terminal: "in_pos".into(),
-                    net: Id(1),
-                },
-                cirq_ir::Connection {
-                    terminal: "in_neg".into(),
-                    net: Id(0),
-                },
-                cirq_ir::Connection {
-                    terminal: "out_pos".into(),
-                    net: Id(2),
-                },
-                cirq_ir::Connection {
-                    terminal: "out_neg".into(),
-                    net: Id(0),
-                },
-            ],
-            params: vec![],
-            model: None,
-            source_spec: None,
-        });
-        assert!(simulate_op_direct(&c).is_none());
-    }
 }

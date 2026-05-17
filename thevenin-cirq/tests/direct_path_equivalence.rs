@@ -502,6 +502,24 @@ fn mutual_coupling_two_inductors() {
 }
 
 #[test]
+fn ltra_lossy_line_op() {
+    // LTRA element with model params from the harness fixture. The
+    // direct path stamps 2 branches per LTRA instance and defers DC
+    // stamping to MnaSystem::stamp_ltra_dc_all, which the shared OP
+    // solver invokes when ltras is non-empty.
+    assert_paths_equal(
+        "LTRA OP\n\
+         .model lline ltra r=12.45 g=0 l=8.972e-9 c=0.468e-12 len=16\n\
+         V1 in 0 1\n\
+         R1 in pos1 50\n\
+         O1 pos1 0 pos2 0 lline\n\
+         R2 pos2 0 50\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
 fn ladder_network() {
     // L-shaped R network with several internal nodes — stresses node
     // indexing.

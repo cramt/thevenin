@@ -228,12 +228,49 @@ Verification: `cargo nextest run --workspace` → 1006/1006 pass; harness
 Verification: `cargo nextest run --workspace` → 1008/1008 pass; harness
 100/0/7 unchanged; `cargo clippy -p thevenin --lib` clean.
 
-**Deferred to a follow-up session:** LTRA, TXL, CPL, and XSPICE. These
-distributed-element kinds need multi-branch allocation (LTRA/TXL add 2,
-CPL adds `2 * width`) plus the XSPICE registry lookup with per-port
-voltage/current branch allocation. Coverage gap remains tractable —
-mutual coupling and behavioural sources cover the most-used cases for
-analog circuits.
+#### Session F-distributed — LTRA / TXL / CPL / XSPICE — landed
+
+The last four element kinds are now in `mna_ir`:
+
+- **TransmissionLine** (LTRA, O element): 4 terminals (in_pos/in_neg/
+  out_pos/out_neg), 2 branch equations, LtraModel::from_model_def.
+  DC stamps stay deferred to `MnaSystem::stamp_ltra_dc_all`.
+- **Txl** (Y element): same 4 terminals + 2 branches. TxlModel +
+  `setup_txline(model, length)` with optional `LEN`/`LENGTH` instance
+  override via `expr_val_or`.
+- **CoupledLine** (CPL, P element): variable width — `in0..inN`,
+  `out0..outN`, optional `gnd` terminal. Allocates `2 * width` branch
+  equations (interleaved as `ibr1[0..N]` then `ibr2[0..N]`). CplModel
+  + `setup_cpline` with length override.
+- **Xspice** (A element): registry-driven. Iterates `cm_def.ports`,
+  resolves per-port (scalar / array) connections to node indices,
+  allocates a vsource branch for voltage-out / current-in ports,
+  collects `ParamValue` defaults from `cm_def.params` overlaid with
+  the model's params. Skips the element when no registry is supplied
+  (matches the Netlist path's backward-compat behaviour).
+
+To enable reuse without duplication:
+- `crate::ltra::LtraModel::from_model_def`, `crate::txl::TxlModel::from_model_def`,
+  and `crate::cpl::CplModel::from_model_def` are already `pub`.
+- `crate::txl::setup_txline` and `crate::cpl::setup_cpline` are already
+  `pub`. No further visibility changes needed.
+
+Both element-kind `match` sites in `stamp_circuit` are now exhaustive
+(no `_ => unreachable!()` arm). The compiler enforces full coverage if
+a new `IrElementKind` variant is added to cirq_ir — the gate
+`circuit_is_supported_subset` still uses `matches!()` so unknown
+variants safely fall back to the lowering path at runtime.
+
+Coverage complete: `mna_ir::circuit_is_supported_subset` now returns
+`true` for every existing `IrElementKind` variant. Every circuit
+shaped from Cirq IR can be assembled directly without going through
+`circuit_to_netlists`. The remaining Stage 4 work (`Session G`) is
+wiring DC / AC / transient analyses through the same path so the
+direct route is exercised end-to-end, not just for `.op`.
+
+One new equivalence fixture (`ltra_lossy_line_op`); TXL/CPL/XSPICE
+paths land in code but rely on the existing harness fixtures for
+broader coverage once Session G routes the harness through mna_ir.
 
 #### Session G — Netlist callers + final cutover
 
