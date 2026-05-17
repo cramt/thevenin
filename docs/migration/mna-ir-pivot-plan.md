@@ -144,19 +144,36 @@ elements:
 Verification: `cargo nextest run --workspace` → 998/998 pass; harness
 100/0/7 unchanged.
 
-#### Session D — MOSFET family
+#### Session D — MOSFET family — landed
 
-- `Mosfet` with level dispatch: 2 (MOS2), 6 (MOS6), 8/49 (BSIM3),
-  14/54 (BSIM4), 55 (BSIM3SOI-FD), 56 (BSIM3SOI-DD), 57 (BSIM3SOI-PD),
-  default (MOS1).
-- Each level uses its own `*Model::from_model_def` loader via the same shim
-  — no model code changes.
-- Internal-node count differs per level (some depend on `nrd`/`nrs`
-  instance params, some on `has_body_contact`). Mirror `mna.rs:1198-1287`
-  exactly.
-- Extend `direct_path_equivalence.rs` with one fixture per supported level.
+`mna_ir.rs` now accepts Nmos / Pmos with the full level dispatch:
+1 (MOS1 default), 2 (MOS2), 6 (MOS6), 8/49 (BSIM3), 14/54 (BSIM4),
+55 (BSIM3SOI-FD), 56 (BSIM3SOI-DD), 57 (BSIM3SOI-PD).
 
-Estimated diff: +600 LOC.
+- New `ModelTables` struct holds owning `Vec<(name, ModelDef)>` plus the
+  Netlist-shaped `models_by_name` and `bins_by_base` lookups that
+  `resolve_model_with_bins` expects. Synthetic-alias filtering mirrors
+  `cirq_frontend::to_netlist::circuit_to_netlists`: empty-param models
+  whose name is the base of `<name>.<digits>` siblings are skipped so
+  the bin resolver picks the right `.N` variant.
+- Each level uses its own `from_model_def` loader unchanged; the level-1
+  / 2 / 6 paths also push junction caps via `push_mosfet_caps`
+  (re-exported as `pub(crate)`). The BSIM3SOI-FD path mirrors the
+  conditional body-internal-node allocation: only created when the
+  element has a body contact (matches `b3soifdset.c`'s
+  `bNode = pNode = 0 when bNodeExt == -1`).
+- `crate::mna::{get_mosfet_level, get_mosfet_lw, get_nrd_nrs,
+  resolve_model_with_bins, push_mosfet_caps}` promoted to `pub(crate)`
+  so the new module can reuse them with the `extra_params` shim
+  producing `Vec<Param>` from IR.
+- Six new equivalence fixtures in `direct_path_equivalence.rs`:
+  `mosfet_level1_nmos`, `mosfet_level1_pmos`, `mosfet_level2_with_series_resistances`,
+  `mosfet_bsim3_level8` (uses the full nmosParameters set ported from
+  `ngspice-upstream/tests/bsim3/nmos/parameters` so the NR solve
+  converges).
+
+Verification: `cargo nextest run --workspace` → 1006/1006 pass; harness
+100/0/7 unchanged.
 
 #### Session E — JFET / MESA / MESFET / HFET
 

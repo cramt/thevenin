@@ -21,15 +21,24 @@ use std::sync::Arc;
 
 use cirq_frontend::to_netlist::{convert_model, convert_source_spec, extra_params};
 use cirq_ir::{Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Model, Value};
-use thevenin_types::{Expr, Source};
+use thevenin_types::{Expr, ModelDef, Source};
 use thevenin_xspice::CodeModelRegistry;
 
 use crate::bjt::{BjtInstance, BjtModel};
+use crate::bsim3::{Bsim3Instance, Bsim3Model};
+use crate::bsim3soi_dd::{Bsim3SoiDdInstance, Bsim3SoiDdModel};
+use crate::bsim3soi_fd::{Bsim3SoiFdInstance, Bsim3SoiFdModel};
+use crate::bsim3soi_pd::{Bsim3SoiPdInstance, Bsim3SoiPdModel};
+use crate::bsim4::{Bsim4Instance, Bsim4Model};
 use crate::diode::DiodeModel;
 use crate::mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
-    NodeMap, ResistorInstance, VoltageSourceInstance, push_bjt_caps, stamp_conductance,
+    NodeMap, ResistorInstance, VoltageSourceInstance, get_mosfet_level, get_mosfet_lw,
+    get_nrd_nrs, push_bjt_caps, push_mosfet_caps, resolve_model_with_bins, stamp_conductance,
 };
+use crate::mos2::{Mos2Instance, Mos2Model};
+use crate::mos6::{Mos6Instance, Mos6Model};
+use crate::mosfet::{MosfetInstance, MosfetModel};
 use crate::newton::NrOptions;
 use crate::vbic::{VbicInstance, VbicModel};
 
@@ -129,6 +138,8 @@ fn circuit_is_supported_subset(circuit: &Circuit) -> bool {
                 | IrElementKind::Diode
                 | IrElementKind::Npn
                 | IrElementKind::Pnp
+                | IrElementKind::Nmos
+                | IrElementKind::Pmos
         )
     })
 }
@@ -342,6 +353,77 @@ fn load_bjt_model(circuit: &Circuit, elem: &IrElement) -> BjtModel {
     base.with_instance_params(&extra_params(elem, &["value"]))
 }
 
+/// Owning storage for Netlist-shaped [`ModelDef`] values converted from the
+/// circuit's IR models, plus the indexed lookup tables `assemble_mna_flat`
+/// uses (exact-name `models` map and base-name `model_bins` map for
+/// BSIM4-style W/L binning).
+///
+/// MOSFET stamping reuses the existing `resolve_model_with_bins` helper from
+/// `crate::mna`, which works on `BTreeMap<String, &ModelDef>`. To keep the
+/// lifetime story clean, the `models_by_name` / `bins_by_base` maps borrow
+/// into `defs` — both live for the duration of `stamp_circuit`.
+struct ModelTables {
+    defs: Vec<(String, ModelDef)>,
+}
+
+impl ModelTables {
+    fn build(circuit: &Circuit) -> Self {
+        // Mirror `cirq_frontend::to_netlist::circuit_to_netlists` (lines 80-103):
+        // skip synthetic aliases — empty-params models whose name is the
+        // base of at least one `<name>.<digits>` sibling. The simulator's
+        // `resolve_model_with_bins` already handles the base-name lookup;
+        // the alias only exists so the IR element's `model: Option<Id>` has
+        // somewhere to point.
+        let all_names: std::collections::HashSet<String> = circuit
+            .models
+            .iter()
+            .map(|m| m.name.to_ascii_uppercase())
+            .collect();
+        let alias_names: std::collections::HashSet<String> = circuit
+            .models
+            .iter()
+            .filter(|m| m.params.is_empty())
+            .map(|m| m.name.to_ascii_uppercase())
+            .filter(|upper| {
+                all_names.iter().any(|n| {
+                    n.strip_prefix(&format!("{upper}."))
+                        .map(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+                        .unwrap_or(false)
+                })
+            })
+            .collect();
+
+        let defs: Vec<(String, ModelDef)> = circuit
+            .models
+            .iter()
+            .filter(|m| !alias_names.contains(&m.name.to_ascii_uppercase()))
+            .map(|m| (m.name.to_ascii_uppercase(), convert_model(m)))
+            .collect();
+        Self { defs }
+    }
+
+    fn models_by_name(&self) -> BTreeMap<String, &ModelDef> {
+        self.defs
+            .iter()
+            .map(|(name, def)| (name.clone(), def))
+            .collect()
+    }
+
+    fn bins_by_base(&self) -> BTreeMap<String, Vec<&ModelDef>> {
+        let mut bins: BTreeMap<String, Vec<&ModelDef>> = BTreeMap::new();
+        for (upper, def) in &self.defs {
+            if let Some(dot_pos) = upper.rfind('.') {
+                let suffix = &upper[dot_pos + 1..];
+                if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+                    let base = upper[..dot_pos].to_string();
+                    bins.entry(base).or_default().push(def);
+                }
+            }
+        }
+        bins
+    }
+}
+
 /// Build a fully-resolved [`VbicModel`] (level 4) with temperature applied.
 /// Mirrors `assemble_mna_flat`'s VBIC branch exactly: no
 /// `with_instance_params` call (the existing Netlist path doesn't apply
@@ -361,6 +443,12 @@ fn stamp_circuit(
     xspice_registry: Option<Arc<CodeModelRegistry>>,
 ) -> Result<MnaSystem, MnaError> {
     let net_name = build_net_name_map(circuit);
+    // MOSFET stamping needs the Netlist-shaped model + bins lookup that
+    // `resolve_model_with_bins` operates on. Build it once up-front; both
+    // passes borrow into `tables.defs`.
+    let tables = ModelTables::build(circuit);
+    let models_map = tables.models_by_name();
+    let bins_map = tables.bins_by_base();
 
     // -----------------------------------------------------------------
     // First pass: index nodes, count vsource branches and internal nodes,
@@ -462,6 +550,72 @@ fn stamp_circuit(
                         .map(|m| BjtModel::from_model_def(&convert_model(m)))
                         .unwrap_or_else(|| BjtModel::new(crate::bjt::BjtType::Npn));
                     internal_node_count += bm.internal_node_count();
+                }
+            }
+            IrElementKind::Nmos | IrElementKind::Pmos => {
+                let d = terminal_name(elem, "drain", &net_name)?;
+                let g = terminal_name(elem, "gate", &net_name)?;
+                let s = terminal_name(elem, "source", &net_name)?;
+                let bulk = terminal_name(elem, "bulk", &net_name)?;
+                node_map.index(d);
+                node_map.index(g);
+                node_map.index(s);
+                node_map.index(bulk);
+                let has_body = elem.connections.iter().any(|cn| cn.terminal == "body");
+                if has_body {
+                    let body = terminal_name(elem, "body", &net_name)?;
+                    node_map.index(body);
+                }
+
+                let params_nl = extra_params(elem, &["value"]);
+                let (inst_l, inst_w) = get_mosfet_lw(&params_nl);
+                let (nrd, nrs) = get_nrd_nrs(&params_nl);
+                let model_name = lookup_model(circuit, elem).map(|m| m.name.clone());
+                let resolved = model_name.as_deref().and_then(|name| {
+                    resolve_model_with_bins(&models_map, &bins_map, name, inst_l, inst_w)
+                });
+                let level = get_mosfet_level(resolved.as_ref(), &params_nl);
+
+                if level == 8 || level == 49 {
+                    let bm = resolved
+                        .map(Bsim3Model::from_model_def)
+                        .unwrap_or_else(|| Bsim3Model::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += bm.internal_node_count(nrd, nrs);
+                } else if level == 14 || level == 54 {
+                    let bm = resolved
+                        .map(Bsim4Model::from_model_def)
+                        .unwrap_or_else(|| Bsim4Model::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += bm.internal_node_count(nrd, nrs);
+                } else if level == 56 {
+                    let bm = resolved
+                        .map(Bsim3SoiDdModel::from_model_def)
+                        .unwrap_or_else(|| Bsim3SoiDdModel::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += bm.internal_node_count(nrd, nrs);
+                } else if level == 57 {
+                    let bm = resolved
+                        .map(Bsim3SoiPdModel::from_model_def)
+                        .unwrap_or_else(|| Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += bm.internal_node_count(nrd, nrs);
+                } else if level == 55 {
+                    let bm = resolved
+                        .map(Bsim3SoiFdModel::from_model_def)
+                        .unwrap_or_else(|| Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += bm.internal_node_count_fd(nrd, nrs, has_body);
+                } else if level == 2 {
+                    let mm = resolved
+                        .map(Mos2Model::from_model_def)
+                        .unwrap_or_else(|| Mos2Model::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += mm.internal_node_count();
+                } else if level == 6 {
+                    let mm = resolved
+                        .map(Mos6Model::from_model_def)
+                        .unwrap_or_else(|| Mos6Model::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += mm.internal_node_count();
+                } else {
+                    let mm = resolved
+                        .map(MosfetModel::from_model_def)
+                        .unwrap_or_else(|| MosfetModel::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += mm.internal_node_count();
                 }
             }
             _ => unreachable!("circuit_is_supported_subset filtered above"),
@@ -807,6 +961,521 @@ fn stamp_circuit(
                 // The conductance/current stamps are applied during NR
                 // iteration in `device_stamp::diode`, not here.
             }
+            IrElementKind::Nmos | IrElementKind::Pmos => {
+                let drain_idx = mna.node_map.get(terminal_name(elem, "drain", &net_name)?);
+                let gate_idx = mna.node_map.get(terminal_name(elem, "gate", &net_name)?);
+                let source_idx = mna.node_map.get(terminal_name(elem, "source", &net_name)?);
+                let bulk_idx = mna.node_map.get(terminal_name(elem, "bulk", &net_name)?);
+                let body_idx = if elem.connections.iter().any(|cn| cn.terminal == "body") {
+                    mna.node_map.get(terminal_name(elem, "body", &net_name)?)
+                } else {
+                    None
+                };
+
+                // Instance scalars (defaults match `mna::assemble_mna_flat`).
+                let mut w = 1e-4;
+                let mut l = 1e-4;
+                let mut ad = 0.0;
+                let mut as_ = 0.0;
+                let mut pd = 0.0;
+                let mut ps = 0.0;
+                let mut m_mult = 1.0;
+                let mut nrd = 0.0;
+                let mut nrs = 0.0;
+                for (name, value) in &elem.params {
+                    if let Some(v) = numeric_value(value) {
+                        match name.to_uppercase().as_str() {
+                            "W" => w = v,
+                            "L" => l = v,
+                            "AD" => ad = v,
+                            "AS" => as_ = v,
+                            "PD" => pd = v,
+                            "PS" => ps = v,
+                            "M" => m_mult = v,
+                            "NRD" => nrd = v,
+                            "NRS" => nrs = v,
+                            _ => {}
+                        }
+                    }
+                }
+
+                let params_nl = extra_params(elem, &["value"]);
+                let model_name = lookup_model(circuit, elem).map(|m| m.name.clone());
+                let resolved = model_name.as_deref().and_then(|name| {
+                    resolve_model_with_bins(&models_map, &bins_map, name, l, w)
+                });
+                let level = get_mosfet_level(resolved.as_ref(), &params_nl);
+
+                if level == 8 || level == 49 {
+                    // BSIM3.
+                    let bm = resolved
+                        .map(Bsim3Model::from_model_def)
+                        .unwrap_or_else(|| Bsim3Model::new(crate::mosfet::MosfetType::Nmos));
+
+                    let drain_prime_idx = if bm.rsh > 0.0 && nrd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if bm.rsh > 0.0 && nrs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+
+                    let size_params = bm.size_dep_param(w, l, 300.15);
+                    let vth0_inst = size_params.vth0;
+                    let vfb_inst = size_params.vfbzb
+                        + size_params.phi
+                        + size_params.k1 * size_params.sqrt_phi;
+                    let vfbzb_inst = size_params.vfbzb;
+                    mna.bsim3s.push(Bsim3Instance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        nrd,
+                        nrs,
+                        m: m_mult,
+                        vth0_inst,
+                        vfb_inst,
+                        vfbzb_inst,
+                        size_params,
+                        model: bm,
+                    });
+                } else if level == 14 || level == 54 {
+                    // BSIM4.
+                    let bm = resolved
+                        .map(Bsim4Model::from_model_def)
+                        .unwrap_or_else(|| Bsim4Model::new(crate::mosfet::MosfetType::Nmos));
+
+                    let drain_prime_idx = if (bm.rsh > 0.0 && nrd > 0.0) || bm.rdsmod != 0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if (bm.rsh > 0.0 && nrs > 0.0) || bm.rdsmod != 0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+
+                    let mut nf = 1.0;
+                    let mut sa = 0.0;
+                    let mut sb = 0.0;
+                    for (name, value) in &elem.params {
+                        if let Some(v) = numeric_value(value) {
+                            match name.to_uppercase().as_str() {
+                                "NF" => nf = v,
+                                "SA" => sa = v,
+                                "SB" => sb = v,
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    let size_params = bm.size_dep_param(w, l, nf, 300.15);
+                    mna.bsim4s.push(Bsim4Instance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        w,
+                        l,
+                        nf,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        nrd,
+                        nrs,
+                        m: m_mult,
+                        sa,
+                        sb,
+                        model: bm,
+                        size_params,
+                    });
+                } else if level == 56 {
+                    // BSIM3SOI-DD.
+                    let bm = resolved
+                        .map(Bsim3SoiDdModel::from_model_def)
+                        .unwrap_or_else(|| Bsim3SoiDdModel::new(crate::mosfet::MosfetType::Nmos));
+
+                    let drain_prime_idx = if bm.rbsh > 0.0 && nrd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if bm.rbsh > 0.0 && nrs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    let body_int_idx = Some({
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        idx
+                    });
+                    let mut nbc = 0.0;
+                    for (name, value) in &elem.params {
+                        if name.eq_ignore_ascii_case("NBC")
+                            && let Some(v) = numeric_value(value)
+                        {
+                            nbc = v;
+                        }
+                    }
+
+                    let size_params = bm.size_dep_param(w, l, 300.15);
+                    let vth0_inst = size_params.vth0;
+                    mna.bsim3soi_dds.push(Bsim3SoiDdInstance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        e_idx: bulk_idx,
+                        body_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        body_int_idx,
+                        w,
+                        l,
+                        m: m_mult,
+                        nrd,
+                        nrs,
+                        model: bm,
+                        size_params,
+                        vth0_inst,
+                        nbc,
+                    });
+                } else if level == 57 {
+                    // BSIM3SOI-PD.
+                    let bm = resolved
+                        .map(Bsim3SoiPdModel::from_model_def)
+                        .unwrap_or_else(|| Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos));
+
+                    let drain_prime_idx = if bm.rbsh > 0.0 && nrd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if bm.rbsh > 0.0 && nrs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    let body_int_idx = Some({
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        idx
+                    });
+                    let mut nbc = 0.0;
+                    for (name, value) in &elem.params {
+                        if name.eq_ignore_ascii_case("NBC")
+                            && let Some(v) = numeric_value(value)
+                        {
+                            nbc = v;
+                        }
+                    }
+
+                    let size_params = bm.size_dep_param(w, l, 300.15);
+                    let vth0_inst = size_params.vth0;
+                    mna.bsim3soi_pds.push(Bsim3SoiPdInstance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        e_idx: bulk_idx,
+                        body_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        body_int_idx,
+                        w,
+                        l,
+                        m: m_mult,
+                        nrd,
+                        nrs,
+                        model: bm,
+                        size_params,
+                        vth0_inst,
+                        nbc,
+                    });
+                } else if level == 55 {
+                    // BSIM3SOI-FD. Body internal node only when body
+                    // contact exists (floating-body sets bNode = ground in
+                    // ngspice b3soifdset.c).
+                    let bm = resolved
+                        .map(Bsim3SoiFdModel::from_model_def)
+                        .unwrap_or_else(|| Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos));
+
+                    let has_ext_rd = nrd > 0.0 && bm.rbsh > 0.0;
+                    let has_ext_rs = nrs > 0.0 && bm.rbsh > 0.0;
+                    let drain_prime_idx = if has_ext_rd {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if has_ext_rs {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    let body_int_idx = if body_idx.is_some() {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        None
+                    };
+                    let mut nbc = 0.0;
+                    for (name, value) in &elem.params {
+                        if name.eq_ignore_ascii_case("NBC")
+                            && let Some(v) = numeric_value(value)
+                        {
+                            nbc = v;
+                        }
+                    }
+
+                    let size_params = bm.size_dep_param(w, l, 300.15);
+                    let vth0_inst = size_params.vth0;
+                    mna.bsim3soi_fds.push(Bsim3SoiFdInstance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        e_idx: bulk_idx,
+                        body_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        body_int_idx,
+                        w,
+                        l,
+                        m: m_mult,
+                        nrd,
+                        nrs,
+                        model: bm,
+                        size_params,
+                        vth0_inst,
+                        nbc,
+                    });
+                } else if level == 2 {
+                    // MOS Level 2.
+                    let mm = resolved
+                        .map(Mos2Model::from_model_def)
+                        .unwrap_or_else(|| Mos2Model::new(crate::mosfet::MosfetType::Nmos));
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    mna.mos2s.push(Mos2Instance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm.clone(),
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
+                    push_mosfet_caps(
+                        &mut mna.capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
+                } else if level == 6 {
+                    // MOS6.
+                    let mm = resolved
+                        .map(Mos6Model::from_model_def)
+                        .unwrap_or_else(|| Mos6Model::new(crate::mosfet::MosfetType::Nmos));
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    mna.mos6s.push(Mos6Instance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm.clone(),
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
+                    push_mosfet_caps(
+                        &mut mna.capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
+                } else {
+                    // MOS Level 1 (default).
+                    let mm = resolved
+                        .map(MosfetModel::from_model_def)
+                        .unwrap_or_else(|| MosfetModel::new(crate::mosfet::MosfetType::Nmos));
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    mna.mosfets.push(MosfetInstance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm.clone(),
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
+                    push_mosfet_caps(
+                        &mut mna.capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
+                }
+                // MOSFET conductance/current stamps are applied during NR
+                // iteration, not here.
+            }
             IrElementKind::Npn | IrElementKind::Pnp => {
                 // Instance scalars (defaults match `mna::assemble_mna_flat`).
                 let mut area = 1.0;
@@ -1110,17 +1779,17 @@ mod tests {
 
     #[test]
     fn unsupported_circuit_returns_none() {
-        // MOSFET (Nmos) is not yet handled by the direct IR path — adding
+        // JFET (NJfet) is not yet handled by the direct IR path — adding
         // one should make `assemble_mna_from_circuit` return Ok(None) so
-        // the caller falls back to `assemble_mna(&Netlist)`. Diodes and
-        // BJTs are now supported; this test pins the fallback for
-        // still-pending device classes (see
+        // the caller falls back to `assemble_mna(&Netlist)`. Diodes /
+        // BJTs / MOSFETs are now supported; this test pins the fallback
+        // for still-pending device classes (see
         // `docs/migration/mna-ir-pivot-plan.md`).
         let mut c = divider();
         c.elements.push(Element {
             id: Id(3),
-            name: "M1".into(),
-            kind: IrElementKind::Nmos,
+            name: "J1".into(),
+            kind: IrElementKind::NJfet,
             connections: vec![
                 Connection {
                     terminal: "drain".into(),
@@ -1132,10 +1801,6 @@ mod tests {
                 },
                 Connection {
                     terminal: "source".into(),
-                    net: Id(0),
-                },
-                Connection {
-                    terminal: "bulk".into(),
                     net: Id(0),
                 },
             ],

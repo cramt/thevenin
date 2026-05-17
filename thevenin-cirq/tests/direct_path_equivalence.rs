@@ -325,6 +325,101 @@ fn bjt_vbic_level4() {
 }
 
 #[test]
+fn mosfet_level1_nmos() {
+    // Default-level MOS1 with simple model — exercises the MosfetModel
+    // branch + push_mosfet_caps (CGSO/CGDO/CGBO=0 here, so no caps push).
+    assert_paths_equal(
+        "MOS1 NMOS\n\
+         .model nm nmos vto=0.7 kp=100u\n\
+         VDD vdd 0 5\n\
+         VGS gate 0 2.0\n\
+         RD vdd drain 10k\n\
+         M1 drain gate 0 0 nm w=10u l=1u\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn mosfet_level1_pmos() {
+    // PMOS in common-source — exercises the typed Pmos -> \"PMOS\" kind
+    // through convert_model.
+    assert_paths_equal(
+        "MOS1 PMOS\n\
+         .model pm pmos vto=-0.7 kp=50u\n\
+         VDD vdd 0 5\n\
+         VGS gate vdd -2.0\n\
+         RD drain 0 10k\n\
+         M1 drain gate vdd vdd pm w=10u l=1u\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn mosfet_level2_with_series_resistances() {
+    // MOS Level 2 with RD/RS > 0 — exercises the level=2 branch including
+    // internal-node allocation and push_mosfet_caps with non-zero overlap.
+    assert_paths_equal(
+        "MOS2 NMOS\n\
+         .model nm nmos level=2 vto=0.7 kp=100u rd=50 rs=30 cgso=1p cgdo=1p\n\
+         VDD vdd 0 5\n\
+         VGS gate 0 2.0\n\
+         RD vdd drain 10k\n\
+         M1 drain gate 0 0 nm w=10u l=1u\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn mosfet_bsim3_level8() {
+    // BSIM3 (level=8) — uses the full nmos parameter set from
+    // ngspice-upstream/tests/bsim3/nmos/parameters/nmosParameters so the
+    // NR solve actually converges. Exercises Bsim3Model + Bsim3Instance
+    // with size_dep_param and the rsh*nrd internal-node gating.
+    let cir = "\
+BSIM3 OP
+.model nmod nmos level=8 version=3.3
++ binunit=1 paramchk=1 mobmod=1 capmod=3 acnqsmod=0 noimod=1 tnom=27
++ nch=1.7e+17 tox=1.5e-08 toxm=1.5e-08
++ wint=0.0 lint=0.0 ll=0.0 wl=0.0 lln=1.0 wln=1.0
++ lw=0.0 ww=0.0 lwn=1.0 wwn=1.0 lwl=0.0 wwl=0.0
++ xpart=0.0 xl=-30e-09
++ vth0=0.7 k1=0.5 k2=0.0 k3=80 k3b=0.0 w0=2.5e-06
++ dvt0=2.2 dvt1=0.53 dvt2=-0.032 nlx=1.74e-07
++ dvt0w=0.0 dvt1w=5.3e6 dvt2w=-0.032 dsub=0.56
++ xj=1.5e-07 ngate=0.0
++ cdsc=2.4e-04 cdscb=0.0 cdscd=0.0 cit=0.0
++ voff=-0.08 nfactor=1.0 eta0=0.08 etab=-0.07
++ vfb=-0.55 u0=670 ua=2.25e-09 ub=5.87e-19 uc=-4.65e-11
++ vsat=8e+04 a0=1.0 ags=0.0 a1=0.0 a2=1.0
++ b0=0.0 b1=0.0 keta=-0.047 dwg=0.0 dwb=0.0
++ pclm=1.3 pdiblc1=0.39 pdiblc2=0.0086 pdiblcb=0.0
++ drout=0.56 pvag=0.0 delta=0.01
++ pscbe1=4.24e+8 pscbe2=1e-05
++ rsh=10.0 rdsw=100.0 prwg=0.0 prwb=0.0 wr=1.0
++ alpha0=0.0 alpha1=0.0 beta0=30
++ cgbo=0.0 cgdl=2e-10 cgsl=2e-10 ckappa=0.6
++ acde=1.0 moin=15 noff=0.9 voffcv=0.02
++ kt1=-0.11 kt1l=0.0 kt2=-0.022 ute=-1.48
++ ua1=4.31e-09 ub1=-7.61e-18 uc1=-5.6e-11 prt=0.0 at=3.3e+04
++ ijth=0.1 js=0.0001 jsw=0.0
++ pb=1.0 cj=0.0005 mj=0.5
++ pbsw=1.0 cjsw=5e-10 mjsw=0.33
++ pbswg=1.0 cjswg=5e-10 mjswg=0.33
++ tpb=0.005 tcj=0.001 tpbsw=0.005 tcjsw=0.001
++ tpbswg=0.005 tcjswg=0.001 xti=3
+M1 d g 0 0 nmod W=10e-6 L=1e-6
+Vgs g 0 1.8
+Vds d 0 0.5
+.op
+.end
+";
+    assert_paths_equal(cir);
+}
+
+#[test]
 fn ladder_network() {
     // L-shaped R network with several internal nodes — stresses node
     // indexing.

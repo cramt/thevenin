@@ -792,7 +792,7 @@ fn get_bjt_level(
 
 /// Extract the MOSFET LEVEL parameter from model definition and instance params.
 /// Checks instance params first (override), then model params. Default is 1.
-fn get_mosfet_level(
+pub(crate) fn get_mosfet_level(
     model_def: Option<&&thevenin_types::ModelDef>,
     instance_params: &[thevenin_types::Param],
 ) -> i32 {
@@ -818,7 +818,7 @@ fn get_mosfet_level(
 }
 
 /// Extract NRD and NRS from instance params.
-fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
+pub(crate) fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
     let mut nrd = 0.0;
     let mut nrs = 0.0;
     for p in params {
@@ -834,7 +834,7 @@ fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
 }
 
 /// Extract MOSFET L and W from instance parameters (defaults: 1e-4).
-fn get_mosfet_lw(params: &[thevenin_types::Param]) -> (f64, f64) {
+pub(crate) fn get_mosfet_lw(params: &[thevenin_types::Param]) -> (f64, f64) {
     let mut l = 1e-4;
     let mut w = 1e-4;
     for p in params {
@@ -874,7 +874,7 @@ fn extract_bin_bounds(mdef: &thevenin_types::ModelDef) -> (f64, f64, f64, f64) {
 /// If no exact match for `name` exists in `models`, looks for binned models
 /// (`name.1`, `name.2`, etc.) in `model_bins` and picks the bin whose
 /// LMIN/LMAX/WMIN/WMAX range includes the given device L and W.
-fn resolve_model_with_bins<'a>(
+pub(crate) fn resolve_model_with_bins<'a>(
     models: &BTreeMap<String, &'a thevenin_types::ModelDef>,
     model_bins: &BTreeMap<String, Vec<&'a thevenin_types::ModelDef>>,
     name: &str,
@@ -986,7 +986,7 @@ pub(crate) fn push_bjt_caps(
 /// We follow the same priority: use CJ*area + CJSW*perimeter when area > 0,
 /// otherwise fall back to the CBD/CBS model parameters.
 #[expect(clippy::too_many_arguments)]
-fn push_mosfet_caps(
+pub(crate) fn push_mosfet_caps(
     capacitors: &mut Vec<CapacitorInstance>,
     gate_idx: Option<usize>,
     drain_prime_idx: Option<usize>,

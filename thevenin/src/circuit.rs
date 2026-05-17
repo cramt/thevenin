@@ -319,8 +319,8 @@ mod tests {
     }
 
     /// A circuit with an element outside the IR-direct supported subset
-    /// must fall back to the lowering path. Uses a MOSFET (Nmos) because
-    /// BJTs are now supported directly; this test pins the fallback
+    /// must fall back to the lowering path. Uses a JFET (NJfet) because
+    /// MOSFETs are now supported directly; this test pins the fallback
     /// behaviour for device classes still pending migration (see
     /// `docs/migration/mna-ir-pivot-plan.md`).
     #[test]
@@ -328,8 +328,8 @@ mod tests {
         let mut c = voltage_divider();
         c.elements.push(cirq_ir::Element {
             id: Id(3),
-            name: "M1".into(),
-            kind: ElementKind::Nmos,
+            name: "J1".into(),
+            kind: ElementKind::NJfet,
             connections: vec![
                 cirq_ir::Connection {
                     terminal: "drain".into(),
@@ -341,10 +341,6 @@ mod tests {
                 },
                 cirq_ir::Connection {
                     terminal: "source".into(),
-                    net: Id(0),
-                },
-                cirq_ir::Connection {
-                    terminal: "bulk".into(),
                     net: Id(0),
                 },
             ],

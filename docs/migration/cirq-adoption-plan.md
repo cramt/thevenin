@@ -183,6 +183,18 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       `.temp` first then `Options.TEMP`. Four new equivalence
       fixtures (NPN CE, NPN with RB/RC/RE, PNP, full VBIC); harness
       stays 100/0/7. 998/998 workspace tests pass.
+      **Session D landed (MOSFET):** Nmos / Pmos with full level
+      dispatch (MOS1/2/6, BSIM3 8/49, BSIM4 14/54, BSIM3SOI-FD/DD/PD
+      55/56/57). New `ModelTables` struct owns Netlist-shaped
+      `ModelDef` copies and exposes the `models_by_name` +
+      `bins_by_base` maps that `resolve_model_with_bins` operates on
+      (synthetic-alias filtering matches `circuit_to_netlists`).
+      `crate::mna::{get_mosfet_level, get_mosfet_lw, get_nrd_nrs,
+      resolve_model_with_bins, push_mosfet_caps}` promoted to
+      pub(crate) for reuse. Four new equivalence fixtures (MOS1 NMOS,
+      MOS1 PMOS, MOS2 with RD/RS, BSIM3 with full nmosParameters
+      ported from ngspice-upstream). 1006/1006 workspace tests pass;
+      harness still 100/0/7.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`
