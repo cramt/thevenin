@@ -181,6 +181,12 @@ pub struct MutualCouplingInstance {
 pub struct VoltageSourceInstance {
     /// Index of this source's branch equation in the RHS vector.
     pub branch_idx: usize,
+    /// Positive terminal matrix index (None = ground).
+    pub pos_idx: Option<usize>,
+    /// Negative terminal matrix index (None = ground).
+    pub neg_idx: Option<usize>,
+    /// Source name (matches the corresponding entry in `vsource_names`).
+    pub name: String,
     /// Transient waveform, if any.
     pub waveform: Option<thevenin_types::Waveform>,
 }
@@ -3431,6 +3437,9 @@ fn stamp_element(
 
             voltage_sources.push(VoltageSourceInstance {
                 branch_idx: branch,
+                pos_idx: ni,
+                neg_idx: nj,
+                name: element.name.clone(),
                 waveform: source.waveform.clone(),
             });
 

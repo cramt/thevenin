@@ -70,11 +70,61 @@ pub fn simulate_noise_with_mna(
 
     let fstart_val = expr_val(&fstart, ".noise")?;
     let fstop_val = expr_val(&fstop, ".noise")?;
+    let num_nodes_pre = mna.total_num_nodes();
+    let excitations =
+        crate::ac::collect_ac_excitations_from_netlist(netlist, &mna, num_nodes_pre);
+    let nr_opts = nr_options_from_netlist(netlist);
+    let nodeset = resolve_nodeset(netlist, &mna);
+
+    run_noise(
+        mna,
+        NoiseRunParams {
+            output,
+            ref_node,
+            src_name,
+            variation,
+            n,
+            fstart: fstart_val,
+            fstop: fstop_val,
+            nr_opts,
+            nodeset,
+            excitations,
+        },
+    )
+}
+
+/// Fully-resolved `.noise` analysis parameters, shared between Netlist and
+/// Circuit input paths.
+pub struct NoiseRunParams {
+    pub output: String,
+    pub ref_node: Option<String>,
+    pub src_name: String,
+    pub variation: thevenin_types::AcVariation,
+    pub n: u32,
+    pub fstart: f64,
+    pub fstop: f64,
+    pub nr_opts: crate::newton::NrOptions,
+    pub nodeset: Vec<(usize, f64)>,
+    pub excitations: Vec<crate::ac::AcExcitation>,
+}
+
+/// Execute `.noise` analysis with pre-resolved params.
+pub fn run_noise(mna: MnaSystem, params: NoiseRunParams) -> Result<SimResult, MnaError> {
+    let NoiseRunParams {
+        output,
+        ref_node,
+        src_name,
+        variation,
+        n,
+        fstart: fstart_val,
+        fstop: fstop_val,
+        nr_opts,
+        nodeset,
+        excitations,
+    } = params;
 
     // Parse output node specification: "v(node)" or "v(node1,node2)".
     let (out_pos, out_neg) = parse_output_spec(&output)?;
-    let nr_opts = nr_options_from_netlist(netlist);
-    let nodeset = resolve_nodeset(netlist, &mna);
     let op_solution = if mna.has_nonlinear() {
         if nodeset.is_empty() {
             solve_nonlinear_op(&mna, &nr_opts)?
@@ -107,8 +157,6 @@ pub fn simulate_noise_with_mna(
     let mut onoise_data = Vec::with_capacity(frequencies.len());
     let mut inoise_data = Vec::with_capacity(frequencies.len());
 
-    let excitations =
-        crate::ac::collect_ac_excitations_from_netlist(netlist, &mna, num_nodes);
     for &freq in &frequencies {
         let omega = 2.0 * PI * freq;
 
@@ -126,15 +174,8 @@ pub fn simulate_noise_with_mna(
         let adjoint = solve_adjoint(&sys, out_pos_idx, out_neg_idx)?;
 
         // Compute gain: solve forward system with AC source excitation.
-        let gain_sq_inv = compute_gain_sq_inv(
-            &sys,
-            netlist,
-            &mna,
-            num_nodes,
-            out_pos_idx,
-            out_neg_idx,
-            src_branch_idx,
-        )?;
+        let _ = src_branch_idx;
+        let gain_sq_inv = compute_gain_sq_inv(&sys, out_pos_idx, out_neg_idx)?;
 
         // Compute total output noise density (V²/Hz).
         let onoise_sq = compute_total_noise(&mna, &op_solution, &adjoint, freq, nr_opts.gmin);
@@ -223,12 +264,8 @@ fn solve_adjoint(
 /// Compute 1/|H(jω)|² where H is the transfer function from input source to output.
 fn compute_gain_sq_inv(
     sys: &ComplexLinearSystem,
-    _netlist: &Netlist,
-    _mna: &MnaSystem,
-    _num_nodes: usize,
     out_pos_idx: Option<usize>,
     out_neg_idx: Option<usize>,
-    _src_branch_idx: Option<usize>,
 ) -> Result<f64, MnaError> {
     // Forward solve with AC excitation already applied.
     let solution = sys.solve().map_err(MnaError::SolveError)?;

@@ -509,6 +509,165 @@ pub fn tran_params_from_circuit(
     })
 }
 
+/// Extract `(output, input)` for `.tf` analysis from a Circuit.
+///
+/// IR's [`cirq_ir::TfAnalysis`] stores `output` as a verbatim spec string
+/// and `source` as an element [`Id`]; the source is resolved to an
+/// element name for [`crate::tf::run_tf`].
+pub fn tf_spec_from_circuit(circuit: &Circuit) -> Result<(String, String), MnaError> {
+    let tf = circuit
+        .analyses
+        .iter()
+        .find_map(|a| match a {
+            cirq_ir::Analysis::Tf(spec) => Some(spec),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement("no .tf analysis found on circuit".to_string())
+        })?;
+    let input_name = element_name_by_id(circuit, tf.source)
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                ".tf source references unknown element id {:?}",
+                tf.source
+            ))
+        })?
+        .to_string();
+    Ok((tf.output.clone(), input_name))
+}
+
+/// Extract a fully-resolved [`crate::pz::PzRunParams`] from a Circuit's
+/// first declared `Analysis::Pz(PzAnalysis)`. Net Ids are resolved to
+/// their string names (with `gnd → 0` rewrite) and the typed enums map
+/// onto the Netlist-shaped [`thevenin_types::PzInputType`] /
+/// [`thevenin_types::PzAnalysisType`].
+pub fn pz_params_from_circuit(circuit: &Circuit) -> Result<crate::pz::PzRunParams, MnaError> {
+    use cirq_ir::{PzType, TransferType};
+    let pz = circuit
+        .analyses
+        .iter()
+        .find_map(|a| match a {
+            cirq_ir::Analysis::Pz(spec) => Some(spec),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement("no .pz analysis found on circuit".to_string())
+        })?;
+
+    let net_lookup: HashMap<Id, String> = circuit
+        .nets
+        .iter()
+        .map(|n| {
+            let name = if n.name == "gnd" {
+                "0".to_string()
+            } else {
+                n.name.clone()
+            };
+            (n.id, name)
+        })
+        .collect();
+    let resolve = |id: Id, role: &str| -> Result<String, MnaError> {
+        net_lookup.get(&id).cloned().ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                ".pz {role} references unknown net id {id:?}"
+            ))
+        })
+    };
+
+    let input_type = match pz.transfer {
+        TransferType::Voltage => thevenin_types::PzInputType::Vol,
+        TransferType::Current => thevenin_types::PzInputType::Cur,
+    };
+    let analysis_type = match pz.analysis_type {
+        PzType::Poles => thevenin_types::PzAnalysisType::Pol,
+        PzType::Zeros => thevenin_types::PzAnalysisType::Zer,
+        PzType::Both => thevenin_types::PzAnalysisType::Pz,
+    };
+
+    Ok(crate::pz::PzRunParams {
+        node_i: resolve(pz.input_pos, "input_pos")?,
+        node_g: resolve(pz.input_neg, "input_neg")?,
+        node_j: resolve(pz.output_pos, "output_pos")?,
+        node_k: resolve(pz.output_neg, "output_neg")?,
+        input_type,
+        analysis_type,
+    })
+}
+
+/// Extract a fully-resolved [`crate::noise::NoiseRunParams`] from a Circuit's
+/// first declared `Analysis::Noise(NoiseAnalysis)`. The IR carries typed
+/// net / element Ids which are resolved to the SPICE-shaped string specs
+/// (`"v(name,ref)"`, source name) that `crate::noise::run_noise` consumes.
+pub fn noise_params_from_circuit(
+    circuit: &Circuit,
+    mna: &MnaSystem,
+) -> Result<crate::noise::NoiseRunParams, MnaError> {
+    let noise = circuit
+        .analyses
+        .iter()
+        .find_map(|a| match a {
+            cirq_ir::Analysis::Noise(spec) => Some(spec),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement("no .noise analysis found on circuit".to_string())
+        })?;
+
+    let net_lookup: HashMap<Id, String> = circuit
+        .nets
+        .iter()
+        .map(|n| {
+            let name = if n.name == "gnd" {
+                "0".to_string()
+            } else {
+                n.name.clone()
+            };
+            (n.id, name)
+        })
+        .collect();
+
+    let out_name = net_lookup.get(&noise.output_net).cloned().ok_or_else(|| {
+        MnaError::UnsupportedElement(format!(
+            ".noise output references unknown net id {:?}",
+            noise.output_net
+        ))
+    })?;
+    let ref_name = net_lookup.get(&noise.reference_net).cloned();
+    let output = match ref_name.as_ref() {
+        Some(r) if r != "0" => format!("v({out_name},{r})"),
+        _ => format!("v({out_name})"),
+    };
+    let ref_node = ref_name.filter(|r| r != "0");
+    let src_name = element_name_by_id(circuit, noise.source)
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                ".noise source references unknown element id {:?}",
+                noise.source
+            ))
+        })?
+        .to_string();
+    let variation = match noise.scale {
+        cirq_ir::FrequencyScale::Decade => thevenin_types::AcVariation::Dec,
+        cirq_ir::FrequencyScale::Octave => thevenin_types::AcVariation::Oct,
+        cirq_ir::FrequencyScale::Linear => thevenin_types::AcVariation::Lin,
+    };
+    let num_nodes = mna.total_num_nodes();
+    let excitations = collect_ac_excitations_from_circuit(circuit, mna, num_nodes);
+
+    Ok(crate::noise::NoiseRunParams {
+        output,
+        ref_node,
+        src_name,
+        variation,
+        n: noise.points,
+        fstart: noise.start,
+        fstop: noise.stop,
+        nr_opts: nr_options_from_circuit(circuit),
+        nodeset: resolve_nodeset_from_circuit(circuit, mna),
+        excitations,
+    })
+}
+
 /// Resolve an element id to its name within `circuit.elements`.
 ///
 /// Returns `None` when the id isn't in the table — callers handle that as
@@ -1131,6 +1290,9 @@ fn stamp_circuit(
 
                 mna.voltage_sources.push(VoltageSourceInstance {
                     branch_idx: branch,
+                    pos_idx: pi,
+                    neg_idx: ni,
+                    name: elem.name.clone(),
                     waveform: source.waveform.clone(),
                 });
                 mna.vsource_names.push(elem.name.clone());

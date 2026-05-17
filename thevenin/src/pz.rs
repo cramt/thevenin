@@ -2,7 +2,7 @@ use faer::Mat;
 use faer::linalg::solvers::Solve as _;
 
 use thevenin_types::{
-    Analysis, Complex, ElementKind, Netlist, PzAnalysisType, PzInputType, SimPlot, SimResult,
+    Analysis, Complex, Netlist, PzAnalysisType, PzInputType, SimPlot, SimResult,
     SimVector,
 };
 
@@ -53,6 +53,41 @@ pub fn simulate_pz_with_mna(
         }
     };
 
+    run_pz(
+        mna,
+        PzRunParams {
+            node_i,
+            node_g,
+            node_j,
+            node_k,
+            input_type,
+            analysis_type,
+        },
+    )
+}
+
+/// Fully-resolved `.pz` analysis parameters, shared between Netlist and
+/// Circuit input paths.
+pub struct PzRunParams {
+    pub node_i: String,
+    pub node_g: String,
+    pub node_j: String,
+    pub node_k: String,
+    pub input_type: thevenin_types::PzInputType,
+    pub analysis_type: thevenin_types::PzAnalysisType,
+}
+
+/// Execute `.pz` analysis with pre-resolved params.
+pub fn run_pz(mna: MnaSystem, params: PzRunParams) -> Result<SimResult, MnaError> {
+    let PzRunParams {
+        node_i,
+        node_g,
+        node_j,
+        node_k,
+        input_type,
+        analysis_type,
+    } = params;
+
     let solution = solve_op_raw(&mna)?;
     let dim = mna.system.dim();
 
@@ -102,7 +137,7 @@ pub fn simulate_pz_with_mna(
 
     if do_zeros {
         let zeros = find_zeros(
-            &g, &c, dim, &mna, netlist, &node_i, &node_g, &node_j, &node_k, input_type,
+            &g, &c, dim, &mna, &node_i, &node_g, &node_j, &node_k, input_type,
         )?;
 
         if !zeros.is_empty() {
@@ -581,7 +616,6 @@ fn find_zeros(
     c: &Mat<f64>,
     dim: usize,
     mna: &MnaSystem,
-    netlist: &Netlist,
     node_i: &str,
     node_g: &str,
     node_j: &str,
@@ -599,7 +633,7 @@ fn find_zeros(
         PzInputType::Vol => {
             // Voltage input: remove row of the voltage source branch
             // connecting the input nodes.
-            find_input_vsource_branch(node_i, node_g, mna, netlist, num_nodes)
+            find_input_vsource_branch(node_i, node_g, mna, num_nodes)
         }
     }?;
 
@@ -675,32 +709,19 @@ fn find_input_vsource_branch(
     node_i: &str,
     node_g: &str,
     mna: &MnaSystem,
-    netlist: &Netlist,
-    num_nodes: usize,
+    _num_nodes: usize,
 ) -> Result<usize, MnaError> {
-    let node_i_lower = node_i.to_lowercase();
-    let node_g_lower = node_g.to_lowercase();
-
-    // Search through netlist elements for a voltage source at the input nodes.
-    for elem in netlist.elements() {
-        if let ElementKind::VoltageSource { pos, neg, .. } = &elem.kind {
-            let pos_lower = pos.to_lowercase();
-            let neg_lower = neg.to_lowercase();
-            if (pos_lower == node_i_lower && neg_lower == node_g_lower)
-                || (pos_lower == node_g_lower && neg_lower == node_i_lower)
-            {
-                // Found the voltage source. Get its branch index.
-                if let Some(vs_idx) = mna
-                    .vsource_names
-                    .iter()
-                    .position(|n| n.eq_ignore_ascii_case(&elem.name))
-                {
-                    return Ok(num_nodes + vs_idx);
-                }
-            }
+    let i_idx = mna.node_map.get(node_i);
+    let g_idx = mna.node_map.get(node_g);
+    // Scan mna.voltage_sources directly (VoltageSourceInstance carries
+    // the pos / neg matrix indices and branch_idx) — no Netlist needed.
+    for vs in &mna.voltage_sources {
+        let matches = (vs.pos_idx == i_idx && vs.neg_idx == g_idx)
+            || (vs.pos_idx == g_idx && vs.neg_idx == i_idx);
+        if matches {
+            return Ok(vs.branch_idx);
         }
     }
-
     Err(MnaError::UnsupportedElement(format!(
         "no voltage source found between nodes '{node_i}' and '{node_g}' for PZ voltage input"
     )))

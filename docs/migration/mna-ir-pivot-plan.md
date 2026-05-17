@@ -425,9 +425,23 @@ extracted to take pre-resolved `(output, input)` strings.
 
 Final state after Session I:
 - OP / DC / AC / TRAN: **fully Netlist-free** on Circuit-input path.
-- TF / PZ / Noise / Sens: Circuit-input entry points exist; internally
-  still build a Netlist for analysis-param lookups. The full
-  Netlist-free path for these is mechanical follow-up work.
+- **TF / PZ / Noise: also fully Netlist-free.** Each extracted to a
+  `run_X(mna, params)` core taking pre-resolved typed
+  `XRunParams`; new `mna_ir::{tf_spec_from_circuit,
+  pz_params_from_circuit, noise_params_from_circuit}` build the
+  params from IR `Analysis::{Tf, Pz, Noise}` (resolving net + element
+  Ids to names + reusing `collect_ac_excitations_from_circuit` for
+  noise's AC excitation list). `find_input_vsource_branch` (pz)
+  decoupled from `&Netlist` after extending
+  [`VoltageSourceInstance`] with `pos_idx` / `neg_idx` / `name`
+  fields. `find_input_source` (tf) was already Netlist-free in the
+  previous slice.
+- Sens: Circuit-input entry exists but still lowers to Netlist for
+  analysis-param lookups. The IR's `SensAnalysis { output: String }`
+  loses the tokenized `Vec<String>` shape the Netlist carries (which
+  encodes the optional AC variant), so a clean Circuit-only path
+  requires extending the IR — a separate work item, not just
+  mechanical refactoring.
 
 Verification: 1014/1014 workspace tests pass; harness still 100/0/7.
 

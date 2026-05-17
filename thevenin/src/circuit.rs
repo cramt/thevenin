@@ -193,41 +193,49 @@ pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
     Ok(crate::simulate_ac(nl)?)
 }
 
-/// Run a transfer function (`.tf`) analysis on a Circuit.
-///
-/// The MnaSystem is built via mna_ir; the lowered Netlist is still used
-/// to supply the `.tf` analysis params (a typed `_with_circuit` variant
-/// for tf is in the deferred Stage 4 / Session J work).
+/// Run a transfer function (`.tf`) analysis on a Circuit. Fully
+/// Netlist-free on the happy path.
 pub fn simulate_tf(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        let (output, input) = mna_ir::tf_spec_from_circuit(circuit)?;
+        return Ok(crate::tf::run_tf(mna, &output, &input)?);
+    }
     let nls = lower(circuit)?;
     let nl = pick(&nls, "tf", |a| matches!(a, Analysis::Tf { .. }))?;
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        return Ok(crate::tf::simulate_tf_with_mna(mna, nl)?);
-    }
     Ok(crate::simulate_tf(nl)?)
 }
 
-/// Run a pole-zero (`.pz`) analysis on a Circuit.
+/// Run a pole-zero (`.pz`) analysis on a Circuit. Fully Netlist-free on
+/// the happy path.
 pub fn simulate_pz(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        let params = mna_ir::pz_params_from_circuit(circuit)?;
+        return Ok(crate::pz::run_pz(mna, params)?);
+    }
     let nls = lower(circuit)?;
     let nl = pick(&nls, "pz", |a| matches!(a, Analysis::Pz { .. }))?;
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        return Ok(crate::pz::simulate_pz_with_mna(mna, nl)?);
-    }
     Ok(crate::simulate_pz(nl)?)
 }
 
-/// Run a noise analysis (`.noise`) on a Circuit.
+/// Run a noise analysis (`.noise`) on a Circuit. Fully Netlist-free on
+/// the happy path.
 pub fn simulate_noise(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        let params = mna_ir::noise_params_from_circuit(circuit, &mna)?;
+        return Ok(crate::noise::run_noise(mna, params)?);
+    }
     let nls = lower(circuit)?;
     let nl = pick(&nls, "noise", |a| matches!(a, Analysis::Noise { .. }))?;
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        return Ok(crate::noise::simulate_noise_with_mna(mna, nl)?);
-    }
     Ok(crate::simulate_noise(nl)?)
 }
 
 /// Run a sensitivity (`.sens`) analysis on a Circuit.
+///
+/// `IrAnalysis::Sens` stores its output spec as a single `String` while
+/// `Netlist`'s `Analysis::Sens` keeps the full tokenized `Vec<String>`
+/// (which encodes the optional AC variant). The IR loses that
+/// distinction, so this entry falls back to lowering to a Netlist and
+/// dispatching via `simulate_sens_with_mna`.
 pub fn simulate_sens(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
     let nls = lower(circuit)?;
     let nl = pick(&nls, "sens", |a| matches!(a, Analysis::Sens { .. }))?;
