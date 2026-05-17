@@ -193,6 +193,50 @@ pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
     Ok(crate::simulate_ac(nl)?)
 }
 
+/// Run a transfer function (`.tf`) analysis on a Circuit.
+///
+/// The MnaSystem is built via mna_ir; the lowered Netlist is still used
+/// to supply the `.tf` analysis params (a typed `_with_circuit` variant
+/// for tf is in the deferred Stage 4 / Session J work).
+pub fn simulate_tf(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    let nls = lower(circuit)?;
+    let nl = pick(&nls, "tf", |a| matches!(a, Analysis::Tf { .. }))?;
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        return Ok(crate::tf::simulate_tf_with_mna(mna, nl)?);
+    }
+    Ok(crate::simulate_tf(nl)?)
+}
+
+/// Run a pole-zero (`.pz`) analysis on a Circuit.
+pub fn simulate_pz(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    let nls = lower(circuit)?;
+    let nl = pick(&nls, "pz", |a| matches!(a, Analysis::Pz { .. }))?;
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        return Ok(crate::pz::simulate_pz_with_mna(mna, nl)?);
+    }
+    Ok(crate::simulate_pz(nl)?)
+}
+
+/// Run a noise analysis (`.noise`) on a Circuit.
+pub fn simulate_noise(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    let nls = lower(circuit)?;
+    let nl = pick(&nls, "noise", |a| matches!(a, Analysis::Noise { .. }))?;
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        return Ok(crate::noise::simulate_noise_with_mna(mna, nl)?);
+    }
+    Ok(crate::simulate_noise(nl)?)
+}
+
+/// Run a sensitivity (`.sens`) analysis on a Circuit.
+pub fn simulate_sens(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    let nls = lower(circuit)?;
+    let nl = pick(&nls, "sens", |a| matches!(a, Analysis::Sens { .. }))?;
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        return Ok(crate::sens::simulate_sens_with_mna(mna, nl)?);
+    }
+    Ok(crate::simulate_sens(nl)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,7 +2,7 @@ use faer::Mat;
 use faer::linalg::solvers::FullPivLu;
 use faer::prelude::Solve;
 
-use thevenin_types::{Analysis, ElementKind, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
@@ -61,14 +61,10 @@ fn parse_output_spec(
 }
 
 /// Find the input source type and indices.
-fn find_input_source(
-    input: &str,
-    mna: &MnaSystem,
-    netlist: &Netlist,
-) -> Result<InputSource, MnaError> {
+fn find_input_source(input: &str, mna: &MnaSystem) -> Result<InputSource, MnaError> {
     let num_nodes = mna.total_num_nodes();
 
-    // Check voltage sources
+    // Check voltage sources by name.
     if let Some(pos) = mna
         .vsource_names
         .iter()
@@ -79,16 +75,17 @@ fn find_input_source(
         });
     }
 
-    // Check current sources in the netlist
-    for elem in netlist.elements() {
-        if elem.name.eq_ignore_ascii_case(input)
-            && let ElementKind::CurrentSource { pos, neg, .. } = &elem.kind
-        {
-            return Ok(InputSource::Current {
-                pos_idx: mna.node_map.get(&pos.to_lowercase()),
-                neg_idx: mna.node_map.get(&neg.to_lowercase()),
-            });
-        }
+    // Check current sources via mna.current_sources (CurrentSourceInstance
+    // already carries name + pos_idx + neg_idx, so no Netlist walk needed).
+    if let Some(c) = mna
+        .current_sources
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case(input))
+    {
+        return Ok(InputSource::Current {
+            pos_idx: c.pos_idx,
+            neg_idx: c.neg_idx,
+        });
     }
 
     Err(MnaError::UnsupportedElement(format!(
@@ -199,7 +196,18 @@ pub fn simulate_tf_with_mna(
             ));
         }
     };
+    run_tf(mna, &output, &input)
+}
 
+/// Run a `.tf` analysis with pre-extracted output / input spec strings.
+///
+/// Shared between Netlist (`simulate_tf_with_mna`) and Circuit
+/// ([`crate::circuit::simulate_tf`]) entry points.
+pub fn run_tf(
+    mna: MnaSystem,
+    output: &str,
+    input: &str,
+) -> Result<SimResult, MnaError> {
     let solution = solve_op_raw(&mna)?;
 
     // Build linearized Jacobian at OP
@@ -210,10 +218,10 @@ pub fn simulate_tf_with_mna(
 
     {
         // Parse output spec
-        let (out_pos, out_neg, out_is_voltage) = parse_output_spec(&output, &mna)?;
+        let (out_pos, out_neg, out_is_voltage) = parse_output_spec(output, &mna)?;
 
         // Parse input spec
-        let in_src = find_input_source(&input, &mna, netlist)?;
+        let in_src = find_input_source(input, &mna)?;
 
         // === Transfer function + input impedance ===
         // Inject unit excitation at input

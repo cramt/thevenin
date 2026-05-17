@@ -402,9 +402,32 @@ Pattern that emerged for both:
 4. `thevenin::circuit::simulate_X` calls the Circuit extractor +
    `run_X_sweep` directly, skipping the lower-to-Netlist step.
 
-**Still pending:** the same pattern applied to `transient`, `noise`,
-`sens`, `tf`, `pz`. Each one is mechanical (analysis-specific param
-extraction + a small Circuit-side reader in `mna_ir`) but tedious.
+**Transient also pivoted.** Extract `TranRunParams` and `run_tran`;
+add `mna_ir::tran_params_from_circuit` that resolves `.ic` overrides
+(IR `(Id, voltage)` pairs) to MnaSystem matrix indices and collects
+`.print @device[param]` queries from `circuit.raw_directives`.
+`collect_device_param_queries` made generic over `IntoIterator<Item =
+&str>` so both `netlist.source.lines()` and
+`circuit.raw_directives.iter().map(String::as_str)` plug in.
+`thevenin::circuit::simulate_tran(&Circuit)` is now Netlist-free on
+the happy path.
+
+**TF + PZ + Noise + Sens Circuit entry points.** The rare analyses
+get Circuit-input entry points (`thevenin::circuit::simulate_tf`,
+`simulate_pz`, `simulate_noise`, `simulate_sens`) that build the
+MnaSystem via mna_ir + dispatch through the existing `_with_mna`
+helpers. The Netlist is still constructed for analysis-param lookups
+(typed `_with_circuit` variants for these would mechanically follow
+the DC / AC / TRAN pattern; deferred to follow-up given they're
+rarely exercised). `find_input_source` in `tf.rs` was made
+Netlist-free by reading `mna.current_sources` directly; `run_tf`
+extracted to take pre-resolved `(output, input)` strings.
+
+Final state after Session I:
+- OP / DC / AC / TRAN: **fully Netlist-free** on Circuit-input path.
+- TF / PZ / Noise / Sens: Circuit-input entry points exist; internally
+  still build a Netlist for analysis-param lookups. The full
+  Netlist-free path for these is mechanical follow-up work.
 
 Verification: 1014/1014 workspace tests pass; harness still 100/0/7.
 
