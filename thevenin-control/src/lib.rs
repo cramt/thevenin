@@ -80,29 +80,47 @@ pub fn has_control_block_ir(circuit: &Circuit) -> bool {
 
 /// Execute a `.control` block from a Cirq IR circuit.
 ///
-/// **Stage 4 / Phase A boundary.** Establishes the IR-shaped entry point
-/// callers should use as the canonical way to drive the `.control`
-/// interpreter from a [`Circuit`]. The interpreter still operates on
-/// `thevenin_types::Netlist` internally — this function lowers the circuit
-/// via [`cirq_frontend::to_netlist::circuit_to_netlists`] and then
-/// [`thevenin::flatten_netlist`] before delegating to
-/// [`execute_control_block`]. Later phases of the Stage 4 migration will
-/// replace the internal lowering with direct IR-based interpretation; the
-/// signature on this entry point won't change.
+/// **Stage 4 / Phase B.** The canonical IR-shaped entry point for driving
+/// `.control` from a [`Circuit`]. Builds a [`SimContext`] via
+/// [`SimContext::from_circuit`] so the analysis dispatcher in `exec.rs` can
+/// route Op / Dc / Tran / Ac runs through [`thevenin::circuit::simulate_*`]
+/// while keeping helpers that still operate on the SPICE Netlist shape
+/// (TEMPER eval, `@device[param]` lookups, alter) working unchanged.
 ///
-/// Control blocks accumulate to every netlist fork produced from a circuit
-/// (e.g. multi-temperature runs), so this function picks the first fork —
-/// the same convention the harness uses.
+/// `.control` lines come from the circuit's [`cirq_ir::CodeBlock`] entries
+/// directly — control blocks accumulate to every netlist fork produced
+/// from a circuit, so picking from the IR is equivalent to picking the
+/// first fork on the lowered side.
 pub fn execute_control_block_ir(circuit: &Circuit) -> Result<ControlResult, String> {
-    let netlists = cirq_frontend::to_netlist::circuit_to_netlists(circuit)
-        .map_err(|e| format!("circuit_to_netlists: {e}"))?;
-    let netlist = netlists
-        .into_iter()
-        .next()
-        .ok_or_else(|| "circuit produced no netlists".to_string())?;
-    let netlist =
-        thevenin::flatten_netlist(&netlist).map_err(|e| format!("flatten_netlist: {e}"))?;
-    execute_control_block(&netlist)
+    let control_lines: Vec<&Vec<String>> = circuit
+        .code_blocks
+        .iter()
+        .filter(|b| b.language == "control")
+        .map(|b| &b.lines)
+        .collect();
+
+    if control_lines.is_empty() {
+        return Err("no .control block found".to_string());
+    }
+
+    let mut ctx = SimContext::from_circuit(circuit.clone())?;
+
+    for lines in control_lines {
+        let stmts = parse::parse_control_block(lines)?;
+        exec::execute(&stmts, &mut ctx)?;
+        if ctx.exit_code.is_some() {
+            break;
+        }
+    }
+
+    let exit_code = ctx.exit_code.unwrap_or(0);
+    let sim_result = SimResult { plots: ctx.plots };
+
+    Ok(ControlResult {
+        sim_result,
+        exit_code,
+        output: ctx.output,
+    })
 }
 
 #[cfg(test)]

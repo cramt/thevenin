@@ -151,13 +151,19 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       points. Both the CLI (`src/main.rs`) and the regression harness
       (`thevenin/tests/harness.rs`) route `.control` through them when a
       `cirq_ir::Circuit` is on hand; the legacy `execute_control_block(&Netlist)`
-      stays available for `--legacy` SPICE input. The interpreter itself still
-      lowers Circuit → Netlist internally and runs against `Netlist`-shaped
-      `SimContext`. Phase B (Circuit-owning `SimContext`, IR-typed `Value`
-      flow into TEMPER / `@model[param]` paths) and Phase C (real `alter`
-      mutation against the IR, prerequisite for resume-1) are the remaining
-      slices. Harness still 100/0/7; 123 unit tests in `thevenin-control`
-      (3 new) pin Phase A equivalence with the Netlist path.
+      stays available for `--legacy` SPICE input.
+      **Phase B landed:** `SimContext` now optionally owns the driving
+      `cirq_ir::Circuit` alongside the working netlist;
+      `SimContext::from_circuit(c)` is the Stage-4 constructor and the IR
+      entry point uses it. `.control` lines now come from
+      `Circuit.code_blocks` rather than `Item::Control` on the lowered
+      netlist. Analysis dispatch still routes through the cached
+      `Netlist` because TEMPER evaluation is intrinsic to the SPICE
+      `Expr` shape — lifting TEMPER onto the IR's typed `Value` belongs
+      to a later phase. Harness still 100/0/7; 125 unit tests in
+      `thevenin-control` (2 new) pin the new constructor.
+      Phase C (real `alter` mutation against `Circuit.elements` /
+      `Circuit.models`, prerequisite for resume-1) is the next slice.
 - [ ] Deprecate `thevenin_types::Netlist` as a public API; expose
       `cirq_ir::Circuit` as the primary simulation input.
 - [ ] Remove SPICE element-prefix naming requirements from the simulator core.
