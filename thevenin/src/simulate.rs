@@ -655,36 +655,38 @@ fn find_sweep_source(mna: &MnaSystem, src_name: &str) -> Result<SweepSource, Mna
 }
 
 /// Find a current source's node indices in the MNA system.
+///
+/// Reads `mna.current_sources` directly — `CurrentSourceInstance` already
+/// carries the resolved (name, pos_idx, neg_idx) tuple, so no Netlist or
+/// Circuit walk is needed at all.
 fn find_current_source_sweep(
     mna: &MnaSystem,
-    netlist: &Netlist,
     src_name: &str,
 ) -> Result<SweepSource, MnaError> {
     let src_lower = src_name.to_lowercase();
-    for element in netlist.elements() {
-        if element.name.to_lowercase() == src_lower
-            && let thevenin_types::ElementKind::CurrentSource { pos, neg, .. } = &element.kind
-        {
-            return Ok(SweepSource::Current {
-                ni: mna.node_map.get(pos),
-                nj: mna.node_map.get(neg),
-            });
-        }
-    }
-    Err(MnaError::UnsupportedElement(format!(
-        "sweep source '{src_name}' not found in circuit"
-    )))
+    mna.current_sources
+        .iter()
+        .find(|c| c.name.to_lowercase() == src_lower)
+        .map(|c| SweepSource::Current {
+            ni: c.pos_idx,
+            nj: c.neg_idx,
+        })
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                "sweep source '{src_name}' not found in circuit"
+            ))
+        })
 }
 
 /// Resolve a sweep source — tries voltage sources first, then current sources.
-fn resolve_sweep_source(
-    mna: &MnaSystem,
-    netlist: &Netlist,
-    src_name: &str,
-) -> Result<SweepSource, MnaError> {
+///
+/// Fully `MnaSystem`-driven: both voltage and current source lookups read
+/// from `mna.vsource_names` and `mna.current_sources` respectively, so this
+/// works equally well for Netlist-built and Circuit-built MNA systems.
+fn resolve_sweep_source(mna: &MnaSystem, src_name: &str) -> Result<SweepSource, MnaError> {
     match find_sweep_source(mna, src_name) {
         Ok(info) => Ok(info),
-        Err(_) => find_current_source_sweep(mna, netlist, src_name),
+        Err(_) => find_current_source_sweep(mna, src_name),
     }
 }
 
@@ -734,25 +736,20 @@ fn set_source_value(
     }
 }
 
-/// Get the original DC value of a source from the netlist.
-fn get_source_dc_value(netlist: &Netlist, src_name: &str) -> f64 {
+/// Get the original DC value of a source from the assembled MNA system.
+///
+/// For current sources, `CurrentSourceInstance.dc_value` already carries
+/// the DC value that was stamped into the RHS at assembly time. Voltage
+/// sources don't need this — `set_source_value` overwrites the branch
+/// RHS directly without needing the original — so the lookup short-circuits
+/// to 0.0 when no current source matches.
+fn get_source_dc_value(mna: &MnaSystem, src_name: &str) -> f64 {
     let src_lower = src_name.to_lowercase();
-    for element in netlist.elements() {
-        if element.name.to_lowercase() == src_lower {
-            match &element.kind {
-                thevenin_types::ElementKind::VoltageSource { source, .. }
-                | thevenin_types::ElementKind::CurrentSource { source, .. } => {
-                    return source
-                        .dc
-                        .as_ref()
-                        .and_then(|e| if let Expr::Num(v) = e { Some(*v) } else { None })
-                        .unwrap_or(0.0);
-                }
-                _ => {}
-            }
-        }
-    }
-    0.0
+    mna.current_sources
+        .iter()
+        .find(|c| c.name.to_lowercase() == src_lower)
+        .map(|c| c.dc_value)
+        .unwrap_or(0.0)
 }
 
 /// Perform a DC sweep analysis.
@@ -772,7 +769,7 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// was assembled. The Netlist is still needed for `.dc` analysis params,
 /// source resolution, and option lookups.
 pub fn simulate_dc_with_mna(
-    mut mna: MnaSystem,
+    mna: MnaSystem,
     netlist: &Netlist,
 ) -> Result<SimResult, MnaError> {
     let mut nr_opts = nr_options_from_netlist(netlist);
@@ -807,6 +804,59 @@ pub fn simulate_dc_with_mna(
     let stop_val = expr_val(&stop, ".dc")?;
     let step_val = expr_val(&step, ".dc")?;
 
+    let src2_resolved = if let Some(s2) = src2 {
+        Some((
+            s2.src.clone(),
+            expr_val(&s2.start, ".dc")?,
+            expr_val(&s2.stop, ".dc")?,
+            expr_val(&s2.step, ".dc")?,
+        ))
+    } else {
+        None
+    };
+
+    run_dc_sweep(
+        mna,
+        nr_opts,
+        DcSweepRunParams {
+            src1: src,
+            start1: start_val,
+            stop1: stop_val,
+            step1: step_val,
+            src2: src2_resolved,
+        },
+    )
+}
+
+/// Fully-resolved `.dc` sweep parameters (numeric values, source names).
+///
+/// Shared between the Netlist path and the Circuit path
+/// ([`crate::circuit::simulate_dc`]) — both extract this struct from their
+/// respective analysis representation and hand it to [`run_dc_sweep`].
+pub struct DcSweepRunParams {
+    pub src1: String,
+    pub start1: f64,
+    pub stop1: f64,
+    pub step1: f64,
+    pub src2: Option<(String, f64, f64, f64)>,
+}
+
+/// Execute a `.dc` sweep on an assembled [`MnaSystem`] with already-resolved
+/// numeric sweep parameters. The function consumes `mna` (it mutates the
+/// RHS per sweep point) and returns the formatted `SimResult`.
+pub fn run_dc_sweep(
+    mut mna: MnaSystem,
+    nr_opts: NrOptions,
+    params: DcSweepRunParams,
+) -> Result<SimResult, MnaError> {
+    let DcSweepRunParams {
+        src1: src,
+        start1: start_val,
+        stop1: stop_val,
+        step1: step_val,
+        src2: src2_resolved,
+    } = params;
+
     // Stamp LTRA / TXL / CPL DC equations into the base matrix.
     let n = mna.total_num_nodes();
     for inst in &mna.ltras {
@@ -821,8 +871,8 @@ pub fn simulate_dc_with_mna(
     let original_rhs = mna.system.rhs.clone();
 
     // Resolve the primary sweep source.
-    let sweep1 = resolve_sweep_source(&mna, netlist, &src)?;
-    let original_dc1 = get_source_dc_value(netlist, &src);
+    let sweep1 = resolve_sweep_source(&mna, &src)?;
+    let original_dc1 = get_source_dc_value(&mna, &src);
     let points1 = generate_sweep_points(start_val, stop_val, step_val);
 
     // Prepare sweep source vector (the independent variable).
@@ -847,12 +897,9 @@ pub fn simulate_dc_with_mna(
     }
 
     // Resolve optional second sweep source.
-    let sweep2_info = if let Some(ref s2) = src2 {
-        let sweep2 = resolve_sweep_source(&mna, netlist, &s2.src)?;
-        let original_dc2 = get_source_dc_value(netlist, &s2.src);
-        let start2 = expr_val(&s2.start, ".dc")?;
-        let stop2 = expr_val(&s2.stop, ".dc")?;
-        let step2 = expr_val(&s2.step, ".dc")?;
+    let sweep2_info = if let Some((ref s2_name, start2, stop2, step2)) = src2_resolved {
+        let sweep2 = resolve_sweep_source(&mna, s2_name)?;
+        let original_dc2 = get_source_dc_value(&mna, s2_name);
         let points2 = generate_sweep_points(start2, stop2, step2);
         Some((sweep2, original_dc2, points2))
     } else {

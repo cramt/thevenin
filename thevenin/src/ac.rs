@@ -48,10 +48,57 @@ pub fn simulate_ac_with_mna(
     let fstart_val = expr_val(&fstart, ".ac")?;
     let fstop_val = expr_val(&fstop, ".ac")?;
 
-    // Solve DC operating point directly to get the full solution vector
-    // including internal device nodes.
     let nr_opts = nr_options_from_netlist(netlist);
     let nodeset = resolve_nodeset(netlist, &mna);
+    let num_nodes_pre = mna.total_num_nodes();
+    let excitations = collect_ac_excitations_from_netlist(netlist, &mna, num_nodes_pre);
+
+    run_ac_sweep(
+        mna,
+        AcSweepRunParams {
+            variation,
+            n,
+            fstart: fstart_val,
+            fstop: fstop_val,
+            nr_opts,
+            nodeset,
+            excitations,
+        },
+    )
+}
+
+/// Fully-resolved `.ac` sweep parameters, shared between Netlist and
+/// Circuit input paths.
+pub struct AcSweepRunParams {
+    pub variation: AcVariation,
+    pub n: u32,
+    pub fstart: f64,
+    pub fstop: f64,
+    pub nr_opts: crate::newton::NrOptions,
+    pub nodeset: Vec<(usize, f64)>,
+    pub excitations: Vec<AcExcitation>,
+}
+
+/// Execute a `.ac` sweep on an assembled [`MnaSystem`] with already-
+/// resolved analysis parameters. Both the Netlist path (`simulate_ac_with_mna`)
+/// and the Circuit path ([`crate::circuit::simulate_ac`]) extract their
+/// respective parameters into this struct and hand it here.
+pub fn run_ac_sweep(
+    mna: MnaSystem,
+    params: AcSweepRunParams,
+) -> Result<SimResult, MnaError> {
+    let AcSweepRunParams {
+        variation,
+        n,
+        fstart,
+        fstop,
+        nr_opts,
+        nodeset,
+        excitations,
+    } = params;
+
+    // Solve DC operating point directly to get the full solution vector
+    // including internal device nodes.
     let op_solution = if mna.has_nonlinear() {
         if nodeset.is_empty() {
             solve_nonlinear_op(&mna, &nr_opts)?
@@ -63,7 +110,7 @@ pub fn simulate_ac_with_mna(
     };
 
     // Generate frequency sweep points.
-    let frequencies = generate_ac_sweep(variation, n, fstart_val, fstop_val);
+    let frequencies = generate_ac_sweep(variation, n, fstart, fstop);
 
     // Build result vectors.
     let mut freq_vec = SimVector::real("frequency", Vec::with_capacity(frequencies.len()));
@@ -94,7 +141,7 @@ pub fn simulate_ac_with_mna(
     // On native targets, frequency points are solved in parallel using rayon
     // since each point is completely independent (same linearized circuit).
     let gmin = nr_opts.gmin;
-    let ac_results = solve_ac_frequencies(&frequencies, &mna, &op_solution, netlist, gmin)?;
+    let ac_results = solve_ac_frequencies(&frequencies, &mna, &op_solution, &excitations, gmin)?;
 
     let num_nodes = mna.total_num_nodes();
     for (freq, solution) in ac_results {
@@ -149,7 +196,7 @@ fn solve_ac_frequencies(
     frequencies: &[f64],
     mna: &MnaSystem,
     op_solution: &[f64],
-    netlist: &Netlist,
+    excitations: &[AcExcitation],
     gmin: f64,
 ) -> Result<Vec<AcFreqResult>, MnaError> {
     #[cfg(not(target_family = "wasm"))]
@@ -177,7 +224,7 @@ fn solve_ac_frequencies(
                 let mna_ref = &mna_ref;
                 s.spawn(move |_| {
                     let omega = 2.0 * PI * freq;
-                    let result = solve_ac_point(mna_ref.0, op_solution, omega, netlist, gmin)
+                    let result = solve_ac_point(mna_ref.0, op_solution, omega, excitations, gmin)
                         .map(|sol| (freq, sol));
                     *slot.lock().unwrap() = Some(result);
                 });
@@ -196,7 +243,7 @@ fn solve_ac_frequencies(
             .iter()
             .map(|&freq| {
                 let omega = 2.0 * PI * freq;
-                solve_ac_point(mna, op_solution, omega, netlist, gmin).map(|sol| (freq, sol))
+                solve_ac_point(mna, op_solution, omega, excitations, gmin).map(|sol| (freq, sol))
             })
             .collect()
     }
@@ -210,7 +257,7 @@ fn solve_ac_point(
     mna: &MnaSystem,
     op_solution: &[f64],
     omega: f64,
-    netlist: &Netlist,
+    excitations: &[AcExcitation],
     gmin: f64,
 ) -> Result<Vec<(f64, f64)>, MnaError> {
     let num_nodes = mna.total_num_nodes();
@@ -222,7 +269,7 @@ fn solve_ac_point(
     stamp_ac_devices(mna, op_solution, omega, &mut sys, gmin);
 
     // Apply AC source excitation to RHS.
-    apply_ac_excitation(&mut sys, netlist, mna, num_nodes);
+    apply_ac_excitation(&mut sys, excitations);
 
     sys.solve().map_err(MnaError::SolveError)
 }
@@ -235,7 +282,7 @@ pub fn build_ac_system(
     mna: &MnaSystem,
     op_solution: &[f64],
     omega: f64,
-    netlist: &Netlist,
+    excitations: &[AcExcitation],
     num_nodes: usize,
     gmin: f64,
 ) -> ComplexLinearSystem {
@@ -243,7 +290,7 @@ pub fn build_ac_system(
     let mut sys = ComplexLinearSystem::new(dim);
 
     stamp_ac_devices(mna, op_solution, omega, &mut sys, gmin);
-    apply_ac_excitation(&mut sys, netlist, mna, num_nodes);
+    apply_ac_excitation(&mut sys, excitations);
 
     sys
 }
@@ -1570,63 +1617,101 @@ pub fn stamp_ac_devices(
 }
 
 /// Apply AC source excitation to the complex RHS.
-pub fn apply_ac_excitation(
-    sys: &mut ComplexLinearSystem,
+/// One AC source's complex excitation, with the resolved matrix target.
+///
+/// Pre-resolved so both Netlist-input (`collect_ac_excitations_from_netlist`)
+/// and Circuit-input (`mna_ir::collect_ac_excitations_from_circuit`) paths
+/// can stamp via the same `apply_ac_excitation` body.
+#[derive(Debug, Clone)]
+pub struct AcExcitation {
+    pub target: AcTarget,
+    pub real: f64,
+    pub imag: f64,
+}
+
+/// Where an AC source feeds the complex MNA system.
+#[derive(Debug, Clone)]
+pub enum AcTarget {
+    /// Voltage source: stamps RHS at the source's branch row.
+    VoltageBranch(usize),
+    /// Current source: stamps RHS at the source's two terminal nodes.
+    CurrentInjection {
+        ni: Option<usize>,
+        nj: Option<usize>,
+    },
+}
+
+/// Collect AC source excitations from a Netlist, resolved against the
+/// already-assembled `MnaSystem`. Voltage sources land on
+/// [`AcTarget::VoltageBranch`]; current sources on
+/// [`AcTarget::CurrentInjection`].
+pub fn collect_ac_excitations_from_netlist(
     netlist: &Netlist,
     mna: &MnaSystem,
     num_nodes: usize,
-) {
+) -> Vec<AcExcitation> {
+    let mut out = Vec::new();
     for element in netlist.elements() {
         match &element.kind {
             thevenin_types::ElementKind::VoltageSource { source, .. } => {
-                if let Some(ac_spec) = &source.ac {
-                    let mag = expr_val_or(&ac_spec.mag, 0.0);
-                    let phase_deg = ac_spec
-                        .phase
-                        .as_ref()
-                        .map(|e| expr_val_or(e, 0.0))
-                        .unwrap_or(0.0);
-                    let phase_rad = phase_deg * PI / 180.0;
-                    let ac_real = mag * phase_rad.cos();
-                    let ac_imag = mag * phase_rad.sin();
-
-                    if let Some(branch_pos) = mna
+                if let Some(ac_spec) = &source.ac
+                    && let Some(branch_pos) = mna
                         .vsource_names
                         .iter()
                         .position(|n| n.to_lowercase() == element.name.to_lowercase())
-                    {
-                        let branch_idx = num_nodes + branch_pos;
-                        sys.rhs_real[branch_idx] += ac_real;
-                        sys.rhs_imag[branch_idx] += ac_imag;
-                    }
+                {
+                    let (real, imag) = ac_complex(ac_spec.mag.clone(), ac_spec.phase.clone());
+                    out.push(AcExcitation {
+                        target: AcTarget::VoltageBranch(num_nodes + branch_pos),
+                        real,
+                        imag,
+                    });
                 }
             }
             thevenin_types::ElementKind::CurrentSource { pos, neg, source } => {
                 if let Some(ac_spec) = &source.ac {
-                    let mag = expr_val_or(&ac_spec.mag, 0.0);
-                    let phase_deg = ac_spec
-                        .phase
-                        .as_ref()
-                        .map(|e| expr_val_or(e, 0.0))
-                        .unwrap_or(0.0);
-                    let phase_rad = phase_deg * PI / 180.0;
-                    let ac_real = mag * phase_rad.cos();
-                    let ac_imag = mag * phase_rad.sin();
-
-                    let ni = mna.node_map.get(pos);
-                    let nj = mna.node_map.get(neg);
-
-                    if let Some(i) = ni {
-                        sys.rhs_real[i] -= ac_real;
-                        sys.rhs_imag[i] -= ac_imag;
-                    }
-                    if let Some(j) = nj {
-                        sys.rhs_real[j] += ac_real;
-                        sys.rhs_imag[j] += ac_imag;
-                    }
+                    let (real, imag) = ac_complex(ac_spec.mag.clone(), ac_spec.phase.clone());
+                    out.push(AcExcitation {
+                        target: AcTarget::CurrentInjection {
+                            ni: mna.node_map.get(pos),
+                            nj: mna.node_map.get(neg),
+                        },
+                        real,
+                        imag,
+                    });
                 }
             }
             _ => {}
+        }
+    }
+    out
+}
+
+fn ac_complex(mag: thevenin_types::Expr, phase: Option<thevenin_types::Expr>) -> (f64, f64) {
+    let mag_v = expr_val_or(&mag, 0.0);
+    let phase_deg = phase.map(|e| expr_val_or(&e, 0.0)).unwrap_or(0.0);
+    let phase_rad = phase_deg * PI / 180.0;
+    (mag_v * phase_rad.cos(), mag_v * phase_rad.sin())
+}
+
+/// Stamp pre-resolved AC source excitations into the complex MNA system.
+pub fn apply_ac_excitation(sys: &mut ComplexLinearSystem, excitations: &[AcExcitation]) {
+    for exc in excitations {
+        match exc.target {
+            AcTarget::VoltageBranch(branch_idx) => {
+                sys.rhs_real[branch_idx] += exc.real;
+                sys.rhs_imag[branch_idx] += exc.imag;
+            }
+            AcTarget::CurrentInjection { ni, nj } => {
+                if let Some(i) = ni {
+                    sys.rhs_real[i] -= exc.real;
+                    sys.rhs_imag[i] -= exc.imag;
+                }
+                if let Some(j) = nj {
+                    sys.rhs_real[j] += exc.real;
+                    sys.rhs_imag[j] += exc.imag;
+                }
+            }
         }
     }
 }

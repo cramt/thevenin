@@ -345,6 +345,177 @@ fn circuit_temp(circuit: &Circuit) -> f64 {
     27.0
 }
 
+/// Circuit-side analogue of
+/// [`crate::ac::collect_ac_excitations_from_netlist`].
+///
+/// Walks `circuit.elements`, picks up voltage/current sources with an AC
+/// spec, and resolves them against `mna.vsource_names` (for V-sources) or
+/// `mna.node_map` (for I-sources) into [`crate::ac::AcExcitation`]
+/// records. The IR's `source_spec.ac: Option<AcSpec>` carries magnitude +
+/// phase directly so no expression evaluation is needed.
+pub fn collect_ac_excitations_from_circuit(
+    circuit: &Circuit,
+    mna: &MnaSystem,
+    num_nodes: usize,
+) -> Vec<crate::ac::AcExcitation> {
+    use crate::ac::{AcExcitation, AcTarget};
+    let net_name = build_net_name_map(circuit);
+    let mut out = Vec::new();
+    for elem in &circuit.elements {
+        let Some(spec) = elem.source_spec.as_ref() else {
+            continue;
+        };
+        let Some(ac) = spec.ac.as_ref() else {
+            continue;
+        };
+        let phase_rad = ac.phase * std::f64::consts::PI / 180.0;
+        let real = ac.mag * phase_rad.cos();
+        let imag = ac.mag * phase_rad.sin();
+
+        match elem.kind {
+            IrElementKind::VoltageSource => {
+                if let Some(branch_pos) = mna
+                    .vsource_names
+                    .iter()
+                    .position(|n| n.eq_ignore_ascii_case(&elem.name))
+                {
+                    out.push(AcExcitation {
+                        target: AcTarget::VoltageBranch(num_nodes + branch_pos),
+                        real,
+                        imag,
+                    });
+                }
+            }
+            IrElementKind::CurrentSource => {
+                let pos = terminal_name(elem, "pos", &net_name).ok();
+                let neg = terminal_name(elem, "neg", &net_name).ok();
+                let ni = pos.and_then(|n| mna.node_map.get(n));
+                let nj = neg.and_then(|n| mna.node_map.get(n));
+                out.push(AcExcitation {
+                    target: AcTarget::CurrentInjection { ni, nj },
+                    real,
+                    imag,
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Extract a fully-resolved `.ac` sweep parameter struct from a Circuit's
+/// first declared `Analysis::Ac(AcAnalysis)`, with the AC source
+/// excitations already collected against the assembled MnaSystem.
+///
+/// The IR `AcAnalysis` carries `start`/`stop` as Hz (no expressions) and a
+/// `scale: FrequencyScale` enum that maps to Netlist's `AcVariation`.
+pub fn ac_sweep_params_from_circuit(
+    circuit: &Circuit,
+    mna: &MnaSystem,
+) -> Result<crate::ac::AcSweepRunParams, MnaError> {
+    let ac = circuit
+        .analyses
+        .iter()
+        .find_map(|a| match a {
+            cirq_ir::Analysis::Ac(spec) => Some(spec),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement("no .ac analysis found on circuit".to_string())
+        })?;
+
+    let variation = match ac.scale {
+        cirq_ir::FrequencyScale::Decade => thevenin_types::AcVariation::Dec,
+        cirq_ir::FrequencyScale::Octave => thevenin_types::AcVariation::Oct,
+        cirq_ir::FrequencyScale::Linear => thevenin_types::AcVariation::Lin,
+    };
+    let nr_opts = nr_options_from_circuit(circuit);
+    let nodeset = resolve_nodeset_from_circuit(circuit, mna);
+    let num_nodes = mna.total_num_nodes();
+    let excitations = collect_ac_excitations_from_circuit(circuit, mna, num_nodes);
+
+    Ok(crate::ac::AcSweepRunParams {
+        variation,
+        n: ac.points,
+        fstart: ac.start,
+        fstop: ac.stop,
+        nr_opts,
+        nodeset,
+        excitations,
+    })
+}
+
+/// Resolve an element id to its name within `circuit.elements`.
+///
+/// Returns `None` when the id isn't in the table — callers handle that as
+/// a missing-source error from the analysis routine.
+pub fn element_name_by_id(circuit: &Circuit, id: Id) -> Option<&str> {
+    circuit
+        .elements
+        .iter()
+        .find(|e| e.id == id)
+        .map(|e| e.name.as_str())
+}
+
+/// Extract a fully-resolved `.dc` sweep parameter struct from a Circuit's
+/// first declared `Analysis::Dc(DcAnalysis)`. The IR stores sweep source
+/// references as element [`Id`]s; this helper resolves them to the SPICE
+/// element names that `crate::simulate::run_dc_sweep` looks up in
+/// `mna.vsource_names` / `mna.current_sources`.
+///
+/// The first `DcSweep` in `DcAnalysis.sweeps` is the primary (inner)
+/// sweep; an optional second entry becomes the outer (nested) sweep. SPICE
+/// `.dc` only ever has up to two sweeps so anything beyond `[0..=1]` is
+/// ignored.
+pub fn dc_sweep_params_from_circuit(
+    circuit: &Circuit,
+) -> Result<crate::simulate::DcSweepRunParams, MnaError> {
+    let dc_analysis = circuit
+        .analyses
+        .iter()
+        .find_map(|a| match a {
+            cirq_ir::Analysis::Dc(spec) => Some(spec),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement("no .dc analysis found on circuit".to_string())
+        })?;
+
+    let mut sweeps = dc_analysis.sweeps.iter();
+    let sweep1 = sweeps.next().ok_or_else(|| {
+        MnaError::UnsupportedElement(".dc analysis has no sweeps".to_string())
+    })?;
+    let src1_name = element_name_by_id(circuit, sweep1.source)
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement(format!(
+                ".dc sweep references unknown element id {:?}",
+                sweep1.source
+            ))
+        })?
+        .to_string();
+    let src2 = if let Some(sweep2) = sweeps.next() {
+        let name = element_name_by_id(circuit, sweep2.source)
+            .ok_or_else(|| {
+                MnaError::UnsupportedElement(format!(
+                    ".dc second sweep references unknown element id {:?}",
+                    sweep2.source
+                ))
+            })?
+            .to_string();
+        Some((name, sweep2.start, sweep2.stop, sweep2.step))
+    } else {
+        None
+    };
+
+    Ok(crate::simulate::DcSweepRunParams {
+        src1: src1_name,
+        start1: sweep1.start,
+        stop1: sweep1.stop,
+        step1: sweep1.step,
+        src2,
+    })
+}
+
 /// Circuit-side analogue of `crate::netlist_tnom(&Netlist) -> f64`.
 ///
 /// Reads `TNOM` from `circuit.options` and returns Kelvin (default 300.15 K

@@ -361,7 +361,54 @@ Verification: `cargo nextest run --workspace` → 1014/1014 pass;
 harness 100/0/7 unchanged (still 100 pass / 0 fail / 7 ignored);
 `cargo clippy -p thevenin --lib` clean.
 
-#### Session I (open) — Netlist-API retirement
+#### Session I — Netlist-free analyses (DC + AC landed)
+
+Two analyses pivoted to be Netlist-free on the Circuit-input path:
+
+**DC sweep.** The internal helpers were already mostly Netlist-free —
+`resolve_sweep_source` and `get_source_dc_value` only ever needed
+`MnaSystem` data (`vsource_names` for V-source lookup,
+`current_sources` for I-source lookup + original DC value). Refactored
+to drop the Netlist arg; updated `simulate_dc_with_mna` accordingly.
+Extracted the sweep core into `pub fn run_dc_sweep(mna, NrOptions,
+DcSweepRunParams)` taking pre-resolved typed params. New
+`mna_ir::dc_sweep_params_from_circuit` builds the params from
+`circuit.analyses[*Analysis::Dc(DcAnalysis)]` (resolving source `Id`s
+to element names via `element_name_by_id`).
+`thevenin::circuit::simulate_dc(&Circuit)` now skips lowering to
+Netlist entirely on the happy path.
+
+**AC sweep.** Decoupled `apply_ac_excitation` from the Netlist by
+introducing a typed `AcExcitation { target: AcTarget, real: f64,
+imag: f64 }` with `AcTarget::VoltageBranch(usize)` /
+`CurrentInjection { ni, nj }`. Two collectors:
+`collect_ac_excitations_from_netlist` (existing call-path preserved)
+and `mna_ir::collect_ac_excitations_from_circuit` (new). Extracted
+`pub fn run_ac_sweep(mna, AcSweepRunParams)` with the sweep core, and
+`mna_ir::ac_sweep_params_from_circuit` to build the params from
+`Analysis::Ac(AcAnalysis)`. `solve_ac_point` / `solve_ac_frequencies`
+/ `build_ac_system` now take `&[AcExcitation]` instead of `&Netlist`
+— updated `noise.rs` and `sens.rs` callers accordingly.
+`thevenin::circuit::simulate_ac(&Circuit)` is also Netlist-free on
+the happy path.
+
+Pattern that emerged for both:
+1. Extract analysis core into `run_X_sweep(mna, params)` taking a
+   `pub struct XSweepRunParams` with pre-resolved typed fields.
+2. Netlist wrapper extracts params from `&Netlist` and calls
+   `run_X_sweep`.
+3. Add Circuit-side params extractor in `mna_ir` (reads from
+   `circuit.analyses`, `circuit.options`, `circuit.elements`).
+4. `thevenin::circuit::simulate_X` calls the Circuit extractor +
+   `run_X_sweep` directly, skipping the lower-to-Netlist step.
+
+**Still pending:** the same pattern applied to `transient`, `noise`,
+`sens`, `tf`, `pz`. Each one is mechanical (analysis-specific param
+extraction + a small Circuit-side reader in `mna_ir`) but tedious.
+
+Verification: 1014/1014 workspace tests pass; harness still 100/0/7.
+
+#### Session J (open) — Final Netlist-API retirement
 
 The remaining Stage 4 work is removing `thevenin_types::Netlist` from
 the public API surface entirely. Concretely:

@@ -735,6 +735,8 @@ fn simulate_ac_sens(
     let mut param_names: Vec<String> = Vec::new();
     let mut param_values: Vec<Vec<Complex>> = Vec::new();
 
+    let excitations = crate::ac::collect_ac_excitations_from_netlist(netlist, &mna, num_nodes);
+
     // We compute sensitivities at the first frequency to discover parameter
     // names, then extend at subsequent frequencies.
     for (fi, &freq) in frequencies.iter().enumerate() {
@@ -743,7 +745,7 @@ fn simulate_ac_sens(
         // Build complex AC system.
         let mut sys = ComplexLinearSystem::new(dim);
         stamp_ac_devices(&mna, &op_solution, omega, &mut sys, gmin);
-        crate::ac::apply_ac_excitation(&mut sys, netlist, &mna, num_nodes);
+        crate::ac::apply_ac_excitation(&mut sys, &excitations);
 
         // Build dense complex matrix and factor it.
         let mut mat = Mat::<c64>::zeros(dim, dim);

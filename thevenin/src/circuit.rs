@@ -125,17 +125,24 @@ fn simulate_op_direct(circuit: &Circuit) -> Option<SimResult> {
 
 /// Run a DC sweep on the circuit's first declared `.dc` analysis.
 ///
-/// When [`mna_ir::assemble_mna_from_circuit`] accepts the circuit, the
-/// MnaSystem is assembled directly from IR and handed to
-/// [`crate::simulate::simulate_dc_with_mna`]. The lowered Netlist is still
-/// built — DC sweep needs it for source resolution and `.dc` analysis
-/// params — but the simulator does not re-`assemble_mna` it.
+/// When [`mna_ir::assemble_mna_from_circuit`] accepts the circuit (always
+/// — every existing `IrElementKind` is supported), this is fully
+/// Circuit-driven: NR options come from `circuit.options`, sweep params
+/// from `circuit.analyses`, and the MnaSystem is built directly from IR.
+/// No lowered Netlist is constructed at all on the happy path.
+///
+/// For the fallback (a future `IrElementKind` not yet handled by mna_ir
+/// would land here), the lowered Netlist + the existing
+/// `crate::simulate_dc` Netlist path is used.
 pub fn simulate_dc(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        let mut nr_opts = mna_ir::nr_options_from_circuit(circuit);
+        nr_opts.diag_gmin = 0.0;
+        let params = mna_ir::dc_sweep_params_from_circuit(circuit)?;
+        return Ok(crate::simulate::run_dc_sweep(mna, nr_opts, params)?);
+    }
     let nls = lower(circuit)?;
     let nl = pick(&nls, "dc", |a| matches!(a, Analysis::Dc { .. }))?;
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        return Ok(crate::simulate::simulate_dc_with_mna(mna, nl)?);
-    }
     Ok(crate::simulate_dc(nl)?)
 }
 
@@ -167,12 +174,18 @@ pub fn simulate_tran(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
 }
 
 /// Run an AC small-signal analysis on the circuit's first declared `.ac`.
+///
+/// Fully Circuit-driven on the happy path: NR options, nodeset, AC source
+/// excitations, and `.ac` sweep params all come from the IR Circuit. The
+/// lowered Netlist is only constructed for the fallback (a future
+/// IrElementKind not yet handled by mna_ir).
 pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        let params = mna_ir::ac_sweep_params_from_circuit(circuit, &mna)?;
+        return Ok(crate::ac::run_ac_sweep(mna, params)?);
+    }
     let nls = lower(circuit)?;
     let nl = pick(&nls, "ac", |a| matches!(a, Analysis::Ac { .. }))?;
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        return Ok(crate::ac::simulate_ac_with_mna(mna, nl)?);
-    }
     Ok(crate::simulate_ac(nl)?)
 }
 

@@ -258,6 +258,17 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       `crate::mna` and `crate::mna_ir` are now pub so the harness
       can call them directly. 1014/1014 workspace tests pass;
       harness still 100/0/7.
+      **Session I landed (DC + AC fully Netlist-free):** the DC and
+      AC analyses now go entirely through Circuit on the Circuit-input
+      path — no lowered Netlist needed. Pattern: extract analysis core
+      to `run_X_sweep(mna, XSweepRunParams)` with pre-resolved typed
+      params; add Netlist-shaped + Circuit-shaped param extractors;
+      have the Circuit entry point bypass `lower()`. For AC,
+      `apply_ac_excitation` was decoupled from `&Netlist` via a typed
+      `AcExcitation` so both paths share the stamping code.
+      Remaining: tran / noise / sens / tf / pz follow the same
+      mechanical pattern. 1014/1014 workspace tests pass; harness
+      still 100/0/7.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`
