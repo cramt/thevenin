@@ -590,7 +590,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// Netlist is still needed for `.tran` analysis params, `.ic` overrides,
 /// nodeset resolution, and `.OPTIONS` lookups.
 pub fn simulate_tran_with_mna(
-    mut mna: MnaSystem,
+    mna: MnaSystem,
     netlist: &Netlist,
 ) -> Result<SimResult, MnaError> {
     let (tstep, tstop, tstart, tmax, uic) = match &netlist.analysis {
@@ -626,6 +626,77 @@ pub fn simulate_tran_with_mna(
         .map(|e| expr_val(e, ".tran tmax"))
         .transpose()?;
 
+    let circuit_nr_opts = nr_options_from_netlist(netlist);
+    let nodeset = crate::simulate::resolve_nodeset(netlist, &mna);
+
+    // Apply node-level .ic overrides from the netlist — pre-resolve them to
+    // MnaSystem matrix indices so `run_tran` doesn't need to walk netlist.items.
+    let mut ic_overrides: Vec<(usize, f64)> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Ic(pairs) = item {
+            for (node_name, val) in pairs {
+                if let Some(idx) = mna.node_map.get(node_name) {
+                    ic_overrides.push((idx, *val));
+                }
+            }
+        }
+    }
+
+    let device_param_queries = collect_device_param_queries(netlist.source.lines(), &mna);
+
+    run_tran(
+        mna,
+        TranRunParams {
+            t_step: h_print,
+            t_stop,
+            t_start,
+            t_max,
+            uic,
+            nr_opts: circuit_nr_opts,
+            nodeset,
+            ic_overrides,
+            device_param_queries,
+        },
+    )
+}
+
+/// Fully-resolved `.tran` analysis parameters, shared between Netlist and
+/// Circuit input paths.
+pub struct TranRunParams {
+    pub t_step: f64,
+    pub t_stop: f64,
+    pub t_start: f64,
+    pub t_max: Option<f64>,
+    pub uic: bool,
+    pub nr_opts: crate::newton::NrOptions,
+    pub nodeset: Vec<(usize, f64)>,
+    /// `(matrix_index, voltage)` pairs resolved from `.ic` directives.
+    pub ic_overrides: Vec<(usize, f64)>,
+    /// `(device, param)` pairs collected from `.print @device[param]` directives.
+    pub device_param_queries: Vec<(String, String)>,
+}
+
+/// Execute a `.tran` analysis on an assembled [`MnaSystem`] with all
+/// netlist-derived params already extracted into [`TranRunParams`].
+///
+/// Shared core for both the Netlist path (`simulate_tran_with_mna`) and the
+/// Circuit path ([`crate::circuit::simulate_tran`]).
+pub fn run_tran(
+    mut mna: MnaSystem,
+    params: TranRunParams,
+) -> Result<SimResult, MnaError> {
+    let TranRunParams {
+        t_step: h_print,
+        t_stop,
+        t_start,
+        t_max,
+        uic,
+        nr_opts: circuit_nr_opts,
+        nodeset,
+        ic_overrides,
+        device_param_queries,
+    } = params;
+
     if h_print <= 0.0 || t_stop <= 0.0 {
         return Err(MnaError::UnsupportedElement(
             "invalid .tran parameters".to_string(),
@@ -635,20 +706,12 @@ pub fn simulate_tran_with_mna(
     // Maximum internal timestep: tmax if specified, otherwise min(tstep, tstop/50).
     let h_max = t_max.unwrap_or_else(|| h_print.min(t_stop / 50.0));
 
-    // Parse circuit .OPTIONS (GMIN, ABSTOL, RELTOL, VNTOL, ITL1, ITL2) so
-    // that transient analysis respects the same settings as DC sweep analysis.
-    // Previously, transient always used NrOptions::default() which ignores
-    // circuit-specified GMIN — critical for floating-body SOI circuits where
-    // the default GMIN (1e-12) overwhelms picoampere-range junction leakage.
-    let circuit_nr_opts = nr_options_from_netlist(netlist);
-
     let dim = mna.system.dim();
     let num_nodes = mna.total_num_nodes();
 
     // When UIC (Use Initial Conditions) is set, skip the DC operating point
     // and start from zero with explicit .ic node voltages applied.
     // Otherwise, compute the normal DC OP as the starting point.
-    let nodeset = crate::simulate::resolve_nodeset(netlist, &mna);
     let mut solution = if uic {
         vec![0.0; dim]
     } else {
@@ -661,16 +724,9 @@ pub fn simulate_tran_with_mna(
         sol
     };
 
-    // Apply node-level .ic overrides from the netlist.
-    // These set explicit node voltages for the transient initial state.
-    for item in &netlist.items {
-        if let Item::Ic(pairs) = item {
-            for (node_name, val) in pairs {
-                if let Some(idx) = mna.node_map.get(node_name) {
-                    solution[idx] = *val;
-                }
-            }
-        }
+    // Apply pre-resolved .ic node voltage overrides.
+    for (idx, val) in &ic_overrides {
+        solution[*idx] = *val;
     }
 
     // Apply IC overrides for capacitors (override DC OP voltage).
@@ -1098,8 +1154,7 @@ pub fn simulate_tran_with_mna(
         .map(|vsrc| SimVector::real(format!("{}#branch", vsrc.to_lowercase()), Vec::new()))
         .collect();
 
-    // Scan .print directives for @device[param] queries and create output vectors.
-    let device_param_queries = collect_device_param_queries(netlist, &mna);
+    // Use the pre-collected @device[param] queries from TranRunParams.
     let mut device_param_vecs: Vec<SimVector> = device_param_queries
         .iter()
         .map(|(device, param)| {
@@ -1984,11 +2039,21 @@ fn parse_device_param_query(var: &str) -> Option<(String, String)> {
     Some((device, param))
 }
 
-/// Scan netlist `.print` directives for `@device[param]` queries that the MNA
+/// Scan `.print` directive lines for `@device[param]` queries that the MNA
 /// system can resolve. Returns a deduplicated list of (device, param) pairs.
-fn collect_device_param_queries(netlist: &Netlist, mna: &MnaSystem) -> Vec<(String, String)> {
+///
+/// Takes an iterator of `.print`-bearing lines so both the Netlist path
+/// (which reads from `netlist.source`) and the Circuit path (which reads
+/// from `circuit.raw_directives`) can share this code.
+pub fn collect_device_param_queries<'a, I>(
+    print_lines: I,
+    mna: &MnaSystem,
+) -> Vec<(String, String)>
+where
+    I: IntoIterator<Item = &'a str>,
+{
     let mut queries = Vec::new();
-    for line in netlist.source.lines() {
+    for line in print_lines {
         let trimmed = line.trim().to_lowercase();
         if !trimmed.starts_with(".print") {
             continue;

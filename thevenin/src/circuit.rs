@@ -149,27 +149,31 @@ pub fn simulate_dc(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
 /// Run a transient analysis on the circuit's first declared `.tran` analysis.
 ///
 /// As with the harness, an operating-point solve is prepended so the
-/// transient starts from a valid steady state. The MnaSystem is built
-/// once via [`mna_ir::assemble_mna_from_circuit`] when accepted and
-/// re-assembled for the transient leg (its solver mutates the system).
+/// transient starts from a valid steady state. Fully Circuit-driven on
+/// the happy path: NR options, nodeset, `.ic` overrides, `.print`
+/// queries, and `.tran` analysis params all come from the IR Circuit.
+/// The lowered Netlist is only used for the fallback path.
 pub fn simulate_tran(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    let nls = lower(circuit)?;
-    let nl = pick(&nls, "tran", |a| matches!(a, Analysis::Tran { .. }))?;
-    let mut plots: Vec<SimPlot> = Vec::new();
     if let Some(mna_op) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
         let opts = mna_ir::nr_options_from_circuit(circuit);
         let nodeset = mna_ir::resolve_nodeset_from_circuit(circuit, &mna_op);
+        let mut plots: Vec<SimPlot> = Vec::new();
         if let Ok(op) = crate::simulate::simulate_op_with_mna(&mna_op, &opts, &nodeset) {
             plots.extend(op.plots);
         }
-    } else if let Ok(op) = crate::simulate_op(nl) {
+        let mna_tran = mna_ir::assemble_mna_from_circuit(circuit, false, None)?
+            .expect("mna_ir already accepted this circuit");
+        let params = mna_ir::tran_params_from_circuit(circuit, &mna_tran)?;
+        plots.extend(crate::transient::run_tran(mna_tran, params)?.plots);
+        return Ok(SimResult { plots });
+    }
+    let nls = lower(circuit)?;
+    let nl = pick(&nls, "tran", |a| matches!(a, Analysis::Tran { .. }))?;
+    let mut plots: Vec<SimPlot> = Vec::new();
+    if let Ok(op) = crate::simulate_op(nl) {
         plots.extend(op.plots);
     }
-    if let Some(mna_tran) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        plots.extend(crate::transient::simulate_tran_with_mna(mna_tran, nl)?.plots);
-    } else {
-        plots.extend(crate::simulate_tran(nl)?.plots);
-    }
+    plots.extend(crate::simulate_tran(nl)?.plots);
     Ok(SimResult { plots })
 }
 

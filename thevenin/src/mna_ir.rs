@@ -445,6 +445,70 @@ pub fn ac_sweep_params_from_circuit(
     })
 }
 
+/// Extract a fully-resolved `.tran` analysis parameter struct from a
+/// Circuit's first declared `Analysis::Tran(TranAnalysis)`. `.ic` overrides
+/// come from `circuit.initial_conditions` (Id → voltage pairs, pre-resolved
+/// against `mna.node_map`), and `.print @device[param]` queries come from
+/// `circuit.raw_directives` (which preserves verbatim SPICE directives via
+/// the harness fix in
+/// `docs/migration/cirq-harness-status.md`).
+pub fn tran_params_from_circuit(
+    circuit: &Circuit,
+    mna: &MnaSystem,
+) -> Result<crate::transient::TranRunParams, MnaError> {
+    let tran = circuit
+        .analyses
+        .iter()
+        .find_map(|a| match a {
+            cirq_ir::Analysis::Tran(spec) => Some(spec),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement("no .tran analysis found on circuit".to_string())
+        })?;
+
+    // Resolve .ic overrides: IR carries (net Id, voltage). Map to matrix
+    // indices via the net id → name → NodeMap lookup the same way
+    // resolve_nodeset_from_circuit does.
+    let net_lookup: HashMap<Id, String> = circuit
+        .nets
+        .iter()
+        .map(|n| {
+            let name = if n.name == "gnd" {
+                "0".to_string()
+            } else {
+                n.name.clone()
+            };
+            (n.id, name)
+        })
+        .collect();
+    let mut ic_overrides = Vec::new();
+    for (net_id, voltage) in &circuit.initial_conditions {
+        if let Some(name) = net_lookup.get(net_id)
+            && let Some(idx) = mna.node_map.get(name)
+        {
+            ic_overrides.push((idx, *voltage));
+        }
+    }
+
+    let device_param_queries = crate::transient::collect_device_param_queries(
+        circuit.raw_directives.iter().map(String::as_str),
+        mna,
+    );
+
+    Ok(crate::transient::TranRunParams {
+        t_step: tran.step,
+        t_stop: tran.stop,
+        t_start: tran.start,
+        t_max: tran.tmax,
+        uic: tran.uic,
+        nr_opts: nr_options_from_circuit(circuit),
+        nodeset: resolve_nodeset_from_circuit(circuit, mna),
+        ic_overrides,
+        device_param_queries,
+    })
+}
+
 /// Resolve an element id to its name within `circuit.elements`.
 ///
 /// Returns `None` when the id isn't in the table — callers handle that as
