@@ -319,28 +319,28 @@ mod tests {
     }
 
     /// A circuit with an element outside the IR-direct supported subset
-    /// must fall back to the lowering path. Uses a JFET (NJfet) because
-    /// MOSFETs are now supported directly; this test pins the fallback
-    /// behaviour for device classes still pending migration (see
-    /// `docs/migration/mna-ir-pivot-plan.md`).
+    /// must fall back to the lowering path. Uses a behavioural source —
+    /// JFET / MESA / MOSFET / BJT / diode are now all supported. This
+    /// test pins the fallback for still-pending device classes (LTRA /
+    /// TXL / CPL / behavioural / XSPICE / mutual coupling); see
+    /// `docs/migration/mna-ir-pivot-plan.md`.
     #[test]
     fn direct_path_rejects_unsupported_circuits() {
         let mut c = voltage_divider();
         c.elements.push(cirq_ir::Element {
             id: Id(3),
-            name: "J1".into(),
-            kind: ElementKind::NJfet,
+            name: "B1".into(),
+            kind: ElementKind::BehavioralSource {
+                mode: cirq_ir::BehavioralMode::Voltage,
+                spec: "v(in)".into(),
+            },
             connections: vec![
                 cirq_ir::Connection {
-                    terminal: "drain".into(),
+                    terminal: "pos".into(),
                     net: Id(1),
                 },
                 cirq_ir::Connection {
-                    terminal: "gate".into(),
-                    net: Id(2),
-                },
-                cirq_ir::Connection {
-                    terminal: "source".into(),
+                    terminal: "neg".into(),
                     net: Id(0),
                 },
             ],

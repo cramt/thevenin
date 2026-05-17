@@ -175,13 +175,31 @@ Verification: `cargo nextest run --workspace` → 998/998 pass; harness
 Verification: `cargo nextest run --workspace` → 1006/1006 pass; harness
 100/0/7 unchanged.
 
-#### Session E — JFET / MESA / MESFET / HFET
+#### Session E — JFET / MESA / MESFET / HFET — landed
 
-- `Jfet`, `Mesa` (which dispatches to MESFET or HFET via model kind string),
-  using the same shim pattern.
-- Extend equivalence tests.
+`mna_ir.rs` now also accepts NJfet / PJfet / NMesfet / PMesfet:
 
-Estimated diff: +300 LOC.
+- **JFET** (`JfetModel` + `JfetInstance`): drain/gate/source terminals
+  with RD/RS internal-node allocation; AREA / M instance params.
+- **MESA elements** (`NMesfet`/`PMesfet`) dispatch the same way
+  `assemble_mna_flat` does — by the resolved model's `kind` string:
+  - `NMF`/`PMF` with level=1 → `MesfetModel` + `MesfetInstance`
+    (RD/RS internal nodes only).
+  - `NHFET`/`PHFET` (any level) → `HfetModel::from_model_def_with_level`
+    + `HfetInstance` with up to 5 conditional internal nodes
+    (drain'/source'/gate' for RD/RS/RG, drain''/source'' for RF/RI)
+    plus a `HfetPrecomp::compute(model, 300.15, 300.15, w, l)` call.
+  - Anything else → generic `MesaModel` + `MesaInstance` with TS / TD /
+    DTEMP instance params, `MesaPrecomp::compute(model, ts, td, tnom, w, l)`,
+    and up to 5 conditional internal nodes.
+- New `circuit_tnom(&Circuit)` helper mirrors `crate::netlist_tnom`
+  (reads `TNOM` from `circuit.options`, returns Kelvin).
+- Two new equivalence fixtures (`jfet_njf_op`, `mesfet_nmf_op`); the
+  HFET and generic-MESA paths are exercised via the existing harness
+  fixtures once the harness routes through `mna_ir`.
+
+Verification: `cargo nextest run --workspace` → 1006/1006 pass; harness
+100/0/7 unchanged; `cargo clippy -p thevenin --lib` clean.
 
 #### Session F — Distributed + behavioral + XSPICE
 

@@ -420,6 +420,38 @@ Vds d 0 0.5
 }
 
 #[test]
+fn jfet_njf_op() {
+    // NJF in common-source — exercises JfetModel + JfetInstance with
+    // RD > 0 internal-node allocation.
+    assert_paths_equal(
+        "JFET NJF\n\
+         .model jmod njf vto=-2 beta=1m rd=10 rs=5\n\
+         VDD vdd 0 5\n\
+         VGS gate 0 -0.5\n\
+         RD vdd drain 10k\n\
+         J1 drain gate 0 jmod\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
+fn mesfet_nmf_op() {
+    // NMF MESFET — model kind \"NMF\" with level=1 routes to MesfetModel
+    // (not generic MESA).
+    assert_paths_equal(
+        "MESFET NMF\n\
+         .model zmod nmf level=1 vto=-2 beta=1m rd=10 rs=5\n\
+         VDD vdd 0 3\n\
+         VGS gate 0 -0.5\n\
+         RD vdd drain 10k\n\
+         Z1 drain gate 0 zmod\n\
+         .op\n\
+         .end\n",
+    );
+}
+
+#[test]
 fn ladder_network() {
     // L-shaped R network with several internal nodes — stresses node
     // indexing.

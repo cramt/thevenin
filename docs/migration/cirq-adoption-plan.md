@@ -195,6 +195,16 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       MOS1 PMOS, MOS2 with RD/RS, BSIM3 with full nmosParameters
       ported from ngspice-upstream). 1006/1006 workspace tests pass;
       harness still 100/0/7.
+      **Session E landed (JFET + MESA family):** NJfet / PJfet /
+      NMesfet / PMesfet now route through the direct IR path. JFET
+      uses JfetModel + JfetInstance with RD/RS internal nodes. The
+      Mesa kind dispatches by resolved model kind: NMF/PMF level=1 →
+      MesfetModel; NHFET/PHFET → HfetModel with up to 5 conditional
+      internal nodes + HfetPrecomp; anything else → generic MesaModel
+      with TS/TD/DTEMP instance params + MesaPrecomp. New
+      `circuit_tnom` helper mirrors crate::netlist_tnom. Two new
+      equivalence fixtures (JFET, MESFET); HFET/MESA generic paths
+      validated once the harness routes through mna_ir.
 - [x] Migrate the `.control` block interpreter to operate on Cirq IR or a
       control-flow IR rather than on the SPICE Netlist shape.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`

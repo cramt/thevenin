@@ -31,6 +31,10 @@ use crate::bsim3soi_fd::{Bsim3SoiFdInstance, Bsim3SoiFdModel};
 use crate::bsim3soi_pd::{Bsim3SoiPdInstance, Bsim3SoiPdModel};
 use crate::bsim4::{Bsim4Instance, Bsim4Model};
 use crate::diode::DiodeModel;
+use crate::hfet::{HfetInstance, HfetModel, HfetPrecomp};
+use crate::jfet::{JfetInstance, JfetModel};
+use crate::mesa::{MesaInstance, MesaModel, MesaPrecomp};
+use crate::mesfet::{MesfetInstance, MesfetModel};
 use crate::mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
     NodeMap, ResistorInstance, VoltageSourceInstance, get_mosfet_level, get_mosfet_lw,
@@ -140,6 +144,10 @@ fn circuit_is_supported_subset(circuit: &Circuit) -> bool {
                 | IrElementKind::Pnp
                 | IrElementKind::Nmos
                 | IrElementKind::Pmos
+                | IrElementKind::NJfet
+                | IrElementKind::PJfet
+                | IrElementKind::NMesfet
+                | IrElementKind::PMesfet
         )
     })
 }
@@ -308,6 +316,22 @@ fn circuit_temp(circuit: &Circuit) -> f64 {
         }
     }
     27.0
+}
+
+/// Circuit-side analogue of `crate::netlist_tnom(&Netlist) -> f64`.
+///
+/// Reads `TNOM` from `circuit.options` and returns Kelvin (default 300.15 K
+/// when unset). Used by MESA temperature-precomputed parameters.
+fn circuit_tnom(circuit: &Circuit) -> f64 {
+    let mut tnom_c = 27.0_f64;
+    for (name, value) in &circuit.options {
+        if name.eq_ignore_ascii_case("TNOM")
+            && let Some(v) = numeric_value(value)
+        {
+            tnom_c = v;
+        }
+    }
+    tnom_c + 273.15
 }
 
 /// Determine the BJT model level from instance params first, then model
@@ -550,6 +574,51 @@ fn stamp_circuit(
                         .map(|m| BjtModel::from_model_def(&convert_model(m)))
                         .unwrap_or_else(|| BjtModel::new(crate::bjt::BjtType::Npn));
                     internal_node_count += bm.internal_node_count();
+                }
+            }
+            IrElementKind::NJfet | IrElementKind::PJfet => {
+                let d = terminal_name(elem, "drain", &net_name)?;
+                let g = terminal_name(elem, "gate", &net_name)?;
+                let s = terminal_name(elem, "source", &net_name)?;
+                node_map.index(d);
+                node_map.index(g);
+                node_map.index(s);
+                let jm = lookup_model(circuit, elem)
+                    .map(|m| JfetModel::from_model_def(&convert_model(m)))
+                    .unwrap_or_else(|| JfetModel::new(crate::jfet::JfetType::Njf));
+                internal_node_count += jm.internal_node_count();
+            }
+            IrElementKind::NMesfet | IrElementKind::PMesfet => {
+                let d = terminal_name(elem, "drain", &net_name)?;
+                let g = terminal_name(elem, "gate", &net_name)?;
+                let s = terminal_name(elem, "source", &net_name)?;
+                node_map.index(d);
+                node_map.index(g);
+                node_map.index(s);
+                let model = lookup_model(circuit, elem);
+                let mdef = model.map(convert_model);
+                let kind = mdef.as_ref().map(|m| m.kind.to_uppercase());
+                let params_nl = extra_params(elem, &["value"]);
+                let level = get_mosfet_level(mdef.as_ref().as_ref(), &params_nl);
+                match kind.as_deref() {
+                    Some("NMF" | "PMF") if level == 1 => {
+                        let mm = MesfetModel::from_model_def(mdef.as_ref().unwrap());
+                        internal_node_count += mm.internal_node_count();
+                    }
+                    Some("NHFET" | "PHFET") => {
+                        let mm = HfetModel::from_model_def_with_level(
+                            mdef.as_ref().unwrap(),
+                            level,
+                        );
+                        internal_node_count += mm.internal_node_count();
+                    }
+                    _ => {
+                        let mm = mdef
+                            .as_ref()
+                            .map(MesaModel::from_model_def)
+                            .unwrap_or_default();
+                        internal_node_count += mm.internal_node_count();
+                    }
                 }
             }
             IrElementKind::Nmos | IrElementKind::Pmos => {
@@ -960,6 +1029,263 @@ fn stamp_circuit(
                 }
                 // The conductance/current stamps are applied during NR
                 // iteration in `device_stamp::diode`, not here.
+            }
+            IrElementKind::NJfet | IrElementKind::PJfet => {
+                let drain_idx = mna.node_map.get(terminal_name(elem, "drain", &net_name)?);
+                let gate_idx = mna.node_map.get(terminal_name(elem, "gate", &net_name)?);
+                let source_idx = mna.node_map.get(terminal_name(elem, "source", &net_name)?);
+
+                let jm = lookup_model(circuit, elem)
+                    .map(|m| JfetModel::from_model_def(&convert_model(m)))
+                    .unwrap_or_else(|| JfetModel::new(crate::jfet::JfetType::Njf));
+
+                let drain_prime_idx = if jm.rd > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    drain_idx
+                };
+                let source_prime_idx = if jm.rs > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    source_idx
+                };
+
+                let mut area = 1.0;
+                let mut m_mult = 1.0;
+                for (name, value) in &elem.params {
+                    if let Some(v) = numeric_value(value) {
+                        match name.to_uppercase().as_str() {
+                            "AREA" => area = v,
+                            "M" => m_mult = v,
+                            _ => {}
+                        }
+                    }
+                }
+
+                mna.jfets.push(JfetInstance {
+                    name: elem.name.clone(),
+                    drain_idx,
+                    gate_idx,
+                    source_idx,
+                    drain_prime_idx,
+                    source_prime_idx,
+                    model: jm,
+                    area,
+                    m: m_mult,
+                });
+            }
+            IrElementKind::NMesfet | IrElementKind::PMesfet => {
+                let drain_idx = mna.node_map.get(terminal_name(elem, "drain", &net_name)?);
+                let gate_idx = mna.node_map.get(terminal_name(elem, "gate", &net_name)?);
+                let source_idx = mna.node_map.get(terminal_name(elem, "source", &net_name)?);
+
+                let model = lookup_model(circuit, elem);
+                let mdef = model.map(convert_model);
+                let kind = mdef.as_ref().map(|m| m.kind.to_uppercase());
+                let params_nl = extra_params(elem, &["value"]);
+                let level = get_mosfet_level(mdef.as_ref().as_ref(), &params_nl);
+
+                match kind.as_deref() {
+                    Some("NMF" | "PMF") if level == 1 => {
+                        let mm = MesfetModel::from_model_def(mdef.as_ref().unwrap());
+
+                        let mut area = 1.0;
+                        let mut m_mult = 1.0;
+                        for (name, value) in &elem.params {
+                            if let Some(v) = numeric_value(value) {
+                                match name.to_uppercase().as_str() {
+                                    "AREA" => area = v,
+                                    "M" => m_mult = v,
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        let drain_prime_idx = if mm.rd > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_idx
+                        };
+                        let source_prime_idx = if mm.rs > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_idx
+                        };
+
+                        mna.mesfets.push(MesfetInstance {
+                            name: elem.name.clone(),
+                            drain_idx,
+                            gate_idx,
+                            source_idx,
+                            drain_prime_idx,
+                            source_prime_idx,
+                            model: mm,
+                            area,
+                            m: m_mult,
+                        });
+                    }
+                    Some("NHFET" | "PHFET") => {
+                        let mm = HfetModel::from_model_def_with_level(
+                            mdef.as_ref().unwrap(),
+                            level,
+                        );
+
+                        let mut w = 10e-6;
+                        let mut l = 1e-6;
+                        for (name, value) in &elem.params {
+                            if let Some(v) = numeric_value(value) {
+                                match name.to_uppercase().as_str() {
+                                    "W" => w = v,
+                                    "L" => l = v,
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        let drain_prime_idx = if mm.rd != 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_idx
+                        };
+                        let source_prime_idx = if mm.rs != 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_idx
+                        };
+                        let gate_prime_idx = if mm.rg > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            gate_idx
+                        };
+                        let drain_prm_prm_idx = if mm.rf > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_prime_idx
+                        };
+                        let source_prm_prm_idx = if mm.ri > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_prime_idx
+                        };
+
+                        let pre = HfetPrecomp::compute(&mm, 300.15, 300.15, w, l);
+                        mna.hfets.push(HfetInstance {
+                            name: elem.name.clone(),
+                            drain_idx,
+                            gate_idx,
+                            source_idx,
+                            gate_prime_idx,
+                            drain_prime_idx,
+                            source_prime_idx,
+                            drain_prm_prm_idx,
+                            source_prm_prm_idx,
+                            model: mm,
+                            precomp: pre,
+                            w,
+                            l,
+                        });
+                    }
+                    _ => {
+                        // Generic MESA.
+                        let mm = mdef
+                            .as_ref()
+                            .map(MesaModel::from_model_def)
+                            .unwrap_or_default();
+
+                        let mut w = 20e-6;
+                        let mut l = 1e-6;
+                        let mut ts_given: Option<f64> = None;
+                        let mut td_given: Option<f64> = None;
+                        let mut dtemp = 0.0_f64;
+                        for (name, value) in &elem.params {
+                            if let Some(v) = numeric_value(value) {
+                                match name.to_uppercase().as_str() {
+                                    "W" => w = v,
+                                    "L" => l = v,
+                                    "TS" => ts_given = Some(v + 273.15),
+                                    "TD" => td_given = Some(v + 273.15),
+                                    "DTEMP" => dtemp = v,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        let ckt_temp = circuit_temp(circuit) + 273.15;
+                        let ts = ts_given.unwrap_or(ckt_temp + dtemp);
+                        let td = td_given.unwrap_or(ckt_temp + dtemp);
+
+                        let drain_prime_idx = if mm.rd > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_idx
+                        };
+                        let source_prime_idx = if mm.rs > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_idx
+                        };
+                        let gate_prime_idx = if mm.rg > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            gate_idx
+                        };
+                        let source_prm_prm_idx = if mm.ri > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_prime_idx
+                        };
+                        let drain_prm_prm_idx = if mm.rf > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_prime_idx
+                        };
+
+                        let tnom = circuit_tnom(circuit);
+                        let pre = MesaPrecomp::compute(&mm, ts, td, tnom, w, l);
+                        mna.mesas.push(MesaInstance {
+                            name: elem.name.clone(),
+                            model: mm,
+                            precomp: pre,
+                            w,
+                            l,
+                            drain_idx,
+                            gate_idx,
+                            source_idx,
+                            drain_prime_idx,
+                            gate_prime_idx,
+                            source_prime_idx,
+                            source_prm_prm_idx,
+                            drain_prm_prm_idx,
+                        });
+                    }
+                }
             }
             IrElementKind::Nmos | IrElementKind::Pmos => {
                 let drain_idx = mna.node_map.get(terminal_name(elem, "drain", &net_name)?);
@@ -1779,28 +2105,27 @@ mod tests {
 
     #[test]
     fn unsupported_circuit_returns_none() {
-        // JFET (NJfet) is not yet handled by the direct IR path — adding
-        // one should make `assemble_mna_from_circuit` return Ok(None) so
-        // the caller falls back to `assemble_mna(&Netlist)`. Diodes /
-        // BJTs / MOSFETs are now supported; this test pins the fallback
-        // for still-pending device classes (see
-        // `docs/migration/mna-ir-pivot-plan.md`).
+        // A behavioural source is not yet handled by the direct IR path —
+        // adding one should make `assemble_mna_from_circuit` return Ok(None)
+        // so the caller falls back to `assemble_mna(&Netlist)`. All
+        // diodes / BJTs / MOSFETs / JFETs / MESA family devices are now
+        // supported; this test pins the fallback for still-pending
+        // device classes (see `docs/migration/mna-ir-pivot-plan.md`).
         let mut c = divider();
         c.elements.push(Element {
             id: Id(3),
-            name: "J1".into(),
-            kind: IrElementKind::NJfet,
+            name: "B1".into(),
+            kind: IrElementKind::BehavioralSource {
+                mode: cirq_ir::BehavioralMode::Voltage,
+                spec: "v(in)".into(),
+            },
             connections: vec![
                 Connection {
-                    terminal: "drain".into(),
+                    terminal: "pos".into(),
                     net: Id(1),
                 },
                 Connection {
-                    terminal: "gate".into(),
-                    net: Id(2),
-                },
-                Connection {
-                    terminal: "source".into(),
+                    terminal: "neg".into(),
                     net: Id(0),
                 },
             ],
