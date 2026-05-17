@@ -28,6 +28,65 @@ use crate::mna::{
     CapacitorInstance, CurrentSourceInstance, InductorInstance, MnaError, MnaSystem, NodeMap,
     ResistorInstance, VoltageSourceInstance, stamp_conductance,
 };
+use crate::newton::NrOptions;
+
+/// Extract Newton-Raphson options from a circuit's `options` field.
+///
+/// Circuit-side equivalent of `crate::simulate::nr_options_from_netlist`.
+/// Recognises the same `.OPTIONS` keys (GMIN, ABSTOL, RELTOL, VNTOL,
+/// ITL1/ITL2/ITL4) and ignores non-numeric values silently.
+pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
+    let mut opts = NrOptions::default();
+    for (name, value) in &circuit.options {
+        let v = match value {
+            Value::Real(f) => *f,
+            Value::Integer(i) => *i as f64,
+            _ => continue,
+        };
+        match name.to_uppercase().as_str() {
+            "GMIN" => opts.gmin = v,
+            "ABSTOL" => opts.abstol = v,
+            "RELTOL" => opts.reltol = v,
+            "VNTOL" => opts.vntol = v,
+            "ITL1" => opts.itl1 = v as usize,
+            "ITL2" => opts.itl2 = v as usize,
+            "ITL4" => opts.itl4 = v as usize,
+            _ => {}
+        }
+    }
+    opts
+}
+
+/// Resolve a circuit's `.nodeset` (IR-shaped: `(Id, f64)` net-id pairs) into
+/// `(matrix_index, voltage)` pairs against an assembled [`MnaSystem`].
+///
+/// Circuit-side equivalent of `crate::simulate::resolve_nodeset`. Hidden
+/// pairs that don't resolve (unknown ids, or the named net is ground and
+/// therefore excluded from the matrix) are dropped silently — matching the
+/// Netlist path's behaviour.
+pub fn resolve_nodeset_from_circuit(circuit: &Circuit, mna: &MnaSystem) -> Vec<(usize, f64)> {
+    let net_lookup: HashMap<Id, String> = circuit
+        .nets
+        .iter()
+        .map(|n| {
+            let name = if n.name == "gnd" {
+                "0".to_string()
+            } else {
+                n.name.clone()
+            };
+            (n.id, name)
+        })
+        .collect();
+    let mut pairs = Vec::new();
+    for (net_id, val) in &circuit.nodeset {
+        if let Some(name) = net_lookup.get(net_id)
+            && let Some(idx) = mna.node_map.get(name)
+        {
+            pairs.push((idx, *val));
+        }
+    }
+    pairs
+}
 
 /// Build an `MnaSystem` directly from a Cirq IR circuit when every element
 /// is part of the linear subset (R / V / I / C / L / E / G / H / F).

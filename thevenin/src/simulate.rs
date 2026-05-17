@@ -58,10 +58,24 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
     let opts = nr_options_from_netlist(netlist);
     let nodeset = resolve_nodeset(netlist, &mna);
+    simulate_op_with_mna(&mna, &opts, &nodeset)
+}
+
+/// Solve an already-assembled `MnaSystem` for `.op` and format the result.
+///
+/// Shared between the Netlist path (`simulate_op` above) and the Stage 4
+/// IR-direct path (`thevenin::circuit::simulate_op`) so both produce
+/// identically-shaped `SimResult` values regardless of how the MNA was
+/// assembled.
+pub fn simulate_op_with_mna(
+    mna: &MnaSystem,
+    opts: &NrOptions,
+    nodeset: &[(usize, f64)],
+) -> Result<SimResult, MnaError> {
     let solution_vec = if nodeset.is_empty() {
-        solve_op_raw_with_opts(&mna, &opts)?
+        solve_op_raw_with_opts(mna, opts)?
     } else {
-        solve_op_raw_with_nodeset(&mna, &opts, &nodeset)?
+        solve_op_raw_with_nodeset(mna, opts, nodeset)?
     };
 
     let mut vecs = Vec::new();
@@ -79,7 +93,7 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
         vecs.push(SimVector::real(format!("v({})", name), vec![v]));
     }
 
-    // Voltage source branch currents
+    // Voltage source branch currents.
     let num_nodes = mna.total_num_nodes();
     for (i, vsrc) in mna.vsource_names.iter().enumerate() {
         let idx = num_nodes + i;
@@ -108,41 +122,10 @@ pub fn simulate_op_with_xspice(
     registry: Arc<CodeModelRegistry>,
 ) -> Result<SimResult, MnaError> {
     let mna = assemble_mna_with_xspice(netlist, registry)?;
-    let solution_vec = solve_op_raw(&mna)?;
-
-    let mut vecs = Vec::new();
-
-    let mut nodes: Vec<(&str, usize)> = mna.node_map.iter().collect();
-    nodes.sort_by_key(|n| std::cmp::Reverse(n.1));
-    for (name, idx) in &nodes {
-        let v = if *idx < solution_vec.len() {
-            solution_vec[*idx]
-        } else {
-            0.0
-        };
-        vecs.push(SimVector::real(format!("v({})", name), vec![v]));
-    }
-
-    let num_nodes = mna.total_num_nodes();
-    for (i, vsrc) in mna.vsource_names.iter().enumerate() {
-        let idx = num_nodes + i;
-        let current = if idx < solution_vec.len() {
-            solution_vec[idx]
-        } else {
-            0.0
-        };
-        vecs.push(SimVector::real(
-            format!("{}#branch", vsrc.to_lowercase()),
-            vec![current],
-        ));
-    }
-
-    Ok(SimResult {
-        plots: vec![SimPlot {
-            name: "op1".to_string(),
-            vecs,
-        }],
-    })
+    // XSPICE entry historically uses default NR options and no nodeset —
+    // preserve that, but route the solve + formatting through the shared
+    // `simulate_op_with_mna` so output shape stays canonical.
+    simulate_op_with_mna(&mna, &NrOptions::default(), &[])
 }
 
 /// Solve the DC operating point and return the raw solution vector.

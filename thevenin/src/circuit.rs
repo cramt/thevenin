@@ -22,7 +22,7 @@
 
 use cirq_frontend::to_netlist::{ConvertError, circuit_to_netlists};
 use cirq_ir::Circuit;
-use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{Analysis, Netlist, SimPlot, SimResult};
 
 use crate::MnaError;
 use crate::mna_ir;
@@ -105,49 +105,22 @@ fn has_op_analysis(circuit: &Circuit) -> bool {
             .any(|a| matches!(a, cirq_ir::Analysis::Op))
 }
 
-/// Direct IR → MNA path for the linear-only DC operating point.
+/// Direct IR → MNA path for the DC operating point.
 ///
 /// Returns `Some(result)` if [`mna_ir::assemble_mna_from_circuit`] accepts
-/// the circuit — i.e. every element is in the linear subset (R / V / I /
-/// C / L / E / G / H / F). Otherwise returns `None` and the caller falls
-/// back to the lowering path.
+/// the circuit (currently the linear subset R / V / I / C / L / E / G / H /
+/// F; future sessions extend to nonlinear devices per
+/// `docs/migration/mna-ir-pivot-plan.md`). Otherwise returns `None` and the
+/// caller falls back to the lowering path.
 ///
-/// The output vectors follow the same `v(node)` / `name#branch` naming and
-/// descending-matrix-index ordering as [`crate::simulate::simulate_op`],
-/// so SimResult lookup by vector name is consistent across paths.
+/// The solve and SimResult formatting route through
+/// [`crate::simulate::simulate_op_with_mna`] so output shape is identical
+/// to the Netlist path regardless of how the MNA was assembled.
 fn simulate_op_direct(circuit: &Circuit) -> Option<SimResult> {
     let mna = mna_ir::assemble_mna_from_circuit(circuit, false, None).ok()??;
-    let solution = mna.system.solve().ok()?;
-
-    let mut vecs: Vec<SimVector> = Vec::new();
-
-    // Node voltages — emit in descending matrix-index order to match
-    // `simulate::simulate_op`'s LIFO node-list traversal.
-    let mut nodes: Vec<(&str, usize)> = mna.node_map.iter().collect();
-    nodes.sort_by_key(|n| std::cmp::Reverse(n.1));
-    for (name, idx) in &nodes {
-        let v = solution.get(*idx).copied().unwrap_or(0.0);
-        vecs.push(SimVector::real(format!("v({})", name), vec![v]));
-    }
-
-    // Voltage source branch currents — element-insertion order, exactly as
-    // `vsource_names` was populated during the second stamping pass.
-    let num_nodes = mna.total_num_nodes();
-    for (i, vsrc) in mna.vsource_names.iter().enumerate() {
-        let idx = num_nodes + i;
-        let current = solution.get(idx).copied().unwrap_or(0.0);
-        vecs.push(SimVector::real(
-            format!("{}#branch", vsrc.to_lowercase()),
-            vec![current],
-        ));
-    }
-
-    Some(SimResult {
-        plots: vec![SimPlot {
-            name: "op1".to_string(),
-            vecs,
-        }],
-    })
+    let opts = mna_ir::nr_options_from_circuit(circuit);
+    let nodeset = mna_ir::resolve_nodeset_from_circuit(circuit, &mna);
+    crate::simulate::simulate_op_with_mna(&mna, &opts, &nodeset).ok()
 }
 
 /// Run a DC sweep on the circuit's first declared `.dc` analysis.
