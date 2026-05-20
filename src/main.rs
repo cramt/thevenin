@@ -21,10 +21,6 @@ enum Command {
         /// Input file (.cirq or SPICE netlist).
         #[facet(args::positional)]
         input: String,
-
-        /// Bypass the Cirq IR pipeline and use the legacy SPICE parser directly.
-        #[facet(args::named)]
-        legacy: bool,
     },
 }
 
@@ -38,22 +34,9 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
-        Command::Run { input, legacy } => {
+        Command::Run { input } => {
             let src = std::fs::read_to_string(&input)
                 .map_err(|e| format!("failed to read {input}: {e}"))?;
-
-            if legacy {
-                if is_cirq_file(&input) {
-                    return Err("--legacy is not supported for .cirq files".into());
-                }
-                // Legacy path: parse SPICE directly into Netlist, bypass IR.
-                let netlist = thevenin_types::Netlist::parse_single(&src)?;
-                return run_netlists(&[netlist]);
-            }
-
-            // Default path: keep Cirq IR circuits in hand so we can route
-            // `.control` blocks through the IR-shaped interpreter entry
-            // point (Stage 4 / Phase A).
             let circuits: Vec<cirq_ir::Circuit> = if is_cirq_file(&input) {
                 let base_dir = Path::new(&input)
                     .parent()
@@ -89,28 +72,6 @@ fn run_circuits(circuits: &[cirq_ir::Circuit]) -> Result<(), Box<dyn std::error:
         } else {
             let result = thevenin::circuit::simulate(circuit)
                 .map_err(|e| format!("simulation error: {e}"))?;
-            print_plots(&result.plots);
-        }
-    }
-    Ok(())
-}
-
-/// Dispatch raw `Netlist` values — the legacy path, used when `--legacy` is set
-/// or when an IR-routed circuit has no `.control` block.
-///
-/// The `.control` branch reaches the deprecated Netlist-shaped entry points
-/// because this is exactly the `--legacy` fallback they exist to support
-/// (Stage 4 / Phase D). `alter` mutation only works through the IR-shaped
-/// path; callers depending on it should drop `--legacy`.
-#[allow(deprecated)]
-fn run_netlists(netlists: &[thevenin_types::Netlist]) -> Result<(), Box<dyn std::error::Error>> {
-    for netlist in netlists {
-        if thevenin_control::has_control_block(netlist) {
-            let ctrl_result = thevenin_control::execute_control_block(netlist)
-                .map_err(|e| format!("control block error: {e}"))?;
-            print_control_result(&ctrl_result);
-        } else {
-            let result = thevenin::simulate(netlist)?;
             print_plots(&result.plots);
         }
     }

@@ -99,8 +99,9 @@ Cirq source ---------> cirq_ir::Circuit ------------+
       All three are now supported: `BehavioralSource` with V=/I= parsing,
       `CoupledLine` with variable-width connections, and `Xspice` with
       scalar/array connections. Verified by unit tests and integration tests.
-- [x] Provide a `--legacy` flag or config to bypass IR for debugging.
-      `thevenin run --legacy <file>` uses the direct SPICE parser path.
+- [x] ~~Provide a `--legacy` flag or config to bypass IR for debugging.~~
+      Landed in Stage 3, removed in Stage 4 — no need to keep a SPICE-only
+      escape hatch once every harness fixture rides the IR.
 
 **Exit criteria:** removing the direct SPICE -> Netlist path causes no test
 regressions.
@@ -274,9 +275,8 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       **Phase A landed:** `thevenin_control::execute_control_block_ir(&Circuit)`
       and `has_control_block_ir(&Circuit)` are the canonical IR-shaped entry
       points. Both the CLI (`src/main.rs`) and the regression harness
-      (`thevenin/tests/harness.rs`) route `.control` through them when a
-      `cirq_ir::Circuit` is on hand; the legacy `execute_control_block(&Netlist)`
-      stays available for `--legacy` SPICE input.
+      (`thevenin/tests/harness.rs`) route `.control` through them. The
+      Netlist-shaped entry points were later removed (see Phase D).
       **Phase B landed:** `SimContext` now optionally owns the driving
       `cirq_ir::Circuit` alongside the working netlist;
       `SimContext::from_circuit(c)` is the Stage-4 constructor and the IR
@@ -300,14 +300,13 @@ Old SPICE-shaped interfaces begin to retire as confidence grows.
       the three prerequisites for `regression/misc/resume-1.cir`;
       `stop when` and `resume` are the remaining two.
       **Phase D landed:** `execute_control_block(&Netlist)` and
-      `has_control_block(&Netlist)` are now `#[deprecated]` pointing at
-      their IR-shaped counterparts. The CLI's `--legacy` SPICE fallback
-      (the only remaining caller in production code) carries
-      `#[allow(deprecated)]`; the `cirq-frontend` integration test that
-      deliberately exercises the legacy round-trip does the same.
-      Removing the Netlist-shaped entry points entirely waits on the
-      broader `thevenin_types::Netlist` public-API retirement listed
-      below. Stage 4 `.control` work is otherwise complete.
+      `has_control_block(&Netlist)` deleted outright;
+      `execute_control_block_ir(&Circuit)` / `has_control_block_ir(&Circuit)`
+      are the only public surface for `.control` interpretation. The
+      CLI's `--legacy` flag was also deleted, removing the last caller of
+      the Netlist-shaped path. `SimContext::netlist` and `SimContext::circuit`
+      demoted to `pub(crate)`, with public read access through
+      `SimContext::circuit()`. Stage 4 `.control` work is complete.
 - [ ] Deprecate `thevenin_types::Netlist` as a public API; expose
       `cirq_ir::Circuit` as the primary simulation input.
 - [ ] Remove SPICE element-prefix naming requirements from the simulator core.

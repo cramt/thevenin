@@ -13,108 +13,23 @@ pub mod vecexpr;
 use cirq_ir::Circuit;
 use context::SimContext;
 use exec::ControlResult;
-use thevenin_types::{Netlist, SimResult};
-
-/// Execute a `.control` block from a netlist.
-///
-/// Finds the first `Item::Control` in the netlist, parses it, and executes
-/// all commands. Returns the merged simulation results and exit code.
-///
-/// **Legacy entry point.** Prefer [`execute_control_block_ir`] when a
-/// `cirq_ir::Circuit` is available — the IR-shaped path is canonical as
-/// of Stage 4 / Phase B, and `alter` only mutates the IR (Phase C) so
-/// callers that route through this Netlist-shaped entry point lose
-/// `alter`'s mutation effects on subsequent analyses. This wrapper is
-/// kept available for the CLI's `--legacy` fallback and will retire
-/// alongside `thevenin_types::Netlist` as a public API surface.
-#[deprecated(
-    since = "0.1.0",
-    note = "use execute_control_block_ir(&cirq_ir::Circuit) for IR-shaped \
-            interpretation; this Netlist-shaped entry point is retained \
-            only for the CLI's --legacy SPICE fallback"
-)]
-pub fn execute_control_block(netlist: &Netlist) -> Result<ControlResult, String> {
-    // Find .control block(s)
-    let control_lines: Vec<&Vec<String>> = netlist
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let thevenin_types::Item::Control(lines) = item {
-                Some(lines)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if control_lines.is_empty() {
-        return Err("no .control block found".to_string());
-    }
-
-    // Create execution context with the netlist (minus .control blocks)
-    let mut ctx = SimContext::new(netlist.clone());
-
-    // Execute each .control block
-    for lines in control_lines {
-        let stmts = parse::parse_control_block(lines)?;
-        exec::execute(&stmts, &mut ctx)?;
-        if ctx.exit_code.is_some() {
-            break;
-        }
-    }
-
-    let exit_code = ctx.exit_code.unwrap_or(0);
-
-    // Merge all plots into a SimResult
-    let sim_result = SimResult { plots: ctx.plots };
-
-    Ok(ControlResult {
-        sim_result,
-        exit_code,
-        output: ctx.output,
-    })
-}
-
-/// Check if a netlist contains a `.control` block.
-///
-/// **Legacy entry point.** Prefer [`has_control_block_ir`] when a
-/// `cirq_ir::Circuit` is available. This wrapper exists for the CLI's
-/// `--legacy` SPICE fallback.
-#[deprecated(
-    since = "0.1.0",
-    note = "use has_control_block_ir(&cirq_ir::Circuit); this \
-            Netlist-shaped check is retained only for the CLI's --legacy \
-            SPICE fallback"
-)]
-pub fn has_control_block(netlist: &Netlist) -> bool {
-    netlist
-        .items
-        .iter()
-        .any(|item| matches!(item, thevenin_types::Item::Control(_)))
-}
+use thevenin_types::SimResult;
 
 /// Check if a Cirq IR circuit contains a `.control` code block.
 ///
 /// The Cirq IR stores `.control` source verbatim as a [`cirq_ir::CodeBlock`]
-/// with `language == "control"`; this is the IR-shaped equivalent of
-/// [`has_control_block`].
+/// with `language == "control"`.
 pub fn has_control_block_ir(circuit: &Circuit) -> bool {
     circuit.code_blocks.iter().any(|b| b.language == "control")
 }
 
 /// Execute a `.control` block from a Cirq IR circuit.
 ///
-/// **Stage 4 / Phase B.** The canonical IR-shaped entry point for driving
-/// `.control` from a [`Circuit`]. Builds a [`SimContext`] via
-/// [`SimContext::from_circuit`] so the analysis dispatcher in `exec.rs` can
-/// route Op / Dc / Tran / Ac runs through [`thevenin::circuit::simulate_*`]
-/// while keeping helpers that still operate on the SPICE Netlist shape
-/// (TEMPER eval, `@device[param]` lookups, alter) working unchanged.
-///
-/// `.control` lines come from the circuit's [`cirq_ir::CodeBlock`] entries
-/// directly — control blocks accumulate to every netlist fork produced
-/// from a circuit, so picking from the IR is equivalent to picking the
-/// first fork on the lowered side.
+/// Builds a [`SimContext`] via [`SimContext::from_circuit`] so the analysis
+/// dispatcher in `exec.rs` routes Op / Dc / Tran / Ac through
+/// [`thevenin::circuit::simulate_*`]. Helpers that still operate on the
+/// SPICE Netlist shape (TEMPER eval, `@device[param]` lookups) consume the
+/// context's internal cached lowering.
 pub fn execute_control_block_ir(circuit: &Circuit) -> Result<ControlResult, String> {
     let control_lines: Vec<&Vec<String>> = circuit
         .code_blocks
@@ -276,51 +191,8 @@ mod tests {
         assert!(!has_control_block_ir(&other));
     }
 
-    /// The IR-shaped entry point must produce the same `ControlResult` as
-    /// lowering the circuit and running the legacy Netlist-shaped entry
-    /// point — they share the interpreter, so any drift means the IR
-    /// lowering or the entry-point wrapper introduced a difference. This is
-    /// the Phase A equivalence contract; the comparison still uses the
-    /// deprecated Netlist entry point because that's the point.
-    #[test]
-    #[allow(deprecated)]
-    fn ir_entry_point_matches_netlist_entry_point() {
-        let circuit = divider_with_control(vec![
-            "op".into(),
-            "let half = v(mid) * 2".into(),
-            "echo result: $&half".into(),
-            "quit 0".into(),
-        ]);
-
-        let via_ir = execute_control_block_ir(&circuit).expect("IR path");
-
-        let nl = cirq_frontend::to_netlist::circuit_to_netlists(&circuit)
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-        let nl = thevenin::flatten_netlist(&nl).unwrap();
-        let via_netlist = execute_control_block(&nl).expect("Netlist path");
-
-        assert_eq!(via_ir.exit_code, via_netlist.exit_code);
-        assert_eq!(via_ir.output, via_netlist.output);
-        assert_eq!(
-            via_ir.sim_result.plots.len(),
-            via_netlist.sim_result.plots.len()
-        );
-        for (a, b) in via_ir
-            .sim_result
-            .plots
-            .iter()
-            .zip(via_netlist.sim_result.plots.iter())
-        {
-            assert_eq!(a.name, b.name);
-            assert_eq!(a.vecs.len(), b.vecs.len());
-        }
-    }
-
-    /// An empty `.control` block is a parse error in the legacy path; the IR
-    /// path should surface the same error rather than swallowing it.
+    /// An empty `.control` block must surface a clear error rather than
+    /// being silently treated as a no-op.
     #[test]
     fn ir_entry_point_errors_when_no_control_block() {
         let mut circuit = divider_with_control(vec!["op".into(), "quit 0".into()]);
@@ -385,14 +257,13 @@ mod tests {
         );
     }
 
-    /// Without a Circuit on the SimContext (legacy `--legacy` SPICE
-    /// callers), `alter` keeps its historical stored-vector behavior so
-    /// callers don't observe a regression. We verify by constructing a
-    /// SimContext via `new(netlist)` and inspecting the stashed vector
-    /// directly — the `$&@v1[dc]` echo syntax only reads alphanumerics,
-    /// so the bracketed key has to be looked up directly.
+    /// When `alter` targets a device the driving Circuit doesn't have, it
+    /// falls back to stashing the value as a named vector so subsequent
+    /// `find_vector("@device[param]")` lookups still resolve. We exercise
+    /// the no-Circuit branch by constructing a [`SimContext`] without one,
+    /// which is the lightest way to reach the fallback path.
     #[test]
-    fn alter_legacy_path_stashes_named_vector() {
+    fn alter_fallback_stashes_named_vector() {
         use crate::context::SimContext;
         use crate::{exec, parse};
         use thevenin_types::{Analysis, Netlist};
@@ -408,15 +279,9 @@ mod tests {
         let mut ctx = SimContext::new(nl);
         exec::execute(&stmts, &mut ctx).unwrap();
 
-        // Legacy path: no Circuit, so nothing was mutated; the value is
-        // only available as a named vector.
-        assert!(
-            ctx.circuit.is_none(),
-            "legacy ctor should leave circuit None"
-        );
         let stash = ctx
             .find_vector("@v1[dc]")
-            .expect("legacy stash for @v1[dc]");
+            .expect("alter fallback stashed value as named vector");
         let v = match &stash.data {
             thevenin_types::VectorData::Real(r) => r[0],
             _ => panic!("expected real"),

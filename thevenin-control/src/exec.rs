@@ -639,10 +639,9 @@ fn parse_num(s: &str) -> Result<f64, String> {
 
 /// Execute an `alter` command.
 ///
-/// **Stage 4 / Phase C.** Mutates the driving [`cirq_ir::Circuit`] when one
-/// is present so subsequent analyses see the new value; otherwise (legacy
-/// `--legacy` Netlist callers) falls back to the historical behavior of
-/// stashing a named vector for `@device[param]` lookups.
+/// Mutates the driving [`cirq_ir::Circuit`] when the spec resolves to a
+/// device the circuit knows about; otherwise falls back to stashing the
+/// value as a named vector so `@device[param]` lookups still resolve.
 ///
 /// Accepted spec shapes:
 /// - `@device[param] = value` — explicit param (e.g. `@r1[resistance]`)
@@ -651,10 +650,10 @@ fn parse_num(s: &str) -> Result<f64, String> {
 /// - `device[param] = value` / `device = value` — same, without the `@`
 ///   prefix (the resume-1 plain form)
 ///
-/// Vector alters (e.g. `@v1[pulse] = [ ... ]`) still take the legacy
-/// stored-vector path because waveform parameters are not first-class on
-/// the IR yet — they live inside `Element.source_spec.waveform` with a
-/// typed shape that doesn't accept a flat coefficient vector.
+/// Vector alters (e.g. `@v1[pulse] = [ ... ]`) always take the stored-vector
+/// path because waveform parameters are not first-class on the IR yet —
+/// they live inside `Element.source_spec.waveform` with a typed shape
+/// that doesn't accept a flat coefficient vector.
 fn execute_alter(spec: &str, value: &AlterValue, ctx: &mut SimContext) -> Result<(), String> {
     let spec_trimmed = spec.trim();
     let (device, param) = parse_alter_spec(spec_trimmed)?;
@@ -671,8 +670,8 @@ fn execute_alter(spec: &str, value: &AlterValue, ctx: &mut SimContext) -> Result
     };
 
     // Try mutating the Circuit first. If the circuit doesn't have the
-    // referenced device/model, fall through to the legacy vector stash
-    // so old behavior is preserved.
+    // referenced device/model, fall through to the named-vector stash
+    // so `@device[param]` lookups still resolve.
     let mutated = ctx
         .circuit
         .as_mut()
@@ -689,7 +688,7 @@ fn execute_alter(spec: &str, value: &AlterValue, ctx: &mut SimContext) -> Result
         return Ok(());
     }
 
-    // Fall-through: legacy stored-vector behavior.
+    // Fall-through: stash the value as a named vector.
     ctx.store_vector(SimVector::real(spec_trimmed.to_lowercase(), vec![scalar]));
     Ok(())
 }

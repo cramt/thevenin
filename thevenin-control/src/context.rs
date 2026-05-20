@@ -1,21 +1,9 @@
 //! Simulation context for `.control` block execution.
 //!
-//! Holds the (optional) IR circuit, the working netlist, simulation results
-//! (plots), variables, and output.
-//!
-//! ## Stage 4 / Phase B
-//!
-//! `SimContext` now optionally owns a [`cirq_ir::Circuit`] alongside the
-//! working `Netlist`. When the context was constructed via
-//! [`SimContext::from_circuit`], the analysis dispatcher in `exec.rs` routes
-//! through [`thevenin::circuit::simulate_*`] for Op / Dc / Tran / Ac — the
-//! analyses that have direct IR-shaped entry points. TEMPER evaluation,
-//! `@model[param]` queries, and `alter` still operate on the cached
-//! `Netlist`; those move onto the IR shape in later phases.
-//!
-//! Contexts constructed via the legacy [`SimContext::new`] keep the
-//! `circuit` field as `None` and dispatch through the existing
-//! Netlist-shaped path unchanged.
+//! Holds the driving IR circuit, a cached SPICE-Expr-shape lowering used by
+//! helpers that haven't moved onto the IR (TEMPER, `@device[param]`),
+//! simulation results (plots), variables, and output. Public entry through
+//! [`SimContext::from_circuit`].
 
 use std::collections::HashMap;
 
@@ -65,12 +53,11 @@ pub struct SimContext {
 }
 
 impl SimContext {
-    /// Create a new context from a netlist (legacy entry point).
-    ///
-    /// Use this only for callers that do not have a [`cirq_ir::Circuit`] on
-    /// hand (e.g. the legacy `--legacy` SPICE path). The Stage 4 surface is
-    /// [`SimContext::from_circuit`].
-    pub fn new(netlist: Netlist) -> Self {
+    /// Crate-internal constructor used by tests that only need to exercise
+    /// the vector / variable / expression machinery without a driving
+    /// [`Circuit`]. External callers use [`SimContext::from_circuit`].
+    #[cfg(test)]
+    pub(crate) fn new(netlist: Netlist) -> Self {
         Self {
             circuit: None,
             netlist,
@@ -86,9 +73,9 @@ impl SimContext {
         }
     }
 
-    /// Create a new context from a Cirq IR circuit (Stage 4 entry point).
+    /// Create a new context from a Cirq IR circuit.
     ///
-    /// Eagerly lowers the circuit to a working [`Netlist`] via
+    /// Eagerly lowers the circuit to a working `Netlist` via
     /// [`cirq_frontend::to_netlist::circuit_to_netlists`] +
     /// [`thevenin::flatten_netlist`]; that cached netlist is what the
     /// helpers still operating on the SPICE shape consume. The Circuit
@@ -120,9 +107,9 @@ impl SimContext {
 
     /// The Cirq IR circuit driving this context, if any.
     ///
-    /// Returns `None` for legacy [`Self::new`] callers. External callers
-    /// (CLI, tests) inspect IR state through this accessor rather than the
-    /// crate-private [`Self::circuit`] field.
+    /// Returns `None` for crate-internal `new(netlist)` constructions (used
+    /// only by tests). External callers always go through
+    /// [`SimContext::from_circuit`] and so always see `Some`.
     pub fn circuit(&self) -> Option<&Circuit> {
         self.circuit.as_ref()
     }

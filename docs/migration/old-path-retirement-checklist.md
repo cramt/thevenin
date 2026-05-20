@@ -69,23 +69,23 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
     context owns a Circuit; the cached netlist is re-derived so the next
     analysis sees the new state. Plain-form `alter v1=-5` accepted.
   - Phase D: `execute_control_block(&Netlist)` / `has_control_block(&Netlist)`
-    are `#[deprecated]`; CLI's `--legacy` fallback is the only remaining
-    caller and carries `#[allow(deprecated)]`. Full removal of the
-    Netlist-shaped entry points is gated on the broader Netlist API
-    retirement above.
-  TEMPER evaluation and `@device[param]` instance-parameter lookups still
-  consume the cached `Netlist` because they're intrinsic to the SPICE
-  `Expr` shape; lifting them onto the IR's typed `Value` belongs to the
-  later Netlist-API retirement work, not Stage 4.
+    deleted. `execute_control_block_ir(&Circuit)` / `has_control_block_ir(&Circuit)`
+    are the only public surface for `.control` interpretation.
+    `SimContext::netlist` and `SimContext::circuit` demoted to `pub(crate)`;
+    public access through `SimContext::circuit()`. The cached Netlist
+    remains as an internal SPICE-Expr-shape adapter consumed by TEMPER
+    evaluation and `@device[param]` lookups, but is no longer reachable
+    from the public API.
 
 ## Simulation Path
 
 - [x] **Direct SPICE parser -> simulate path**
-  The CLI now routes SPICE files through IR by default:
-  `SPICE source -> import_spice() -> Circuit -> circuit_to_netlists() -> simulate()`.
-  The direct path remains available via `--legacy` flag.
-  11 round-trip tests validate bit-identical results.
-  *Resolved in:* Stage 3.
+  The CLI routes SPICE files through IR exclusively:
+  `SPICE source -> import_spice() -> Circuit -> thevenin::circuit::simulate()`.
+  The `--legacy` flag was deleted; the direct Netlist-shaped path has no
+  CLI exit. 11 round-trip tests validate bit-identical results across the
+  IR adapter.
+  *Resolved in:* Stage 3; `--legacy` flag removed in Stage 4.
 
 ## Model Representation
 
