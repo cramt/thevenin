@@ -1,7 +1,7 @@
 # Plan: 100% ngspice Test Coverage
 
-Current state: 100 harness tests passing, 7 skipped (488 total tests passing across all
-test binaries). Goal: eliminate as many skips as possible.
+Current state: **101 harness tests passing, 6 skipped** (1020 total tests passing across
+all test binaries). Goal: eliminate as many skips as possible.
 
 ## Phase 1: RampVg2 Charge Coupling (bsim3soidd/RampVg2.cir)
 
@@ -90,31 +90,40 @@ The harness test is ignored with full documentation in `ignore.toml`.
 
 ---
 
-## Phase 3: resume-1 Control Interpreter (regression/misc/resume-1.cir)
+## Phase 3: resume-1 Control Interpreter — DONE
 
-**Effort:** ~500-600 LOC | **Confidence:** 90% | **Tests unlocked:** 1
+**Status: PASSING.** resume-1.cir was unignored when `stop when`/`resume` landed; the
+harness is now 101/0/6.
 
-The test needs `stop when time = <val>`, plain-form `alter v1=-5`, and `resume`.
+The original estimate was ~500-600 LOC for a full `TranState` lift. The actual
+implementation came in much smaller (~250 LOC) by leaning on existing
+machinery:
 
-### 3a: Refactor `simulate_tran` into resumable `TranState` (~200-300 LOC)
-
-Lift the ~30 local variables in the transient loop into a `TranState` struct. Expose
-`step_until(t_pause)` and `resume_until(t_stop)` methods. Purely mechanical — no
-algorithm changes.
-
-### 3b: `stop when` parser + executor (~50 LOC)
-
-Add `Statement::Stop` AST variant, parse `stop when time = <val>`, store
-`stop_time: Option<f64>` in `SimContext`.
-
-### 3c: Plain-form `alter` + netlist mutation (~100 LOC)
-
-Parse `alter v1=-5` and `alter r1=100` (no `@` prefix). Mutate the actual netlist
-elements so the resumed simulation sees new values.
-
-### 3d: `resume` executor (~40 LOC)
-
-Look up `ctx.paused_tran`, call `TranState::resume_until`, merge time vectors.
+- `Statement::StopWhen(StopCondition::TimeEq)` and `Statement::Resume` AST
+  variants with parser support (`stop when time = <value>`).
+- `TranRunParams` gained two optional fields: `t_pause` (consumed in the
+  main step loop) and `start_state` (gates whether the loop initialises
+  from DC OP or from a snapshot). No state-machine lift required.
+- A `TranPauseSnapshot` carries the `(t_paused, solution, output_vecs)`
+  triple plus the original `tstep`/`tstop`/`tmax` so a resumed leg can
+  drive a `.control`-only tran (where the netlist's `Analysis::Tran` is
+  reconstructed from the snapshot rather than parsed from a directive).
+- `run_tran` returns `TranOutcome::{Complete | Paused}` instead of a bare
+  `SimResult`. Non-pause callers (`simulate_tran_with_mna`,
+  `thevenin::circuit::simulate_tran`) extract via `.into_result()`.
+- `execute_resume` in `thevenin-control` re-assembles the MNA from the
+  altered netlist, applies TEMPER so changed tc1/tc2 take effect, then
+  invokes `run_tran` with `start_state = Some(snapshot)`.
+- Plain-form `alter` (no `@` prefix) was already implemented in Stage 4
+  Phase C, so no work was needed there.
+- The pause time is registered as an extra breakpoint so the loop clamps
+  to land exactly at `t_pause` (otherwise the paused leg's last sample
+  overshoots by one print-step, breaking comparisons against piecewise
+  golden traces).
+- Two tokenizer fixes: `vecexpr` now recognises ngspice word-form
+  comparison operators (`le`, `gt`, `lt`, `ge`), and SPICE time literals
+  with an `s` suffix (`1ms`, `200us`) strip the `s` so the SI prefix
+  resolves.
 
 ---
 
@@ -142,10 +151,10 @@ code produces the correct result. **Not a thevenin bug — ngspice bug.**
 
 | Phase | Tests Fixed | Running Total | Pass Rate |
 |-------|------------|---------------|-----------|
-| Current | — | 100/107 | 93.5% |
-| Phase 1 | +1 | 101/107 | 94.4% |
-| Phase 2 | — (ngspice bug) | 101/107 | 94.4% |
-| Phase 3 | +1 | 102/107 | 95.3% |
+| Baseline (pre-resume-1) | — | 100/107 | 93.5% |
+| Phase 3 (resume-1) | +1 (DONE) | 101/107 | 94.4% |
+| Phase 1 (RampVg2) | +1 | 102/107 | 95.3% |
+| Phase 2 | — (ngspice bug) | 102/107 | 95.3% |
 | Intractable | — | 102/107 | 95.3% |
 
 Best realistic outcome: **102/107 harness tests (95.3%)**. The remaining 5 tests are:

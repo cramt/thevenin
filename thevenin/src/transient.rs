@@ -301,6 +301,23 @@ impl BreakpointTable {
         self.times.get(self.next_idx).copied()
     }
 
+    /// Insert an extra breakpoint at `t`, preserving sort order and the
+    /// dedup invariant (no two breakpoints closer than `min_break`).
+    ///
+    /// Used to register a pause-time as a breakpoint so the integrator
+    /// lands exactly there.
+    fn insert(&mut self, t: f64) {
+        let idx = self.times.partition_point(|x| *x < t);
+        // Skip duplicates within min_break of an existing entry.
+        if idx < self.times.len() && (self.times[idx] - t).abs() < self.min_break {
+            return;
+        }
+        if idx > 0 && (t - self.times[idx - 1]).abs() < self.min_break {
+            return;
+        }
+        self.times.insert(idx, t);
+    }
+
     /// Check if `t` is at or very near an *upcoming* breakpoint.
     /// Only checks breakpoints that haven't been advanced past by
     /// `next_after`.  This prevents a breakpoint at t=0 from forcing
@@ -593,6 +610,18 @@ pub fn simulate_tran_with_mna(
     mna: MnaSystem,
     netlist: &Netlist,
 ) -> Result<SimResult, MnaError> {
+    let params = tran_run_params_from_netlist(netlist, &mna)?;
+    run_tran(mna, params).map(TranOutcome::into_result)
+}
+
+/// Build a [`TranRunParams`] from a `.tran`-declaring [`Netlist`]. Returned
+/// params have `t_pause = None` and `start_state = None`; callers that want
+/// pause/resume semantics overwrite those fields before invoking
+/// [`run_tran`].
+pub fn tran_run_params_from_netlist(
+    netlist: &Netlist,
+    mna: &MnaSystem,
+) -> Result<TranRunParams, MnaError> {
     let (tstep, tstop, tstart, tmax, uic) = match &netlist.analysis {
         Analysis::Tran {
             tstep,
@@ -627,7 +656,7 @@ pub fn simulate_tran_with_mna(
         .transpose()?;
 
     let circuit_nr_opts = nr_options_from_netlist(netlist);
-    let nodeset = crate::simulate::resolve_nodeset(netlist, &mna);
+    let nodeset = crate::simulate::resolve_nodeset(netlist, mna);
 
     // Apply node-level .ic overrides from the netlist — pre-resolve them to
     // MnaSystem matrix indices so `run_tran` doesn't need to walk netlist.items.
@@ -642,22 +671,21 @@ pub fn simulate_tran_with_mna(
         }
     }
 
-    let device_param_queries = collect_device_param_queries(netlist.source.lines(), &mna);
+    let device_param_queries = collect_device_param_queries(netlist.source.lines(), mna);
 
-    run_tran(
-        mna,
-        TranRunParams {
-            t_step: h_print,
-            t_stop,
-            t_start,
-            t_max,
-            uic,
-            nr_opts: circuit_nr_opts,
-            nodeset,
-            ic_overrides,
-            device_param_queries,
-        },
-    )
+    Ok(TranRunParams {
+        t_step: h_print,
+        t_stop,
+        t_start,
+        t_max,
+        uic,
+        nr_opts: circuit_nr_opts,
+        nodeset,
+        ic_overrides,
+        device_param_queries,
+        t_pause: None,
+        start_state: None,
+    })
 }
 
 /// Fully-resolved `.tran` analysis parameters, shared between Netlist and
@@ -674,17 +702,100 @@ pub struct TranRunParams {
     pub ic_overrides: Vec<(usize, f64)>,
     /// `(device, param)` pairs collected from `.print @device[param]` directives.
     pub device_param_queries: Vec<(String, String)>,
+    /// Pause condition: if `Some(t_pause)`, the loop exits cleanly at the
+    /// first accepted timestep with `t >= t_pause` and the snapshot is
+    /// returned via [`TranOutcome::Paused`]. None disables pause and keeps
+    /// the historical "always run to `t_stop`" behaviour.
+    pub t_pause: Option<f64>,
+    /// Resume from a previously paused run. When `Some`, the DC OP and IC
+    /// initialisation are skipped; `t` and `solution` come from the snapshot
+    /// and the integration restarts from the snapshot's pause point as if
+    /// the snapshot's solution were the operating point.
+    ///
+    /// All charge histories are re-initialised from that solution as if it
+    /// were a fresh DC OP (cqXX = 0). This matches `uic` semantics for the
+    /// resumed leg and means a small derivative discontinuity is possible
+    /// for circuits with reactive nonlinear devices — resume-1 is purely
+    /// linear so it's exact there.
+    pub start_state: Option<TranStartState>,
+}
+
+/// Snapshot captured at a `stop when` pause point, returned by `run_tran` and
+/// fed back in via [`TranRunParams::start_state`] on resume.
+///
+/// Contents are intentionally minimal: the solution vector at the pause
+/// point, the pause time itself, the partial output vectors accumulated up
+/// to the pause, and the original `.tran` parameters (so resume can drive
+/// the remaining sweep even when the working netlist no longer carries an
+/// `Analysis::Tran` directive — e.g. the `.control`-only case where `tran`
+/// is an interpreter command rather than a netlist directive).
+#[derive(Debug, Clone)]
+pub struct TranPauseSnapshot {
+    /// Time at which the run paused (≥ the requested `t_pause`).
+    pub t_paused: f64,
+    /// Original `tstop` from the paused leg's `.tran` directive — the
+    /// resumed leg runs from `t_paused` to this value.
+    pub t_stop: f64,
+    /// Original `tstep` (print step) — preserved so the resumed leg keeps
+    /// the same output cadence.
+    pub t_step: f64,
+    /// Optional `tmax` cap on the internal integration step.
+    pub t_max: Option<f64>,
+    /// Full solution vector at `t_paused`.
+    pub solution: Vec<f64>,
+    /// Output vectors accumulated so far: time vector first, then per-node
+    /// `v(...)` vectors, per-vsource `#branch` vectors, and any
+    /// `@device[param]` vectors — same shape as a completed `SimResult`'s
+    /// single transient plot.
+    pub output_vecs: Vec<SimVector>,
+}
+
+/// Start-state hand-off when a transient resumes from a previous snapshot.
+#[derive(Debug, Clone)]
+pub struct TranStartState {
+    /// Initial simulation time on resume.
+    pub t_initial: f64,
+    /// Solution vector to seed the resumed run with. Must match the
+    /// dimension of the (post-alter, re-assembled) MnaSystem.
+    pub solution: Vec<f64>,
+    /// Output vectors carried over from the paused leg; the resumed leg
+    /// appends to these so the merged plot looks contiguous.
+    pub output_vecs: Vec<SimVector>,
+}
+
+/// Outcome of a transient run: either the full result, or a pause snapshot
+/// plus the partial result so far when a `stop when` condition fired.
+pub enum TranOutcome {
+    Complete(SimResult),
+    Paused {
+        snapshot: TranPauseSnapshot,
+        partial: SimResult,
+    },
+}
+
+impl TranOutcome {
+    /// Extract the [`SimResult`] regardless of completion state. For a paused
+    /// outcome this returns the partial result accumulated up to the pause.
+    pub fn into_result(self) -> SimResult {
+        match self {
+            TranOutcome::Complete(r) => r,
+            TranOutcome::Paused { partial, .. } => partial,
+        }
+    }
 }
 
 /// Execute a `.tran` analysis on an assembled [`MnaSystem`] with all
 /// netlist-derived params already extracted into [`TranRunParams`].
 ///
 /// Shared core for both the Netlist path (`simulate_tran_with_mna`) and the
-/// Circuit path ([`crate::circuit::simulate_tran`]).
+/// Circuit path ([`crate::circuit::simulate_tran`]). Returns a
+/// [`TranOutcome`] so callers that set [`TranRunParams::t_pause`] can
+/// recover the [`TranPauseSnapshot`]; callers that don't always get
+/// [`TranOutcome::Complete`].
 pub fn run_tran(
     mut mna: MnaSystem,
     params: TranRunParams,
-) -> Result<SimResult, MnaError> {
+) -> Result<TranOutcome, MnaError> {
     let TranRunParams {
         t_step: h_print,
         t_stop,
@@ -695,6 +806,8 @@ pub fn run_tran(
         nodeset,
         ic_overrides,
         device_param_queries,
+        t_pause,
+        start_state,
     } = params;
 
     if h_print <= 0.0 || t_stop <= 0.0 {
@@ -709,12 +822,26 @@ pub fn run_tran(
     let dim = mna.system.dim();
     let num_nodes = mna.total_num_nodes();
 
-    // When UIC (Use Initial Conditions) is set, skip the DC operating point
-    // and start from zero with explicit .ic node voltages applied.
-    // Otherwise, compute the normal DC OP as the starting point.
-    let mut solution = if uic {
+    // Resume hand-off: when a start_state is provided, seed `solution` from
+    // it and skip both the DC OP and the .ic overrides. The snapshot's
+    // solution already encodes the paused state of every node, branch, and
+    // internal device variable.
+    let mut solution = if let Some(state) = &start_state {
+        if state.solution.len() != dim {
+            return Err(MnaError::UnsupportedElement(format!(
+                "resume: snapshot solution dim {} != current MNA dim {} \
+                 (alter must not change circuit topology between pause and resume)",
+                state.solution.len(),
+                dim
+            )));
+        }
+        state.solution.clone()
+    } else if uic {
+        // When UIC (Use Initial Conditions) is set, skip the DC operating
+        // point and start from zero with explicit .ic node voltages applied.
         vec![0.0; dim]
     } else {
+        // Otherwise, compute the normal DC OP as the starting point.
         let mut sol = if nodeset.is_empty() {
             solve_op_raw_with_opts(&mna, &circuit_nr_opts)?
         } else {
@@ -724,29 +851,31 @@ pub fn run_tran(
         sol
     };
 
-    // Apply pre-resolved .ic node voltage overrides.
-    for (idx, val) in &ic_overrides {
-        solution[*idx] = *val;
-    }
+    if start_state.is_none() {
+        // Apply pre-resolved .ic node voltage overrides.
+        for (idx, val) in &ic_overrides {
+            solution[*idx] = *val;
+        }
 
-    // Apply IC overrides for capacitors (override DC OP voltage).
-    for cap in &mna.capacitors {
-        if let Some(ic_v) = cap.ic {
-            match (cap.pos_idx, cap.neg_idx) {
-                (Some(pi), None) => solution[pi] = ic_v,
-                (None, Some(ni)) => solution[ni] = -ic_v,
-                (Some(pi), Some(ni)) => {
-                    solution[pi] = ic_v + solution[ni];
+        // Apply IC overrides for capacitors (override DC OP voltage).
+        for cap in &mna.capacitors {
+            if let Some(ic_v) = cap.ic {
+                match (cap.pos_idx, cap.neg_idx) {
+                    (Some(pi), None) => solution[pi] = ic_v,
+                    (None, Some(ni)) => solution[ni] = -ic_v,
+                    (Some(pi), Some(ni)) => {
+                        solution[pi] = ic_v + solution[ni];
+                    }
+                    (None, None) => {}
                 }
-                (None, None) => {}
             }
         }
-    }
 
-    // Apply IC overrides for inductors.
-    for ind in &mna.inductors {
-        if let Some(ic_i) = ind.ic {
-            solution[ind.branch_idx] = ic_i;
+        // Apply IC overrides for inductors.
+        for ind in &mna.inductors {
+            if let Some(ic_i) = ind.ic {
+                solution[ind.branch_idx] = ic_i;
+            }
         }
     }
 
@@ -1128,9 +1257,6 @@ pub fn run_tran(
     }
     let mut cpl_stamps: Vec<crate::cpl::CplTransientStamp> = Vec::new();
 
-    // Prepare output vectors.
-    let mut time_vec = SimVector::real("time", Vec::new());
-
     // Sort nodes by descending matrix index to match ngspice's LIFO node-list
     // traversal order (last-inserted node first in output).  The DC path in
     // simulate.rs applies the same sort.
@@ -1143,27 +1269,52 @@ pub fn run_tran(
         nodes.sort_by_key(|n| std::cmp::Reverse(n.1));
         nodes
     };
-    let mut node_vecs: Vec<SimVector> = sorted_nodes
-        .iter()
-        .map(|(name, _)| SimVector::real(format!("v({})", name), Vec::new()))
-        .collect();
 
-    let mut branch_vecs: Vec<SimVector> = mna
-        .vsource_names
-        .iter()
-        .map(|vsrc| SimVector::real(format!("{}#branch", vsrc.to_lowercase()), Vec::new()))
-        .collect();
-
-    // Use the pre-collected @device[param] queries from TranRunParams.
-    let mut device_param_vecs: Vec<SimVector> = device_param_queries
-        .iter()
-        .map(|(device, param)| {
-            SimVector::real(
-                format!("@{}[{}]", device.to_lowercase(), param.to_lowercase()),
-                Vec::new(),
-            )
-        })
-        .collect();
+    // Prepare output vectors. On resume, seed from the snapshot so the
+    // resumed leg appends to the paused leg's accumulated samples; the
+    // expected vector layout is `[time, v(n1)..v(nk), v#branch.., @dev[p]..]`
+    // (same shape the completion arm assembles below).
+    let n_branch = mna.vsource_names.len();
+    let n_dev = device_param_queries.len();
+    let (mut time_vec, mut node_vecs, mut branch_vecs, mut device_param_vecs) =
+        if let Some(state) = &start_state {
+            let expected = 1 + sorted_nodes.len() + n_branch + n_dev;
+            if state.output_vecs.len() != expected {
+                return Err(MnaError::UnsupportedElement(format!(
+                    "resume: snapshot output_vecs has {} vectors, expected {} \
+                     (alter must not change output topology)",
+                    state.output_vecs.len(),
+                    expected
+                )));
+            }
+            let mut iter = state.output_vecs.clone().into_iter();
+            let time = iter.next().expect("expected count guarantees one vec");
+            let nodes: Vec<SimVector> = iter.by_ref().take(sorted_nodes.len()).collect();
+            let branches: Vec<SimVector> = iter.by_ref().take(n_branch).collect();
+            let devs: Vec<SimVector> = iter.collect();
+            (time, nodes, branches, devs)
+        } else {
+            let time = SimVector::real("time", Vec::new());
+            let nodes: Vec<SimVector> = sorted_nodes
+                .iter()
+                .map(|(name, _)| SimVector::real(format!("v({})", name), Vec::new()))
+                .collect();
+            let branches: Vec<SimVector> = mna
+                .vsource_names
+                .iter()
+                .map(|vsrc| SimVector::real(format!("{}#branch", vsrc.to_lowercase()), Vec::new()))
+                .collect();
+            let devs: Vec<SimVector> = device_param_queries
+                .iter()
+                .map(|(device, param)| {
+                    SimVector::real(
+                        format!("@{}[{}]", device.to_lowercase(), param.to_lowercase()),
+                        Vec::new(),
+                    )
+                })
+                .collect();
+            (time, nodes, branches, devs)
+        };
 
     let has_nonlinear = mna.has_nonlinear();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
@@ -1173,13 +1324,11 @@ pub fn run_tran(
         tstop: t_stop,
     };
 
-    // Record initial point at t=0.
-    // For linear circuits with time-varying waveform sources (e.g., SIN with delay),
-    // compute the actual t=0 state by solving the system with t=0 source values rather
-    // than recording the DC OP values directly. This matches ngspice behaviour where the
-    // initial transient solution reflects the circuit state at t=0 with time-domain sources.
-    let mut t = 0.0;
-    if t >= t_start {
+    // Record initial point at t=0 (fresh runs only). On resume the paused
+    // leg already recorded a sample at t_paused; the new leg picks up from
+    // the next accepted step.
+    let mut t = start_state.as_ref().map(|s| s.t_initial).unwrap_or(0.0);
+    if start_state.is_none() && t >= t_start {
         let t0_solution: Vec<f64> = if !has_reactive
             && !has_nonlinear
             && (mna.voltage_sources.iter().any(|vs| vs.waveform.is_some())
@@ -1229,8 +1378,16 @@ pub fn run_tran(
         );
     }
 
-    // Build breakpoint table from source waveforms.
+    // Build breakpoint table from source waveforms. When a pause is
+    // requested, register `t_pause` as an extra breakpoint so the loop
+    // clamps to land exactly there rather than overshooting by one
+    // print-step — keeping the paused leg's last sample at `t_pause`
+    // exactly is what users expect (and what comparisons of the resumed
+    // trace against a piecewise gold trace at `t == t_pause` rely on).
     let mut breakpoints = BreakpointTable::from_mna(&mna, &tran_params);
+    if let Some(tp) = t_pause {
+        breakpoints.insert(tp);
+    }
 
     // Internal timestep — start small and let doubling grow it to h_max.
     // ngspice starts at h_max/400 and doubles each step (matching its adaptive
@@ -2005,6 +2162,34 @@ pub fn run_tran(
                 &sorted_nodes,
             );
         }
+
+        // Pause check: fires after the recorded sample so the partial plot
+        // includes the pause point itself (matches what `tran ... ; stop
+        // when time = T` shows in ngspice — the trace ends at T, not the
+        // sample just before it).
+        if let Some(tp) = t_pause
+            && t >= tp
+        {
+            let mut vecs = vec![time_vec];
+            vecs.extend(node_vecs.clone());
+            vecs.extend(branch_vecs.clone());
+            vecs.extend(device_param_vecs.clone());
+            let partial = SimResult {
+                plots: vec![SimPlot {
+                    name: "tran1".to_string(),
+                    vecs: vecs.clone(),
+                }],
+            };
+            let snapshot = TranPauseSnapshot {
+                t_paused: t,
+                t_stop,
+                t_step: h_print,
+                t_max,
+                solution: solution.clone(),
+                output_vecs: vecs,
+            };
+            return Ok(TranOutcome::Paused { snapshot, partial });
+        }
     }
 
     // Assemble result.
@@ -2013,12 +2198,12 @@ pub fn run_tran(
     vecs.extend(branch_vecs);
     vecs.extend(device_param_vecs);
 
-    Ok(SimResult {
+    Ok(TranOutcome::Complete(SimResult {
         plots: vec![SimPlot {
             name: "tran1".to_string(),
             vecs,
         }],
-    })
+    }))
 }
 
 /// Extract a node voltage from the solution vector, returning 0 for ground.

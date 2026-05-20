@@ -1,6 +1,7 @@
 # Future Work: Remaining Ignored Tests
 
-After 146 sessions of the fix-tests agent, **645 tests pass** (11 with tolerance overrides), **7 remain skipped**. Each maps to a missing subsystem or architectural limitation.
+After resume-1 landed (101/0/6), **6 tests remain skipped**. Each maps to a
+missing subsystem or architectural limitation.
 
 ## Status Summary
 
@@ -13,7 +14,7 @@ After 146 sessions of the fix-tests agent, **645 tests pass** (11 with tolerance
 | hfet/inverter.cir | NR wrong basin (bistable) | 200-500 LOC | 1 |
 | bsim1/test.cir | BSIM1 not implemented | ~3,500 LOC | 1 |
 | bsim2/test.cir | BSIM2 not implemented | ~2,500 LOC | 1 |
-| regression/misc/resume-1.cir | .control interpreter | ~800 LOC | 1 |
+| ~~regression/misc/resume-1.cir~~ | ~~.control resumable transient~~ | ~~DONE~~ | ~~1~~ |
 
 ## 1. CAPMOD=3 Body-Floating Coupling (RampVg2)
 
@@ -201,19 +202,32 @@ ngspice for backward compatibility with legacy process libraries.
 **Priority:** Low. Obsolete models, large effort, only 2 tests. Implement only if users
 need legacy PDK compatibility.
 
-## 6. .control Interpreter
+## 6. .control Interpreter ✓ resume-1 IMPLEMENTED
 
-**Test:** `regression/misc/resume-1.cir`
+**asrc-tc-2.cir** passes — behavioral resistor `r={expr}` conversion to B-source plus
+the .control interpreter handling `op`, `ac`, `let`, `if/end`, `echo`, `quit`.
 
-**asrc-tc-2.cir** is now passing — behavioral resistor `r={expr}` conversion to B-source
-is implemented, and the .control interpreter already handles `op`, `ac`, `let`, `if/end`,
-`echo`, and `quit`.
+**resume-1.cir** passes — `stop when time = <value>`, `alter` (plain and bracketed
+forms), and `resume` are all implemented. Approach was a minimal pause/resume hook
+rather than a full `TranState` lift (~250 LOC vs the original ~800 LOC estimate):
 
-**resume-1.cir** needs: `stop when <condition>` (hook into transient solver), `alter`
-(runtime parameter modification), `resume` (continue paused simulation). This requires deep
-solver integration -- saving/restoring full circuit state mid-simulation. Estimated ~800 LOC.
+- `TranRunParams.t_pause` / `start_state` thread through `run_tran`.
+- `TranOutcome::{Complete | Paused}` return type carries the snapshot when a
+  pause fires.
+- `TranPauseSnapshot` holds `(t_paused, solution, output_vecs)` plus the
+  paused leg's `tstep`/`tstop`/`tmax` so `.control`-only trans (no
+  `Analysis::Tran` directive) can resume.
+- Pause time is registered as a breakpoint so the loop lands exactly at
+  `t_pause` (otherwise overshoots by one print-step, breaking gold-trace
+  comparisons that switch piecewise at the pause boundary).
+- Limitation: charge histories for nonlinear devices re-initialise from
+  the snapshot's solution as if it were a DC OP, so reactive nonlinear
+  circuits may see a small derivative discontinuity at resume. resume-1
+  is purely linear (RC) so it's exact there.
 
-**Priority:** Low (invasive solver changes for 1 test).
+Other `.control` features that still aren't implemented: `setplot new`,
+arbitrary `stop when <expr>` conditions, `wrdata` output, `let` indexing
+on the LHS, `compose` with full ngspice semantics.
 
 ## Recommended Tackle Order
 
@@ -222,4 +236,4 @@ solver integration -- saving/restoring full circuit state mid-simulation. Estima
 3. ~~HFET perturbation fallback~~ -- **RULED OUT** (requires Markowitz solver, ~500-800 LOC)
 4. BSIM1/BSIM2 -- only if legacy PDK support needed
 5. rtlinv/schmitt -- accept as intractable
-6. resume-1 .control -- defer until broader .control support is needed
+6. ~~resume-1 .control~~ -- **DONE** (101/0/6)

@@ -102,7 +102,10 @@ pub use simulate::{
     simulate_op_with_mna, simulate_op_with_xspice,
 };
 pub use tf::{simulate_tf, simulate_tf_with_mna};
-pub use transient::{simulate_tran, simulate_tran_with_mna};
+pub use transient::{
+    TranOutcome, TranPauseSnapshot, TranRunParams, TranStartState, run_tran, simulate_tran,
+    simulate_tran_with_mna, tran_run_params_from_netlist,
+};
 
 // Utilities
 pub use mna::MnaError;

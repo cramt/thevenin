@@ -8,7 +8,10 @@
 use std::collections::HashMap;
 
 use cirq_ir::Circuit;
+use thevenin::TranPauseSnapshot;
 use thevenin_types::{Netlist, SimPlot, SimVector};
+
+use crate::ast::StopCondition;
 
 /// Simulation context — mutable state during .control execution.
 pub struct SimContext {
@@ -50,6 +53,15 @@ pub struct SimContext {
     /// Resolved model parameters from the last analysis run.
     /// Used by `@model[param]` queries to return TEMPER-evaluated values.
     pub resolved_models: HashMap<String, Vec<thevenin_types::Param>>,
+    /// Pending pause condition for the next transient analysis.
+    ///
+    /// Set by `stop when` and consumed by the next `tran` run. Cleared after
+    /// the run starts (whether or not the run actually paused), matching
+    /// ngspice's one-shot semantics.
+    pub stop_when: Option<StopCondition>,
+    /// Snapshot of a transient run that paused at its stop condition,
+    /// awaiting a `resume` command. None when no run is paused.
+    pub paused_tran: Option<TranPauseSnapshot>,
 }
 
 impl SimContext {
@@ -70,6 +82,8 @@ impl SimContext {
             output: String::new(),
             user_vectors: Vec::new(),
             resolved_models: HashMap::new(),
+            stop_when: None,
+            paused_tran: None,
         }
     }
 
@@ -102,6 +116,8 @@ impl SimContext {
             output: String::new(),
             user_vectors: Vec::new(),
             resolved_models: HashMap::new(),
+            stop_when: None,
+            paused_tran: None,
         })
     }
 

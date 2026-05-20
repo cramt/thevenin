@@ -506,6 +506,8 @@ pub fn tran_params_from_circuit(
         nodeset: resolve_nodeset_from_circuit(circuit, mna),
         ic_overrides,
         device_param_queries,
+        t_pause: None,
+        start_state: None,
     })
 }
 

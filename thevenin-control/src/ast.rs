@@ -53,8 +53,28 @@ pub enum Statement {
     RunAnalysis(String),
     /// `eprint ...` — print element info (treated as echo for now)
     Eprint(Vec<String>),
+    /// `stop when <condition>` — register a pause condition for the next
+    /// transient run. Currently only `stop when time = <value>` is supported;
+    /// the value is parsed as a SPICE number with optional SI suffix.
+    StopWhen(StopCondition),
+    /// `resume` — resume a previously paused transient simulation.
+    Resume,
     /// Comment line (starts with * or $)
     Comment,
+}
+
+/// A pause condition registered by `stop when`.
+///
+/// ngspice supports several condition kinds (`time =`, `<expr>` comparisons,
+/// `node v(...) > x`, etc.); thevenin currently implements only the
+/// time-equals form needed by `regression/misc/resume-1.cir`. Other forms
+/// are parsed leniently — the executor errors out if asked to honour an
+/// unsupported kind.
+#[derive(Debug, Clone)]
+pub enum StopCondition {
+    /// `stop when time = <value>` — pause the next transient run at the
+    /// first integration point at or past `t_pause`.
+    TimeEq(f64),
 }
 
 /// A value for the `alter` command.

@@ -164,7 +164,11 @@ pub fn simulate_tran(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
         let mna_tran = mna_ir::assemble_mna_from_circuit(circuit, false, None)?
             .expect("mna_ir already accepted this circuit");
         let params = mna_ir::tran_params_from_circuit(circuit, &mna_tran)?;
-        plots.extend(crate::transient::run_tran(mna_tran, params)?.plots);
+        plots.extend(
+            crate::transient::run_tran(mna_tran, params)?
+                .into_result()
+                .plots,
+        );
         return Ok(SimResult { plots });
     }
     let nls = lower(circuit)?;

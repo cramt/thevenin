@@ -30,9 +30,6 @@
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
 "general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag; timing shift in BJT voltage-dependent cap model)"
 
-# === Regression: misc ===
-"regression/misc/resume-1.cir" = ".control: stop when + resume commands not implemented (requires transient state preservation)"
-
 # === Transmission lines ===
 # cpl_ibm2: moved to tolerances.toml (abs_tol=1e-4 for bounded ~70µV FP accumulation)
 # ltra2_2_line: moved to tolerances.toml (peak error ~0.75%, bounded)

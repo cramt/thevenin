@@ -460,6 +460,12 @@ fn parse_comparison(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Resu
             Token::Ge => Some(CmpOp::Ge),
             Token::Le => Some(CmpOp::Le),
             Token::SingleEq => Some(CmpOp::Eq),
+            // ngspice-style word forms — `time le tstop` is equivalent to
+            // `time <= tstop`. resume-1.cir's golden trace uses these.
+            Token::Ident(s) if s.eq_ignore_ascii_case("gt") => Some(CmpOp::Gt),
+            Token::Ident(s) if s.eq_ignore_ascii_case("lt") => Some(CmpOp::Lt),
+            Token::Ident(s) if s.eq_ignore_ascii_case("ge") => Some(CmpOp::Ge),
+            Token::Ident(s) if s.eq_ignore_ascii_case("le") => Some(CmpOp::Le),
             Token::Ident(s) if s.eq_ignore_ascii_case("eq") => Some(CmpOp::Eq),
             Token::Ident(s) if s.eq_ignore_ascii_case("ne") => Some(CmpOp::Ne),
             _ => None,
@@ -1119,7 +1125,12 @@ fn resolve_element_param(kind: &thevenin_types::ElementKind, param: &str) -> Opt
     }
 }
 
-/// Strip SPICE unit suffixes from a number string (V, A, W, Hz, Ohm).
+/// Strip SPICE unit suffixes from a number string (V, A, W, Hz, Ohm, s).
+///
+/// `s` (seconds) is stripped so time literals like `1ms`/`200us` parse as
+/// `1m`/`200u` (then resolve via SI prefix). Stripping is safe because the
+/// tokenizer only reaches this function for tokens that started with a digit
+/// or `.` — bare `s` is an identifier and never hits this path.
 fn strip_unit_suffix_str(s: &str) -> &str {
     let lower = s.to_lowercase();
     for suffix in &["hz", "ohm", "ohms"] {
@@ -1127,7 +1138,7 @@ fn strip_unit_suffix_str(s: &str) -> &str {
             return &s[..s.len() - suffix.len()];
         }
     }
-    for &unit in &['v', 'a', 'w'] {
+    for &unit in &['v', 'a', 'w', 's'] {
         if lower.ends_with(unit) {
             return &s[..s.len() - 1];
         }

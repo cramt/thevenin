@@ -1,6 +1,6 @@
 //! Parser for `.control` block lines into [`Statement`] AST.
 
-use crate::ast::{AlterValue, EchoFragment, Statement};
+use crate::ast::{AlterValue, EchoFragment, Statement, StopCondition};
 
 /// Parse raw `.control` lines into a list of statements.
 pub fn parse_control_block(lines: &[String]) -> Result<Vec<Statement>, String> {
@@ -89,6 +89,8 @@ fn parse_statement(
         "eprint" | "eprvcd" => Ok(Statement::Eprint(
             rest.split_whitespace().map(|s| s.to_string()).collect(),
         )),
+        "stop" => parse_stop(rest),
+        "resume" => Ok(Statement::Resume),
         "op" | "dc" | "ac" | "tran" | "sens" | "noise" | "pz" | "tf" | "run" => {
             Ok(Statement::RunAnalysis(trimmed.to_string()))
         }
@@ -376,6 +378,48 @@ fn parse_print(rest: &str) -> Result<Statement, String> {
         .map(|s| s.to_string())
         .collect();
     Ok(Statement::Print { exprs, file })
+}
+
+/// Parse `stop when <condition>`. Only `stop when time = <value>` is supported
+/// today (the form `regression/misc/resume-1.cir` uses); other conditions
+/// return an error so the failure is loud rather than silently ignored.
+fn parse_stop(rest: &str) -> Result<Statement, String> {
+    let rest = rest.trim();
+    let lower = rest.to_lowercase();
+    let after_when = lower
+        .strip_prefix("when")
+        .ok_or_else(|| format!("stop: expected 'when', got: {rest}"))?
+        .trim_start();
+    // Re-slice the original rest to preserve case for the value, using the
+    // length difference to locate where the condition body begins.
+    let body = rest[rest.len() - after_when.len()..].trim();
+
+    // Time form: `time = <value>` or `time=<value>`.
+    if let Some(after_time) = body
+        .strip_prefix("time")
+        .or_else(|| body.strip_prefix("TIME"))
+    {
+        let after_eq = after_time
+            .trim_start()
+            .strip_prefix('=')
+            .ok_or_else(|| format!("stop when time: expected '=', got: {body}"))?
+            .trim();
+        // Time values commonly carry an `s` (seconds) suffix on top of an SI
+        // prefix — e.g. `1ms` is one millisecond. parse_spice_number doesn't
+        // strip 's' (it conflicts with `f`/`s` SI handling elsewhere), so
+        // strip it here before delegating.
+        let value_str = after_eq
+            .strip_suffix('s')
+            .or_else(|| after_eq.strip_suffix('S'))
+            .unwrap_or(after_eq);
+        let val = parse_spice_number(value_str)
+            .map_err(|e| format!("stop when time: cannot parse value '{after_eq}': {e}"))?;
+        return Ok(Statement::StopWhen(StopCondition::TimeEq(val)));
+    }
+
+    Err(format!(
+        "stop when: only `time = <value>` is supported, got: {body}"
+    ))
 }
 
 /// Parse a SPICE number with optional SI suffix (public for exec module).
@@ -908,5 +952,48 @@ mod tests {
         let result = parse_spice_number("");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("empty number"));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_stop / Statement::Resume
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_stop_when_time_eq_milliseconds() {
+        let lines = vec!["stop when time = 1ms".to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::StopWhen(StopCondition::TimeEq(t)) => {
+                assert!((t - 1e-3).abs() < 1e-18);
+            }
+            other => panic!("expected StopWhen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_stop_when_time_eq_no_spaces() {
+        let lines = vec!["stop when time=500us".to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        match &stmts[0] {
+            Statement::StopWhen(StopCondition::TimeEq(t)) => {
+                assert!((t - 5e-4).abs() < 1e-18);
+            }
+            other => panic!("expected StopWhen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_stop_unsupported_condition_errors() {
+        let result = parse_stop("when v(out) > 1");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("only `time"));
+    }
+
+    #[test]
+    fn parse_resume() {
+        let lines = vec!["resume".to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        assert!(matches!(stmts[0], Statement::Resume));
     }
 }

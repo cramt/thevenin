@@ -1,11 +1,12 @@
 //! Executor for `.control` block statements.
 
+use thevenin::{TranOutcome, TranStartState};
 use thevenin_types::{
     AcVariation, Analysis, DcSweep, Expr, PzAnalysisType, PzInputType, SimPlot, SimResult,
     SimVector,
 };
 
-use crate::ast::{AlterValue, EchoFragment, Statement};
+use crate::ast::{AlterValue, EchoFragment, Statement, StopCondition};
 use crate::context::SimContext;
 use crate::vecexpr::{eval_condition, eval_vec_expr};
 
@@ -175,6 +176,13 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
             // Not implemented — skip silently
             Ok(())
         }
+
+        Statement::StopWhen(cond) => {
+            ctx.stop_when = Some(cond.clone());
+            Ok(())
+        }
+
+        Statement::Resume => execute_resume(ctx),
     }
 }
 
@@ -208,9 +216,7 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
     let result = match &analysis {
         Analysis::Op => thevenin::simulate_op_dc(&netlist).map_err(|e| format!("OP: {e}")),
         Analysis::Dc { .. } => thevenin::simulate_dc(&netlist).map_err(|e| format!("DC: {e}")),
-        Analysis::Tran { .. } => {
-            thevenin::simulate_tran(&netlist).map_err(|e| format!("Tran: {e}"))
-        }
+        Analysis::Tran { .. } => run_tran_with_pause(&netlist, ctx),
         Analysis::Ac { .. } => thevenin::simulate_ac(&netlist).map_err(|e| format!("AC: {e}")),
         Analysis::Sens { .. } => {
             thevenin::simulate_sens(&netlist).map_err(|e| format!("Sens: {e}"))
@@ -239,6 +245,127 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Run a `.tran` analysis with optional pause support.
+///
+/// If `ctx.stop_when` is set, the run honours that condition (currently only
+/// `time = <value>`) and may pause partway through. The partial result is
+/// always returned so the caller's plot machinery shows whatever was
+/// integrated up to the pause point; the snapshot is stashed on
+/// `ctx.paused_tran` for a subsequent `resume`.
+///
+/// The `stop_when` field is consumed (cleared) regardless of whether the run
+/// actually paused, matching ngspice's one-shot semantics.
+fn run_tran_with_pause(
+    netlist: &thevenin_types::Netlist,
+    ctx: &mut SimContext,
+) -> Result<SimResult, String> {
+    let stop = ctx.stop_when.take();
+    let t_pause = stop.map(|StopCondition::TimeEq(t)| t);
+
+    let mna = thevenin::mna::assemble_mna(netlist).map_err(|e| format!("Tran: {e}"))?;
+    let mut params =
+        thevenin::tran_run_params_from_netlist(netlist, &mna).map_err(|e| format!("Tran: {e}"))?;
+    params.t_pause = t_pause;
+
+    match thevenin::run_tran(mna, params).map_err(|e| format!("Tran: {e}"))? {
+        TranOutcome::Complete(r) => {
+            // A new complete run invalidates any prior pause snapshot —
+            // resume only makes sense for the most recent paused tran.
+            ctx.paused_tran = None;
+            Ok(r)
+        }
+        TranOutcome::Paused { snapshot, partial } => {
+            ctx.paused_tran = Some(snapshot);
+            Ok(partial)
+        }
+    }
+}
+
+/// Execute the `resume` command: continue the most recent paused transient
+/// from where it stopped, against the (possibly `alter`-mutated) current
+/// netlist.
+///
+/// Errors if no transient is paused. Re-assembles the MNA from the working
+/// netlist (which `alter` keeps in sync with `Circuit`), seeds the resumed
+/// run with the snapshot's solution and accumulated output, and runs from
+/// the snapshot's `t_paused` to the original `tstop`.
+///
+/// The resumed result replaces the paused leg's plot rather than adding a
+/// new one — this matches ngspice's behaviour where `tran ... ; resume`
+/// produces a single contiguous plot, not two.
+fn execute_resume(ctx: &mut SimContext) -> Result<(), String> {
+    let snapshot = ctx
+        .paused_tran
+        .take()
+        .ok_or_else(|| "resume: no paused transient simulation".to_string())?;
+
+    // Build a working netlist from the current ctx.netlist (already
+    // refreshed by any `alter` calls between pause and resume). Override
+    // its analysis with the paused leg's Tran params so the resumed run
+    // honours the original `tstep`/`tstop` even when `tran` was an
+    // interpreter command (.control-only) rather than a netlist directive.
+    let mut netlist = ctx.netlist.clone();
+    netlist.analysis = Analysis::Tran {
+        tstep: Expr::Num(snapshot.t_step),
+        tstop: Expr::Num(snapshot.t_stop),
+        tstart: None,
+        tmax: snapshot.t_max.map(Expr::Num),
+        // The original paused leg may have been uic; the resumed leg
+        // does not re-apply uic — it starts from the snapshot's solution
+        // via `start_state` and so its IC/uic handling is short-circuited
+        // inside run_tran (see the `start_state.is_none()` guard).
+        uic: false,
+    };
+    let temp_c = thevenin::netlist_temp(&netlist);
+    evaluate_temper_exprs(&mut netlist, temp_c);
+
+    let mna = thevenin::mna::assemble_mna(&netlist).map_err(|e| format!("resume: {e}"))?;
+    let mut params = thevenin::tran_run_params_from_netlist(&netlist, &mna)
+        .map_err(|e| format!("resume: {e}"))?;
+    params.start_state = Some(TranStartState {
+        t_initial: snapshot.t_paused,
+        solution: snapshot.solution,
+        output_vecs: snapshot.output_vecs,
+    });
+
+    let outcome = thevenin::run_tran(mna, params).map_err(|e| format!("resume: {e}"))?;
+    let resumed = match outcome {
+        TranOutcome::Complete(r) => r,
+        // A second `stop when` between resume and the new tstop is not
+        // supported today — the snapshot would replace the just-restored one
+        // and the interpreter would re-enter resume against a moving target.
+        // ngspice supports this but resume-1.cir does not exercise it.
+        TranOutcome::Paused { partial, snapshot } => {
+            ctx.paused_tran = Some(snapshot);
+            partial
+        }
+    };
+
+    // Replace the paused leg's plot in-place so the interpreter sees a
+    // single contiguous tran plot. The paused leg was added as "tran<N>";
+    // overwrite its vecs while keeping the name + plot index stable.
+    let resumed_vecs = resumed
+        .plots
+        .into_iter()
+        .next()
+        .map(|p| p.vecs)
+        .unwrap_or_default();
+    if let Some(idx) = ctx.current_plot
+        && let Some(plot) = ctx.plots.get_mut(idx)
+    {
+        plot.vecs = resumed_vecs;
+    } else {
+        // No current plot (shouldn't happen in practice — the paused tran
+        // always created one) — fall back to adding the resumed leg as a
+        // fresh plot.
+        ctx.add_plot(SimPlot {
+            name: "tran".to_string(),
+            vecs: resumed_vecs,
+        });
+    }
+    Ok(())
 }
 
 /// Run a DC temperature sweep: `dc temp start stop step`.
@@ -545,23 +672,36 @@ fn parse_analysis_command(cmd: &str, args: &[&str]) -> Result<Analysis, String> 
             })
         }
         "tran" => {
-            if args.len() < 2 {
+            // ngspice grammar: `tran tstep tstop [tstart [tmax]] [uic]`.
+            // The trailing `uic` keyword is optional and order-independent
+            // relative to the numeric positionals — strip it first so the
+            // remaining args are pure positionals.
+            let mut numeric: Vec<&str> = Vec::with_capacity(args.len());
+            let mut uic = false;
+            for a in args {
+                if a.eq_ignore_ascii_case("uic") {
+                    uic = true;
+                } else {
+                    numeric.push(a);
+                }
+            }
+            if numeric.len() < 2 {
                 return Err("tran: need tstep tstop".to_string());
             }
             Ok(Analysis::Tran {
-                tstep: Expr::Num(parse_num(args[0])?),
-                tstop: Expr::Num(parse_num(args[1])?),
-                tstart: if args.len() > 2 {
-                    Some(Expr::Num(parse_num(args[2])?))
+                tstep: Expr::Num(parse_num(numeric[0])?),
+                tstop: Expr::Num(parse_num(numeric[1])?),
+                tstart: if numeric.len() > 2 {
+                    Some(Expr::Num(parse_num(numeric[2])?))
                 } else {
                     None
                 },
-                tmax: if args.len() > 3 {
-                    Some(Expr::Num(parse_num(args[3])?))
+                tmax: if numeric.len() > 3 {
+                    Some(Expr::Num(parse_num(numeric[3])?))
                 } else {
                     None
                 },
-                uic: false,
+                uic,
             })
         }
         "sens" => {
