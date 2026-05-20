@@ -15,36 +15,62 @@ After 146 sessions of the fix-tests agent, **645 tests pass** (11 with tolerance
 | bsim2/test.cir | BSIM2 not implemented | ~2,500 LOC | 1 |
 | regression/misc/resume-1.cir | .control interpreter | ~800 LOC | 1 |
 
-## 1. CAPMOD=3 Body Charge Coupling (RampVg2)
+## 1. CAPMOD=3 Body-Floating Coupling (RampVg2)
 
 **Test:** `bsim3soidd/RampVg2.cir`
-**Status:** CAPMOD=3 model and NR convergence both work; remaining gap is **device
-physics**, not solver.
+**Status:** CAPMOD=3 charge block is now verified faithful to ngspice (audit
+complete 2026-05-20). The remaining gap is in the body-floating bias chain
+(Vbs0t / Vbs0 / Vbs0mos / Vthfd / Vbs0eff), not in the cap_mod==3 charge
+formulas. The failure starts at t=0 as a DC operating-point offset (~0.04%
+on Vbs) that grows during the gate ramp because the body's response to gate
+coupling rides on top of the wrong DC bias.
 
-CAPMOD=3 is fully implemented in `bsim3soi_dd.rs`. All other DD tests (inv2, t3, t4, t5)
-pass with CAPMOD=3 active. NR converges cleanly through ITL4=10 after the bypass +
-no-floor fixes landed.
+### What was checked and confirmed correct
 
-The actual failure: during the gate ramp (Vg: 0 → 2 V over t=20-120ps), our Vbs only
-climbs to ~0.25 V where ngspice reaches ~0.55 V — the body-to-gate charge coupling
-`dqbf/dvg` is roughly half what ngspice computes. A smaller bounded ~1% drift also
-appears in the pre-ramp holding region, suggesting our CAPMOD=3 dQ/dt isn't quite zero
-at steady state.
+Full term-by-term audit of `cap_mod==3` block (`bsim3soi_dd.rs:2741-3040`)
+against ngspice `b3soiddld.c:2888-3224`:
+- VdsatCV redefinition and derivatives (lines 2745-2753)
+- VdsCV nonlinear saturation mapping in both saturation and parabolic
+  branches (2762-2825), including the value-only clamp behaviour
+- Surface potentials Phisd/Phisc and sqrtPhisd/sqrtPhisc (2827-2869)
+- Qdep0 depletion-charge-at-Vth formula (2835-2838)
+- VcsCV smooth clamp with smoothing constant — see fix below (2840-2862)
+- Xc surface-potential-based partition (2871-2931), incl. dT5/dVg = K1·sqrtPhisd·dPhisd/dVg
+  identity which depends on the (2/3)·1.5 cancellation
+- Qsubs1 Nomi/Denomi formulation incl. Phi^(5/2) terms (2933-3010)
+- Qsubs2 with Vbs0eff dependencies, dQsubs2_dVrg = T11·dVbs0eff_dVg routing
+  (3012-3024)
+- Qbf assembly including the Qdep0 addition specific to cap_mod==3 (3026-3033)
+- Cbg/Cbb/Cbd/Cbe transformation (3259-3262)
+- Qe1/Qe2 back-gate charges and dQe1/dQe2 derivatives (3225-3255)
 
-The charge model contributes:
-- `Qdep0` -- depletion charge at Vgs=Vth (key for subthreshold gate-body coupling)
-- Redesigned `VdsCV` with nonlinear saturation mapping using IV-model Vdsat
-- Surface potentials `Phisd`/`Phisc` replacing simple voltage ratios
-- `Nomi`/`Denomi` formulation for `Qsubs1` using Phi^(3/2) terms
-- `Qsubs2` with `dVbs0eff` derivatives (Ve and Vrg coupling)
+### Fix landed
 
-**What's needed:** Line-by-line audit of our `cap_mod == 3` block in `bsim3soi_dd.rs`
-(around lines 2741-3260) against ngspice `b3soiddld.c` lines 2888-3224. The divergence
-is almost certainly in one of the qbf-contributing terms (`qac0`, `qsub0`, `qsubs1_3`,
-`qsubs2_3`, `qdep0`) or their chain-rule derivatives feeding `cbg/cbb/cbd/cbe`. A
-tolerance bump would hide a real 50% device-physics error, so don't go there.
+`DELTA_VCSCV` constant in `bsim3soi_dd.rs` was `1e-5`; ngspice
+`b3soiddld.c:43` defines `DELTA_Vcscv 0.0004`. Both cap_mod==2 and
+cap_mod==3 copies corrected to `4e-4`. This is a transient-smoothing
+constant for the Vcs ≤ VdsCV clamp; at moderate |VdsCV| the smoothing zone
+is sub-dominant, which is why this didn't move the RampVg2 number much,
+but it is a real correctness issue and could matter for circuits with
+near-zero Vds.
 
-**Reference:** ngspice `b3soiddld.c` lines 2888-3224.
+### Where to look next
+
+The failure pattern (DC OP off by 0.04% growing into a ~60% capacitive
+response shortfall) points at the DD-specific body-floating chain:
+
+```
+Vbs0t → Vbs0 → Vbs0mos → Vthfd → Vbs0teff → Vbs0eff → Vbsdio → Vbsmos → Vbseff
+```
+
+The chain runs `bsim3soi_dd.rs:1269-1454` against ngspice
+`b3soiddld.c:921-1193`. Particularly worth re-checking: the Nfb feedback
+factor at line 1389 (`nfb = 1 / (1 + (kb3·Cbox/cox)·sqrt(1 + 4·(phi+K1·sqrt(phi-Vbs0mos) - Vbs0mos)/K1²))`),
+the Vbs0mos derivation through `t4_mos = T3·csieff/qsieff` smoothing, and
+the dVbs0mos_dVe derivative path that feeds Cbg through dQsubs2_dVe.
+Adding compile-time `eprintln!` of the chain at a fixed (Vg, Vd, Vbs)
+operating point and diffing against ngspice's `B3SOIDDdebug` output is
+the most direct way to find the divergence.
 
 ## 2. Level 2 MOSFET ✓ IMPLEMENTED
 

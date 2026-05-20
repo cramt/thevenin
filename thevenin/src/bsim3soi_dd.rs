@@ -2838,7 +2838,8 @@ pub fn bsim3soi_dd_companion(
         let dqdep0_dvb = t10_qdep * dsqrt_phis_dvb;
 
         // VcsCV for CAPMOD=3 (ngspice lines 2997-3036)
-        const DELTA_VCSCV: f64 = 1e-5;
+        // ngspice b3soiddld.c line 43: #define DELTA_Vcscv 0.0004
+        const DELTA_VCSCV: f64 = 4e-4;
         let t5_vcscv = 2.0 * DELTA_VCSCV;
         let t1_vcscv3 = vds_cv_m - vcs - vds_cv_m * vds_cv_m * DELTA_VCSCV;
         let t2_vcscv3 = (t1_vcscv3 * t1_vcscv3 + t5_vcscv * vds_cv_m * vds_cv_m).sqrt();
@@ -3061,7 +3062,8 @@ pub fn bsim3soi_dd_companion(
         let dvds_cv2_dvb = dvdseff_cv_dvb;
 
         // VcsCV calculation (ngspice b3soiddld.c lines 2772-2796)
-        const DELTA_VCSCV: f64 = 1e-5;
+        // ngspice b3soiddld.c line 43: #define DELTA_Vcscv 0.0004
+        const DELTA_VCSCV: f64 = 4e-4;
         let t1_vcscv = vds_cv2 - vcs - vds_cv2 * vds_cv2 * DELTA_VCSCV;
         let t5_vcscv = 2.0 * DELTA_VCSCV;
         let t2_vcscv = (t1_vcscv * t1_vcscv + t5_vcscv * vds_cv2 * vds_cv2).sqrt();

@@ -6,15 +6,15 @@
 "bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
 
 # === BSIM3SOI-DD ===
-# RampVg2: CAPMOD=3 transient NR converges (bypass + no-floor fixes landed),
-# but during the gate ramp (t=20-120ps) our Vbs only rises to ~0.25 V where
-# ngspice reaches ~0.55 V — roughly half the body-to-gate charge coupling.
-# Holding region (pre-ramp) is also off by a small bounded drift (~1% over
-# 3ps) suggesting dQ/dt is non-zero in what should be steady-state. Fix is
-# CAPMOD=3 charge-derivative diff against b3soiddld.c lines 2888-3224 — not
-# a tolerance bump (would hide a real 50% device-physics error). All other
-# DD tests (t3/t4/t5, inv2) pass.
-"bsim3soidd/RampVg2.cir" = "CAPMOD=3 gate-ramp body voltage ~54% too weak: charge-coupling dqbf/dvg short of ngspice b3soiddld.c CAPMOD=3 (see comment above)"
+# RampVg2: CAPMOD=3 charge block fully audited 2026-05-20 and verified
+# faithful to ngspice b3soiddld.c:2888-3224 (one real bug found and fixed:
+# DELTA_VCSCV was 1e-5 vs ngspice's 0.0004). Test still fails because the
+# residual gap is upstream of the charge model — in the DD body-floating
+# bias chain (Vbs0t/Vbs0/Vbs0mos/Vthfd/Vbs0eff). Failure starts at t=0 as
+# a 0.04% DC OP offset on Vbs (0.0920 vs 0.0917) which grows during the
+# gate ramp into a ~60% capacitive response shortfall. See
+# docs/future-work.md item 1 for what to instrument next.
+"bsim3soidd/RampVg2.cir" = "DD body-floating bias chain off: 0.04% DC OP offset grows into ~60% capacitive shortfall during gate ramp; CAPMOD=3 charge block verified clean (see docs/future-work.md item 1)"
 
 # === General circuits ===
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
