@@ -94,17 +94,27 @@ More significant for small circuits where allocation overhead is a
 larger fraction of solve time.
 
 
-6. Partial Pivoting Instead of Full Pivoting  ✅ IMPLEMENTED
+6. Partial Pivoting Instead of Full Pivoting  ⚠️  PARTIAL
 ----------------------------------------------
 
-Dense solves (for systems < 48 unknowns) now use PartialPivLu instead
-of FullPivLu. Partial pivoting does row pivoting only, which is cheaper
-than full pivoting's additional column search. SPICE matrices are
-well-conditioned enough for this.
+The complex AC dense path (ComplexLinearSystem::solve_dense in
+sparse.rs) uses PartialPivLu. The real-valued dense path
+(LinearSystem::solve) still uses FullPivLu by design — full pivoting
+gives superior numerical stability for ill-conditioned MNA matrices
+that arise with negative conductances (HFET GGR terms, gmin stepping
+on stiff Jacobians) and matches ngspice's Markowitz solver behaviour
+more closely. The extra cost of full pivoting is negligible at
+dim < 48.
 
 For sparse solves (>= 48 unknowns), the sparse LU solver uses its own
 fill-reducing column permutation (COLAMD), so this is moot for large
 circuits.
+
+The asymmetry between the real and complex dense paths is
+intentional: complex AC analysis runs at the DC operating point where
+the system is already well-conditioned, while the real DC/transient
+path needs robustness through NR steps that may visit poorly
+conditioned intermediate states.
 
 
 7. Transient Timestep Parallelism (Speculative)
