@@ -10,7 +10,7 @@ use cirq_ir::{
     AcAnalysis, AcSpec as IrAcSpec, Analysis as IrAnalysis, BehavioralMode, Circuit, Connection,
     DcAnalysis, DcSweep as IrDcSweep, Element as IrElement, ElementKind as IrElementKind,
     FrequencyScale, Id, Model as IrModel, Net, NoiseAnalysis, PzAnalysis, PzType, ResolvedParam,
-    SensAnalysis, SourceSpec, TfAnalysis, TranAnalysis, TransferType, Value,
+    SensAcSpec, SensAnalysis, SourceSpec, TfAnalysis, TranAnalysis, TransferType, Value,
     Waveform as IrWaveform, XspiceConnection as IrXspiceConnection,
 };
 use thevenin_types::{
@@ -52,6 +52,60 @@ pub enum ImportError {
     /// Subcircuit flattening failed.
     #[error("subcircuit flattening error: {0}")]
     SubcktError(#[from] thevenin::subckt::SubcktError),
+
+    /// An analysis directive could not be lowered into the IR.
+    #[error("unsupported analysis: {0}")]
+    UnsupportedAnalysis(String),
+}
+
+/// Parse the optional AC tail of `.sens output [AC DEC|OCT|LIN n fstart fstop]`.
+///
+/// Returns `None` when the tail is empty or consists only of the legacy `dc`
+/// marker (which ngspice accepts and the simulator silently ignores).
+fn parse_sens_ac_tail(tail: &[String]) -> Result<Option<SensAcSpec>, ImportError> {
+    if tail.is_empty() {
+        return Ok(None);
+    }
+
+    let first = tail[0].to_ascii_lowercase();
+    if first == "dc" {
+        return Ok(None);
+    }
+    if first != "ac" {
+        return Err(ImportError::UnsupportedAnalysis(format!(
+            ".sens: expected AC|DC marker after output, got `{}`",
+            tail[0]
+        )));
+    }
+    if tail.len() < 5 {
+        return Err(ImportError::UnsupportedAnalysis(
+            ".sens AC: needs variation n fstart fstop".into(),
+        ));
+    }
+    let scale = match tail[1].to_ascii_lowercase().as_str() {
+        "dec" | "decade" => FrequencyScale::Decade,
+        "oct" | "octave" => FrequencyScale::Octave,
+        "lin" | "linear" => FrequencyScale::Linear,
+        other => {
+            return Err(ImportError::UnsupportedAnalysis(format!(
+                ".sens AC: unknown variation `{other}`"
+            )));
+        }
+    };
+    let parse_num = |s: &str, field: &str| -> Result<f64, ImportError> {
+        thevenin_types::parse::parse_spice_number(s).ok_or_else(|| {
+            ImportError::UnsupportedAnalysis(format!(".sens AC: bad {field}: `{s}`"))
+        })
+    };
+    let points = parse_num(&tail[2], "n")? as u32;
+    let fstart = parse_num(&tail[3], "fstart")?;
+    let fstop = parse_num(&tail[4], "fstop")?;
+    Ok(Some(SensAcSpec {
+        scale,
+        points,
+        fstart,
+        fstop,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1793,9 +1847,17 @@ fn convert_analysis(
             })
         }
 
-        SpiceAnalysis::Sens { output } => IrAnalysis::Sens(SensAnalysis {
-            output: output.join(", "),
-        }),
+        SpiceAnalysis::Sens { output } => {
+            let output_var = output
+                .first()
+                .ok_or_else(|| ImportError::UnsupportedAnalysis(".sens: missing output".into()))?
+                .clone();
+            let ac = parse_sens_ac_tail(&output[1..])?;
+            IrAnalysis::Sens(SensAnalysis {
+                output: output_var,
+                ac,
+            })
+        }
 
         SpiceAnalysis::Pz {
             node_i,

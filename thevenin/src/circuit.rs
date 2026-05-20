@@ -202,13 +202,21 @@ pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
 /// for new code; the Netlist-shaped wrapper remains available for legacy
 /// callers.
 ///
-/// Multi-temperature sweeps (`circuit.temps.len() > 1`) are not yet
-/// supported here; the existing `thevenin::simulate(&Netlist)` handles
-/// that by re-running each analysis at every temperature. Lifting that
-/// onto a Circuit requires mutating element parameters per temperature
-/// — the same TEMPER work that `.control` interpretation is waiting on
-/// (see `docs/migration/old-path-retirement-checklist.md`).
+/// Multi-temperature sweeps (`circuit.temps.len() > 1`) re-run every
+/// analysis at each temperature and label the resulting plots with
+/// `{plot_name}_temp{index}_{temp}` — matching the shape produced by
+/// [`thevenin::simulate(&Netlist)`].
 pub fn simulate(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    if circuit.temps.len() > 1 {
+        return simulate_multi_temp(circuit, &circuit.temps);
+    }
+    simulate_single(circuit)
+}
+
+/// Run every analysis declared on `circuit.analyses` once and concatenate
+/// the resulting plots. The multi-temperature wrapper [`simulate`] dispatches
+/// here per temperature.
+fn simulate_single(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
     let mut plots = Vec::new();
     let analyses = if circuit.analyses.is_empty() {
         std::borrow::Cow::Owned(vec![cirq_ir::Analysis::Op])
@@ -227,6 +235,24 @@ pub fn simulate(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
             cirq_ir::Analysis::Tf(_) => simulate_tf(circuit)?,
         };
         plots.extend(result.plots);
+    }
+    Ok(SimResult { plots })
+}
+
+/// Run every analysis at each requested temperature, labelling plots so the
+/// caller can distinguish sweep points. Mirrors the Netlist-side
+/// `simulate_multi_temp` so a Circuit lowered from a SPICE `.temp 25 50 100`
+/// netlist produces the same `{name}_temp{i}_{temp}` plot naming.
+fn simulate_multi_temp(circuit: &Circuit, temps: &[f64]) -> Result<SimResult, CircuitSimError> {
+    let mut plots = Vec::with_capacity(temps.len() * circuit.analyses.len().max(1));
+    for (i, &temp) in temps.iter().enumerate() {
+        let mut single_temp = circuit.clone();
+        single_temp.temps = vec![temp];
+        let result = simulate_single(&single_temp)?;
+        for mut plot in result.plots {
+            plot.name = format!("{}_temp{}_{}", plot.name, i + 1, temp);
+            plots.push(plot);
+        }
     }
     Ok(SimResult { plots })
 }
@@ -267,19 +293,20 @@ pub fn simulate_noise(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
     Ok(crate::simulate_noise(nl)?)
 }
 
-/// Run a sensitivity (`.sens`) analysis on a Circuit.
+/// Run a sensitivity (`.sens`) analysis on a Circuit. Fully Netlist-free on
+/// the happy path.
 ///
-/// `IrAnalysis::Sens` stores its output spec as a single `String` while
-/// `Netlist`'s `Analysis::Sens` keeps the full tokenized `Vec<String>`
-/// (which encodes the optional AC variant). The IR loses that
-/// distinction, so this entry falls back to lowering to a Netlist and
-/// dispatching via `simulate_sens_with_mna`.
+/// The IR's [`cirq_ir::SensAnalysis`] carries the output spec as a single
+/// token plus an optional typed [`cirq_ir::SensAcSpec`] for the AC variant —
+/// the Netlist's tokenized `Vec<String>` is reconstructed by the emitter
+/// only when the Netlist path is taken.
 pub fn simulate_sens(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
+    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
+        let params = mna_ir::sens_params_from_circuit(circuit, &mna)?;
+        return Ok(crate::sens::run_sens(mna, params)?);
+    }
     let nls = lower(circuit)?;
     let nl = pick(&nls, "sens", |a| matches!(a, Analysis::Sens { .. }))?;
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        return Ok(crate::sens::simulate_sens_with_mna(mna, nl)?);
-    }
     Ok(crate::simulate_sens(nl)?)
 }
 

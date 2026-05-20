@@ -1382,13 +1382,7 @@ impl IrCtx {
             "tran" => Some(self.lower_tran_analysis(&a.body, a)),
             "noise" => Some(self.lower_noise_analysis(&a.body, a)),
             "pz" => Some(self.lower_pz_analysis(&a.body, a)),
-            "sens" => {
-                // Look for an "output" setting.
-                let output = self
-                    .get_setting_string(&a.body, "output")
-                    .unwrap_or_default();
-                Some(Analysis::Sens(cirq_ir::SensAnalysis { output }))
-            }
+            "sens" => Some(Analysis::Sens(self.lower_sens_analysis(&a.body))),
             "tf" => {
                 let output = self
                     .get_setting_string(&a.body, "output")
@@ -1458,6 +1452,69 @@ impl IrCtx {
         }
 
         Analysis::Dc(DcAnalysis { sweeps })
+    }
+
+    fn lower_sens_analysis(&mut self, body: &[AnalysisItem]) -> cirq_ir::SensAnalysis {
+        let mut output = String::new();
+        let mut ac_mode = false;
+        let mut scale = FrequencyScale::Decade;
+        let mut points = 0u32;
+        let mut fstart = 0.0;
+        let mut fstop = 0.0;
+
+        for item in body {
+            if let AnalysisItem::Setting { name, value } = item {
+                match name.name.as_str() {
+                    "output" => {
+                        output = self.get_setting_string(body, "output").unwrap_or_default();
+                    }
+                    "ac" => {
+                        ac_mode = matches!(value, Expr::Bool { value: true, .. });
+                    }
+                    "scale" => {
+                        if let Some(s) = expr_as_ident(value) {
+                            scale = match s {
+                                "decade" | "dec" => FrequencyScale::Decade,
+                                "octave" | "oct" => FrequencyScale::Octave,
+                                "linear" | "lin" => FrequencyScale::Linear,
+                                _ => {
+                                    self.diags.push(
+                                        Diagnostic::error(format!(
+                                            "unknown frequency scale: `{s}`"
+                                        ))
+                                        .with_span(name.span),
+                                    );
+                                    FrequencyScale::Decade
+                                }
+                            };
+                        }
+                    }
+                    "points" => {
+                        points = self.eval_to_f64(value).unwrap_or(0.0) as u32;
+                    }
+                    "fstart" | "start" => {
+                        fstart = self.eval_to_f64(value).unwrap_or(0.0);
+                    }
+                    "fstop" | "stop" => {
+                        fstop = self.eval_to_f64(value).unwrap_or(0.0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let ac = if ac_mode || points > 0 || fstart != 0.0 || fstop != 0.0 {
+            Some(cirq_ir::SensAcSpec {
+                scale,
+                points,
+                fstart,
+                fstop,
+            })
+        } else {
+            None
+        };
+
+        cirq_ir::SensAnalysis { output, ac }
     }
 
     fn lower_ac_analysis(&mut self, body: &[AnalysisItem], decl: &AnalysisDecl) -> Analysis {

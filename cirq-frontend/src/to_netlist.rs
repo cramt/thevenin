@@ -1175,9 +1175,24 @@ fn convert_analysis(
             }
         }
 
-        cirq_ir::Analysis::Sens(sens) => Analysis::Sens {
-            output: vec![sens.output.clone()],
-        },
+        cirq_ir::Analysis::Sens(sens) => {
+            let mut output = vec![sens.output.clone()];
+            if let Some(ac) = &sens.ac {
+                output.push("ac".into());
+                output.push(
+                    match ac.scale {
+                        FrequencyScale::Decade => "dec",
+                        FrequencyScale::Octave => "oct",
+                        FrequencyScale::Linear => "lin",
+                    }
+                    .into(),
+                );
+                output.push(ac.points.to_string());
+                output.push(format!("{}", ac.fstart));
+                output.push(format!("{}", ac.fstop));
+            }
+            Analysis::Sens { output }
+        }
 
         cirq_ir::Analysis::Tf(tf) => {
             let input = element_names

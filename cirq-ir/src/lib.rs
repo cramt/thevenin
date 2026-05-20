@@ -378,7 +378,19 @@ pub enum PzType {
 
 #[derive(Debug, Clone)]
 pub struct SensAnalysis {
+    /// The output expression being differentiated (e.g. `"v(out)"`, `"v(5,4)"`,
+    /// `"ix(...)"`). Single SPICE token preserved verbatim.
     pub output: String,
+    /// AC sensitivity sweep parameters. `None` for DC sensitivity.
+    pub ac: Option<SensAcSpec>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SensAcSpec {
+    pub scale: FrequencyScale,
+    pub points: u32,
+    pub fstart: f64,
+    pub fstop: f64,
 }
 
 #[derive(Debug, Clone)]

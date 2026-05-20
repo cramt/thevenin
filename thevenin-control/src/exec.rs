@@ -673,24 +673,20 @@ fn execute_alter(spec: &str, value: &AlterValue, ctx: &mut SimContext) -> Result
     // Try mutating the Circuit first. If the circuit doesn't have the
     // referenced device/model, fall through to the legacy vector stash
     // so old behavior is preserved.
-    if let Some(circuit) = ctx.circuit.as_mut() {
-        if alter_circuit(circuit, &device, param.as_deref(), scalar) {
-            // Re-derive the cached netlist so the next analysis (which
-            // reads ctx.netlist) sees the mutation.
-            let netlists = cirq_frontend::to_netlist::circuit_to_netlists(circuit)
-                .map_err(|e| format!("alter: circuit_to_netlists: {e}"))?;
-            let netlist = netlists
-                .into_iter()
-                .next()
-                .ok_or_else(|| "alter: circuit produced no netlists".to_string())?;
-            let netlist = thevenin::flatten_netlist(&netlist)
-                .map_err(|e| format!("alter: flatten_netlist: {e}"))?;
-            ctx.netlist = netlist;
-            // Also stash the new value as a named vector so expressions
-            // that look up `@device[param]` via find_vector keep working.
-            ctx.store_vector(SimVector::real(spec_trimmed.to_lowercase(), vec![scalar]));
-            return Ok(());
-        }
+    let mutated = ctx
+        .circuit
+        .as_mut()
+        .is_some_and(|circuit| alter_circuit(circuit, &device, param.as_deref(), scalar));
+    if mutated {
+        // Re-derive the cached netlist so the next analysis (which
+        // still reads through the SPICE-Expr-shape adapter) sees the
+        // mutation. Both `ctx.circuit` and `ctx.netlist` track the
+        // same logical state.
+        ctx.refresh_netlist_cache()?;
+        // Also stash the new value as a named vector so expressions
+        // that look up `@device[param]` via find_vector keep working.
+        ctx.store_vector(SimVector::real(spec_trimmed.to_lowercase(), vec![scalar]));
+        return Ok(());
     }
 
     // Fall-through: legacy stored-vector behavior.

@@ -327,7 +327,7 @@ fn load_diode_model(circuit: &Circuit, elem: &IrElement) -> DiodeModel {
 ///
 /// Reads the first `.temp` directive if present, else looks for a numeric
 /// `TEMP` entry in `circuit.options`, else returns 27 °C.
-fn circuit_temp(circuit: &Circuit) -> f64 {
+pub fn circuit_temp(circuit: &Circuit) -> f64 {
     if let Some(t) = circuit.temps.first() {
         return *t;
     }
@@ -665,6 +665,46 @@ pub fn noise_params_from_circuit(
         nr_opts: nr_options_from_circuit(circuit),
         nodeset: resolve_nodeset_from_circuit(circuit, mna),
         excitations,
+    })
+}
+
+/// Extract a fully-resolved [`crate::sens::SensRunParams`] from a Circuit's
+/// first declared `Analysis::Sens(SensAnalysis)`.
+///
+/// The IR `SensAnalysis` carries `output: String` (the single SPICE token
+/// like `"v(out)"`) and an optional `SensAcSpec` with the AC sweep params.
+/// AC excitations are collected against `mna` so the simulator's
+/// [`crate::sens::run_sens`] is fully Netlist-free.
+pub fn sens_params_from_circuit(
+    circuit: &Circuit,
+    mna: &MnaSystem,
+) -> Result<crate::sens::SensRunParams, MnaError> {
+    let sens = circuit
+        .analyses
+        .iter()
+        .find_map(|a| match a {
+            cirq_ir::Analysis::Sens(spec) => Some(spec),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            MnaError::UnsupportedElement("no .sens analysis found on circuit".to_string())
+        })?;
+
+    let ac = sens.ac.as_ref().map(crate::sens::SensAcSpec::from_ir);
+    let nr_opts = nr_options_from_circuit(circuit);
+    let excitations = if ac.is_some() {
+        collect_ac_excitations_from_circuit(circuit, mna, mna.total_num_nodes())
+    } else {
+        Vec::new()
+    };
+    let ckt_temp_k = circuit_temp(circuit) + 273.15;
+
+    Ok(crate::sens::SensRunParams {
+        output: sens.output.clone(),
+        ac,
+        nr_opts,
+        excitations,
+        ckt_temp_k,
     })
 }
 

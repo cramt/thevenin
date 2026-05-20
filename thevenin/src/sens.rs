@@ -7,8 +7,10 @@ use faer::prelude::Solve;
 
 use thevenin_types::{AcVariation, Analysis, Complex, Netlist, SimPlot, SimResult, SimVector};
 
+use cirq_ir::FrequencyScale;
+
 use crate::LinearSystem;
-use crate::ac::{generate_ac_sweep, stamp_ac_devices};
+use crate::ac::{AcExcitation, generate_ac_sweep, stamp_ac_devices};
 use crate::bjt::stamp_bjt;
 use crate::jfet::stamp_jfet;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
@@ -182,18 +184,53 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
     simulate_sens_with_mna(mna, netlist)
 }
 
+/// Pre-resolved `.sens` analysis parameters, shared between the Netlist and
+/// Circuit input paths.
+pub struct SensRunParams {
+    /// First token of `.sens` (e.g. `"v(out)"`, `"ix(...)"`).
+    pub output: String,
+    /// AC sweep spec, or `None` for DC sensitivity.
+    pub ac: Option<SensAcSpec>,
+    pub nr_opts: NrOptions,
+    /// Pre-built AC excitations (only consumed by the AC variant).
+    pub excitations: Vec<AcExcitation>,
+    /// Circuit temperature in Kelvin (for temperature-dependent sensitivities).
+    pub ckt_temp_k: f64,
+}
+
+/// Fully-resolved AC sens sweep spec.
+#[derive(Debug, Clone)]
+pub struct SensAcSpec {
+    pub variation: AcVariation,
+    pub n: u32,
+    pub fstart: f64,
+    pub fstop: f64,
+}
+
+impl SensAcSpec {
+    /// Translate the IR's [`cirq_ir::SensAcSpec`] (which carries
+    /// `FrequencyScale`) into the simulator's [`SensAcSpec`] (which carries
+    /// the Netlist-shaped [`AcVariation`]).
+    pub fn from_ir(spec: &cirq_ir::SensAcSpec) -> Self {
+        Self {
+            variation: match spec.scale {
+                FrequencyScale::Decade => AcVariation::Dec,
+                FrequencyScale::Octave => AcVariation::Oct,
+                FrequencyScale::Linear => AcVariation::Lin,
+            },
+            n: spec.points,
+            fstart: spec.fstart,
+            fstop: spec.fstop,
+        }
+    }
+}
+
 /// Run `.sens` analysis on an already-assembled [`MnaSystem`].
 ///
 /// Shared between the Netlist path (`simulate_sens` above) and the Stage 4
-/// IR-direct path. The Netlist is still needed for `.sens` analysis params
-/// and the AC variant's frequency-sweep configuration.
-///
-/// The AC-sens branch internally re-assembles the MNA (it builds a complex
-/// stamping that differs from the DC stamping) — see `simulate_ac_sens`.
-pub fn simulate_sens_with_mna(
-    mna: MnaSystem,
-    netlist: &Netlist,
-) -> Result<SimResult, MnaError> {
+/// IR-direct path. Extracts params from the netlist and delegates to
+/// [`run_sens`], which is Netlist-free.
+pub fn simulate_sens_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
     let sens_output = match &netlist.analysis {
         Analysis::Sens { output } => output.clone(),
         _ => {
@@ -203,16 +240,95 @@ pub fn simulate_sens_with_mna(
         }
     };
 
-    let output_var = &sens_output[0];
+    let output_var = sens_output[0].clone();
+    let ac = sens_ac_from_tokens(&sens_output[1..])?;
 
-    // Check DC vs AC.
-    let is_ac = sens_output.len() > 1 && sens_output[1].eq_ignore_ascii_case("ac");
+    let nr_opts = crate::simulate::nr_options_from_netlist(netlist);
+    let num_nodes_pre = mna.total_num_nodes();
+    let excitations = if ac.is_some() {
+        crate::ac::collect_ac_excitations_from_netlist(netlist, &mna, num_nodes_pre)
+    } else {
+        Vec::new()
+    };
+    let ckt_temp_k = crate::netlist_temp(netlist) + 273.15;
 
-    if is_ac {
-        return simulate_ac_sens(netlist, output_var, &sens_output[2..]);
+    run_sens(
+        mna,
+        SensRunParams {
+            output: output_var,
+            ac,
+            nr_opts,
+            excitations,
+            ckt_temp_k,
+        },
+    )
+}
+
+/// Parse the optional AC tail of `.sens <output> [AC DEC|OCT|LIN n fstart fstop]`.
+///
+/// Mirrors the SPICE importer's parser in `cirq-spice-import` so the
+/// legacy Netlist-shaped path produces the same typed [`SensAcSpec`] the IR
+/// path already carries.
+fn sens_ac_from_tokens(tail: &[String]) -> Result<Option<SensAcSpec>, MnaError> {
+    if tail.is_empty() {
+        return Ok(None);
+    }
+    if tail[0].eq_ignore_ascii_case("dc") {
+        return Ok(None);
+    }
+    if !tail[0].eq_ignore_ascii_case("ac") {
+        return Err(MnaError::UnsupportedElement(format!(
+            ".sens: expected AC|DC marker after output, got `{}`",
+            tail[0]
+        )));
+    }
+    if tail.len() < 5 {
+        return Err(MnaError::UnsupportedElement(
+            "sens AC needs: variation n fstart fstop".to_string(),
+        ));
+    }
+    let variation = match tail[1].to_lowercase().as_str() {
+        "dec" => AcVariation::Dec,
+        "oct" => AcVariation::Oct,
+        "lin" => AcVariation::Lin,
+        other => {
+            return Err(MnaError::UnsupportedElement(format!(
+                "sens AC: unknown variation: {other}"
+            )));
+        }
+    };
+    let n = parse_spice_num(&tail[2])? as u32;
+    let fstart = parse_spice_num(&tail[3])?;
+    let fstop = parse_spice_num(&tail[4])?;
+    Ok(Some(SensAcSpec {
+        variation,
+        n,
+        fstart,
+        fstop,
+    }))
+}
+
+/// Execute `.sens` analysis with pre-resolved params on a prebuilt
+/// [`MnaSystem`].
+///
+/// Netlist-free. The Netlist-shaped wrapper [`simulate_sens_with_mna`] and
+/// the Circuit-shaped entry point both build [`SensRunParams`] and call into
+/// this.
+pub fn run_sens(mna: MnaSystem, params: SensRunParams) -> Result<SimResult, MnaError> {
+    let SensRunParams {
+        output,
+        ac,
+        nr_opts,
+        excitations,
+        ckt_temp_k,
+    } = params;
+
+    if let Some(ac_spec) = ac {
+        return run_ac_sens(mna, &output, ac_spec, nr_opts, excitations);
     }
 
     // ---------- DC sensitivity path ----------
+    let output_var = &output;
     let solution = if !mna.has_nonlinear() {
         solve_op_raw(&mna)?
     } else {
@@ -258,9 +374,7 @@ pub fn simulate_sens_with_mna(
     }
 
     // === BJT model/instance parameters (numerical) ===
-    // Circuit temperature in Kelvin (used for temperature-dependent sensitivities).
-    let ckt_temp_k = crate::netlist_temp(netlist) + 273.15;
-
+    // `ckt_temp_k` is passed in via `SensRunParams`.
     {
         let mut bjt_pairs: Vec<(String, f64)> = Vec::new();
         for bjt in &mna.bjts {
@@ -690,33 +804,20 @@ fn complex_susceptance_sensitivity(
 ///   z = delta_b - delta_Y*x   (perturbation)
 ///   delta_E = Y^-1 * z
 ///   S(p) = (delta_E[out+] - delta_E[out-]) / delta_p
-fn simulate_ac_sens(
-    netlist: &Netlist,
+fn run_ac_sens(
+    mna: MnaSystem,
     output_var: &str,
-    ac_params: &[String], // ["lin", "1", "1e6", "1.1e6"]
+    ac_spec: SensAcSpec,
+    nr_opts: NrOptions,
+    excitations: Vec<AcExcitation>,
 ) -> Result<SimResult, MnaError> {
-    if ac_params.len() < 4 {
-        return Err(MnaError::UnsupportedElement(
-            "sens AC needs: variation n fstart fstop".to_string(),
-        ));
-    }
-    let variation = match ac_params[0].to_lowercase().as_str() {
-        "dec" => AcVariation::Dec,
-        "oct" => AcVariation::Oct,
-        "lin" => AcVariation::Lin,
-        other => {
-            return Err(MnaError::UnsupportedElement(format!(
-                "sens AC: unknown variation: {other}"
-            )));
-        }
-    };
-    let n = parse_spice_num(&ac_params[1])? as u32;
-    let fstart = parse_spice_num(&ac_params[2])?;
-    let fstop = parse_spice_num(&ac_params[3])?;
+    let SensAcSpec {
+        variation,
+        n,
+        fstart,
+        fstop,
+    } = ac_spec;
 
-    // Assemble MNA and solve DC OP.
-    let mna = assemble_mna(netlist)?;
-    let nr_opts = crate::simulate::nr_options_from_netlist(netlist);
     let op_solution = if mna.has_nonlinear() {
         crate::simulate::solve_nonlinear_op(&mna, &nr_opts)?
     } else {
@@ -734,8 +835,6 @@ fn simulate_ac_sens(
     // Pre-allocate per-parameter accumulation (name → Vec of complex values).
     let mut param_names: Vec<String> = Vec::new();
     let mut param_values: Vec<Vec<Complex>> = Vec::new();
-
-    let excitations = crate::ac::collect_ac_excitations_from_netlist(netlist, &mna, num_nodes);
 
     // We compute sensitivities at the first frequency to discover parameter
     // names, then extend at subsequent frequencies.

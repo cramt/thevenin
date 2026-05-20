@@ -722,6 +722,71 @@ fn ltra_lossy_line_op() {
 }
 
 #[test]
+fn multi_temperature_dc_op() {
+    // `.temp 25 50 100` requests one analysis run per temperature.
+    // Plots come back labelled `{name}_temp{i}_{temp}` on both paths.
+    //
+    // R1 has a positive TC1 (linear temperature coefficient) so the
+    // divider's mid-point voltage differs at each temperature, which
+    // distinguishes the per-T solves from each other and from a
+    // single-temp baseline.
+    let spice = "Multi-temp voltage divider\n\
+                 V1 in 0 1\n\
+                 R1 in mid 1k TC1=0.002\n\
+                 R2 mid 0 2k\n\
+                 .temp 25 50 100\n\
+                 .op\n\
+                 .end\n";
+
+    let circuits = cirq_spice_import::import_spice(spice).unwrap();
+    let circuit = &circuits[0];
+    assert_eq!(circuit.temps, vec![25.0, 50.0, 100.0]);
+
+    let via_circuit = thevenin_cirq::simulate(circuit).unwrap();
+
+    let nl = circuit_to_netlists(circuit)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let nl = thevenin::flatten_netlist(&nl).unwrap();
+    let via_netlist = thevenin::simulate(&nl).unwrap();
+
+    assert_eq!(
+        via_circuit.plots.len(),
+        via_netlist.plots.len(),
+        "multi-temp plot count mismatch"
+    );
+
+    // Pin the labelling convention: 3 plots, one per temperature.
+    assert_eq!(via_circuit.plots.len(), 3);
+    let circuit_names: Vec<&str> = via_circuit.plots.iter().map(|p| p.name.as_str()).collect();
+    let netlist_names: Vec<&str> = via_netlist.plots.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+        circuit_names, netlist_names,
+        "plot naming drift between Circuit and Netlist multi-temp paths"
+    );
+
+    for (cp, np) in via_circuit.plots.iter().zip(via_netlist.plots.iter()) {
+        for cv in &cp.vecs {
+            let nv = np
+                .vecs
+                .iter()
+                .find(|v| v.name == cv.name)
+                .unwrap_or_else(|| {
+                    panic!("missing vec '{}' in netlist plot '{}'", cv.name, np.name)
+                });
+            match (&cv.data, &nv.data) {
+                (VectorData::Real(c), VectorData::Real(n)) => {
+                    assert_eq!(c, n, "drift in {}@{}", cv.name, cp.name);
+                }
+                _ => panic!("unexpected non-real data in OP plot"),
+            }
+        }
+    }
+}
+
+#[test]
 fn ladder_network() {
     // L-shaped R network with several internal nodes — stresses node
     // indexing.

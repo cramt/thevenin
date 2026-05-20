@@ -31,14 +31,17 @@ pub struct SimContext {
     /// when possible.
     ///
     /// `None` for legacy [`SimContext::new`] callers, where the working
-    /// [`Self::netlist`] is the sole source of truth.
-    pub circuit: Option<Circuit>,
-    /// The working netlist. With a Circuit present this is a cached
-    /// lowering used by the analyses (Sens/Noise/Pz/Tf) and helpers
-    /// (TEMPER eval, `@device[param]` lookups) that haven't moved onto
-    /// the IR shape yet. `alter` mutates this directly in Phase B; Phase
-    /// C lifts that onto the Circuit.
-    pub netlist: Netlist,
+    /// `netlist` cache is the sole source of truth. External callers
+    /// inspect this via [`SimContext::circuit`].
+    pub(crate) circuit: Option<Circuit>,
+    /// SPICE-Expr-shape adapter for helpers that don't yet operate on the IR: TEMPER expression
+    /// rewriting, `@device[param]` lookups, and the Sens/Noise/Pz/Tf analyses that still take
+    /// `&Netlist`. On the IR path this is a cached lowering of `circuit`, refreshed via
+    /// `refresh_netlist_cache` after every `alter`; on the legacy path it *is* the source of
+    /// truth. Crate-private — removing this field is the deeper TEMPER+`@device` IR lift; until
+    /// then it stays an internal implementation detail so the public API doesn't leak
+    /// `thevenin_types::Netlist`.
+    pub(crate) netlist: Netlist,
     /// Named plots from simulation runs, in insertion order.
     pub plots: Vec<SimPlot>,
     /// Current plot index (most recent simulation result).
@@ -113,6 +116,37 @@ impl SimContext {
             user_vectors: Vec::new(),
             resolved_models: HashMap::new(),
         })
+    }
+
+    /// The Cirq IR circuit driving this context, if any.
+    ///
+    /// Returns `None` for legacy [`Self::new`] callers. External callers
+    /// (CLI, tests) inspect IR state through this accessor rather than the
+    /// crate-private [`Self::circuit`] field.
+    pub fn circuit(&self) -> Option<&Circuit> {
+        self.circuit.as_ref()
+    }
+
+    /// Re-derive the cached internal Netlist after mutating the driving
+    /// [`Circuit`] (e.g. through `alter`). No-op on legacy contexts where
+    /// no Circuit is present.
+    ///
+    /// Kept `pub(crate)` because the cached Netlist is an internal
+    /// SPICE-Expr-shape adapter that callers outside the crate must not
+    /// rely on.
+    pub(crate) fn refresh_netlist_cache(&mut self) -> Result<(), String> {
+        let Some(circuit) = self.circuit.as_ref() else {
+            return Ok(());
+        };
+        let netlists = cirq_frontend::to_netlist::circuit_to_netlists(circuit)
+            .map_err(|e| format!("refresh_netlist_cache: {e}"))?;
+        let netlist = netlists
+            .into_iter()
+            .next()
+            .ok_or_else(|| "refresh_netlist_cache: circuit produced no netlists".to_string())?;
+        self.netlist = thevenin::flatten_netlist(&netlist)
+            .map_err(|e| format!("refresh_netlist_cache: flatten_netlist: {e}"))?;
+        Ok(())
     }
 
     /// Add a plot from a simulation result, returning its name.
