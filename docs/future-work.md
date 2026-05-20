@@ -6,7 +6,7 @@ After 146 sessions of the fix-tests agent, **645 tests pass** (11 with tolerance
 
 | Test | Category | Effort | Tests Unlocked |
 |------|----------|--------|----------------|
-| bsim3soidd/RampVg2.cir | CAPMOD=3 convergence | Solver work | 1 |
+| bsim3soidd/RampVg2.cir | CAPMOD=3 charge coupling | Model-internal | 1 |
 | ~~general/mosamp.cir~~ | ~~Level 2 MOSFET~~ | ~~DONE~~ | ~~1~~ |
 | general/rtlinv.cir | Transient timing cascade | Architectural | 1 |
 | general/schmitt.cir | Transient timing cascade | Architectural | 1 |
@@ -15,26 +15,34 @@ After 146 sessions of the fix-tests agent, **645 tests pass** (11 with tolerance
 | bsim2/test.cir | BSIM2 not implemented | ~2,500 LOC | 1 |
 | regression/misc/resume-1.cir | .control interpreter | ~800 LOC | 1 |
 
-## 1. CAPMOD=3 Transient Convergence (RampVg2)
+## 1. CAPMOD=3 Body Charge Coupling (RampVg2)
 
 **Test:** `bsim3soidd/RampVg2.cir`
-**Status:** CAPMOD=3 charge model implemented; transient NR convergence issue remains.
+**Status:** CAPMOD=3 model and NR convergence both work; remaining gap is **device
+physics**, not solver.
 
-CAPMOD=3 is now fully implemented in `bsim3soi_dd.rs`. All other DD tests (inv2, t3, t4, t5)
-pass with CAPMOD=3 active. RampVg2 fails because its combination of `gmin=1e-20` (extremely
-tight) and a fast 0.1ns gate pulse creates a stiff Jacobian that the transient solver cannot
-converge through gmin stepping.
+CAPMOD=3 is fully implemented in `bsim3soi_dd.rs`. All other DD tests (inv2, t3, t4, t5)
+pass with CAPMOD=3 active. NR converges cleanly through ITL4=10 after the bypass +
+no-floor fixes landed.
 
-The charge model adds:
+The actual failure: during the gate ramp (Vg: 0 → 2 V over t=20-120ps), our Vbs only
+climbs to ~0.25 V where ngspice reaches ~0.55 V — the body-to-gate charge coupling
+`dqbf/dvg` is roughly half what ngspice computes. A smaller bounded ~1% drift also
+appears in the pre-ramp holding region, suggesting our CAPMOD=3 dQ/dt isn't quite zero
+at steady state.
+
+The charge model contributes:
 - `Qdep0` -- depletion charge at Vgs=Vth (key for subthreshold gate-body coupling)
 - Redesigned `VdsCV` with nonlinear saturation mapping using IV-model Vdsat
 - Surface potentials `Phisd`/`Phisc` replacing simple voltage ratios
 - `Nomi`/`Denomi` formulation for `Qsubs1` using Phi^(3/2) terms
 - `Qsubs2` with `dVbs0eff` derivatives (Ve and Vrg coupling)
 
-**What's needed:** Transient solver improvements -- either increased iteration limits for
-stiff circuits, better timestep control near rapid charge model transitions, or adaptive
-gmin strategies for transient steps.
+**What's needed:** Line-by-line audit of our `cap_mod == 3` block in `bsim3soi_dd.rs`
+(around lines 2741-3260) against ngspice `b3soiddld.c` lines 2888-3224. The divergence
+is almost certainly in one of the qbf-contributing terms (`qac0`, `qsub0`, `qsubs1_3`,
+`qsubs2_3`, `qdep0`) or their chain-rule derivatives feeding `cbg/cbb/cbd/cbe`. A
+tolerance bump would hide a real 50% device-physics error, so don't go there.
 
 **Reference:** ngspice `b3soiddld.c` lines 2888-3224.
 

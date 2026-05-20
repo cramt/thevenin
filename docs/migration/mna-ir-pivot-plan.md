@@ -466,29 +466,42 @@ handles that by mutating Netlist items per temperature. Lifting it
 onto Circuit requires the same TEMPER work the `.control` interpreter
 is waiting on.
 
-#### Session J (open) — Final Netlist-API retirement
+#### Session J — Final Netlist-API retirement (landed for analyses)
 
-The remaining Stage 4 work is removing `thevenin_types::Netlist` from
-the public API surface entirely. Concretely:
+- **Sens.** `cirq_ir::SensAnalysis` gained an `Option<SensAcSpec>` field
+  carrying typed `FrequencyScale + points + fstart + fstop`. The
+  Netlist's tokenized `Vec<String>` is reconstructed in the emitter for
+  the round-trip but never reaches the simulator on the Circuit-input
+  path. `simulate_sens` factored into `run_sens(mna, SensRunParams)` +
+  `mna_ir::sens_params_from_circuit`. With this, **all eight analyses
+  are fully Netlist-free on the Circuit-input path.**
+- **Multi-temperature.** `thevenin::circuit::simulate(&Circuit)` now
+  handles `circuit.temps.len() > 1` by cloning per-T and dispatching
+  through the single-temp path. Plot naming
+  `{name}_temp{i+1}_{temp}` matches `thevenin::simulate(&Netlist)`
+  byte-for-byte.
+- **Control interpreter.** `SimContext::{circuit, netlist}` demoted to
+  `pub(crate)`; public read access through `SimContext::circuit()`. The
+  cached Netlist stays as an internal SPICE-Expr-shape adapter for
+  TEMPER eval and `@device[param]` lookups but is not reachable from
+  the public API. `execute_control_block(&Netlist)` /
+  `has_control_block(&Netlist)` deleted outright;
+  `execute_control_block_ir(&Circuit)` is the only public surface.
+- **CLI.** `--legacy` flag deleted. SPICE input routes through Cirq IR
+  exclusively.
 
-- Pivot `simulate_dc/ac/tran` (Netlist-shaped wrappers) to take
-  `&Circuit` directly. The current `_with_mna` helpers still need
-  a Netlist for source resolution / analysis params; those reads
-  would lift onto `Circuit` fields (`circuit.analyses`,
-  `circuit.options`, instance lookups via `Element.name`).
-- Same for the other analyses: `noise`, `sens`, `pz`, `tf`.
-- `.control` interpreter's TEMPER / `@device[param]` paths still
-  build a `Netlist` view from the current `Circuit`; that's a
-  parallel work item that can run in any order against this one.
-- After all simulator entry points accept `&Circuit`:
-  - `crate::mna::assemble_mna(&Netlist)` becomes pub(crate) (used
-    only by the Netlist wrapper that calls `cirq_spice_import::import_netlist`
-    first).
-  - The Netlist-shaped public API can be deprecated / removed.
+Open follow-ups (no longer Stage-4 blockers):
 
-Estimated diff: +400 LOC of Circuit-side analysis helpers, -200 LOC of
-Netlist-shaped wrappers, possibly minus another chunk if the
-`.control` work overlaps.
+- `crate::mna::assemble_mna(&Netlist)` is still `pub`, used by the
+  Netlist-shaped `thevenin::simulate*` wrappers that ~50 internal
+  integration tests consume. Demoting to `pub(crate)` and rewriting
+  those tests to construct circuits via `cirq_spice_import::import_spice`
+  is mechanical but voluminous; punted unless someone has an external
+  use case.
+- TEMPER expression eval and `@device[param]` lookups still consume
+  the internal cached Netlist inside `thevenin-control`. Lifting them
+  onto IR-typed `Value` is its own slice (Slice 3b in session
+  shorthand) and is gated on the IR not having typed expressions yet.
 
 ### Risk register
 
