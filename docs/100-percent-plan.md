@@ -3,22 +3,35 @@
 Current state: 100 harness tests passing, 7 skipped (488 total tests passing across all
 test binaries). Goal: eliminate as many skips as possible.
 
-## Phase 1: RampVg2 Transient Convergence (bsim3soidd/RampVg2.cir)
+## Phase 1: RampVg2 Charge Coupling (bsim3soidd/RampVg2.cir)
 
-**Effort:** ~20 LOC | **Confidence:** 85% | **Tests unlocked:** 1
+**Effort:** large (300+ LOC, model-internal) | **Confidence:** low | **Tests unlocked:** 1
 
-SOI-DD CAPMOD=3 transient NR oscillates within ITL4=10 iterations per timestep. The
-dev_gmin and fallback chain have been fixed, but the core issue is likely SOI-DD charge
-Jacobian accuracy — all other DD tests pass.
+NR convergence is **no longer the issue** — bypass and no-floor fixes have landed and the
+solve converges cleanly through ITL4=10. The actual remaining gap is **device physics**:
+during the 100ps gate ramp (Vg: 0 → 2 V over t=20-120ps), our Vbs only climbs to ~0.25 V
+where ngspice reaches ~0.55 V. The body-to-gate charge coupling `dqbf/dvg` is roughly
+half what ngspice computes.
+
+A smaller bounded drift (~1% over 3ps) also appears in the pre-ramp holding region,
+suggesting our CAPMOD=3 dQ/dt isn't quite zero at the steady state.
+
+### Where to look
+
+Our `thevenin/src/bsim3soi_dd.rs` `cap_mod == 3` branch (around lines 2741-3260) maps to
+ngspice `sys/b3soiddld.c` lines 2888-3224. The divergence is almost certainly in one of
+the qbf-contributing terms (`qac0`, `qsub0`, `qsubs1_3`, `qsubs2_3`, `qdep0`) or their
+chain-rule derivatives feeding `cbg/cbb/cbd/cbe`.
 
 ### Optional follow-up: SOI-DD LTE estimation
 
 SOI-DD CAPMOD=3 charges are tracked in `soidd_charge_histories` but never fed into
 `estimate_new_timestep`. Without LTE feedback from the charge derivatives, the adaptive
-timestep has no visibility into how fast the SOI body charges are changing. This causes
-blind timestep shrinking at gate edges.
+timestep has no visibility into how fast the SOI body charges are changing. This is a
+separate concern from the charge-coupling magnitude bug above and likely won't fix it
+alone.
 
-**Fix:** Add SOI-DD charges to `estimate_new_timestep`, following the existing BJT
+**Fix shape:** Add SOI-DD charges to `estimate_new_timestep`, following the existing BJT
 charge LTE pattern. (~40-80 LOC, medium risk)
 
 ---

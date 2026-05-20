@@ -6,7 +6,15 @@
 "bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
 
 # === BSIM3SOI-DD ===
-"bsim3soidd/RampVg2.cir" = "CAPMOD=3 transient NR converges (bypass + no-floor fix), but body voltage ~54% too weak during gate ramp — charge coupling dqbf/dvg too small (all other DD tests pass)"
+# RampVg2: CAPMOD=3 transient NR converges (bypass + no-floor fixes landed),
+# but during the gate ramp (t=20-120ps) our Vbs only rises to ~0.25 V where
+# ngspice reaches ~0.55 V — roughly half the body-to-gate charge coupling.
+# Holding region (pre-ramp) is also off by a small bounded drift (~1% over
+# 3ps) suggesting dQ/dt is non-zero in what should be steady-state. Fix is
+# CAPMOD=3 charge-derivative diff against b3soiddld.c lines 2888-3224 — not
+# a tolerance bump (would hide a real 50% device-physics error). All other
+# DD tests (t3/t4/t5, inv2) pass.
+"bsim3soidd/RampVg2.cir" = "CAPMOD=3 gate-ramp body voltage ~54% too weak: charge-coupling dqbf/dvg short of ngspice b3soiddld.c CAPMOD=3 (see comment above)"
 
 # === General circuits ===
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
