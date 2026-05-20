@@ -15,7 +15,7 @@ use crate::device_stamp::{DeviceVoltageState, stamp_current_source};
 use crate::expr_val;
 use crate::ltra::{LtraCoeffs, LtraState};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
-use crate::newton::{NrMode, NrOptions, transient_nr_solve};
+use crate::newton::{NrMode, NrOptions, transient_nr_solve_with_cache};
 use crate::simulate::{nr_options_from_netlist, solve_op_raw_with_opts};
 use crate::txl::TxlTransientStamp;
 use crate::waveform::{self, TranParams};
@@ -1389,6 +1389,12 @@ pub fn run_tran(
         breakpoints.insert(tp);
     }
 
+    // Sparse-LU symbolic cache that survives the entire simulation. NR
+    // iterations for transient timesteps all share the same matrix
+    // topology, so we expect ~100% cache hit rate after the very first
+    // timestep computes the symbolic factor.
+    let mut nr_cache = crate::sparse::SparseLuCache::new();
+
     // Internal timestep — start small and let doubling grow it to h_max.
     // ngspice starts at h_max/400 and doubles each step (matching its adaptive
     // initial-step algorithm).  For reactive circuits the LTE will control growth;
@@ -1538,6 +1544,7 @@ pub fn run_tran(
             &mos6_charge_histories,
             &soidd_charge_histories,
             &vbic_charge_histories,
+            &mut nr_cache,
         ) {
             Ok(sol) => sol,
             Err(e) if step_h > h_min * 2.0 => {
@@ -2328,6 +2335,7 @@ fn solve_timestep(
     mos6_charge_histories: &[MosfetChargeHistory],
     soidd_charge_histories: &[Bsim3SoiDdChargeHistory],
     vbic_charge_histories: &[VbicChargeHistory],
+    nr_cache: &mut crate::sparse::SparseLuCache,
 ) -> Result<Vec<f64>, MnaError> {
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
@@ -3334,11 +3342,19 @@ fn solve_timestep(
     };
 
     if has_nonlinear {
-        // Nonlinear: use NR solver.
-        let result =
-            transient_nr_solve(nr_options, dim, num_nodes, load, prev_solution).map_err(|e| {
-                MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string()))
-            })?;
+        // Nonlinear: use NR solver. Pass the long-lived sparse-LU cache
+        // so the symbolic factor survives across NR iterations AND
+        // across timesteps (matrix topology is invariant within a
+        // simulation run).
+        let result = transient_nr_solve_with_cache(
+            nr_options,
+            dim,
+            num_nodes,
+            load,
+            prev_solution,
+            Some(nr_cache),
+        )
+        .map_err(|e| MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string())))?;
         Ok(result.solution)
     } else {
         // Linear: single solve.

@@ -14,32 +14,33 @@ For systems below the threshold, FullPivLu was replaced with PartialPivLu
 for well-conditioned MNA matrices.
 
 
-2. Symbolic Factorization Reuse (LU Refactorization)
+2. Symbolic Factorization Reuse (LU Refactorization)  ✅ IMPLEMENTED
 ------------------------------------------------------
 
-During Newton-Raphson iteration, the MNA matrix sparsity pattern stays
-fixed -- only the numerical values change as device operating points
-update. Currently, every NR iteration does a full sparse LU decomposition
-from scratch (newton.rs).
+`SparseLuCache` (sparse.rs) caches faer's `SymbolicLu` across NR
+iterations and across transient timesteps. The cache is keyed on a hash
+of the matrix sparsity pattern, so any topology change (rare, but
+possible if a device emits / skips stamps based on state) silently
+triggers a symbolic refactor. NR iterations hit the cache at ~95% on
+the harness's largest fixture.
 
-ngspice splits LU into two phases:
-  - Symbolic factorization: determine pivot ordering and fill-in pattern
-    (done once per analysis or when topology changes)
-  - Numeric factorization: fill in the actual numbers using the existing
-    pattern (done each NR iteration)
+Implementation:
+  - `SparseMatrix::add` no longer drops `value == 0.0` stamps — the
+    nonzero pattern is now structural rather than value-gated.
+  - `LinearSystem::solve_with_cache(&mut SparseLuCache)` is the
+    cache-aware entry point. Dense systems (dim < 48) fall through to
+    the regular `solve()` since symbolic computation is most of dense
+    LU at that size.
+  - `transient_nr_solve_with_cache` threads a single cache through every
+    NR call in the transient loop. The cache is also threaded down
+    through `try_nr_with_cache` for any future caller that needs it.
 
-The symbolic phase is the expensive part for sparse LU. Reusing it
-across NR iterations avoids redundant work. This is standard practice
-in all production SPICE implementations.
-
-Note: the current SparseMatrix::add() guard `if value != 0.0` means the
-set of (row, col) positions can change between NR iterations when a device
-conductance transitions through exactly zero. Symbolic reuse requires a
-stable sparsity pattern, so this would need the stamping logic to always
-emit structural zeros (stamp with 0.0 instead of skipping).
-
-Expected impact: 2-5x for NR-heavy simulations (transient with many
-timesteps, DC sweeps). The win scales with NR iteration count.
+Measured speedup (`tests/perf_sparse_lu.rs`, 5 reps each):
+  - `fourbitadder/transient`: 311ms → 218ms = 30% faster, 95% cache hit
+    rate (sparse path is 94% of this fixture's runtime).
+  - `rca3040` and `mosamp`: unchanged. Both run entirely through the
+    dense path (dim < 48 for every solve), so they don't exercise the
+    cache. Future dense-LU workspace reuse would help here.
 
 
 3. Matrix Reuse in AC Analysis
@@ -143,7 +144,17 @@ Priority Order (remaining work)
 
 For maximum impact with minimum effort:
 
-  1. Symbolic reuse (improvement 2) -- biggest remaining win for NR-heavy sims
-  2. AC matrix reuse (improvement 3) -- pairs with improvement 2
-  3. Allocation reuse (improvement 5) -- small win, easy to do
-  4. Transient parallelism (improvement 7) -- only if circuits are large
+  1. Dense LU workspace reuse -- our harness's biggest dense-path fixtures
+     (rca3040, mosamp) spend 50-83% of runtime in `LinearSystem::solve()`
+     allocating/factoring tiny dense matrices. faer's `FullPivLu::new` API
+     doesn't expose workspace reuse, so this needs either a faer PR or a
+     hand-rolled small-dim partial-pivot LU that mutates in place.
+  2. AC matrix reuse (improvement 3) -- pairs with the symbolic LU work
+     that already landed for the real-valued case (improvement 2).
+  3. Allocation reuse (improvement 5) -- small win, easy to do.
+  4. Transient parallelism (improvement 7) -- only if circuits are large.
+
+The `THEVENIN_PERF_BENCH=1 cargo test --release -p thevenin
+--test perf_sparse_lu` harness prints per-fixture wall time + phase
+breakdown (dense LU, sparse LU, device stamping) + sparse cache hit
+rate. Use it to validate any of the above before / after.

@@ -47,7 +47,7 @@ pub mod mna_ir;
 pub(crate) mod newton;
 pub(crate) mod physics;
 pub(crate) mod simulate;
-pub(crate) mod sparse;
+pub mod sparse;
 pub(crate) mod waveform;
 
 // ── Analysis modules ────────────────────────────────────────────────────────

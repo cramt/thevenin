@@ -1,6 +1,97 @@
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
+
 use faer::Mat;
 use faer::linalg::solvers::{FullPivLu, PartialPivLu, Solve};
+use faer::sparse::SparseColMatRef;
+use faer::sparse::linalg::solvers::{Lu as FaerLu, SymbolicLu};
 use faer::sparse::{SparseColMat, Triplet as FaerTriplet};
+
+// --- Perf instrumentation ---------------------------------------------------
+//
+// Tracks the number of `LinearSystem::solve()` invocations bucketed by
+// matrix dimension AND the cumulative nanoseconds spent inside each major
+// phase so we can tell where a workload actually spends its time before
+// chasing optimisations there. Counters update unconditionally on every
+// solve; they're only consulted via `solve_trace_counts` /
+// `solve_phase_nanos`.
+
+static SOLVE_COUNT_TINY: AtomicUsize = AtomicUsize::new(0); // dim < 16
+static SOLVE_COUNT_SMALL: AtomicUsize = AtomicUsize::new(0); // 16 <= dim < SPARSE_THRESHOLD
+static SOLVE_COUNT_SPARSE: AtomicUsize = AtomicUsize::new(0); // dim >= SPARSE_THRESHOLD
+
+/// Cumulative ns spent inside the dense LU branch of `solve` (matrix
+/// densification + FullPivLu + solve + result extraction).
+static SOLVE_NANOS_DENSE: AtomicU64 = AtomicU64::new(0);
+/// Cumulative ns spent inside the sparse LU branch of `solve`.
+static SOLVE_NANOS_SPARSE: AtomicU64 = AtomicU64::new(0);
+/// Cumulative ns spent inside the device-stamping callback in `try_nr`.
+/// Recorded externally via [`record_stamp_nanos`] so the sparse module
+/// doesn't depend on newton.rs.
+static STAMP_NANOS: AtomicU64 = AtomicU64::new(0);
+/// Global counters that aggregate cache activity across every
+/// `SparseLuCache` instance, so the bench can report a single hit/miss
+/// number without threading caches around.
+static GLOBAL_CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
+static GLOBAL_CACHE_MISSES: AtomicUsize = AtomicUsize::new(0);
+
+fn record_solve_dim(dim: usize) {
+    let bucket = if dim < 16 {
+        &SOLVE_COUNT_TINY
+    } else if dim < SPARSE_THRESHOLD {
+        &SOLVE_COUNT_SMALL
+    } else {
+        &SOLVE_COUNT_SPARSE
+    };
+    bucket.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Snapshot the per-bucket solve counts since process start (or the last
+/// `reset_solve_trace`). Returns `(tiny, small, sparse)`.
+pub fn solve_trace_counts() -> (usize, usize, usize) {
+    (
+        SOLVE_COUNT_TINY.load(Ordering::Relaxed),
+        SOLVE_COUNT_SMALL.load(Ordering::Relaxed),
+        SOLVE_COUNT_SPARSE.load(Ordering::Relaxed),
+    )
+}
+
+/// Snapshot the cumulative ns spent in each phase. Returns
+/// `(dense_solve_ns, sparse_solve_ns, stamp_ns)`.
+pub fn solve_phase_nanos() -> (u64, u64, u64) {
+    (
+        SOLVE_NANOS_DENSE.load(Ordering::Relaxed),
+        SOLVE_NANOS_SPARSE.load(Ordering::Relaxed),
+        STAMP_NANOS.load(Ordering::Relaxed),
+    )
+}
+
+/// Add `ns` to the device-stamping bucket. Called from `try_nr` around
+/// each invocation of the `load_system` closure.
+pub fn record_stamp_nanos(ns: u64) {
+    STAMP_NANOS.fetch_add(ns, Ordering::Relaxed);
+}
+
+/// Snapshot the global sparse-LU cache hit/miss counters since process
+/// start (or the last `reset_solve_trace`).
+pub fn sparse_cache_counts() -> (usize, usize) {
+    (
+        GLOBAL_CACHE_HITS.load(Ordering::Relaxed),
+        GLOBAL_CACHE_MISSES.load(Ordering::Relaxed),
+    )
+}
+
+/// Reset all solve-trace counters to zero. Useful between bench runs.
+pub fn reset_solve_trace() {
+    SOLVE_COUNT_TINY.store(0, Ordering::Relaxed);
+    SOLVE_COUNT_SMALL.store(0, Ordering::Relaxed);
+    SOLVE_COUNT_SPARSE.store(0, Ordering::Relaxed);
+    SOLVE_NANOS_DENSE.store(0, Ordering::Relaxed);
+    SOLVE_NANOS_SPARSE.store(0, Ordering::Relaxed);
+    STAMP_NANOS.store(0, Ordering::Relaxed);
+    GLOBAL_CACHE_HITS.store(0, Ordering::Relaxed);
+    GLOBAL_CACHE_MISSES.store(0, Ordering::Relaxed);
+}
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -55,6 +146,13 @@ impl SparseMatrix {
     /// Add a value to position (row, col). If multiple values are added
     /// at the same position, they are summed (standard MNA stamp behavior).
     ///
+    /// Zero-valued stamps are kept — they create a structural placeholder at
+    /// `(row, col)` so the matrix's nonzero pattern stays stable across NR
+    /// iterations even when a device transitions through exactly zero. The
+    /// stable pattern is what lets `SparseLuCache` reuse the symbolic
+    /// factorization across iterations (which is the dominant cost for
+    /// sparse-LU workloads — see `tests/perf_sparse_lu.rs`).
+    ///
     /// # Panics
     /// Panics if row or col >= dim.
     pub fn add(&mut self, row: usize, col: usize, value: f64) {
@@ -68,9 +166,7 @@ impl SparseMatrix {
             "col {col} out of bounds for dim {}",
             self.dim
         );
-        if value != 0.0 {
-            self.triplets.push(Triplet { row, col, value });
-        }
+        self.triplets.push(Triplet { row, col, value });
     }
 
     /// Convert triplet form to a dense faer matrix (summing duplicates).
@@ -114,6 +210,69 @@ impl thevenin_xspice::MatrixStamp for SparseMatrix {
     }
 }
 
+/// Cached sparse-LU symbolic factorization that survives across NR
+/// iterations.
+///
+/// For sparse-LU-dominated workloads (e.g. `fourbitadder`, where 94% of
+/// runtime is in `sp_lu`), reusing the symbolic factor across NR iterations
+/// turns each iteration's LU into a numeric-only refactorization — typically
+/// 3-5× faster than computing symbolic + numeric every iteration.
+///
+/// The cache is keyed on a hash of the matrix sparsity pattern; when the
+/// caller's structure changes (different `(row, col)` set after dedup), the
+/// symbolic factor is automatically recomputed. NR iterations of a fixed
+/// circuit topology always hit the cache.
+///
+/// Use via [`LinearSystem::solve_with_cache`].
+#[derive(Default)]
+pub struct SparseLuCache {
+    /// `(pattern_hash, symbolic_factor)`. `None` until first warm-up.
+    inner: Option<(u64, SymbolicLu<usize>)>,
+    /// Hits / misses for tests + bench reporting.
+    hits: usize,
+    misses: usize,
+}
+
+impl SparseLuCache {
+    /// Create an empty cache.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of times the cached symbolic was reused.
+    pub fn hits(&self) -> usize {
+        self.hits
+    }
+
+    /// Number of times the symbolic had to be (re-)computed.
+    pub fn misses(&self) -> usize {
+        self.misses
+    }
+
+    /// Discard the cached symbolic. Forces the next call through
+    /// [`LinearSystem::solve_with_cache`] to recompute it.
+    pub fn invalidate(&mut self) {
+        self.inner = None;
+    }
+}
+
+/// Hash a sparse matrix's CSC pattern (col_ptr + row_idx) into a single
+/// u64 fingerprint. Two matrices with the same hash have (with overwhelming
+/// probability) the same sparsity pattern.
+fn pattern_hash(mat: SparseColMatRef<'_, usize, f64>) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write_usize(mat.ncols());
+    hasher.write_usize(mat.nrows());
+    for &p in mat.col_ptr() {
+        hasher.write_usize(p);
+    }
+    for &r in mat.row_idx() {
+        hasher.write_usize(r);
+    }
+    hasher.finish()
+}
+
 /// A linear system Ax = b assembled in triplet form.
 #[derive(Debug, Clone)]
 pub struct LinearSystem {
@@ -141,6 +300,85 @@ impl LinearSystem {
     /// For small systems (< 48 unknowns), uses dense partial-pivoting LU.
     /// For larger systems, uses sparse LU which exploits the O(N) sparsity
     /// pattern typical of MNA circuit matrices.
+    /// Solve `Ax = b` reusing a cached sparse symbolic LU factor when
+    /// possible.
+    ///
+    /// Wraps [`solve`](Self::solve), routing the sparse-path branch
+    /// (`dim >= SPARSE_THRESHOLD`) through the cache. Dense-path systems
+    /// fall through to the regular path; the cache is unused for them.
+    /// Callers that only solve small systems get no speedup but pay nothing
+    /// either (cache stays empty).
+    ///
+    /// Pattern stability: the cache validates the new matrix's sparsity
+    /// against the one used to compute the cached symbolic. A pattern
+    /// mismatch silently triggers a symbolic refactor (counted as a miss).
+    /// Topology changes between NR iterations are rare; the typical NR
+    /// loop hits the cache on every iteration after the first.
+    pub fn solve_with_cache(
+        &self,
+        cache: &mut SparseLuCache,
+    ) -> Result<Vec<f64>, SparseMatrixError> {
+        let dim = self.matrix.dim();
+        if self.rhs.len() != dim {
+            return Err(SparseMatrixError::DimensionMismatch {
+                matrix_dim: dim,
+                rhs_len: self.rhs.len(),
+            });
+        }
+        if dim == 0 {
+            return Ok(vec![]);
+        }
+
+        // Dense path stays untouched — small systems don't benefit from
+        // symbolic reuse (the symbolic computation is most of the LU at
+        // that size). Avoid double-counting by deferring `record_solve_dim`
+        // to `solve` for the dense branch.
+        if dim < SPARSE_THRESHOLD {
+            return self.solve();
+        }
+        record_solve_dim(dim);
+
+        let t0 = Instant::now();
+        let mut b = Mat::zeros(dim, 1);
+        for (i, &val) in self.rhs.iter().enumerate() {
+            b[(i, 0)] = val;
+        }
+        let sparse_mat = self.matrix.to_sparse_col()?;
+        let hash = pattern_hash(sparse_mat.as_ref());
+
+        // Look up the cached symbolic. If pattern matches, reuse it
+        // (Arc clone is O(1)); otherwise rebuild.
+        let symbolic = match &cache.inner {
+            Some((cached_hash, sym)) if *cached_hash == hash => {
+                cache.hits += 1;
+                GLOBAL_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                sym.clone()
+            }
+            _ => {
+                cache.misses += 1;
+                GLOBAL_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+                let sym = SymbolicLu::try_new(sparse_mat.as_ref().symbolic()).map_err(|e| {
+                    SparseMatrixError::SingularMatrix(format!(
+                        "symbolic LU factorization failed: {e}"
+                    ))
+                })?;
+                cache.inner = Some((hash, sym.clone()));
+                sym
+            }
+        };
+
+        let lu = FaerLu::try_new_with_symbolic(symbolic, sparse_mat.as_ref()).map_err(|e| {
+            SparseMatrixError::SingularMatrix(format!("numeric LU refactorization failed: {e}"))
+        })?;
+        let x = lu.solve(&b);
+        let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+        SOLVE_NANOS_SPARSE.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {
+            return Err(SparseMatrixError::Singular);
+        }
+        Ok(result)
+    }
+
     pub fn solve(&self) -> Result<Vec<f64>, SparseMatrixError> {
         let dim = self.matrix.dim();
         if self.rhs.len() != dim {
@@ -153,6 +391,13 @@ impl LinearSystem {
         if dim == 0 {
             return Ok(vec![]);
         }
+
+        // Perf instrumentation: count solves per dim bucket. Used by
+        // benches to validate which code path dominates before chasing
+        // optimisations there. Atomic ops on the hot path are cheap; the
+        // counters are only consulted when an explicit `solve_trace_counts`
+        // call is made.
+        record_solve_dim(dim);
 
         // Build faer column vector from rhs.
         let mut b = Mat::zeros(dim, 1);
@@ -168,10 +413,12 @@ impl LinearSystem {
             // ngspice's Markowitz solver behaviour more closely for circuits
             // with negative conductances (e.g. HFET GGR terms) that make
             // the Jacobian ill-conditioned during NR convergence.
+            let t0 = Instant::now();
             let a = self.matrix.to_dense();
             let lu = FullPivLu::new(a.as_ref());
             let x = lu.solve(&b);
             let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+            SOLVE_NANOS_DENSE.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {
                 return Err(SparseMatrixError::Singular);
             }
@@ -179,12 +426,14 @@ impl LinearSystem {
         } else {
             // Sparse path: exploits O(N) nonzero structure of circuit matrices.
             // For 500+ node circuits this is 10-100x faster than dense LU.
+            let t0 = Instant::now();
             let sparse_mat = self.matrix.to_sparse_col()?;
             let lu = sparse_mat.sp_lu().map_err(|e| {
                 SparseMatrixError::SingularMatrix(format!("sparse LU factorization failed: {e}"))
             })?;
             let x = lu.solve(&b);
             let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+            SOLVE_NANOS_SPARSE.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {
                 return Err(SparseMatrixError::Singular);
             }

@@ -1,3 +1,4 @@
+use crate::sparse::SparseLuCache;
 use crate::{LinearSystem, SparseMatrixError};
 use thiserror::Error;
 
@@ -147,13 +148,53 @@ fn try_nr<F>(
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
+    try_nr_with_cache(
+        options,
+        dim,
+        num_nodes,
+        load_system,
+        initial_guess,
+        attempt,
+        first_mode,
+        None,
+    )
+}
+
+/// Same as [`try_nr`], but threads an externally-owned [`SparseLuCache`]
+/// through every NR iteration so the symbolic LU survives across the
+/// caller's outer loop (typically the transient timestep loop or a DC
+/// sweep). When `cache` is `None` a fresh cache is created and discarded
+/// per call, matching the existing one-shot behaviour.
+#[expect(clippy::too_many_arguments)]
+fn try_nr_with_cache<F>(
+    options: &NrOptions,
+    dim: usize,
+    num_nodes: usize,
+    load_system: &F,
+    initial_guess: &[f64],
+    attempt: &NrAttempt,
+    first_mode: NrMode,
+    cache: Option<&mut SparseLuCache>,
+) -> Result<NrResult, NrError>
+where
+    F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
+{
     let mut solution = initial_guess.to_vec();
     let mut system = LinearSystem::new(dim);
+    // NR iterations of a fixed topology share a sparsity pattern, so the
+    // sparse symbolic LU computed on the first iteration can be reused
+    // on every subsequent iteration via `solve_with_cache`. When the
+    // caller provides a cache it survives across NR calls too (e.g. all
+    // timesteps of a transient share the same circuit topology, so the
+    // symbolic LU survives the entire simulation).
+    let mut local_cache = SparseLuCache::new();
+    let lu_cache = cache.unwrap_or(&mut local_cache);
     let mut total_iters = 0;
     for iter in 0..attempt.max_iters {
         system.matrix.clear();
         system.rhs.fill(0.0);
         let mode = if iter == 0 { first_mode } else { NrMode::Float };
+        let stamp_t0 = std::time::Instant::now();
         load_system(
             &solution,
             &mut system,
@@ -166,8 +207,9 @@ where
         for i in 0..num_nodes {
             system.matrix.add(i, i, attempt.diag_gmin);
         }
+        crate::sparse::record_stamp_nanos(stamp_t0.elapsed().as_nanos() as u64);
 
-        let new_solution = match system.solve() {
+        let new_solution = match system.solve_with_cache(lu_cache) {
             Ok(s) => s,
             Err(e) => {
                 return Err(NrError::SolveError(e));
@@ -585,12 +627,21 @@ where
 /// falls back to Gmin stepping: starts with elevated diagonal Gmin (1e-2)
 /// and progressively reduces to target, matching ngspice's approach for
 /// transient steps where MOSFET cutoff can leave internal nodes floating.
-pub fn transient_nr_solve<F>(
+/// Threads an externally-owned [`SparseLuCache`] through the NR loop so
+/// the sparse symbolic LU survives across timesteps. The transient
+/// driver constructs one cache and passes it on every timestep — this
+/// keeps the cache hit rate near 100% (the matrix topology never changes
+/// across timesteps of a transient).
+///
+/// Pass `cache: None` for one-shot NR calls that don't need symbolic
+/// reuse; a fresh cache is created internally and discarded.
+pub fn transient_nr_solve_with_cache<F>(
     options: &NrOptions,
     dim: usize,
     num_nodes: usize,
     load_system: F,
     initial_guess: &[f64],
+    cache: Option<&mut SparseLuCache>,
 ) -> Result<NrResult, NrError>
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
@@ -616,7 +667,7 @@ where
         max_iters: options.itl4,
     };
     // Transient always uses Float — we have a meaningful previous solution.
-    try_nr(
+    try_nr_with_cache(
         options,
         dim,
         num_nodes,
@@ -624,6 +675,7 @@ where
         initial_guess,
         &attempt,
         NrMode::Float,
+        cache,
     )
 }
 
