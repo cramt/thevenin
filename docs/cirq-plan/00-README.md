@@ -1,5 +1,16 @@
 # Cirq + Thevenin Agent Plan Pack (v3)
 
+> **Historical reference.** The runs described in `01-` through `08-`
+> have all landed. Cirq is the canonical semantic model, every harness
+> fixture rides the IR pipeline, and the Stage 4 retirement work that
+> these runs set up is documented in `../migration/`. The per-run
+> documents are kept so future contributors can read what each run was
+> meant to accomplish and where to find the resulting code.
+>
+> For the current language reference, see `../cirq-spec/`. For the
+> remaining open frontier (which is no longer about SPICE parity),
+> see `09-feature-parity-gaps.md`.
+
 This plan pack is for introducing **Cirq** as the new source language and canonical semantic model, while refactoring the existing **Thevenin** project to consume a cleaner IR instead of staying tied to SPICE-shaped baggage.
 
 This version intentionally uses **smaller, more explicit runs** than the earlier plan.

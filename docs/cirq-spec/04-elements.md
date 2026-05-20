@@ -248,6 +248,47 @@ The named argument `v:` selects voltage mode; `i:` selects current mode. The exp
 
 ## Transmission Lines
 
+### Lossless (LTRA / O element)
+
 ```cirq
-T1: tline(in_p -> in_n, out_p -> out_n, z0: 50, td: 1n)
+T1: tline(in_p -> in_n, out_p -> out_n, model: line_model)
 ```
+
+The element binds to a `model` of one of the supported transmission-line
+kinds (`ltra`, `txl`, etc.). Length, characteristic impedance, and other
+electrical parameters come from the model card.
+
+### Coupled multiconductor (CPL / P element)
+
+Multi-port transmission lines use a dedicated block syntax because they
+have a variable number of input/output ports:
+
+```cirq
+coupled_line P1 {
+    in: [in0, in1, in2]
+    out: [out0, out1, out2]
+    gnd: gnd
+    model: cpl_model
+}
+```
+
+The `in` and `out` lists must be the same length. The optional `gnd`
+field is the common reference net. The model must be a CPL model card.
+
+## XSPICE Code Models (A element)
+
+XSPICE code-model instances bind to a model registered with the
+`thevenin-xspice` registry. Ports can be scalar or array, depending on
+the code model's declaration:
+
+```cirq
+A1: xspice(
+    in: signal_in,                  // scalar port
+    out: [out0, out1, out2],        // array port
+    model: my_d_state
+)
+```
+
+Connection field names match the code model's declared port names; the
+parser resolves each to either a scalar net or an array of nets based
+on the model's port arity.

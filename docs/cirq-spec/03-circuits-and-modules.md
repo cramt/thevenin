@@ -210,6 +210,33 @@ circuit top {
 
 Initial conditions are used with `uic: true` in transient analysis, or as hints for the DC operating point solver.
 
+## Embedded Code Blocks
+
+A `code` block embeds a verbatim block of source text from another
+language. The simulator currently recognises `"control"`, which routes
+to the `.control` interpreter:
+
+```cirq
+circuit demo {
+    V1: vsource(in -> gnd, dc: 5)
+    R1: resistor(in -> out, 1k)
+    R2: resistor(out -> gnd, 2k)
+
+    analysis op {}
+
+    code "control" {
+        run
+        let gain = v(out) / v(in)
+        print gain
+        quit 0
+    }
+}
+```
+
+Contents of the block are preserved as raw text and dispatched at
+simulate time. Unrecognised language tags are passed through for future
+tooling but ignored by the simulator.
+
 ## Import
 
 Modules can be imported from other files:

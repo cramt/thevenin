@@ -125,10 +125,26 @@ The node names also accept the short aliases `in_pos`, `in_neg`, `out_pos`, `out
 ## Sensitivity Analysis
 
 ```cirq
+// DC sensitivity (default)
 analysis sens {
     output: v(out)             // output variable
 }
+
+// AC sensitivity sweep — adds an AC frequency scan
+analysis sens {
+    output: v(out)
+    ac: true
+    scale: decade              // decade | octave | linear
+    points: 10
+    fstart: 1
+    fstop: 1G
+}
 ```
+
+Parameters:
+- `output`: signal whose sensitivity is computed — **required**
+- `ac`: enable AC variant — optional, default `false`
+- `scale`, `points`, `fstart`, `fstop`: required when `ac: true`
 
 ## Transfer Function
 

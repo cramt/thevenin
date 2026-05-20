@@ -104,10 +104,14 @@ No analyses defaults to a single `.op` netlist.
 
 ## What the adapter does NOT handle
 
-- Subcircuit expansion (must be done during IR lowering)
-- Waveform construction (PULSE, SIN, etc.) -- not yet represented in Cirq IR
-- `.include` / `.lib` directives
-- SPICE `.options`
-- Behavioral sources (B elements)
-- XSPICE code model instances
-- Initial condition specifications beyond UIC flag
+- Subcircuit expansion. Module instances are inlined during IR
+  lowering, before this adapter runs.
+- `.include` / `.lib` directives. These resolve during Cirq import
+  (via the file resolver in `cirq-frontend/src/resolve.rs`), so the
+  IR the adapter sees already has every dependency merged in.
+
+Everything else (waveforms, AC specs, `.options`, behavioural sources,
+XSPICE code-model instances, CPL multiconductor lines, initial
+conditions, nodesets) round-trips through the adapter end-to-end. See
+the harness fixture coverage in `thevenin/tests/harness.rs` for the
+authoritative list — every passing fixture exercises this path.

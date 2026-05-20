@@ -62,7 +62,7 @@ Every valid SPICE netlist that Thevenin supports can be mechanically translated 
 | `.save` | `save { v(node) i(elem) }` block |
 | `.temp` | `temp <value>` |
 | `.func` | `name(args) = expr` function declaration |
-| `.control` / `.endc` | Not mapped (scripting is separate) |
+| `.control` / `.endc` | `code "control" { ... }` block |
 
 ## SI Suffix Differences
 
@@ -146,8 +146,17 @@ circuit cmos_inverter {
 
 ## What Cannot Be Automatically Translated
 
-- `.control` / `.endc` blocks (scripting language — requires manual migration or separate tooling)
-- `.meas` / `.measure` (future Cirq feature)
-- `.four` (Fourier analysis — future Cirq feature)
-- XSPICE code models (`.cmodel` — future feature, requires syntax design)
-- CPL coupled transmission lines (uncommon, not yet supported)
+The SPICE importer covers everything the harness corpus uses, but the
+Cirq source language has gaps relative to what the importer accepts:
+
+- **`.meas` / `.measure` from Cirq source.** The IR carries a
+  `MeasureSpec` and the SPICE importer populates it. Lowering a `meas`
+  declaration from Cirq source isn't wired yet.
+- **`.four` (Fourier analysis).** Not represented in IR.
+- **User-defined XSPICE code models in Cirq source.** XSPICE *instances*
+  (A elements) round-trip fine via `xspice(...)`; defining a new code
+  model from Cirq syntax (the `.cmodel`-equivalent) is not designed.
+
+`.control` / `.endc` blocks round-trip through `code "control" { ... }`.
+CPL multiconductor lines round-trip through `coupled_line P1 { ... }`
+(see `04-elements.md`).
