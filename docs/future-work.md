@@ -56,21 +56,54 @@ near-zero Vds.
 
 ### Where to look next
 
-The failure pattern (DC OP off by 0.04% growing into a ~60% capacitive
-response shortfall) points at the DD-specific body-floating chain:
+**The body-floating chain itself is also verified clean.** A second audit
+(2026-05-20, follow-up to the cap_mod==3 work) ran ngspice with
+`debug=4` enabled on a single-point DC OP at (Vg=0, Vd=1.5, Vs=0, Ve=0)
+and dumped the chain values from `b3soiddn.log`, then instrumented
+`bsim3soi_dd_companion` to emit the same intermediates and ran them
+side-by-side at our converged DC OP:
 
-```
-Vbs0t → Vbs0 → Vbs0mos → Vthfd → Vbs0teff → Vbs0eff → Vbsdio → Vbsmos → Vbseff
-```
+| Variable | ngspice | thevenin | match |
+|----------|--------:|---------:|:-----:|
+| Vbs0t    | 0.2383  | 0.238328 | ✓     |
+| Vbs0     | 0.2210  | 0.220988 | ✓     |
+| Vbs0mos  | 0.2209  | 0.220924 | ✓     |
+| Vthfd    | 0.4766  | 0.476572 | ✓     |
+| Vbs0eff  | 0.05582121 | 0.05582123 | ✓ |
+| Vbsdio   | 0.08453198 | 0.08479741 | offset by 2.6e-4 (= Vbs offset) |
 
-The chain runs `bsim3soi_dd.rs:1269-1454` against ngspice
-`b3soiddld.c:921-1193`. Particularly worth re-checking: the Nfb feedback
-factor at line 1389 (`nfb = 1 / (1 + (kb3·Cbox/cox)·sqrt(1 + 4·(phi+K1·sqrt(phi-Vbs0mos) - Vbs0mos)/K1²))`),
-the Vbs0mos derivation through `t4_mos = T3·csieff/qsieff` smoothing, and
-the dVbs0mos_dVe derivative path that feeds Cbg through dQsubs2_dVe.
-Adding compile-time `eprintln!` of the chain at a fixed (Vg, Vd, Vbs)
-operating point and diffing against ngspice's `B3SOIDDdebug` output is
-the most direct way to find the divergence.
+The Vbsdio gap exactly equals the Vbs equilibrium gap (0.0917 vs 0.092),
+so the chain is locally consistent — Vbsdio just rides on top of Vbs.
+
+**The DC OP Vbs disagreement is in the body-junction current balance,
+not the chain.** At the converged DC OP ngspice reports:
+- Iii = 2.77e-17  (impact ionization, sub-femtoamp)
+- Ibs = 3.35e-17  (source-body junction)
+- Ibd = -5.5e-18  (drain-body junction)
+- Idgidl = 0
+
+All currents are sub-femtoamp and balance precariously to set the
+floating-body equilibrium. To get Vbs = 0.0917 vs 0.0920 requires
+matching one of: the BJT base transport factor (ASD, BjtA), the
+impact-ionization coefficients (ALPHA0/ALPHA1/BETA0/AII/BII/CII/DII),
+or the junction-diode pre-exponentials (ISBJT, ISDIF, ISREC, ISTUN).
+
+**The transient response shortfall is bigger than the DC OP offset would
+explain on its own.** At t=22.5ps (3 ps into the gate ramp), ngspice's
+Vbs rises by 0.07 V while ours rises by only 0.02 V — a factor-of-~3.5
+slope difference, much larger than the 0.4% DC OP offset. So there's
+likely a separate cap-coupling issue in addition to the DC OP issue.
+The audit confirms the cap_mod==3 charge formulas are correct in
+isolation, so the next investigation should:
+
+1. Patch ngspice's b3soiddld.c to log `cbgb` / `cbsb` / `cbdb` / `cbeb`
+   each NR iteration (extend the `B3SOIDDdebugMod > 3` block at
+   line 4437 to dump these), rebuild, and re-run RampVg2.
+2. Compare against our `cbgb` values at the same (Vg, Vd, Vbs)
+   operating point during the ramp.
+3. If they match, the cap model is fine and the bug is in transient
+   integration / matrix stamping. If they differ, the bug is upstream
+   of cap_mod==3 (Vgsteff / Vbseff derivatives, perhaps).
 
 ## 2. Level 2 MOSFET ✓ IMPLEMENTED
 

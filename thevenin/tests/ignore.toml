@@ -6,15 +6,25 @@
 "bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
 
 # === BSIM3SOI-DD ===
-# RampVg2: CAPMOD=3 charge block fully audited 2026-05-20 and verified
-# faithful to ngspice b3soiddld.c:2888-3224 (one real bug found and fixed:
-# DELTA_VCSCV was 1e-5 vs ngspice's 0.0004). Test still fails because the
-# residual gap is upstream of the charge model — in the DD body-floating
-# bias chain (Vbs0t/Vbs0/Vbs0mos/Vthfd/Vbs0eff). Failure starts at t=0 as
-# a 0.04% DC OP offset on Vbs (0.0920 vs 0.0917) which grows during the
-# gate ramp into a ~60% capacitive response shortfall. See
-# docs/future-work.md item 1 for what to instrument next.
-"bsim3soidd/RampVg2.cir" = "DD body-floating bias chain off: 0.04% DC OP offset grows into ~60% capacitive shortfall during gate ramp; CAPMOD=3 charge block verified clean (see docs/future-work.md item 1)"
+# RampVg2: TWO clean audits done 2026-05-20.
+# (1) cap_mod==3 charge block (bsim3soi_dd.rs:2741-3040) is faithful to
+#     ngspice b3soiddld.c:2888-3224. One real bug found: DELTA_VCSCV was
+#     1e-5 vs ngspice's 0.0004 — fixed.
+# (2) body-floating bias chain (Vbs0t/Vbs0/Vbs0mos/Vthfd/Vbs0eff/Vbsdio)
+#     in bsim3soi_dd.rs:1269-1454 matches ngspice b3soiddld.c:921-1193
+#     to 4-5 sig digits at the DC OP (verified by side-by-side dump
+#     against `b3soiddn.log` with debug=4).
+# Remaining failure has two layers:
+# (a) DC OP Vbs converges to 0.092 (ours) vs 0.0917 (ngspice) — a 0.4%
+#     offset driven by body-junction current balance (Iii/Ibs/Ibd, all
+#     sub-femtoamp) not the chain math.
+# (b) During gate ramp 20-120ps the response slope is ~3.5x short of
+#     ngspice — larger than the DC OP offset can explain alone, so
+#     there's a separate cap-coupling issue downstream of the audited
+#     charge formulas (likely in transient integration / matrix
+#     stamping). See docs/future-work.md item 1 for what to instrument
+#     next.
+"bsim3soidd/RampVg2.cir" = "Two layers remaining: (a) DC OP off by 0.4% from body-junction current balance, (b) gate-ramp cap response slope ~3.5x short; cap_mod==3 charge block AND body-floating chain both verified clean (see docs/future-work.md item 1)"
 
 # === General circuits ===
 "general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
