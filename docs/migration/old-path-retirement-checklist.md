@@ -74,8 +74,44 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
     `SimContext::netlist` and `SimContext::circuit` demoted to `pub(crate)`;
     public access through `SimContext::circuit()`. The cached Netlist
     remains as an internal SPICE-Expr-shape adapter consumed by TEMPER
-    evaluation and `@device[param]` lookups, but is no longer reachable
-    from the public API.
+    evaluation, but is no longer reachable from the public API.
+  - Stage 4.5 (incremental): `@device[param]` lookup (`resolve_device_param`,
+    `resolve_device_param_vec` in `thevenin-control/src/vecexpr.rs`) walks
+    `Circuit.models` / `Circuit.elements` directly — one of the two cache
+    consumers is gone. The other (TEMPER) is blocked on the
+    Analysis-converter described below.
+
+### Blocker: thevenin_types::Analysis → cirq_ir::Analysis converter
+
+Killing the cached Netlist entirely requires moving the `.control`
+analysis dispatch from `simulate_*(&Netlist)` to `circuit::simulate_*(&Circuit)`
+(or to a Circuit-input transient pause/resume path built on
+`assemble_mna_from_circuit` + `tran_params_from_circuit`). That's
+blocked on a missing converter: when `parse_analysis_command` returns
+a parsed `thevenin_types::Analysis` (Netlist shape) at runtime, there
+is currently no way to set the equivalent `cirq_ir::Analysis` on a
+Circuit clone for dispatch.
+
+The two shapes are not 1:1 — IR variants carry node `Id`s where
+Netlist variants carry source/node names:
+
+- `cirq_ir::DcSweep { source: Id, ... }` vs Netlist `DcSweep { src: String, ... }`
+- `cirq_ir::PzAnalysis { input_pos: Id, input_neg: Id, output_pos: Id, output_neg: Id, ... }`
+  vs Netlist `Pz { in_pos: String, in_neg: String, out_pos: String, out_neg: String, ... }`
+- `cirq_ir::NoiseAnalysis { output_net: Id, reference_net: Id, source: Id, ... }`
+  vs Netlist counterparts holding net/source names
+
+So the converter needs `Circuit` access to resolve names → IDs. It
+belongs in `thevenin-control` (where the parsed Netlist Analysis
+originates) or in `cirq-frontend` next to the existing `to_netlist`
+adapter. Once it lands, TEMPER eval can be ported to Circuit (Brace
+expressions round-trip through `Value::String("{...}")` per
+`cirq-frontend/src/to_netlist.rs:268`), the analysis-dispatch sites
+in `thevenin-control/src/exec.rs` (`run_analysis`, `run_tran_with_pause`,
+`execute_resume`, `run_temp_sweep`) can move to Circuit-shape entry
+points, and `SimContext::netlist` + `refresh_netlist_cache` can be
+deleted along with the `circuit_to_netlists` calls in
+`thevenin-control/src/context.rs`.
 
 ## Simulation Path
 
