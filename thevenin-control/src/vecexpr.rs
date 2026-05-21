@@ -1016,31 +1016,69 @@ fn resolve_device_param(spec: &str, ctx: &SimContext) -> Option<f64> {
         }
     }
 
-    // Fall back to original model definitions
-    for item in &ctx.netlist.items {
-        if let thevenin_types::Item::Model(model) = item
-            && model.name.eq_ignore_ascii_case(device)
-        {
-            for p in &model.params {
-                if p.name.to_uppercase() == param_upper
-                    && let thevenin_types::Expr::Num(v) = &p.value
+    // Fall back to original model definitions (walking the Circuit directly).
+    // A `SimContext` without a driving Circuit (test-only `new(netlist)`
+    // construction) skips this fallback; the `resolved_models` lookup above
+    // is the only path that works for those contexts and they don't have
+    // @device[param] usage in practice.
+    let circuit = ctx.circuit()?;
+    for model in &circuit.models {
+        if model.name.eq_ignore_ascii_case(device) {
+            for (name, value) in &model.params {
+                if name.to_uppercase() == param_upper
+                    && let Some(v) = value_as_real(value)
                 {
-                    return Some(*v);
+                    return Some(v);
                 }
             }
         }
     }
 
-    // Search element instance parameters (e.g., @v1[dc], @r1[resistance])
-    for item in &ctx.netlist.items {
-        if let thevenin_types::Item::Element(el) = item
-            && el.name.eq_ignore_ascii_case(device)
-        {
-            return resolve_element_param(&el.kind, param);
+    // Search element instance parameters (e.g., @v1[dc], @r1[resistance]).
+    for element in &circuit.elements {
+        if element.name.eq_ignore_ascii_case(device) {
+            return resolve_element_param_ir(element, param);
         }
     }
 
     None
+}
+
+/// Coerce a Cirq IR `Value` to `f64`, or `None` for non-numeric variants.
+fn value_as_real(value: &cirq_ir::Value) -> Option<f64> {
+    match value {
+        cirq_ir::Value::Real(v) => Some(*v),
+        cirq_ir::Value::Integer(v) => Some(*v as f64),
+        cirq_ir::Value::Bool(_) | cirq_ir::Value::String(_) => None,
+    }
+}
+
+/// Mirror of [`resolve_element_param`] over a Cirq IR `Element`.
+fn resolve_element_param_ir(element: &cirq_ir::Element, param: &str) -> Option<f64> {
+    let param_lower = param.to_lowercase();
+    match element.kind {
+        cirq_ir::ElementKind::VoltageSource | cirq_ir::ElementKind::CurrentSource => {
+            if param_lower == "dc"
+                && let Some(spec) = &element.source_spec
+            {
+                return spec.dc;
+            }
+            None
+        }
+        cirq_ir::ElementKind::Resistor => {
+            if matches!(param_lower.as_str(), "resistance" | "r") {
+                // SPICE importer normalises the resistance param to "value".
+                for (name, value) in &element.params {
+                    if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("resistance")
+                    {
+                        return value_as_real(value);
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Resolve a vector-valued `@device[param]` query (e.g., `@v1[pulse]`).
@@ -1051,24 +1089,23 @@ fn resolve_device_param_vec(spec: &str, ctx: &SimContext) -> Option<VecVal> {
     let device = &spec[..bracket];
     let param = &spec[bracket + 1..end];
 
-    for item in &ctx.netlist.items {
-        if let thevenin_types::Item::Element(el) = item
-            && el.name.eq_ignore_ascii_case(device)
-        {
-            return resolve_element_param_vec(&el.kind, param);
+    let circuit = ctx.circuit()?;
+    for element in &circuit.elements {
+        if element.name.eq_ignore_ascii_case(device) {
+            return resolve_element_param_vec_ir(element, param);
         }
     }
     None
 }
 
-/// Resolve a vector-valued parameter from an element's kind (e.g., pulse waveform).
-fn resolve_element_param_vec(kind: &thevenin_types::ElementKind, param: &str) -> Option<VecVal> {
-    use thevenin_types::{ElementKind, Expr, Waveform};
+/// Mirror of [`resolve_element_param_vec`] over a Cirq IR `Element`.
+fn resolve_element_param_vec_ir(element: &cirq_ir::Element, param: &str) -> Option<VecVal> {
     let param_lower = param.to_lowercase();
-    match kind {
-        ElementKind::VoltageSource { source, .. } | ElementKind::CurrentSource { source, .. } => {
+    let spec = element.source_spec.as_ref()?;
+    match element.kind {
+        cirq_ir::ElementKind::VoltageSource | cirq_ir::ElementKind::CurrentSource => {
             if param_lower == "pulse"
-                && let Some(Waveform::Pulse {
+                && let Some(cirq_ir::Waveform::Pulse {
                     v1,
                     v2,
                     td,
@@ -1076,17 +1113,16 @@ fn resolve_element_param_vec(kind: &thevenin_types::ElementKind, param: &str) ->
                     tf,
                     pw,
                     per,
-                }) = &source.waveform
+                }) = &spec.waveform
             {
-                let expr_val = |e: &Expr| -> f64 { if let Expr::Num(v) = e { *v } else { 0.0 } };
                 let vals = vec![
-                    expr_val(v1),
-                    expr_val(v2),
-                    td.as_ref().map_or(0.0, expr_val),
-                    tr.as_ref().map_or(0.0, expr_val),
-                    tf.as_ref().map_or(0.0, expr_val),
-                    pw.as_ref().map_or(0.0, expr_val),
-                    per.as_ref().map_or(0.0, expr_val),
+                    *v1,
+                    *v2,
+                    td.unwrap_or(0.0),
+                    tr.unwrap_or(0.0),
+                    tf.unwrap_or(0.0),
+                    pw.unwrap_or(0.0),
+                    per.unwrap_or(0.0),
                 ];
                 return Some(VecVal::real(vals));
             }
@@ -1096,34 +1132,6 @@ fn resolve_element_param_vec(kind: &thevenin_types::ElementKind, param: &str) ->
     }
 }
 
-/// Resolve a parameter from an element's kind.
-fn resolve_element_param(kind: &thevenin_types::ElementKind, param: &str) -> Option<f64> {
-    use thevenin_types::ElementKind;
-    let param_lower = param.to_lowercase();
-    match kind {
-        ElementKind::VoltageSource { source, .. } => match param_lower.as_str() {
-            "dc" => source.dc.as_ref().and_then(|e| {
-                if let thevenin_types::Expr::Num(v) = e {
-                    Some(*v)
-                } else {
-                    None
-                }
-            }),
-            _ => None,
-        },
-        ElementKind::Resistor { value, .. } => match param_lower.as_str() {
-            "resistance" | "r" => {
-                if let thevenin_types::Expr::Num(v) = value {
-                    Some(*v)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
 
 /// Strip SPICE unit suffixes from a number string (V, A, W, Hz, Ohm, s).
 ///
