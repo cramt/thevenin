@@ -21,9 +21,39 @@ use crate::mesa::{mesa_companion, stamp_mesa};
 use crate::mesfet::{mesfet_companion, stamp_mesfet_with_voltages};
 use crate::mna::{MnaSystem, stamp_conductance};
 use crate::mos2::stamp_mos2;
-use crate::mosfet::{mos_limit, stamp_mosfet};
+use crate::mosfet::{MosfetCompanion, mos_limit, stamp_mosfet};
 use crate::newton::NrMode;
 use crate::vbic::{compute_self_heating_power, stamp_vbic_with_voltages};
+
+/// Bypass tolerance for nonlinear device re-evaluation, matching ngspice's
+/// `CKTbypass` defaults: skip model evaluation when all controlling terminal
+/// voltages have moved by less than `reltol * max(|v_new|, |v_old|) + vntol`
+/// from the values used in the last evaluation. The cached companion from
+/// the previous iteration is stamped in place of a fresh evaluation. The
+/// stamping itself isn't skipped — only the (transcendental-heavy) model
+/// `companion()` call.
+///
+/// Tolerances mirror ngspice's `CKTreltol` (1e-3) and `CKTvntol` (1e-6).
+const BYPASS_RELTOL: f64 = 1e-3;
+const BYPASS_VNTOL: f64 = 1e-6;
+
+#[inline]
+fn within_bypass_tol(v_new: f64, v_old: f64) -> bool {
+    let tol = BYPASS_RELTOL * v_new.abs().max(v_old.abs()) + BYPASS_VNTOL;
+    (v_new - v_old).abs() < tol
+}
+
+/// Honor `THEVENIN_NO_BYPASS=1` as an escape hatch so a confused failure
+/// can be triaged against the no-bypass behaviour without recompiling.
+fn bypass_enabled() -> bool {
+    static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("THEVENIN_NO_BYPASS").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE")
+        )
+    })
+}
 
 /// Stamp a current source into the RHS vector.
 /// Current flows from ni (pos) to nj (neg) externally:
@@ -159,7 +189,15 @@ pub(crate) struct DeviceVoltageState {
     vcrits: Vec<f64>,
     prev_bjt: RefCell<Vec<(f64, f64)>>,
     prev_mos: RefCell<Vec<(f64, f64, f64, f64)>>,
+    /// Companion from the previous Level 1 MOSFET evaluation, used to
+    /// stamp the device when terminal voltages haven't moved beyond
+    /// [`BYPASS_RELTOL`]/[`BYPASS_VNTOL`] (ngspice CKTbypass).
+    cached_mos_companion: RefCell<Vec<Option<MosfetCompanion>>>,
     prev_mos2: RefCell<Vec<(f64, f64, f64, f64)>>,
+    /// Companion from the previous MOS2 (Level 2) evaluation. Same shape
+    /// as [`Self::cached_mos_companion`] — MOS2's `companion` returns the
+    /// same [`MosfetCompanion`] struct as Level 1.
+    cached_mos2_companion: RefCell<Vec<Option<MosfetCompanion>>>,
     prev_mos6: RefCell<Vec<(f64, f64, f64, f64)>>,
     prev_jfet: RefCell<Vec<(f64, f64)>>,
     jfet_vcrits: Vec<f64>,
@@ -196,7 +234,9 @@ impl DeviceVoltageState {
             vcrits,
             prev_bjt: RefCell::new(vec![(0.0, 0.0); mna.bjts.len()]),
             prev_mos: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mosfets.len()]),
+            cached_mos_companion: RefCell::new(vec![None; mna.mosfets.len()]),
             prev_mos2: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos2s.len()]),
+            cached_mos2_companion: RefCell::new(vec![None; mna.mos2s.len()]),
             prev_mos6: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos6s.len()]),
             prev_jfet: RefCell::new(vec![(0.0, 0.0); mna.jfets.len()]),
             jfet_vcrits,
@@ -263,6 +303,7 @@ impl DeviceVoltageState {
                     })
                     .collect(),
             ),
+            cached_mos_companion: RefCell::new(vec![None; mna.mosfets.len()]),
             prev_mos2: RefCell::new(
                 mna.mos2s
                     .iter()
@@ -272,6 +313,7 @@ impl DeviceVoltageState {
                     })
                     .collect(),
             ),
+            cached_mos2_companion: RefCell::new(vec![None; mna.mos2s.len()]),
             prev_mos6: RefCell::new(
                 mna.mos6s
                     .iter()
@@ -373,12 +415,20 @@ impl DeviceVoltageState {
                 prev[i] = bjt.junction_voltages(solution);
             }
         }
-        // Reset MOSFET prev voltages (von reset to 0.0 for fresh NR sequence)
+        // Reset MOSFET prev voltages (von reset to 0.0 for fresh NR sequence).
+        // Also invalidate the cached companion so the first stamp of the
+        // next attempt always re-evaluates the model — the prev (vgs/vds/vbs)
+        // we just overwrote is the reference point a bypass check would
+        // use, and re-using a companion from a failed attempt would let
+        // stale linearizations leak across attempts.
         {
             let mut prev = self.prev_mos.borrow_mut();
             for (i, mos) in mna.mosfets.iter().enumerate() {
                 let (vgs, vds, vbs) = mos.terminal_voltages(solution);
                 prev[i] = (vgs, vds, vbs, 0.0);
+            }
+            for cached in self.cached_mos_companion.borrow_mut().iter_mut() {
+                *cached = None;
             }
         }
         // Reset BSIM3SOI-FD/DD/PD prev voltages to prevent stale values from
@@ -415,12 +465,17 @@ impl DeviceVoltageState {
                 prev[di] = va - vc;
             }
         }
-        // Reset MOS2 prev voltages (von reset to 0.0 for fresh NR sequence)
+        // Reset MOS2 prev voltages (von reset to 0.0 for fresh NR sequence).
+        // Invalidate cached companions for the same reason as Level 1 (see
+        // the MOSFET reset block above).
         {
             let mut prev = self.prev_mos2.borrow_mut();
             for (i, mos) in mna.mos2s.iter().enumerate() {
                 let (vgs, vds, vbs) = mos.terminal_voltages(solution);
                 prev[i] = (vgs, vds, vbs, 0.0);
+            }
+            for cached in self.cached_mos2_companion.borrow_mut().iter_mut() {
+                *cached = None;
             }
         }
         // Reset MOS6 prev voltages (von reset to 0.0 for fresh NR sequence)
@@ -602,6 +657,8 @@ impl DeviceVoltageState {
         // MOSFETs (level 1)
         {
             let mut prev = self.prev_mos.borrow_mut();
+            let mut cache = self.cached_mos_companion.borrow_mut();
+            let bypass_on = bypass_enabled();
             for (mi, mos) in mna.mosfets.iter().enumerate() {
                 let (vgs, vds, vbs) = if init_jct {
                     // MODEINITJCT: vgs = vds = type * Vto, vbs = 0.
@@ -627,10 +684,32 @@ impl DeviceVoltageState {
                     (vgs, vds, vbs)
                 };
 
-                let mut eff_model = mos.model.clone();
-                eff_model.kp = mos.beta();
+                // Bypass: reuse the previous companion when all controlling
+                // terminal voltages are within tolerance of the values they
+                // had at the last full evaluation. init_jct must always
+                // evaluate (its synthetic voltages aren't what the cached
+                // companion was linearized at) and the very first iteration
+                // of a fresh attempt has `cached = None`.
+                let bypass = bypass_on
+                    && !init_jct
+                    && cache[mi].is_some()
+                    && within_bypass_tol(vgs, prev[mi].0)
+                    && within_bypass_tol(vds, prev[mi].1)
+                    && within_bypass_tol(vbs, prev[mi].2);
 
-                let comp = eff_model.companion(vgs, vds, vbs);
+                let comp = if bypass {
+                    crate::sparse::record_bypass_hit();
+                    // SAFETY: bypass guard checked `is_some()`.
+                    cache[mi].clone().unwrap()
+                } else {
+                    crate::sparse::record_bypass_miss();
+                    let mut eff_model = mos.model.clone();
+                    eff_model.kp = mos.beta();
+                    let new_comp = eff_model.companion(vgs, vds, vbs);
+                    cache[mi] = Some(new_comp.clone());
+                    new_comp
+                };
+
                 // Store von for next iteration's fetlim (ngspice mos1load.c line 535):
                 //   here->MOS1von = model->MOS1type * von;
                 prev[mi] = (vgs, vds, vbs, comp.von);
@@ -641,6 +720,8 @@ impl DeviceVoltageState {
         // MOS Level 2
         {
             let mut prev = self.prev_mos2.borrow_mut();
+            let mut cache = self.cached_mos2_companion.borrow_mut();
+            let bypass_on = bypass_enabled();
             for (mi, mos) in mna.mos2s.iter().enumerate() {
                 let (vgs, vds, vbs) = if init_jct {
                     // MODEINITJCT matching ngspice mos2load.c:
@@ -660,9 +741,25 @@ impl DeviceVoltageState {
                     (vgs, vds, vbs)
                 };
 
-                let beta = mos.beta();
-                let l_eff = mos.l_eff();
-                let comp = mos.model.companion(vgs, vds, vbs, beta, mos.w, l_eff);
+                let bypass = bypass_on
+                    && !init_jct
+                    && cache[mi].is_some()
+                    && within_bypass_tol(vgs, prev[mi].0)
+                    && within_bypass_tol(vds, prev[mi].1)
+                    && within_bypass_tol(vbs, prev[mi].2);
+
+                let comp = if bypass {
+                    crate::sparse::record_bypass_hit();
+                    cache[mi].clone().unwrap()
+                } else {
+                    crate::sparse::record_bypass_miss();
+                    let beta = mos.beta();
+                    let l_eff = mos.l_eff();
+                    let new_comp = mos.model.companion(vgs, vds, vbs, beta, mos.w, l_eff);
+                    cache[mi] = Some(new_comp.clone());
+                    new_comp
+                };
+
                 prev[mi] = (vgs, vds, vbs, comp.von);
                 stamp_mos2(&mut system.matrix, &mut system.rhs, mos, &comp);
             }

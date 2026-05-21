@@ -52,6 +52,8 @@ struct BenchResult {
     complex_solves: (usize, usize),
     /// `(complex_dense_ns, complex_sparse_ns)` cumulative complex-solve time.
     complex_phase_ns: (u64, u64),
+    /// `(bypass_hits, bypass_misses)` for nonlinear-device companion bypass.
+    bypass: (usize, usize),
 }
 
 fn run_fixture(path: &str) -> BenchResult {
@@ -91,6 +93,7 @@ fn run_fixture(path: &str) -> BenchResult {
         cache: thevenin::sparse::sparse_cache_counts(),
         complex_solves: thevenin::sparse::complex_solve_counts(),
         complex_phase_ns: thevenin::sparse::complex_solve_phase_nanos(),
+        bypass: thevenin::sparse::bypass_counts(),
     }
 }
 
@@ -114,8 +117,14 @@ fn report(name: &str, r: BenchResult) {
     };
     let (cx_dense, cx_sparse) = r.complex_solves;
     let (cx_dense_ns, cx_sparse_ns) = r.complex_phase_ns;
+    let (bp_hits, bp_misses) = r.bypass;
+    let bypass_rate = if bp_hits + bp_misses == 0 {
+        0.0
+    } else {
+        100.0 * bp_hits as f64 / (bp_hits + bp_misses) as f64
+    };
     eprintln!(
-        "{name}: {} reps in {:?} (avg {:?}/rep)\n  solves: total={total} tiny<16={tiny} small<48={small} sparse>=48={sparse}\n  phases: dense_LU={:.1}% ({:.2}ms)  sparse_LU={:.1}% ({:.2}ms)  device_stamp={:.1}% ({:.2}ms)  other={:.1}%\n  sparse-LU cache: hits={hits} misses={misses} ({:.1}% hit rate)\n  complex solves: dense={cx_dense} ({:.2}ms) sparse={cx_sparse} ({:.2}ms)",
+        "{name}: {} reps in {:?} (avg {:?}/rep)\n  solves: total={total} tiny<16={tiny} small<48={small} sparse>=48={sparse}\n  phases: dense_LU={:.1}% ({:.2}ms)  sparse_LU={:.1}% ({:.2}ms)  device_stamp={:.1}% ({:.2}ms)  other={:.1}%\n  sparse-LU cache: hits={hits} misses={misses} ({:.1}% hit rate)\n  complex solves: dense={cx_dense} ({:.2}ms) sparse={cx_sparse} ({:.2}ms)\n  device bypass: hits={bp_hits} misses={bp_misses} ({:.1}% hit rate)",
         REPS,
         r.elapsed,
         r.elapsed / REPS as u32,
@@ -129,6 +138,7 @@ fn report(name: &str, r: BenchResult) {
         hit_rate,
         cx_dense_ns as f64 / 1e6,
         cx_sparse_ns as f64 / 1e6,
+        bypass_rate,
     );
 }
 
@@ -160,6 +170,22 @@ fn perf_mosamp() {
         return;
     }
     report("mosamp", run_fixture("ngspice-upstream/tests/general/mosamp.cir"));
+}
+
+/// MOSFET-bypass fixture: 13 Level 1 MOSFETs in a memory cell, `.tran 20ns 2us`.
+/// Used to validate the device-companion bypass (CKTbypass) actually saves
+/// model evaluations on a real Level 1 MOSFET-heavy workload. mosamp uses
+/// Level 2 and so doesn't exercise the Level 1 bypass path.
+#[test]
+fn perf_mosmem() {
+    if !enabled() {
+        eprintln!("skipped (set THEVENIN_PERF_BENCH=1 to enable)");
+        return;
+    }
+    report(
+        "mosmem",
+        run_fixture("ngspice-upstream/tests/general/mosmem.cir"),
+    );
 }
 
 /// AC-heavy fixture: VBIC differential amplifier with a `dec 25 1e5..1e9`

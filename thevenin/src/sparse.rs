@@ -41,6 +41,31 @@ static STAMP_NANOS: AtomicU64 = AtomicU64::new(0);
 static GLOBAL_CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
 static GLOBAL_CACHE_MISSES: AtomicUsize = AtomicUsize::new(0);
 
+/// Nonlinear-device companion-bypass hit/miss counters (CKTbypass).
+static BYPASS_HITS: AtomicUsize = AtomicUsize::new(0);
+static BYPASS_MISSES: AtomicUsize = AtomicUsize::new(0);
+
+/// Increment the companion-bypass hit counter. Called from each device
+/// family's stamping loop when the cached companion is reused.
+pub fn record_bypass_hit() {
+    BYPASS_HITS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment the companion-bypass miss counter. Called when the cached
+/// companion is invalid or terminal voltages have moved beyond tolerance.
+pub fn record_bypass_miss() {
+    BYPASS_MISSES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Snapshot the device-bypass hit/miss counters since process start (or
+/// the last `reset_solve_trace`).
+pub fn bypass_counts() -> (usize, usize) {
+    (
+        BYPASS_HITS.load(Ordering::Relaxed),
+        BYPASS_MISSES.load(Ordering::Relaxed),
+    )
+}
+
 fn record_solve_dim(dim: usize) {
     let bucket = if dim < 16 {
         &SOLVE_COUNT_TINY
@@ -119,6 +144,8 @@ pub fn reset_solve_trace() {
     COMPLEX_SOLVE_COUNT_SPARSE.store(0, Ordering::Relaxed);
     COMPLEX_SOLVE_NANOS_DENSE.store(0, Ordering::Relaxed);
     COMPLEX_SOLVE_NANOS_SPARSE.store(0, Ordering::Relaxed);
+    BYPASS_HITS.store(0, Ordering::Relaxed);
+    BYPASS_MISSES.store(0, Ordering::Relaxed);
 }
 use thiserror::Error;
 
