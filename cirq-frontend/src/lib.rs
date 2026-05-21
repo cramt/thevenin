@@ -5,6 +5,7 @@
 //! simulation).
 
 pub mod diagnostics;
+pub mod from_netlist;
 pub mod ir_lower;
 pub mod lower;
 pub mod parser;
