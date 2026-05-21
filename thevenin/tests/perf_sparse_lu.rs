@@ -48,6 +48,10 @@ struct BenchResult {
     phase_ns: (u64, u64, u64),
     /// `(cache_hits, cache_misses)` for the sparse symbolic LU cache.
     cache: (usize, usize),
+    /// `(complex_dense_count, complex_sparse_count)` for AC/noise/pz solves.
+    complex_solves: (usize, usize),
+    /// `(complex_dense_ns, complex_sparse_ns)` cumulative complex-solve time.
+    complex_phase_ns: (u64, u64),
 }
 
 fn run_fixture(path: &str) -> BenchResult {
@@ -85,6 +89,8 @@ fn run_fixture(path: &str) -> BenchResult {
         solves: thevenin::sparse::solve_trace_counts(),
         phase_ns: thevenin::sparse::solve_phase_nanos(),
         cache: thevenin::sparse::sparse_cache_counts(),
+        complex_solves: thevenin::sparse::complex_solve_counts(),
+        complex_phase_ns: thevenin::sparse::complex_solve_phase_nanos(),
     }
 }
 
@@ -106,8 +112,10 @@ fn report(name: &str, r: BenchResult) {
     } else {
         100.0 * hits as f64 / (hits + misses) as f64
     };
+    let (cx_dense, cx_sparse) = r.complex_solves;
+    let (cx_dense_ns, cx_sparse_ns) = r.complex_phase_ns;
     eprintln!(
-        "{name}: {} reps in {:?} (avg {:?}/rep)\n  solves: total={total} tiny<16={tiny} small<48={small} sparse>=48={sparse}\n  phases: dense_LU={:.1}% ({:.2}ms)  sparse_LU={:.1}% ({:.2}ms)  device_stamp={:.1}% ({:.2}ms)  other={:.1}%\n  sparse-LU cache: hits={hits} misses={misses} ({:.1}% hit rate)",
+        "{name}: {} reps in {:?} (avg {:?}/rep)\n  solves: total={total} tiny<16={tiny} small<48={small} sparse>=48={sparse}\n  phases: dense_LU={:.1}% ({:.2}ms)  sparse_LU={:.1}% ({:.2}ms)  device_stamp={:.1}% ({:.2}ms)  other={:.1}%\n  sparse-LU cache: hits={hits} misses={misses} ({:.1}% hit rate)\n  complex solves: dense={cx_dense} ({:.2}ms) sparse={cx_sparse} ({:.2}ms)",
         REPS,
         r.elapsed,
         r.elapsed / REPS as u32,
@@ -119,6 +127,8 @@ fn report(name: &str, r: BenchResult) {
         stamp_ns as f64 / 1e6,
         100.0 - pct(dense_ns) - pct(sparse_ns) - pct(stamp_ns),
         hit_rate,
+        cx_dense_ns as f64 / 1e6,
+        cx_sparse_ns as f64 / 1e6,
     );
 }
 
@@ -150,4 +160,21 @@ fn perf_mosamp() {
         return;
     }
     report("mosamp", run_fixture("ngspice-upstream/tests/general/mosamp.cir"));
+}
+
+/// AC-heavy fixture: VBIC differential amplifier with a `dec 25 1e5..1e9`
+/// sweep (~100 points) over 13 BJTs. Exercises the per-frequency reassembly
+/// path so the AC stamp-cache change has a clear signal: pre-cache each
+/// freq point re-ran `stamp_ac_devices` over every device, post-cache it
+/// clones cached triplets and scales the imag ones by ω.
+#[test]
+fn perf_vbic_diffamp_ac() {
+    if !enabled() {
+        eprintln!("skipped (set THEVENIN_PERF_BENCH=1 to enable)");
+        return;
+    }
+    report(
+        "vbic/diffamp",
+        run_fixture("ngspice-upstream/tests/vbic/diffamp.cir"),
+    );
 }

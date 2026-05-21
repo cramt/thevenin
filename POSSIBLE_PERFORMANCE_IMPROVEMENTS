@@ -43,26 +43,36 @@ Measured speedup (`tests/perf_sparse_lu.rs`, 5 reps each):
     cache. Future dense-LU workspace reuse would help here.
 
 
-3. Matrix Reuse in AC Analysis
+3. Matrix Reuse in AC Analysis  ⚠️ PARTIAL
 -------------------------------
 
 AC analysis (ac.rs) solves (G + jwC)x = b at each frequency point.
 The matrix structure is identical across all frequencies -- only the
 scalar w changes, which scales the C contribution.
 
-Current approach: full matrix assembly and full sparse LU per frequency.
+Phase 1 landed: `AcStampCache` runs `stamp_ac_devices` once at ω=1 to
+capture the per-ω coefficients for every imag triplet (caps, inductors,
+mutual couplings, all device capacitive stamps), and captures the real
+(G) triplets + RHS as-is. Per frequency, `solve_ac_point_cached`
+clones the cached real triplets and scales the imag triplets by ω --
+no device iteration, no model `companion` calls. The unsafe `Send/Sync`
+wrapper around `MnaSystem` is also gone since `AcStampCache` is plain
+`Send + Sync` (no interior mutability).
 
-Better approach:
-  - Compute G and C matrices once from the DC operating point
-  - For each frequency, form G + jwC numerically and refactorize
-  - If using sparse LU, the symbolic factorization from step 1 can be
-    reused across all frequency points
+Wall-clock impact on the current bench fixtures is below noise: the
+two AC tests in our corpus (`rca3040`, `vbic/diffamp`) spend ~78% of
+runtime in the complex sparse LU itself, not in stamping. To see the
+multi-x win the change promises, you need a fixture with thousands of
+devices and hundreds of frequency points -- none in the ngspice corpus
+qualify.
 
-This eliminates redundant MNA assembly and symbolic factorization for
-every frequency in the sweep.
+Phase 2 (not landed): pre-build the complex CSC structure once and
+mutate values per frequency instead of triplet-converting every time.
+Skips the triplet → CSC sort.
 
-Expected impact: 2-10x for AC sweeps with many frequency points
-(on top of the parallelism already in place).
+Phase 3 (not landed): cache the complex symbolic LU across frequencies
+(same pattern, different values), mirroring `SparseLuCache` for the
+real path.
 
 
 4. Parallel AC Frequency Sweeps  ✅ IMPLEMENTED
@@ -144,17 +154,27 @@ Priority Order (remaining work)
 
 For maximum impact with minimum effort:
 
-  1. Dense LU workspace reuse -- our harness's biggest dense-path fixtures
-     (rca3040, mosamp) spend 50-83% of runtime in `LinearSystem::solve()`
-     allocating/factoring tiny dense matrices. faer's `FullPivLu::new` API
-     doesn't expose workspace reuse, so this needs either a faer PR or a
-     hand-rolled small-dim partial-pivot LU that mutates in place.
-  2. AC matrix reuse (improvement 3) -- pairs with the symbolic LU work
-     that already landed for the real-valued case (improvement 2).
-  3. Allocation reuse (improvement 5) -- small win, easy to do.
-  4. Transient parallelism (improvement 7) -- only if circuits are large.
+  1. Device-stamp bypass -- mosamp spends 45% of runtime stamping device
+     models on every NR iteration, but most iterations after the first
+     have terminal voltages within 1e-6 of the previous evaluation. ngspice
+     bypasses model re-evaluation when the bypass tolerance is met
+     (CKTbypass). Implementing this would attack the largest remaining
+     unaddressed cost on mosamp / rca3040 / similar transistor-heavy
+     fixtures.
+  2. Dense LU workspace reuse -- on hold. A hand-rolled full-pivot LU
+     turned out to be 30-100% _slower_ than faer's `nano-gemm`-accelerated
+     small-dim path (tried in this session). faer's `FullPivLu::new` API
+     doesn't expose workspace reuse. Real wins here probably need a faer
+     PR exposing in-place LU on pre-allocated scratch, or a much more
+     aggressive small-dim kernel.
+  3. AC reuse phase 2 + 3 (improvement 3 above) -- CSC value-mutation and
+     complex symbolic-LU caching. Bigger win than phase 1 once a real
+     AC-bound circuit lands in the corpus.
+  4. Allocation reuse (improvement 5) -- small win, easy to do.
+  5. Transient parallelism (improvement 7) -- only if circuits are large.
 
-The `THEVENIN_PERF_BENCH=1 cargo test --release -p thevenin
---test perf_sparse_lu` harness prints per-fixture wall time + phase
-breakdown (dense LU, sparse LU, device stamping) + sparse cache hit
-rate. Use it to validate any of the above before / after.
+The `THEVENIN_PERF_BENCH=1 cargo nextest run --release -p thevenin
+--test perf_sparse_lu --no-capture` harness prints per-fixture wall
+time + phase breakdown (dense LU, sparse LU, device stamping) +
+sparse cache hit rate + complex (AC/noise/pz) solve counts and times.
+Use it to validate any of the above before / after.

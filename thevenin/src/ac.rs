@@ -179,19 +179,57 @@ pub fn run_ac_sweep(
 /// Per-frequency AC solution: (frequency, complex solution vector).
 type AcFreqResult = (f64, Vec<(f64, f64)>);
 
+/// Per-AC-analysis snapshot of the stamps that don't depend on frequency.
+///
+/// Every imaginary contribution emitted by [`stamp_ac_devices`] is of the
+/// form `ω · k`, where `k` is a per-device DC-OP-derived scalar (capacitance,
+/// inductance, transit-time-times-conductance, etc.). The real part is
+/// outright independent of ω, and the AC source excitations don't carry ω
+/// either. We exploit this by running `stamp_ac_devices` once at `ω = 1` to
+/// capture every triplet's per-ω coefficient, then per-frequency we just
+/// clone the real triplets through unchanged and scale the imag triplets by
+/// the actual ω. Across an N-point sweep this skips N–1 full passes over
+/// every device.
+struct AcStampCache {
+    dim: usize,
+    real_triplets: Vec<crate::sparse::Triplet>,
+    /// Imag-part triplets captured at ω = 1, so their values equal the
+    /// per-ω coefficients. Scale by the actual ω at solve time.
+    imag_per_omega: Vec<crate::sparse::Triplet>,
+    rhs_real: Vec<f64>,
+    rhs_imag: Vec<f64>,
+}
+
+fn build_ac_stamp_cache(
+    mna: &MnaSystem,
+    op_solution: &[f64],
+    excitations: &[AcExcitation],
+    gmin: f64,
+) -> AcStampCache {
+    let num_nodes = mna.total_num_nodes();
+    let dim = num_nodes + mna.vsource_names.len();
+
+    // Stamp at ω = 1 so the captured imag triplets equal the per-ω
+    // coefficients. The real part doesn't depend on ω, so it's captured
+    // as-is.
+    let mut sys = ComplexLinearSystem::new(dim);
+    stamp_ac_devices(mna, op_solution, 1.0, &mut sys, gmin);
+    apply_ac_excitation(&mut sys, excitations);
+
+    AcStampCache {
+        dim,
+        real_triplets: sys.real.triplets().to_vec(),
+        imag_per_omega: sys.imag.triplets().to_vec(),
+        rhs_real: sys.rhs_real,
+        rhs_imag: sys.rhs_imag,
+    }
+}
+
 /// Solve all AC frequency points, using rayon on native targets.
 ///
 /// Each frequency point is independent — the linearized circuit from the DC operating
 /// point does not change between frequencies. On native targets this distributes
 /// frequency points across CPU cores via rayon, giving roughly Nx speedup for N cores.
-///
-/// # Safety of the Sync wrapper
-///
-/// `MnaSystem` is not `Sync` because `XspiceInstance` contains `RefCell<Box<dyn Any>>`.
-/// AC analysis is purely read-only on the MNA system (it only reads base matrix
-/// triplets, device instance parameters, and node maps). The `RefCell` state is only
-/// mutated during nonlinear NR iteration, never during AC stamping. Therefore it is
-/// sound to share `&MnaSystem` across threads for AC analysis.
 fn solve_ac_frequencies(
     frequencies: &[f64],
     mna: &MnaSystem,
@@ -199,21 +237,13 @@ fn solve_ac_frequencies(
     excitations: &[AcExcitation],
     gmin: f64,
 ) -> Result<Vec<AcFreqResult>, MnaError> {
+    let cache = build_ac_stamp_cache(mna, op_solution, excitations, gmin);
+
     #[cfg(not(target_family = "wasm"))]
     {
-        // MnaSystem is !Sync because XspiceInstance contains RefCell<Box<dyn Any>>.
-        // AC analysis is provably read-only: stamp_ac_devices and apply_ac_excitation
-        // only read device parameters, base matrix triplets, and node maps. No
-        // RefCell::borrow_mut occurs during AC stamping (that only happens in NR
-        // iteration for nonlinear device evaluation). Therefore sharing &MnaSystem
-        // across threads is sound for AC analysis.
-        struct SendSyncRef<'a>(&'a MnaSystem);
-        // SAFETY: AC stamping is read-only; no interior-mutable state is accessed.
-        unsafe impl Send for SendSyncRef<'_> {}
-        unsafe impl Sync for SendSyncRef<'_> {}
-
-        let mna_ref = SendSyncRef(mna);
-
+        // `AcStampCache` is plain `Send + Sync` (no interior mutability),
+        // unlike `MnaSystem`, so threading it through rayon needs no
+        // unsafe Send/Sync wrapper.
         use std::sync::Mutex;
         let results: Vec<Mutex<Option<Result<AcFreqResult, MnaError>>>> =
             (0..frequencies.len()).map(|_| Mutex::new(None)).collect();
@@ -221,11 +251,10 @@ fn solve_ac_frequencies(
         rayon::scope(|s| {
             for (idx, &freq) in frequencies.iter().enumerate() {
                 let slot = &results[idx];
-                let mna_ref = &mna_ref;
+                let cache_ref = &cache;
                 s.spawn(move |_| {
                     let omega = 2.0 * PI * freq;
-                    let result = solve_ac_point(mna_ref.0, op_solution, omega, excitations, gmin)
-                        .map(|sol| (freq, sol));
+                    let result = solve_ac_point_cached(cache_ref, omega).map(|sol| (freq, sol));
                     *slot.lock().unwrap() = Some(result);
                 });
             }
@@ -243,33 +272,29 @@ fn solve_ac_frequencies(
             .iter()
             .map(|&freq| {
                 let omega = 2.0 * PI * freq;
-                solve_ac_point(mna, op_solution, omega, excitations, gmin).map(|sol| (freq, sol))
+                solve_ac_point_cached(&cache, omega).map(|sol| (freq, sol))
             })
             .collect()
     }
 }
 
-/// Solve the AC MNA system at a single frequency point.
-///
-/// Builds the complex matrix: real part = G (conductances + voltage source stamps),
-/// imaginary part = ωC (susceptances from capacitors/inductors).
-fn solve_ac_point(
-    mna: &MnaSystem,
-    op_solution: &[f64],
+/// Reassemble the complex MNA system at `omega` from the cached stamps and
+/// solve. This is the fast path: no device iteration, no model `companion`
+/// calls — just two triplet copies and a solve.
+fn solve_ac_point_cached(
+    cache: &AcStampCache,
     omega: f64,
-    excitations: &[AcExcitation],
-    gmin: f64,
 ) -> Result<Vec<(f64, f64)>, MnaError> {
-    let num_nodes = mna.total_num_nodes();
-    let dim = num_nodes + mna.vsource_names.len();
+    let mut sys = ComplexLinearSystem::new(cache.dim);
 
-    let mut sys = ComplexLinearSystem::new(dim);
-
-    // Stamp base matrix, reactive elements, and all device small-signal models.
-    stamp_ac_devices(mna, op_solution, omega, &mut sys, gmin);
-
-    // Apply AC source excitation to RHS.
-    apply_ac_excitation(&mut sys, excitations);
+    for t in &cache.real_triplets {
+        sys.real.add(t.row, t.col, t.value);
+    }
+    for t in &cache.imag_per_omega {
+        sys.imag.add(t.row, t.col, omega * t.value);
+    }
+    sys.rhs_real.copy_from_slice(&cache.rhs_real);
+    sys.rhs_imag.copy_from_slice(&cache.rhs_imag);
 
     sys.solve().map_err(MnaError::SolveError)
 }

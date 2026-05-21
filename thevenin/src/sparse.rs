@@ -19,6 +19,12 @@ use faer::sparse::{SparseColMat, Triplet as FaerTriplet};
 static SOLVE_COUNT_TINY: AtomicUsize = AtomicUsize::new(0); // dim < 16
 static SOLVE_COUNT_SMALL: AtomicUsize = AtomicUsize::new(0); // 16 <= dim < SPARSE_THRESHOLD
 static SOLVE_COUNT_SPARSE: AtomicUsize = AtomicUsize::new(0); // dim >= SPARSE_THRESHOLD
+/// Complex (AC / noise / pole-zero) solve invocations, total and by bucket.
+static COMPLEX_SOLVE_COUNT_DENSE: AtomicUsize = AtomicUsize::new(0); // dim < SPARSE_THRESHOLD
+static COMPLEX_SOLVE_COUNT_SPARSE: AtomicUsize = AtomicUsize::new(0); // dim >= SPARSE_THRESHOLD
+/// Cumulative ns spent in the complex sparse / dense solve paths.
+static COMPLEX_SOLVE_NANOS_DENSE: AtomicU64 = AtomicU64::new(0);
+static COMPLEX_SOLVE_NANOS_SPARSE: AtomicU64 = AtomicU64::new(0);
 
 /// Cumulative ns spent inside the dense LU branch of `solve` (matrix
 /// densification + FullPivLu + solve + result extraction).
@@ -66,6 +72,24 @@ pub fn solve_phase_nanos() -> (u64, u64, u64) {
     )
 }
 
+/// Snapshot the complex (AC / noise / pole-zero) solve counts, returning
+/// `(dense, sparse)`.
+pub fn complex_solve_counts() -> (usize, usize) {
+    (
+        COMPLEX_SOLVE_COUNT_DENSE.load(Ordering::Relaxed),
+        COMPLEX_SOLVE_COUNT_SPARSE.load(Ordering::Relaxed),
+    )
+}
+
+/// Snapshot the complex (AC / noise / pole-zero) solve phase nanos, returning
+/// `(dense_ns, sparse_ns)`.
+pub fn complex_solve_phase_nanos() -> (u64, u64) {
+    (
+        COMPLEX_SOLVE_NANOS_DENSE.load(Ordering::Relaxed),
+        COMPLEX_SOLVE_NANOS_SPARSE.load(Ordering::Relaxed),
+    )
+}
+
 /// Add `ns` to the device-stamping bucket. Called from `try_nr` around
 /// each invocation of the `load_system` closure.
 pub fn record_stamp_nanos(ns: u64) {
@@ -91,6 +115,10 @@ pub fn reset_solve_trace() {
     STAMP_NANOS.store(0, Ordering::Relaxed);
     GLOBAL_CACHE_HITS.store(0, Ordering::Relaxed);
     GLOBAL_CACHE_MISSES.store(0, Ordering::Relaxed);
+    COMPLEX_SOLVE_COUNT_DENSE.store(0, Ordering::Relaxed);
+    COMPLEX_SOLVE_COUNT_SPARSE.store(0, Ordering::Relaxed);
+    COMPLEX_SOLVE_NANOS_DENSE.store(0, Ordering::Relaxed);
+    COMPLEX_SOLVE_NANOS_SPARSE.store(0, Ordering::Relaxed);
 }
 use thiserror::Error;
 
@@ -513,6 +541,8 @@ impl ComplexLinearSystem {
     fn solve_dense(&self, transpose: bool) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
         use faer::c64;
 
+        COMPLEX_SOLVE_COUNT_DENSE.fetch_add(1, Ordering::Relaxed);
+        let t0 = Instant::now();
         let mut mat = Mat::<c64>::zeros(self.dim, self.dim);
         if transpose {
             for t in self.real.triplets() {
@@ -542,6 +572,8 @@ impl ComplexLinearSystem {
             .map(|i| (x[(i, 0)].re, x[(i, 0)].im))
             .collect();
 
+        COMPLEX_SOLVE_NANOS_DENSE.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+
         if result
             .iter()
             .any(|(re, im)| re.is_nan() || re.is_infinite() || im.is_nan() || im.is_infinite())
@@ -556,6 +588,8 @@ impl ComplexLinearSystem {
     fn solve_sparse(&self, transpose: bool) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
         use faer::c64;
 
+        COMPLEX_SOLVE_COUNT_SPARSE.fetch_add(1, Ordering::Relaxed);
+        let t0 = Instant::now();
         let sparse_mat = self.to_complex_sparse_col(transpose)?;
         let lu = sparse_mat.sp_lu().map_err(|e| {
             SparseMatrixError::SingularMatrix(format!(
@@ -573,6 +607,8 @@ impl ComplexLinearSystem {
         let result: Vec<(f64, f64)> = (0..self.dim)
             .map(|i| (x[(i, 0)].re, x[(i, 0)].im))
             .collect();
+
+        COMPLEX_SOLVE_NANOS_SPARSE.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
         if result
             .iter()
