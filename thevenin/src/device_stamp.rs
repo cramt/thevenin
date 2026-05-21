@@ -199,6 +199,8 @@ pub(crate) struct DeviceVoltageState {
     /// same [`MosfetCompanion`] struct as Level 1.
     cached_mos2_companion: RefCell<Vec<Option<MosfetCompanion>>>,
     prev_mos6: RefCell<Vec<(f64, f64, f64, f64)>>,
+    /// Companion from the previous MOS6 (Level 6) evaluation.
+    cached_mos6_companion: RefCell<Vec<Option<MosfetCompanion>>>,
     prev_jfet: RefCell<Vec<(f64, f64)>>,
     jfet_vcrits: Vec<f64>,
     prev_bsim3: RefCell<Vec<(f64, f64, f64)>>,
@@ -238,6 +240,7 @@ impl DeviceVoltageState {
             prev_mos2: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos2s.len()]),
             cached_mos2_companion: RefCell::new(vec![None; mna.mos2s.len()]),
             prev_mos6: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos6s.len()]),
+            cached_mos6_companion: RefCell::new(vec![None; mna.mos6s.len()]),
             prev_jfet: RefCell::new(vec![(0.0, 0.0); mna.jfets.len()]),
             jfet_vcrits,
             prev_bsim3: RefCell::new(vec![(0.0, 0.0, 0.0); mna.bsim3s.len()]),
@@ -323,6 +326,7 @@ impl DeviceVoltageState {
                     })
                     .collect(),
             ),
+            cached_mos6_companion: RefCell::new(vec![None; mna.mos6s.len()]),
             prev_jfet: RefCell::new(
                 mna.jfets
                     .iter()
@@ -478,12 +482,16 @@ impl DeviceVoltageState {
                 *cached = None;
             }
         }
-        // Reset MOS6 prev voltages (von reset to 0.0 for fresh NR sequence)
+        // Reset MOS6 prev voltages (von reset to 0.0 for fresh NR sequence).
+        // Invalidate cached companions for the same reason as MOS1/MOS2.
         {
             let mut prev = self.prev_mos6.borrow_mut();
             for (i, mos) in mna.mos6s.iter().enumerate() {
                 let (vgs, vds, vbs) = mos.terminal_voltages(solution);
                 prev[i] = (vgs, vds, vbs, 0.0);
+            }
+            for cached in self.cached_mos6_companion.borrow_mut().iter_mut() {
+                *cached = None;
             }
         }
         // Reset JFET prev voltages
@@ -780,6 +788,8 @@ impl DeviceVoltageState {
         // MOS6 (level 6)
         {
             let mut prev = self.prev_mos6.borrow_mut();
+            let mut cache = self.cached_mos6_companion.borrow_mut();
+            let bypass_on = bypass_enabled();
             for (mi, mos) in mna.mos6s.iter().enumerate() {
                 let (vgs, vds, vbs) = if init_jct {
                     // MODEINITJCT: same as Level 1.
@@ -800,8 +810,24 @@ impl DeviceVoltageState {
                     (vgs, vds, vbs)
                 };
 
-                let betac = mos.betac();
-                let comp = mos.model.companion(vgs, vds, vbs, betac);
+                let bypass = bypass_on
+                    && !init_jct
+                    && cache[mi].is_some()
+                    && within_bypass_tol(vgs, prev[mi].0)
+                    && within_bypass_tol(vds, prev[mi].1)
+                    && within_bypass_tol(vbs, prev[mi].2);
+
+                let comp = if bypass {
+                    crate::sparse::record_bypass_hit();
+                    cache[mi].clone().unwrap()
+                } else {
+                    crate::sparse::record_bypass_miss();
+                    let betac = mos.betac();
+                    let new_comp = mos.model.companion(vgs, vds, vbs, betac);
+                    cache[mi] = Some(new_comp.clone());
+                    new_comp
+                };
+
                 prev[mi] = (vgs, vds, vbs, comp.von);
                 crate::mos6::stamp_mos6(&mut system.matrix, &mut system.rhs, mos, &comp);
             }

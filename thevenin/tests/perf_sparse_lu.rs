@@ -172,6 +172,21 @@ fn perf_mosamp() {
     report("mosamp", run_fixture("ngspice-upstream/tests/general/mosamp.cir"));
 }
 
+/// MOS6 bypass fixture: 20 Level 6 MOSFETs in an inverter chain,
+/// `.tran 0.5n 150n`. Exercises the MOS6 companion-bypass path which
+/// shares the cache-and-tolerance pattern with Level 1 / Level 2.
+#[test]
+fn perf_mos6inv() {
+    if !enabled() {
+        eprintln!("skipped (set THEVENIN_PERF_BENCH=1 to enable)");
+        return;
+    }
+    report(
+        "mos6inv",
+        run_fixture("ngspice-upstream/tests/mos6/mos6inv.cir"),
+    );
+}
+
 /// MOSFET-bypass fixture: 13 Level 1 MOSFETs in a memory cell, `.tran 20ns 2us`.
 /// Used to validate the device-companion bypass (CKTbypass) actually saves
 /// model evaluations on a real Level 1 MOSFET-heavy workload. mosamp uses
