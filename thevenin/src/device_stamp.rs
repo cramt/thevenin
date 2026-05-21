@@ -627,7 +627,19 @@ impl DeviceVoltageState {
             }
         }
 
-        // BJTs
+        // BJTs.
+        //
+        // Bypass NOT enabled here: the exponential I-V on the b-e/b-c
+        // junctions means even small voltage deltas can move Ic
+        // dramatically, so the bypass-tolerance window that works for
+        // MOSFETs (`BYPASS_RELTOL` = 1e-3) lets stale linearizations
+        // through that slow NR convergence. Measured on `fourbitadder`,
+        // a BJT-heavy transient bench fixture, with the standard
+        // tolerance: solve count rose 1815 -> 2430 (+34%) which more
+        // than wiped out the per-eval companion savings. ngspice handles
+        // this by gating bypass on the exponential's local slope, which
+        // we don't have machinery for yet. Until that lands, BJT keeps
+        // re-evaluating every iteration.
         {
             let mut prev = self.prev_bjt.borrow_mut();
             for (bi, bjt) in mna.bjts.iter().enumerate() {
