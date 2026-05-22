@@ -249,31 +249,11 @@ pub fn simulate(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
 }
 
 /// Run any `.meas` directives declared on the circuit against the simulation
-/// result, appending a `"measurements"` plot. Mirrors the Netlist-shape's
-/// `measure::evaluate_measurements`, which the simulator runs at the tail of
-/// every top-level `simulate(&Netlist)` call.
+/// result, appending a `"measurements"` plot. Dispatches directly to the
+/// typed evaluator — the Circuit already carries parsed `MeasureExpr` values
+/// alongside the verbatim spec strings.
 fn evaluate_circuit_measurements(circuit: &Circuit, result: &mut SimResult) {
-    if circuit.measures.is_empty() {
-        return;
-    }
-    let mut nl = thevenin_types::Netlist {
-        title: String::new(),
-        items: circuit
-            .measures
-            .iter()
-            .map(|m| {
-                thevenin_types::Item::Meas(thevenin_types::MeasureSpec {
-                    name: m.name.clone(),
-                    analysis_type: m.analysis_type.clone(),
-                    spec: m.spec.clone(),
-                })
-            })
-            .collect(),
-        analysis: thevenin_types::Analysis::Op,
-        source: String::new(),
-    };
-    crate::measure::evaluate_measurements(&nl, result);
-    nl.items.clear();
+    crate::measure::evaluate_circuit_measures(&circuit.measures, result);
 }
 
 /// Run every analysis declared on `circuit.analyses` once and concatenate

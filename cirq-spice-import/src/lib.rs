@@ -993,11 +993,11 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     let mut ir_measures: Vec<cirq_ir::MeasureSpec> = Vec::new();
     for item in &netlist.items {
         if let Item::Meas(spec) = item {
-            ir_measures.push(cirq_ir::MeasureSpec {
-                name: spec.name.clone(),
-                analysis_type: spec.analysis_type.clone(),
-                spec: spec.spec.clone(),
-            });
+            ir_measures.push(cirq_ir::MeasureSpec::parse(
+                spec.name.clone(),
+                spec.analysis_type.clone(),
+                spec.spec.clone(),
+            ));
         }
     }
 

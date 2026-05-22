@@ -1750,6 +1750,64 @@ C1 out 0 1n
     );
 }
 
+/// Verify newly added `.meas` features (LAST, TD, PARAM=) ride the full
+/// SPICE → IR → simulator pipeline end-to-end.
+#[test]
+fn cirq_meas_param_and_last_end_to_end() {
+    // Pulse-driven RC: vout swings; we measure max, min, the delta via
+    // PARAM=, and the last rising edge via RISE=LAST.
+    let spice = "\
+Meas Features
+V1 in 0 DC 0 PULSE(0 5 0 1n 1n 25n 50n)
+R1 in out 1k
+C1 out 0 1n
+.tran 1n 200n
+.meas tran vout_max MAX v(out)
+.meas tran vout_min MIN v(out)
+.meas tran vout_swing PARAM=vout_max - vout_min
+.meas tran last_rise WHEN v(in)=2.5 RISE=LAST
+.end
+";
+
+    let netlists = thevenin_types::Netlist::parse(spice).expect("SPICE parse");
+    let nl = &netlists[0];
+
+    // The IR should now carry parsed MeasureExpr values, not just strings.
+    let ir = cirq_spice_import::import_netlist(nl).expect("import");
+    let parsed: Vec<&cirq_ir::MeasureSpec> =
+        ir.measures.iter().filter(|m| m.expr.is_some()).collect();
+    assert_eq!(parsed.len(), 4, "all four .meas should parse to typed form");
+
+    let result = simulate(nl);
+    let meas = result
+        .plots
+        .iter()
+        .find(|p| p.name == "measurements")
+        .expect("measurements plot");
+
+    let vmax = meas.vector("vout_max").expect("vout_max").data.as_real()[0];
+    let vmin = meas.vector("vout_min").expect("vout_min").data.as_real()[0];
+    let swing = meas
+        .vector("vout_swing")
+        .expect("vout_swing")
+        .data
+        .as_real()[0];
+    assert!(
+        (swing - (vmax - vmin)).abs() < 1e-9,
+        "PARAM= should equal max - min: swing={swing}, max-min={}",
+        vmax - vmin
+    );
+
+    // PULSE period is 50 ns over [0, 200 ns]; rising edges through 2.5 V are
+    // at ~0.5, 50.5, 100.5, 150.5 ns. RISE=LAST should land near the final
+    // rising edge (~150.5 ns), well past the first one.
+    let last_rise = meas.vector("last_rise").expect("last_rise").data.as_real()[0];
+    assert!(
+        last_rise > 100e-9,
+        "RISE=LAST should pick the final rising edge, got {last_rise}"
+    );
+}
+
 /// Verify .meas round-trips through SPICE → IR → netlist → simulate.
 #[test]
 fn spice_meas_round_trip_through_ir() {
