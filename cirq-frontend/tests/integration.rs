@@ -4,6 +4,26 @@
 //!   Cirq source -> AST -> IR -> Netlist -> Simulator
 //!   SPICE source -> Netlist -> Cirq IR -> Netlist (round-trip)
 
+/// Bridge tests that hold a parsed `Netlist` (the canonical input shape for
+/// cirq-frontend round-trip checks) into the Circuit-input simulator
+/// surface. `thevenin::simulate(&Netlist)` is `pub(crate)` after the Stage 4
+/// IR migration; integration tests round-trip via
+/// `cirq_spice_import::import_netlist` to keep the existing assertions
+/// pointing at the same behaviour.
+#[allow(dead_code)]
+fn simulate(netlist: &thevenin_types::Netlist) -> thevenin_types::SimResult {
+    let mut resolved = netlist.clone();
+    thevenin::expr::resolve_netlist_exprs(&mut resolved).expect("resolve_netlist_exprs");
+    let circuit = cirq_spice_import::import_netlist(&resolved).expect("import_netlist");
+    let mut result = thevenin::circuit::simulate(&circuit).expect("circuit::simulate");
+    // Drop the implicit OP prepend that `circuit::simulate_tran` emits, so
+    // tests expecting `plots[0].name == "tran1"` keep working.
+    if matches!(netlist.analysis, thevenin_types::Analysis::Tran { .. }) {
+        result.plots.retain(|p| !p.name.starts_with("op"));
+    }
+    result
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: Cirq source -> AST -> IR -> Netlist round-trip
 // ---------------------------------------------------------------------------
@@ -87,7 +107,7 @@ fn cirq_voltage_divider_simulate_op() {
         cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
     assert_eq!(netlists.len(), 1);
 
-    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+    let result = simulate(&netlists[0]);
 
     // For two equal 1k resistors with a 5V supply, v(mid) should be 2.5V.
     let vmid = result.vector("v(mid)").expect("should have v(mid) vector");
@@ -228,8 +248,7 @@ R2 mid 0 2k
     assert_eq!(elem_count, 3, "should have V1, R1, R2");
 
     // Simulate the round-tripped netlist.
-    let result =
-        thevenin::simulate(nl).expect("simulation of round-tripped netlist should succeed");
+    let result = simulate(nl);
 
     // Verify operating point: mid = 10V * (2k / (2k+2k)) = 5V.
     let v_mid = result.vector("v(mid)").expect("should have v(mid) vector");
@@ -363,7 +382,7 @@ fn cirq_dc_sweep_simulate() {
         nl.analysis
     );
 
-    let result = thevenin::simulate(nl).expect("DC sweep simulation should succeed");
+    let result = simulate(nl);
 
     // The sweep from 0 to 5V in 0.5V steps should produce 11 data points
     // (0.0, 0.5, 1.0, ..., 5.0).
@@ -421,7 +440,7 @@ fn cirq_ac_analysis_simulate() {
         nl.analysis
     );
 
-    let result = thevenin::simulate(nl).expect("AC simulation should succeed");
+    let result = simulate(nl);
 
     // AC results should have complex-valued output vectors.
     // Look for v(out) -- the output node voltage in AC.
@@ -504,7 +523,7 @@ fn cirq_transient_pulse_waveform_simulate() {
     let nl = &netlists[0];
     assert!(matches!(nl.analysis, thevenin_types::Analysis::Tran { .. }));
 
-    let result = thevenin::simulate(nl).expect("transient simulation should succeed");
+    let result = simulate(nl);
 
     // Transient results should have multiple time points.
     let plot = result.plot().expect("should have at least one plot");
@@ -732,7 +751,7 @@ fn cirq_rlc_circuit_simulate_op() {
     // Simulate OP.
     let netlists =
         cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
-    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+    let result = simulate(&netlists[0]);
 
     // At DC steady state: inductor is short, capacitor is open.
     // No current flows through the series path, so v(mid) = v(out) = v(in) = 5V.
@@ -1194,7 +1213,7 @@ R2 out 0 1k
         .expect("circuit_to_netlists should succeed");
     let nl = &round_tripped[0];
 
-    let result = thevenin::simulate(nl).expect("simulation should succeed");
+    let result = simulate(nl);
 
     // VCVS with gain=2: if V(in)=1V, V(out)=2V.
     let vin = result.vector("v(in)").expect("should have v(in)");
@@ -1449,7 +1468,7 @@ fn cirq_module_multiple_instances_top_level() {
     // Simulate and check: each divider should produce v(mid) = 5V.
     let netlists =
         cirq_frontend::compile_to_netlist(source).expect("compile_to_netlist should succeed");
-    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+    let result = simulate(&netlists[0]);
 
     let vmid1 = result.vector("v(mid1)").expect("should have v(mid1)");
     assert!(
@@ -1552,7 +1571,7 @@ fn cirq_ic_node_voltage_in_transient() {
         .any(|i| matches!(i, thevenin_types::Item::Ic(_)));
     assert!(has_ic, "netlist should contain .ic directive");
 
-    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+    let result = simulate(&netlists[0]);
 
     // v(cap) should start at 5V and stay near it (since supply is also 5V).
     let vcap = result.vector("v(cap)").expect("should have v(cap)");
@@ -1597,7 +1616,7 @@ fn cirq_uic_skips_dc_op() {
         _ => panic!("expected tran analysis"),
     }
 
-    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+    let result = simulate(&netlists[0]);
 
     let vout = result.vector("v(out)").expect("should have v(out)");
     let data = vout.data.as_real();
@@ -1658,8 +1677,8 @@ R2 mid 0 1k
     assert!(has_nodeset, "round-tripped netlist should have .nodeset");
 
     // Simulate both: original SPICE and round-tripped.
-    let r1 = thevenin::simulate(spice_nl).expect("SPICE sim");
-    let r2 = thevenin::simulate(rt_nl).expect("round-trip sim");
+    let r1 = simulate(spice_nl);
+    let r2 = simulate(rt_nl);
 
     let v1 = r1.vector("v(mid)").unwrap().data.as_real()[0];
     let v2 = r2.vector("v(mid)").unwrap().data.as_real()[0];
@@ -1701,7 +1720,7 @@ C1 out 0 1n
         .count();
     assert_eq!(meas_count, 2, "should have 2 .meas directives");
 
-    let result = thevenin::simulate(nl).expect("simulation should succeed");
+    let result = simulate(nl);
 
     // Check that a "measurements" plot was added.
     let meas_plot = result.plots.iter().find(|p| p.name == "measurements");
@@ -1794,7 +1813,7 @@ fn cirq_multi_temp_produces_multiple_plots() {
         .count();
     assert_eq!(temp_count, 2, "should have 2 .temp directives");
 
-    let result = thevenin::simulate(&netlists[0]).expect("simulation should succeed");
+    let result = simulate(&netlists[0]);
 
     // Multi-temp produces one plot per temperature.
     assert!(
@@ -1877,7 +1896,7 @@ R2 mid 0 1k
     );
 
     // Simulate the round-tripped netlist.
-    let result = thevenin::simulate(rt_nl).expect("simulation should succeed");
+    let result = simulate(rt_nl);
     assert!(
         result.plots.len() >= 2,
         "multi-temp simulation should produce >= 2 plots, got {}",
@@ -1924,7 +1943,7 @@ C1 cap 0 1n
     assert!(has_ic, "round-tripped netlist should have .ic");
 
     // Simulate and verify the initial voltage is applied.
-    let result = thevenin::simulate(rt_nl).expect("simulation should succeed");
+    let result = simulate(rt_nl);
     let vcap = result.vector("v(cap)").expect("should have v(cap)");
     let data = vcap.data.as_real();
     assert!(!data.is_empty());

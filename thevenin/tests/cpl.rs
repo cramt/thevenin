@@ -3,6 +3,9 @@ use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
+mod common;
+use common::{simulate_op, simulate_tran};
+
 /// Helper to get a vector from a transient result.
 fn tran_vector<'a>(result: &'a thevenin_types::SimResult, name: &str) -> &'a [f64] {
     result.plots[0]
@@ -31,7 +34,7 @@ R3 5 0 100
     )
     .expect("parse failed");
 
-    let result = thevenin::simulate_op(&netlist).expect("op failed");
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     // DC: CPL line 1 acts as R[0][0]*length = 0.5*1 = 0.5 ohm resistor
@@ -52,7 +55,7 @@ R3 5 0 100
 fn test_cpl_ibm2_transient() {
     let cir = include_str!("fixtures/transmission/cpl_ibm2.cir");
     let netlist = Netlist::parse_single(cir).expect("parse failed");
-    let result = thevenin::simulate_tran(&netlist).expect("tran failed");
+    let result = simulate_tran(&netlist);
     let time = tran_vector(&result, "time");
 
     // The simulation should complete without errors.
@@ -68,7 +71,7 @@ fn test_cpl_ibm2_transient() {
 fn test_cpl3_4_line_transient() {
     let cir = include_str!("fixtures/transmission/cpl3_4_line.cir");
     let netlist = Netlist::parse_single(cir).expect("parse failed");
-    let result = thevenin::simulate_tran(&netlist).expect("tran failed");
+    let result = simulate_tran(&netlist);
     let time = tran_vector(&result, "time");
 
     assert!(

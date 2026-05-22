@@ -5,6 +5,9 @@ use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
+mod common;
+use common::{simulate_dc, simulate_op};
+
 /// Port of ngspice-upstream/tests/regression/subckt-processing/global-1.cir
 /// Tests that multiple .global cards are accumulative and global nodes are
 /// properly resolved inside subcircuit instances.
@@ -51,7 +54,7 @@ Rn  n1 0  100k
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     // Global nodes should have expected voltages:
@@ -102,7 +105,7 @@ X1 1 0 VDIV
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     // Find v(1) and v(x1.mid)
@@ -138,7 +141,7 @@ R2 mid 0 1k
 ",
     )
     .unwrap();
-    let direct_result = thevenin::simulate_op(&direct).unwrap();
+    let direct_result = simulate_op(&direct);
 
     // Same circuit as subcircuit
     let subckt = Netlist::parse_single(
@@ -154,7 +157,7 @@ X1 1 0 VDIV
 ",
     )
     .unwrap();
-    let subckt_result = thevenin::simulate_op(&subckt).unwrap();
+    let subckt_result = simulate_op(&subckt);
 
     // Both should give same V1 branch current
     let direct_iv1 = direct_result.plots[0]
@@ -195,7 +198,7 @@ X1 in 0 CHAIN
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     let v_in = plot
@@ -233,7 +236,7 @@ X1 1 0 RLOAD PARAMS: rval=5k
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     // I = V/R = 10/5000 = 2mA
@@ -267,7 +270,7 @@ R_load 4 0 1k
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     // 4 x 1k resistors in series, V=4V, I=4/4000=1mA
@@ -317,7 +320,7 @@ X1 out 0 DCLAMP
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     let v_out = plot
@@ -352,7 +355,7 @@ X1 in 0 RLOAD
     )
     .unwrap();
 
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
     let plot = &result.plots[0];
 
     // 3 data points: V=0, V=5, V=10

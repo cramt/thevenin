@@ -5,11 +5,11 @@
 //!
 //! Expected: V(mid) = 1V * 2k/(1k+2k) ≈ 0.667V
 
-use thevenin::simulate;
-use thevenin_types::Netlist;
+use cirq_spice_import::import_spice;
+use thevenin::circuit::simulate;
 
 fn main() {
-    let netlist = Netlist::parse_single(
+    let circuit = import_spice(
         "\
 Voltage Divider
 V1 in 0 1.0
@@ -19,9 +19,11 @@ R2 mid 0 2k
 .end
 ",
     )
-    .expect("failed to parse netlist");
+    .expect("failed to parse SPICE source")
+    .pop()
+    .expect("expected at least one circuit");
 
-    let result = simulate(&netlist).expect("simulation failed");
+    let result = simulate(&circuit).expect("simulation failed");
 
     println!("=== DC Operating Point ===");
     let plot = result.plot().expect("no plot");

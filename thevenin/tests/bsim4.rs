@@ -7,6 +7,9 @@ use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
+mod common;
+use common::{simulate_ac, simulate_dc, simulate_noise, simulate_op};
+
 /// Full BSIM4 NMOS model parameters from ngspice-upstream/tests/bsim4/nmos/parameters/nmosParameters.
 const BSIM4_NMOS_PARAMS: &str = "\
 + binunit=1 paramchk=1 mobmod=0 capmod=2 igcmod=1 igbmod=1
@@ -112,7 +115,7 @@ Vds d 0 0.0
 fn test_bsim4_dc_sweep_vg1p0() {
     let cir = bsim4_dc_sweep_cir(1.0);
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -161,7 +164,7 @@ fn test_bsim4_dc_sweep_vg1p0() {
 fn test_bsim4_dc_sweep_vg0p6() {
     let cir = bsim4_dc_sweep_cir(0.6);
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -184,7 +187,7 @@ fn test_bsim4_dc_sweep_vg0p6() {
 fn test_bsim4_dc_sweep_saturation_plateau() {
     let cir = bsim4_dc_sweep_cir(1.0);
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -229,7 +232,7 @@ Vds d 0 0.2
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     let plot = &result.plots[0];
     let vds_branch = plot
@@ -263,7 +266,7 @@ Vds d 0 1.2
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     let plot = &result.plots[0];
     let vds_branch = plot
@@ -300,7 +303,7 @@ Vds d 0 1.0
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     let plot = &result.plots[0];
     let vds_branch = plot
@@ -339,7 +342,7 @@ Vds d 0 1.2
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_ac(&netlist).unwrap();
+    let result = simulate_ac(&netlist);
 
     let plot = &result.plots[0];
     let freq_vec = plot
@@ -396,7 +399,7 @@ Vds d 0 1.2
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_ac(&netlist).unwrap();
+    let result = simulate_ac(&netlist);
 
     let plot = &result.plots[0];
     let freq_vec = plot
@@ -433,7 +436,7 @@ Vds d 0 1.2
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_ac(&netlist).unwrap();
+    let result = simulate_ac(&netlist);
 
     let plot = &result.plots[0];
     assert_eq!(
@@ -478,7 +481,7 @@ Rload vdd d 1k
 fn test_bsim4_noise1_fnoi0_tnoi0() {
     let cir = bsim4_noise_cir(1.0, "fnoimod=0 tnoimod=0 kf=1e-30 af=1.2 ef=1.1");
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_noise(&netlist).unwrap();
+    let result = simulate_noise(&netlist);
 
     // Should have noise spectrum plot
     assert!(
@@ -530,7 +533,7 @@ fn test_bsim4_noise2_fnoi1_tnoi1() {
         "fnoimod=1 tnoimod=1 noia=6.25e41 noib=3.125e26 noic=8.75 em=4.1e7 ef=1.1",
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_noise(&netlist).unwrap();
+    let result = simulate_noise(&netlist);
 
     let plot = &result.plots[0];
     let onoise = plot
@@ -570,7 +573,7 @@ fn test_bsim4_noise3_fnoi1_tnoi0() {
         "fnoimod=1 tnoimod=0 noia=6.25e41 noib=3.125e26 noic=8.75 em=4.1e7 ef=1.1",
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_noise(&netlist).unwrap();
+    let result = simulate_noise(&netlist);
 
     let plot = &result.plots[0];
     let onoise = plot
@@ -592,7 +595,7 @@ fn test_bsim4_noise3_fnoi1_tnoi0() {
 fn test_bsim4_noise4_fnoi0_tnoi1() {
     let cir = bsim4_noise_cir(0.6, "fnoimod=0 tnoimod=1 kf=1e-30 af=1.2 ef=1.1");
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_noise(&netlist).unwrap();
+    let result = simulate_noise(&netlist);
 
     let plot = &result.plots[0];
     let onoise = plot
@@ -632,7 +635,7 @@ Vds d 0 0.0
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot

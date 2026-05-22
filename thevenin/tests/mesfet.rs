@@ -1,6 +1,8 @@
 use approx::assert_abs_diff_eq;
-use thevenin::simulate_dc;
 use thevenin_types::Netlist;
+
+mod common;
+use common::simulate_dc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -12,7 +14,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 fn test_mesfet_subthreshold() {
     let cir = include_str!("fixtures/mes/subth.cir");
     let netlist = Netlist::parse_single(cir).unwrap();
-    let result = simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let ibranch = plot

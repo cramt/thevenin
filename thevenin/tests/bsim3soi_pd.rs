@@ -2,8 +2,10 @@
 //!
 //! Tests ported from ngspice-upstream/tests/bsim3soipd/ test suite.
 
-use thevenin::{simulate_dc, simulate_op};
 use thevenin_types::Netlist;
+
+mod common;
+use common::{try_simulate_dc, try_simulate_op};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -105,7 +107,7 @@ Ve e 0 0.0
 "
     );
     let netlist = Netlist::parse_single(&cir).expect("parse");
-    let result = simulate_op(&netlist);
+    let result = try_simulate_op(&netlist);
     assert!(result.is_ok(), "OP failed: {:?}", result.err());
 }
 
@@ -127,7 +129,7 @@ Ve e 0 0.0
 "
         );
         let netlist = Netlist::parse_single(&cir).expect("parse");
-        let result = simulate_op(&netlist);
+        let result = try_simulate_op(&netlist);
         assert!(
             result.is_ok(),
             "OP failed at Vgs={vgs}, Vds={vds}: {:?}",
@@ -154,7 +156,7 @@ Ve e 0 1.25
 "
     );
     let netlist = Netlist::parse_single(&cir).expect("parse");
-    let result = simulate_op(&netlist);
+    let result = try_simulate_op(&netlist);
     assert!(result.is_ok(), "PMOS OP failed: {:?}", result.err());
 }
 
@@ -180,7 +182,7 @@ m2 out in ss e n1 W=10u L=0.25u
 "
     );
     let netlist = Netlist::parse_single(&cir).expect("parse");
-    let result = simulate_op(&netlist);
+    let result = try_simulate_op(&netlist);
     assert!(result.is_ok(), "Inverter OP failed: {:?}", result.err());
 
     // With vin=0, PMOS on, NMOS off => output should be near VDD=2.5
@@ -219,7 +221,7 @@ m2 out in ss e n1 W=10u L=0.25u
 "
     );
     let netlist = Netlist::parse_single(&cir).expect("parse");
-    let result = simulate_op(&netlist);
+    let result = try_simulate_op(&netlist);
     assert!(result.is_ok(), "Inverter OP failed: {:?}", result.err());
 
     // With vin=2.5, NMOS on, PMOS off => output should be near 0
@@ -256,7 +258,7 @@ Vb b 0 0.0
 "
     );
     let netlist = Netlist::parse_single(&cir).expect("parse");
-    let result = simulate_op(&netlist);
+    let result = try_simulate_op(&netlist);
     assert!(result.is_ok(), "5-terminal OP failed: {:?}", result.err());
 }
 
@@ -277,7 +279,7 @@ Ve e 0 0.0
 "
     );
     let netlist = Netlist::parse_single(&cir).expect("parse");
-    let result = simulate_dc(&netlist);
+    let result = try_simulate_dc(&netlist);
     assert!(result.is_ok(), "DC sweep failed: {:?}", result.err());
 
     let plot = &result.unwrap().plots[0];

@@ -1,6 +1,8 @@
 use approx::assert_abs_diff_eq;
-use thevenin::simulate_dc;
 use thevenin_types::{Analysis, Netlist};
+
+mod common;
+use common::simulate_dc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -12,7 +14,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 fn test_mesa_dcfl_inverter() {
     let cir = include_str!("fixtures/mesa/mesa.cir");
     let netlist = Netlist::parse(cir).unwrap().pop().unwrap();
-    let result = simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let v2 = plot
@@ -49,7 +51,7 @@ fn test_mesa_dcfl_inverter() {
 fn test_mesa_gate_leakage() {
     let cir = include_str!("fixtures/mesa/mesa13.cir");
     let netlist = Netlist::parse(cir).unwrap().pop().unwrap();
-    let result = simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
     assert!(!result.plots.is_empty());
 }
 
@@ -64,6 +66,6 @@ fn test_mesa_level2_double_sweep() {
         .iter()
         .find(|n| matches!(n.analysis, Analysis::Dc { .. }))
         .expect("no .dc fork found");
-    let result = simulate_dc(netlist).unwrap();
+    let result = simulate_dc(netlist);
     assert!(!result.plots.is_empty());
 }

@@ -7,6 +7,9 @@ use thevenin_types::{Analysis, Netlist};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
+mod common;
+use common::{simulate_ac, simulate_dc, simulate_noise, simulate_op, try_simulate_dc};
+
 /// Common VBIC NPN model parameters used across all test circuits.
 const VBIC_NPN_PARAMS: &str = "\
 + IS=1e-16 IBEI=1e-18 IBEN=5e-15 IBCI=2e-17 IBCN=5e-15 ISP=1e-15 RCX=10
@@ -69,7 +72,7 @@ Q1 Q1_C Q1_B Q1_E P1
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vc = plot
@@ -116,7 +119,7 @@ Q1 Q1_C V1_P 0 N1
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vc = plot
@@ -168,7 +171,7 @@ Q1 2 1 0 0 N1
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_ac(&netlist).unwrap();
+    let result = simulate_ac(&netlist);
 
     let plot = &result.plots[0];
 
@@ -243,7 +246,7 @@ R3 R3_P R3_N 500k
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_noise(&netlist).unwrap();
+    let result = simulate_noise(&netlist);
 
     // Noise result has two plots: noise1 (spectrum) and noise2 (integrated)
     assert!(
@@ -321,7 +324,7 @@ Q1 Q1_C Q1_B 0 N1
 "
         );
         let netlist = Netlist::parse_single(&cir).unwrap();
-        match thevenin::simulate_dc(&netlist) {
+        match try_simulate_dc(&netlist) {
             Ok(r) => eprintln!(
                 "Range {start}-{stop}: OK ({} points)",
                 r.plots[0].vecs[0].data.as_real().len()
@@ -351,7 +354,7 @@ Q1 Q1_C Q1_B 0 N1
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vc = plot
@@ -417,7 +420,7 @@ Q9 Q9_B Q9_B Q8_B Q9_B P1
         .iter()
         .find(|n| matches!(n.analysis, Analysis::Ac { .. }))
         .expect("no .ac fork found");
-    let _result = thevenin::simulate_ac(netlist).unwrap();
+    let _result = simulate_ac(netlist);
 }
 
 // ===================== Simple NPN sanity test =====================
@@ -434,7 +437,7 @@ Q1 col base 0 N1
 .END
 ";
     let netlist = Netlist::parse_single(cir).unwrap();
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     // Print all vectors for debugging
@@ -472,7 +475,7 @@ Q1 col base emit P1
 .END
 ";
     let netlist = Netlist::parse_single(cir).unwrap();
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     // Print all vectors for debugging
@@ -519,7 +522,7 @@ Q1 Q1_C Q1_B Q1_E P1
 .END
 ";
     let netlist = Netlist::parse_single(cir).unwrap();
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
     for v in &plot.vecs {
         eprintln!("{}: {:?}", v.name, v.data);
@@ -553,7 +556,7 @@ Q1 Q1_C Q1_B Q1_E P1
 .END
 ";
     let netlist = Netlist::parse_single(cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
     let plot = &result.plots[0];
     let i_vc = plot
         .vecs

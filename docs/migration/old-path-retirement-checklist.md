@@ -6,29 +6,27 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
 
 ## Primary Interface
 
-- [~] **`thevenin_types::Netlist` as the primary input interface**
-  The simulator currently requires a `Netlist` to run. As the Cirq IR matures,
-  the simulator should accept `cirq_ir::Circuit` directly. The Netlist type
-  would become an internal intermediate or compatibility layer.
-  *Depends on:* Stage 4 of the adoption plan.
-  *Mostly landed on `feat/mna-circuit-input`* — session-by-session migration
-  plan in [`docs/migration/mna-ir-pivot-plan.md`](mna-ir-pivot-plan.md).
-  As of the last commit on that branch:
-  - Every `IrElementKind` variant assembles into an `MnaSystem` directly
-    via `thevenin::mna_ir::assemble_mna_from_circuit` (no Netlist
-    conversion needed). The full ngspice regression corpus
-    (100 fixtures) runs through `mna_ir` end-to-end on every commit.
-  - All eight analyses (op / dc / tran / ac / noise / sens / pz / tf)
-    have Circuit-input entry points in `thevenin::circuit::*`. Seven
-    of them (everything but sens) are Netlist-free on the happy path;
-    sens requires an IR-shape change to preserve the tokenized
-    `Vec<String>` it currently joins.
-  - Top-level `thevenin::circuit::simulate(&Circuit)` dispatcher mirrors
-    `thevenin::simulate(&Netlist)`. The CLI uses it for non-`.control`
-    circuits.
-  - Netlist-shaped public APIs still exist for the `.control`
-    interpreter, which mutates a Netlist in-place for TEMPER
-    expression evaluation (see the `.control` item below).
+- [x] **`thevenin_types::Netlist` as the primary input interface**
+  The Stage 4 surface is `thevenin::circuit::simulate(&cirq_ir::Circuit)`.
+  Every `IrElementKind` variant assembles into an `MnaSystem` directly via
+  `thevenin::mna_ir::assemble_mna_from_circuit`, and all eight analyses
+  (op / dc / tran / ac / noise / sens / pz / tf) have Circuit-input
+  entry points in `thevenin::circuit::*` that are Netlist-free on the
+  happy path. `thevenin::circuit::simulate(&Circuit)` is the top-level
+  dispatcher and includes multi-temperature sweep + `.meas` evaluation.
+
+  The Netlist-shaped `thevenin::simulate(&Netlist)` and per-analysis
+  `simulate_*(&Netlist)` / `simulate_*_with_mna(MnaSystem, &Netlist)`
+  helpers are `pub(crate)` post Stage 4. The harness, all `thevenin/tests`
+  integration suites, `cirq-frontend/tests/integration.rs`, the
+  `examples/`, and `src/main.rs` were migrated to use
+  `thevenin::circuit::simulate*(&Circuit)` (with a shared
+  `thevenin/tests/common/mod.rs` helper that wraps
+  `cirq_spice_import::import_netlist` + the IR-shape dispatcher for the
+  `Netlist::parse_single(spice) → simulate` flow that fixtures still
+  use). `simulate_op_with_xspice(&Netlist, registry)` stays `pub`
+  because there is no Circuit-input XSPICE equivalent yet.
+  *Resolved in:* Stage 4 + this session's demotion sweep.
 
 ## Naming Conventions
 

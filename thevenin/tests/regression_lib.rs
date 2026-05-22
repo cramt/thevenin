@@ -6,6 +6,9 @@ use approx::assert_abs_diff_eq;
 use std::path::Path;
 use thevenin_types::Netlist;
 
+mod common;
+use common::simulate_op;
+
 fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
     let plot = &result.plots[0];
     let key = format!("v({})", node.to_lowercase());
@@ -20,7 +23,7 @@ fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
 fn simulate_with_libs(cir: &str, base_dir: &Path) -> thevenin_types::SimResult {
     let mut netlist = Netlist::parse_single(cir).unwrap();
     thevenin::libproc::process_libs(&mut netlist, base_dir).unwrap();
-    thevenin::simulate_op(&netlist).unwrap()
+    simulate_op(&netlist)
 }
 
 /// ex1a: Basic .lib processing — load subcircuit from library file.
@@ -117,7 +120,7 @@ R1 n1 n2 2k
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     // sub1: 4k||4k = 2k → V = 2V
     assert_abs_diff_eq!(op_voltage(&result, "n1001_t"), 2.0, epsilon = 1e-6);
     // sub2: 2k||2k = 1k → V = 1V
@@ -168,7 +171,7 @@ R1 n1 n2 2k
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     assert_abs_diff_eq!(op_voltage(&result, "n1001_t"), 2.0, epsilon = 1e-6);
     assert_abs_diff_eq!(op_voltage(&result, "n1002_t"), 1.0, epsilon = 1e-6);
     assert_abs_diff_eq!(op_voltage(&result, "n1003_t"), 3.0, epsilon = 1e-6);
@@ -231,7 +234,7 @@ R1 n1 n2 'foo*13'
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     assert_abs_diff_eq!(op_voltage(&result, "n1001_t"), 11.25, epsilon = 1e-6);
     assert_abs_diff_eq!(
         op_voltage(&result, "n1002_t"),

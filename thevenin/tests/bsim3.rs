@@ -3,10 +3,12 @@
 //! Tests ported from ngspice-upstream/tests/bsim3/ qaSpec test suite.
 //! Model parameters match nmosParameters from the BSIM3 CMC QA suite.
 
-use thevenin::simulate_op;
 use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
+
+mod common;
+use common::{simulate_ac, simulate_dc, simulate_op, simulate_tran};
 
 /// Full BSIM3 model parameters from ngspice-upstream/tests/bsim3/nmos/parameters/nmosParameters.
 const BSIM3_NMOS_PARAMS: &str = "\
@@ -88,7 +90,7 @@ Vbs b 0 0.0
 fn test_bsim3_qaspec_dc_sweep_vg1p8() {
     let cir = bsim3_dc_sweep_cir(1.8);
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -146,7 +148,7 @@ fn test_bsim3_qaspec_dc_sweep_vg1p8() {
 fn test_bsim3_qaspec_dc_sweep_vg1p0() {
     let cir = bsim3_dc_sweep_cir(1.0);
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -172,7 +174,7 @@ fn test_bsim3_qaspec_dc_sweep_vg1p0() {
 fn test_bsim3_qaspec_dc_sweep_vg0p4() {
     let cir = bsim3_dc_sweep_cir(0.4);
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -213,7 +215,7 @@ Vds d 0 1.8
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -246,7 +248,7 @@ Vds d 0 0.0
 .end
 ";
     let netlist = Netlist::parse_single(cir).unwrap();
-    let result = simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -276,7 +278,7 @@ Vds d 0 0.0
 fn test_bsim3_qaspec_ac_freq() {
     let cir = bsim3_ac_freq_cir("");
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_ac(&netlist).unwrap();
+    let result = simulate_ac(&netlist);
 
     let plot = &result.plots[0];
 
@@ -316,7 +318,7 @@ fn test_bsim3_qaspec_ac_freq() {
 fn test_bsim3_qaspec_ac_freq_capmod1() {
     let cir = bsim3_ac_freq_cir("+ capmod=1");
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_ac(&netlist).unwrap();
+    let result = simulate_ac(&netlist);
 
     let plot = &result.plots[0];
     let freq = plot
@@ -337,7 +339,7 @@ fn test_bsim3_qaspec_ac_freq_capmod1() {
 fn test_bsim3_qaspec_ac_freq_xpart1() {
     let cir = bsim3_ac_freq_cir("+ xpart=1");
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_ac(&netlist).unwrap();
+    let result = simulate_ac(&netlist);
 
     let plot = &result.plots[0];
     let freq = plot
@@ -373,7 +375,7 @@ Vds d 0 0.0
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -410,7 +412,7 @@ Vds d 0 0.0
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let i_vds = plot
@@ -449,7 +451,7 @@ Vds d 0 1.8
 "
     );
     let netlist = Netlist::parse_single(&cir).unwrap();
-    let result = thevenin::simulate_tran(&netlist).unwrap();
+    let result = simulate_tran(&netlist);
 
     let plot = &result.plots[0];
     let time = plot

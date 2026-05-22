@@ -5,6 +5,9 @@
 use thevenin::output::{compare_filtered, format_batch_output_multi};
 use thevenin_types::Netlist;
 
+mod common;
+use common::{simulate_op, simulate_tran};
+
 const MOSAMP_CIR: &str = include_str!("fixtures/general/mosamp.cir");
 const MOSAMP_OUT: &str = include_str!("fixtures/general/mosamp.out");
 
@@ -21,7 +24,7 @@ vds 2 0 dc 3.0
 .end
 "#;
     let netlist = Netlist::parse_single(cir).unwrap();
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     assert!(!result.plots.is_empty(), "should produce at least one plot");
 }
 
@@ -42,7 +45,7 @@ vccp 2 0 dc +15
     let mut netlist = Netlist::parse_single(cir).unwrap();
     thevenin::expr::resolve_netlist_exprs(&mut netlist).unwrap();
     let netlist = thevenin::flatten_netlist(&netlist).unwrap();
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     assert!(!result.plots.is_empty(), "should produce at least one plot");
 }
 
@@ -52,7 +55,7 @@ fn test_mosamp_op_converges() {
     let mut netlist = Netlist::parse_single(MOSAMP_CIR).unwrap();
     thevenin::expr::resolve_netlist_exprs(&mut netlist).unwrap();
     let netlist = thevenin::flatten_netlist(&netlist).unwrap();
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     assert!(!result.plots.is_empty(), "should produce at least one plot");
 }
 
@@ -63,8 +66,8 @@ fn test_mosamp_against_ngspice_output() {
     thevenin::expr::resolve_netlist_exprs(&mut netlist).unwrap();
     let netlist = thevenin::flatten_netlist(&netlist).unwrap();
 
-    let op_result = thevenin::simulate_op(&netlist).unwrap();
-    let tran_result = thevenin::simulate_tran(&netlist).unwrap();
+    let op_result = simulate_op(&netlist);
+    let tran_result = simulate_tran(&netlist);
 
     let mut all_plots = op_result.plots;
     all_plots.extend(tran_result.plots);

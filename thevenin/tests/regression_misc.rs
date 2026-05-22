@@ -5,6 +5,9 @@
 use approx::assert_abs_diff_eq;
 use thevenin_types::Netlist;
 
+mod common;
+use common::{simulate_ac, simulate_op, simulate_pz};
+
 fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
     let plot = &result.plots[0];
     let key = format!("v({})", node.to_lowercase());
@@ -39,7 +42,7 @@ c3 3 0 1uF
     )
     .unwrap();
 
-    let result = thevenin::simulate_ac(&netlist).unwrap();
+    let result = simulate_ac(&netlist);
     let plot = &result.plots[0];
     let v3 = plot
         .vecs
@@ -74,7 +77,7 @@ R1 1 0 1Meg
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), *expected, epsilon = 1e-9);
     }
 }
@@ -100,7 +103,7 @@ R2 n2 0 1Meg
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     // (-2)^2 = 4
     assert_abs_diff_eq!(op_voltage(&result, "n1"), 4.0, epsilon = 1e-9);
     // -((-2)^2) = -4
@@ -130,7 +133,7 @@ R3 n3 0 1Meg
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     let ln_gold = 0.9932517730102834;
     let log10_gold = 0.43136376415898736;
@@ -180,7 +183,7 @@ V1 1 0 1
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     // select=3, select2=3 → R1 = 300
     // V(1) = 1V, I = V/R = 1/300
@@ -207,7 +210,7 @@ R2 2 0 4k
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     // DC: uses R1=1k (DC value), not 4k (AC value)
     // V(2) = 5.0 * 4k / (1k + 4k) = 4.0
@@ -237,7 +240,7 @@ R2 2 0 4k
     )
     .unwrap();
 
-    let result = thevenin::simulate_pz(&netlist).unwrap();
+    let result = simulate_pz(&netlist);
 
     // With AC R1=4k: tau = (4k||4k) * 1n = 2e-6
     // pole = -1/tau = -5e5
@@ -308,7 +311,7 @@ V1 1 0 1
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     assert_abs_diff_eq!(op_voltage(&result, "1"), 1.0, epsilon = 1e-9);
 }
 
@@ -335,7 +338,7 @@ V1 1 0 1
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     // select=99 → else → R1=300, I = 1/300
     let i = result.plots[0]
         .vecs
@@ -360,7 +363,7 @@ v2 2 0 dc=0
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let names: Vec<_> = result.plots[0].vecs.iter().map(|v| &v.name).collect();
     eprintln!("result vectors: {names:?}");
     for v in &result.plots[0].vecs {
@@ -390,7 +393,7 @@ v2 2 0 dc=0
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     // R = 1k, dT = 100, tc_factor = 1.1, R_eff = 1.1k
     // I = 100/1100 = 0.0909...
     let gold = 100.0 / (1000.0 * (1.0 + 100.0 * 0.001));
@@ -418,7 +421,7 @@ v3 3 0 dc=0
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     // R = 1k + v(9) = 1k, dT=100, tc_factor=1.1, R_eff=1.1k
     let gold = 100.0 / (1000.0 * (1.0 + 100.0 * 0.001));
     let iv3 = result.plots[0]

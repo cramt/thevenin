@@ -211,10 +211,41 @@ pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
 /// `{plot_name}_temp{index}_{temp}` — matching the shape produced by
 /// [`thevenin::simulate(&Netlist)`].
 pub fn simulate(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    if circuit.temps.len() > 1 {
-        return simulate_multi_temp(circuit, &circuit.temps);
+    let mut result = if circuit.temps.len() > 1 {
+        simulate_multi_temp(circuit, &circuit.temps)?
+    } else {
+        simulate_single(circuit)?
+    };
+    evaluate_circuit_measurements(circuit, &mut result);
+    Ok(result)
+}
+
+/// Run any `.meas` directives declared on the circuit against the simulation
+/// result, appending a `"measurements"` plot. Mirrors the Netlist-shape's
+/// `measure::evaluate_measurements`, which the simulator runs at the tail of
+/// every top-level `simulate(&Netlist)` call.
+fn evaluate_circuit_measurements(circuit: &Circuit, result: &mut SimResult) {
+    if circuit.measures.is_empty() {
+        return;
     }
-    simulate_single(circuit)
+    let mut nl = thevenin_types::Netlist {
+        title: String::new(),
+        items: circuit
+            .measures
+            .iter()
+            .map(|m| {
+                thevenin_types::Item::Meas(thevenin_types::MeasureSpec {
+                    name: m.name.clone(),
+                    analysis_type: m.analysis_type.clone(),
+                    spec: m.spec.clone(),
+                })
+            })
+            .collect(),
+        analysis: thevenin_types::Analysis::Op,
+        source: String::new(),
+    };
+    crate::measure::evaluate_measurements(&nl, result);
+    nl.items.clear();
 }
 
 /// Run every analysis declared on `circuit.analyses` once and concatenate

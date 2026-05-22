@@ -5,6 +5,9 @@
 use approx::assert_abs_diff_eq;
 use thevenin_types::Netlist;
 
+mod common;
+use common::simulate_op;
+
 fn op_current(result: &thevenin_types::SimResult, src: &str) -> f64 {
     let plot = &result.plots[0];
     let key = format!("{}#branch", src.to_lowercase());
@@ -53,7 +56,7 @@ d4 t4 0 1smb4148
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     // Current ratios should match Is ratios (at same forward bias)
     let i1 = op_current(&result, "vm1");
@@ -83,7 +86,7 @@ r1 1 0 myres
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     // V=1V, R=2k → I = 1/2k = 0.5mA
     let i_v1 = op_current(&result, "v1");

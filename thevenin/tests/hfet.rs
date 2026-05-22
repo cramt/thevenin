@@ -1,8 +1,10 @@
 use approx::assert_abs_diff_eq;
-use thevenin::{simulate_dc, simulate_op};
 use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
+
+mod common;
+use common::{simulate_dc, simulate_op};
 
 /// Port of ngspice-upstream/tests/hfet/id_vgs.cir
 ///
@@ -12,7 +14,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 fn test_hfet_id_vgs() {
     let cir = include_str!("fixtures/hfet/id_vgs.cir");
     let netlist = Netlist::parse_single(cir).unwrap();
-    let result = simulate_dc(&netlist).unwrap();
+    let result = simulate_dc(&netlist);
 
     let plot = &result.plots[0];
     let ids = plot
@@ -87,7 +89,7 @@ x2 1 3 4 inv
 .end
 ";
     let netlist = Netlist::parse_single(cir).unwrap();
-    let result = simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     // V(3): first inverter output, driver OFF → load pulls to ≈VDD

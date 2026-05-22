@@ -3,11 +3,11 @@
 //! A 1V pulse drives a 1kΩ + 10µF RC network.
 //! Time constant τ = R·C = 10ms.
 
-use thevenin::simulate;
-use thevenin_types::Netlist;
+use cirq_spice_import::import_spice;
+use thevenin::circuit::simulate;
 
 fn main() {
-    let netlist = Netlist::parse_single(
+    let circuit = import_spice(
         "\
 RC Pulse Response
 V1 in 0 PULSE(0 1 0 1n 1n 50m 100m)
@@ -17,9 +17,11 @@ C1 out 0 10u
 .end
 ",
     )
-    .expect("failed to parse netlist");
+    .expect("failed to parse SPICE source")
+    .pop()
+    .expect("expected at least one circuit");
 
-    let result = simulate(&netlist).expect("simulation failed");
+    let result = simulate(&circuit).expect("simulation failed");
 
     let time = result["time"].data.as_real();
     let vout = result["v(out)"].data.as_real();

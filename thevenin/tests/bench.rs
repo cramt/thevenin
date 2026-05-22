@@ -14,8 +14,10 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 
 use web_time::Instant;
 
-use thevenin::{simulate_ac, simulate_op, simulate_sens};
 use thevenin_types::Netlist;
+
+mod common;
+use common::{simulate_ac, simulate_op, simulate_sens};
 
 /// Run a closure `iters` times, returning (total_ns, per_iter_ns).
 fn bench_fn(iters: u32, mut f: impl FnMut()) -> (u128, u128) {
@@ -146,7 +148,7 @@ fn bench_op_resistor_divider() {
     let netlist = Netlist::parse_single(RESISTOR_DIVIDER_CIR).unwrap();
     let iters = 100;
     let (total, per) = bench_fn(iters, || {
-        let _ = simulate_op(&netlist).unwrap();
+        let _ = simulate_op(&netlist);
     });
     report("op_resistor_divider", iters, total, per);
 }
@@ -157,7 +159,7 @@ fn bench_dc_sweep_bsim3() {
     let netlist = Netlist::parse_single(&cir).unwrap();
     let iters = 10;
     let (total, per) = bench_fn(iters, || {
-        let _ = simulate_op(&netlist).unwrap();
+        let _ = simulate_op(&netlist);
     });
     report("dc_sweep_bsim3", iters, total, per);
 }
@@ -167,7 +169,7 @@ fn bench_ac_lowpass() {
     let netlist = Netlist::parse_single(LOWPASS_CIR).unwrap();
     let iters = 20;
     let (total, per) = bench_fn(iters, || {
-        let _ = simulate_ac(&netlist).unwrap();
+        let _ = simulate_ac(&netlist);
     });
     report("ac_lowpass", iters, total, per);
 }
@@ -177,7 +179,7 @@ fn bench_sensitivity() {
     let netlist = Netlist::parse_single(SENSITIVITY_CIR).unwrap();
     let iters = 50;
     let (total, per) = bench_fn(iters, || {
-        let _ = simulate_sens(&netlist).unwrap();
+        let _ = simulate_sens(&netlist);
     });
     report("sensitivity", iters, total, per);
 }

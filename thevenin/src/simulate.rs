@@ -186,31 +186,6 @@ pub(crate) fn solve_op_raw_with_nodeset(
     }
 }
 
-/// Compute the DC operating point with `diag_gmin = 0`, matching ngspice's
-/// behaviour for explicit `.op` analysis (`CKTdiagGmin` starts at 0).
-///
-/// This variant produces branch currents that match ngspice's `.op` output
-/// exactly, with output formatted for `.op` analysis.
-pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let mna = assemble_mna(netlist)?;
-    simulate_op_dc_with_mna(&mna)
-}
-
-/// Run the `.op` (CKT-mode DC) analysis on an already-assembled
-/// [`MnaSystem`].
-///
-/// Differs from [`simulate_op_with_mna`] in that it pins `diag_gmin = 0.0`
-/// (matching ngspice's `.op` branch-current convention from `cktop.c`) and
-/// does not consult `.OPTIONS` or `.nodeset`. Used by the regression
-/// harness via `Analysis::Op`. Shared between Netlist and IR-direct paths.
-pub fn simulate_op_dc_with_mna(mna: &MnaSystem) -> Result<SimResult, MnaError> {
-    let opts = NrOptions {
-        diag_gmin: 0.0,
-        ..NrOptions::default()
-    };
-    simulate_op_with_mna(mna, &opts, &[])
-}
-
 /// Solve a nonlinear DC operating point using Newton-Raphson.
 pub fn solve_nonlinear_op(mna: &MnaSystem, options: &NrOptions) -> Result<Vec<f64>, MnaError> {
     solve_nonlinear_op_with_guess(mna, options, None, &[])

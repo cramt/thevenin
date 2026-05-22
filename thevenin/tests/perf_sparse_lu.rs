@@ -25,7 +25,6 @@ use std::path::Path;
 use std::time::Instant;
 
 use cirq_spice_import::import_spice;
-use thevenin::flatten_netlist;
 use thevenin_control::{execute_control_block_ir, has_control_block_ir};
 
 /// Number of times to repeat each fixture so the wall time is large enough
@@ -64,14 +63,6 @@ fn run_fixture(path: &str) -> BenchResult {
     let src = std::fs::read_to_string(&abs_path)
         .unwrap_or_else(|e| panic!("read {}: {}", abs_path.display(), e));
     let circuits = import_spice(&src).expect("import_spice");
-    // Use the first circuit's flattened netlist for non-control paths.
-    let netlists: Vec<_> = circuits
-        .iter()
-        .map(|c| {
-            let nls = cirq_frontend::to_netlist::circuit_to_netlists(c).expect("to_netlist");
-            flatten_netlist(&nls[0]).expect("flatten")
-        })
-        .collect();
 
     thevenin::sparse::reset_solve_trace();
     let start = Instant::now();
@@ -80,9 +71,10 @@ fn run_fixture(path: &str) -> BenchResult {
             let r = execute_control_block_ir(&circuits[0]).expect("control");
             assert_eq!(r.exit_code, 0, "control quit nonzero");
         } else {
-            // Dispatch each analysis on the netlist (mirrors harness logic).
-            for nl in &netlists {
-                let _ = thevenin::simulate(nl).expect("simulate");
+            // Dispatch each analysis via the IR-shape top-level
+            // simulator (mirrors harness logic).
+            for circuit in &circuits {
+                let _ = thevenin::circuit::simulate(circuit).expect("simulate");
             }
         }
     }

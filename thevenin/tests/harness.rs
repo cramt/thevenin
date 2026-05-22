@@ -226,80 +226,64 @@ fn run_all_analyses(
     for (circuit_idx, netlist) in netlists {
         let circuit = &circuits[*circuit_idx];
 
-        // Build the MnaSystem once via mna_ir. Some analyses (DC sweep,
-        // transient) need a mutable handle to mutate the RHS in their
-        // sweep loop; we re-assemble per analysis to keep that simple
-        // (mna_ir assembly is cheap relative to the analysis solve).
-        let assemble = || -> Result<thevenin::mna::MnaSystem, String> {
-            thevenin::mna_ir::assemble_mna_from_circuit(circuit, false, None)
-                .map_err(|e| format!("mna_ir assembly error: {e}"))?
+        // Each iteration's netlist comes pre-split per analysis fork by
+        // `Netlist::parse`; copy that single analysis onto a clone of the
+        // shared Circuit so the Circuit-input dispatchers see exactly the
+        // analysis variant for this leg.
+        let mut per_analysis = circuit.clone();
+        per_analysis.analyses = vec![match &netlist.analysis {
+            Analysis::Op => cirq_ir::Analysis::Op,
+            _ => circuit
+                .analyses
+                .iter()
+                .find(|a| matches_kind(a, &netlist.analysis))
+                .cloned()
                 .ok_or_else(|| {
-                    "mna_ir rejected circuit (every IrElementKind should be supported)".to_string()
-                })
-        };
+                    format!(
+                        "harness: circuit has no IR analysis matching netlist {:?}",
+                        netlist.analysis
+                    )
+                })?,
+        }];
 
-        match &netlist.analysis {
-            Analysis::Op => {
-                let mna = assemble()?;
-                let result = thevenin::simulate_op_dc_with_mna(&mna)
-                    .map_err(|e| format!("OP error: {e}"))?;
-                all_plots.extend(result.plots);
-            }
-            Analysis::Dc { .. } => {
-                let mna = assemble()?;
-                let result = thevenin::simulate_dc_with_mna(mna, netlist)
-                    .map_err(|e| format!("DC error: {e}"))?;
-                all_plots.extend(result.plots);
-            }
-            Analysis::Tran { .. } => {
-                // Also get OP for initial transient solution.
-                let mna_op = assemble()?;
-                if let Ok(op_result) = thevenin::simulate_op_with_mna(
-                    &mna_op,
-                    &thevenin::nr_options_from_netlist(netlist),
-                    &[],
-                ) {
-                    all_plots.extend(op_result.plots);
-                }
-                let mna_tran = assemble()?;
-                let result = thevenin::simulate_tran_with_mna(mna_tran, netlist)
-                    .map_err(|e| format!("Tran error: {e}"))?;
-                all_plots.extend(result.plots);
-            }
-            Analysis::Ac { .. } => {
-                let mna = assemble()?;
-                let result = thevenin::simulate_ac_with_mna(mna, netlist)
-                    .map_err(|e| format!("AC error: {e}"))?;
-                all_plots.extend(result.plots);
-            }
-            Analysis::Noise { .. } => {
-                let mna = assemble()?;
-                let result = thevenin::simulate_noise_with_mna(mna, netlist)
-                    .map_err(|e| format!("Noise error: {e}"))?;
-                all_plots.extend(result.plots);
-            }
-            Analysis::Tf { .. } => {
-                let mna = assemble()?;
-                let result = thevenin::simulate_tf_with_mna(mna, netlist)
-                    .map_err(|e| format!("TF error: {e}"))?;
-                all_plots.extend(result.plots);
-            }
-            Analysis::Sens { .. } => {
-                let mna = assemble()?;
-                let result = thevenin::simulate_sens_with_mna(mna, netlist)
-                    .map_err(|e| format!("Sens error: {e}"))?;
-                all_plots.extend(result.plots);
-            }
-            Analysis::Pz { .. } => {
-                let mna = assemble()?;
-                let result = thevenin::simulate_pz_with_mna(mna, netlist)
-                    .map_err(|e| format!("PZ error: {e}"))?;
-                all_plots.extend(result.plots);
-            }
-        }
+        let result = match &netlist.analysis {
+            Analysis::Op => thevenin::circuit::simulate_op(&per_analysis)
+                .map_err(|e| format!("OP error: {e}"))?,
+            Analysis::Dc { .. } => thevenin::circuit::simulate_dc(&per_analysis)
+                .map_err(|e| format!("DC error: {e}"))?,
+            Analysis::Tran { .. } => thevenin::circuit::simulate_tran(&per_analysis)
+                .map_err(|e| format!("Tran error: {e}"))?,
+            Analysis::Ac { .. } => thevenin::circuit::simulate_ac(&per_analysis)
+                .map_err(|e| format!("AC error: {e}"))?,
+            Analysis::Noise { .. } => thevenin::circuit::simulate_noise(&per_analysis)
+                .map_err(|e| format!("Noise error: {e}"))?,
+            Analysis::Tf { .. } => thevenin::circuit::simulate_tf(&per_analysis)
+                .map_err(|e| format!("TF error: {e}"))?,
+            Analysis::Sens { .. } => thevenin::circuit::simulate_sens(&per_analysis)
+                .map_err(|e| format!("Sens error: {e}"))?,
+            Analysis::Pz { .. } => thevenin::circuit::simulate_pz(&per_analysis)
+                .map_err(|e| format!("PZ error: {e}"))?,
+        };
+        all_plots.extend(result.plots);
     }
 
     Ok(SimResult { plots: all_plots })
+}
+
+fn matches_kind(ir: &cirq_ir::Analysis, netlist: &Analysis) -> bool {
+    use cirq_ir::Analysis as I;
+    use thevenin_types::Analysis as N;
+    matches!(
+        (ir, netlist),
+        (I::Op, N::Op)
+            | (I::Dc(_), N::Dc { .. })
+            | (I::Tran(_), N::Tran { .. })
+            | (I::Ac(_), N::Ac { .. })
+            | (I::Noise(_), N::Noise { .. })
+            | (I::Tf(_), N::Tf { .. })
+            | (I::Sens(_), N::Sens { .. })
+            | (I::Pz(_), N::Pz { .. })
+    )
 }
 
 // Generate all test functions from ngspice-upstream/tests/ at compile time.

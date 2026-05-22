@@ -6,6 +6,9 @@ use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
+mod common;
+use common::{simulate_op, simulate_tran};
+
 const SIMPLEINV_CIR: &str = include_str!("fixtures/mos6/simpleinv.cir");
 
 /// Test that the MOS6 CMOS inverter netlist parses and the DC operating point
@@ -16,7 +19,7 @@ fn test_mos6_simpleinv_parses_and_op_converges() {
     let netlist = Netlist::parse_single(SIMPLEINV_CIR).unwrap();
 
     // Run the operating point (DC) analysis to verify convergence.
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     assert!(!result.plots.is_empty(), "should produce at least one plot");
 
     let plot = &result.plots[0];
@@ -37,7 +40,7 @@ fn test_mos6_simpleinv_parses_and_op_converges() {
 #[test]
 fn test_mos6_simpleinv_transient() {
     let netlist = Netlist::parse_single(SIMPLEINV_CIR).unwrap();
-    let result = thevenin::simulate_tran(&netlist).unwrap();
+    let result = simulate_tran(&netlist);
 
     assert!(!result.plots.is_empty(), "should produce at least one plot");
     let plot = &result.plots[0];

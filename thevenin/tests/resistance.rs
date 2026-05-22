@@ -4,10 +4,12 @@
 //! thevenin, and compares output against expected .out reference values.
 
 use approx::assert_abs_diff_eq;
-use thevenin::simulate_op;
 use thevenin_types::{Analysis, Netlist, SimResult};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
+
+mod common;
+use common::simulate_op;
 
 const RES_SIMPLE_CIR: &str = include_str!("fixtures/resistance/res_simple.cir");
 const RES_SIMPLE_OUT: &str = include_str!("fixtures/resistance/res_simple.out");
@@ -159,7 +161,7 @@ fn res_simple_dc_op() {
     // shown in the ngspice .out file.
     let netlists = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
     let netlist = &netlists[0];
-    let result = simulate_op(netlist).unwrap();
+    let result = simulate_op(netlist);
 
     // From .out: Node 1 = 1V, v1#branch = -0.0001
     assert_abs_diff_eq!(op_voltage(&result, "1"), 1.0, epsilon = 1e-9);
@@ -211,7 +213,7 @@ fn res_partition_parses() {
 fn res_partition_dc_op() {
     let netlists = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
     let netlist = find_op(&netlists);
-    let result = simulate_op(netlist).unwrap();
+    let result = simulate_op(netlist);
 
     // From .out: V(1)=1.0, V(2)=0.5, vin#branch=-0.0001
     assert_abs_diff_eq!(op_voltage(&result, "1"), 1.0, epsilon = 1e-9);
@@ -268,7 +270,7 @@ fn res_array_dc_op() {
     // model evaluation to compute effective resistance. Not yet supported.
     let netlists = parse_cir(RES_ARRAY_CIR, "res_array.cir");
     let netlist = find_op(&netlists);
-    let result = simulate_op(netlist).unwrap();
+    let result = simulate_op(netlist);
 
     // Expected from .out:
     assert_abs_diff_eq!(op_voltage(&result, "1"), 1.0, epsilon = 1e-9);

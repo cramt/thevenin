@@ -1,8 +1,10 @@
 use approx::assert_abs_diff_eq;
-use thevenin::{simulate_sens, simulate_tf};
 use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
+
+mod common;
+use common::{simulate_sens, simulate_tf};
 
 fn tf_value(result: &thevenin_types::SimResult, plot_idx: usize, name: &str) -> f64 {
     result.plots[plot_idx]
@@ -64,7 +66,7 @@ vee 9 0 -12
     assert_eq!(netlists.len(), 2);
 
     // .tf v(5) vcm — common-mode TF
-    let result_cm = simulate_tf(&netlists[0]).unwrap();
+    let result_cm = simulate_tf(&netlists[0]);
     let tf_cm = tf_value(&result_cm, 0, "transfer_function");
     assert_abs_diff_eq!(tf_cm, -1.10341e-01, epsilon = 1e-2);
 
@@ -76,7 +78,7 @@ vee 9 0 -12
     assert_abs_diff_eq!(z_in_cm, 1.793e6, epsilon = 1e4);
 
     // .tf v(5) vdm — differential-mode TF
-    let result_dm = simulate_tf(&netlists[1]).unwrap();
+    let result_dm = simulate_tf(&netlists[1]);
     // ngspice reference: transfer_function = -8.78493e+01
     let tf_dm = tf_value(&result_dm, 0, "transfer_function");
     assert_abs_diff_eq!(tf_dm, -8.78493e1, epsilon = 1.0);
@@ -117,7 +119,7 @@ vee 9 0 -12
     )
     .unwrap();
 
-    let result = simulate_sens(&netlist).unwrap();
+    let result = simulate_sens(&netlist);
 
     // Resistor sensitivities (from diffpair.out reference)
     // rc1 sensitivity: 6.031558e-04
@@ -156,7 +158,7 @@ r1 1 0 1k
     )
     .unwrap();
 
-    let result = simulate_sens(&netlist).unwrap();
+    let result = simulate_sens(&netlist);
 
     // Golden values from ngspice
     assert_abs_diff_eq!(sens_value(&result, "i1"), 1000.0, epsilon = 1e-3);
@@ -183,7 +185,7 @@ rx 2 4 2.7k
     )
     .unwrap();
 
-    let result = simulate_sens(&netlist).unwrap();
+    let result = simulate_sens(&netlist);
 
     // Golden values from ngspice
     assert_abs_diff_eq!(

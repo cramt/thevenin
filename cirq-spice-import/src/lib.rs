@@ -651,6 +651,25 @@ fn expr_to_value(expr: &Expr) -> Value {
     }
 }
 
+/// Strip SPICE voltage syntax `v(node[,ref])` to recover the bare node
+/// names. A bare token round-trips unchanged. Mirrors
+/// `thevenin::noise::parse_output_spec` so the IR's `output_net` /
+/// `reference_net` Ids point at the actual circuit nets rather than at
+/// `v(...)`-shaped artifact strings.
+fn parse_voltage_node_spec(spec: &str) -> (String, Option<String>) {
+    let s = spec.trim();
+    let stripped = s.strip_prefix("v(").or_else(|| s.strip_prefix("V("));
+    let Some(rest) = stripped else {
+        return (s.to_string(), None);
+    };
+    let inner = rest.strip_suffix(')').unwrap_or(rest);
+    if let Some((pos, neg)) = inner.split_once(',') {
+        (pos.trim().to_string(), Some(neg.trim().to_string()))
+    } else {
+        (inner.trim().to_string(), None)
+    }
+}
+
 /// Convert a slice of `thevenin_types::Param` to Cirq IR param pairs.
 fn convert_params(params: &[Param]) -> Vec<(String, Value)> {
     params
@@ -1168,7 +1187,15 @@ fn intern_analysis_nodes(analysis: &SpiceAnalysis, nets: &mut NetTable) {
         SpiceAnalysis::Noise {
             output, ref_node, ..
         } => {
-            nets.intern(output);
+            // Unpack `v(node)` / `v(node,ref)` before interning so the
+            // resulting Net table doesn't accumulate `v(...)` artifact
+            // names. The analysis-conversion pass below performs the same
+            // unpacking when wiring Ids.
+            let (out_name, inline_ref) = parse_voltage_node_spec(output);
+            nets.intern(&out_name);
+            if let Some(name) = inline_ref {
+                nets.intern(&name);
+            }
             if let Some(r) = ref_node {
                 nets.intern(r);
             }
@@ -1814,8 +1841,17 @@ fn convert_analysis(
             fstart,
             fstop,
         } => {
-            let output_id = nets.intern(output);
-            let ref_id = ref_node.as_ref().map(|r| nets.intern(r)).unwrap_or(Id(0));
+            // SPICE permits `v(node)` or `v(node,ref)` as the output spec.
+            // The IR carries separate `output_net` / `reference_net` Ids,
+            // so unpack the parenthesised form here before interning — an
+            // inline reference takes precedence over `ref_node`.
+            let (out_name, inline_ref) = parse_voltage_node_spec(output);
+            let ref_name = inline_ref.or_else(|| ref_node.as_ref().map(|r| r.to_string()));
+            let output_id = nets.intern(&out_name);
+            let ref_id = match ref_name.as_deref() {
+                Some(name) => nets.intern(name),
+                None => Id(0),
+            };
             let src_id = element_names
                 .get(&src.to_ascii_uppercase())
                 .copied()

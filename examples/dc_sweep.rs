@@ -2,11 +2,11 @@
 //!
 //! Sweeps voltage source V1 from -0.5V to 0.8V and prints the diode current.
 
-use thevenin::simulate;
-use thevenin_types::Netlist;
+use cirq_spice_import::import_spice;
+use thevenin::circuit::simulate;
 
 fn main() {
-    let netlist = Netlist::parse_single(
+    let circuit = import_spice(
         "\
 Diode IV Curve
 V1 anode 0 0
@@ -16,9 +16,11 @@ D1 anode 0 DMOD
 .end
 ",
     )
-    .expect("failed to parse netlist");
+    .expect("failed to parse SPICE source")
+    .pop()
+    .expect("expected at least one circuit");
 
-    let result = simulate(&netlist).expect("simulation failed");
+    let result = simulate(&circuit).expect("simulation failed");
 
     let sweep = result["v-sweep"].data.as_real();
     let current = result["v1#branch"].data.as_real();

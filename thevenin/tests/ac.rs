@@ -1,8 +1,10 @@
 //! Integration tests for AC analysis, porting ngspice-upstream/tests/filters/ tests.
 
 use approx::assert_abs_diff_eq;
-use thevenin::simulate_ac;
 use thevenin_types::Netlist;
+
+mod common;
+use common::simulate_ac;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -21,7 +23,7 @@ fn test_lowpass_filter() {
         .find(|n| matches!(n.analysis, thevenin_types::Analysis::Ac { .. }))
         .expect("no .ac analysis found");
 
-    let result = simulate_ac(&netlist).expect("AC simulation failed");
+    let result = simulate_ac(&netlist);
     assert_eq!(result.plots.len(), 1);
 
     let plot = &result.plots[0];
@@ -86,7 +88,7 @@ C1 2 0 1u
     )
     .unwrap();
 
-    let result = simulate_ac(&netlist).unwrap();
+    let result = simulate_ac(&netlist);
     let plot = &result.plots[0];
     let freq_vec = plot.vecs.iter().find(|v| v.name == "frequency").unwrap();
     let v2_vec = plot.vecs.iter().find(|v| v.name == "v(2)").unwrap();

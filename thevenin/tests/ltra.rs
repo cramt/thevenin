@@ -3,6 +3,9 @@ use thevenin_types::Netlist;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
+mod common;
+use common::{simulate_op, simulate_tran};
+
 /// Helper to get a vector from a transient result.
 fn tran_vector<'a>(result: &'a thevenin_types::SimResult, name: &str) -> &'a [f64] {
     result.plots[0]
@@ -32,7 +35,7 @@ R2 3 0 200
     )
     .expect("parse failed");
 
-    let result = thevenin::simulate_tran(&netlist).expect("tran failed");
+    let result = simulate_tran(&netlist);
     let time = tran_vector(&result, "time");
     let _v2 = tran_vector(&result, "v(2)");
     let v3 = tran_vector(&result, "v(3)");
@@ -77,7 +80,7 @@ C1 3 0 0.025e-12
     )
     .expect("parse failed");
 
-    let result = thevenin::simulate_tran(&netlist).expect("tran failed");
+    let result = simulate_tran(&netlist);
     let time = tran_vector(&result, "time");
     let v3 = tran_vector(&result, "v(3)");
 
@@ -119,7 +122,7 @@ R2 3 0 100
     )
     .expect("parse failed");
 
-    let result = thevenin::simulate_op(&netlist).expect("op failed");
+    let result = simulate_op(&netlist);
     let plot = &result.plots[0];
 
     // DC: LTRA acts as R*len = 10*1 = 10 ohm resistor
@@ -141,7 +144,7 @@ R2 3 0 100
 fn test_ltra1_1_line_ngspice() {
     let cir = include_str!("fixtures/transmission/ltra1_1_line.cir");
     let netlist = Netlist::parse_single(cir).expect("parse failed");
-    let result = thevenin::simulate_tran(&netlist).expect("tran failed");
+    let result = simulate_tran(&netlist);
     let time = tran_vector(&result, "time");
     let v2 = tran_vector(&result, "v(2)");
     let v3 = tran_vector(&result, "v(3)");
@@ -172,7 +175,7 @@ fn test_ltra1_1_line_ngspice() {
 fn test_ltra2_2_line_ngspice() {
     let cir = include_str!("fixtures/transmission/ltra2_2_line.cir");
     let netlist = Netlist::parse_single(cir).expect("parse failed");
-    let result = thevenin::simulate_tran(&netlist).expect("tran failed");
+    let result = simulate_tran(&netlist);
     let time = tran_vector(&result, "time");
     let _v2 = tran_vector(&result, "v(2)");
     let _v3 = tran_vector(&result, "v(3)");

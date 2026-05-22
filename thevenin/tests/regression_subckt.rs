@@ -5,6 +5,9 @@
 use approx::assert_abs_diff_eq;
 use thevenin_types::Netlist;
 
+mod common;
+use common::simulate_op;
+
 fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
     let plot = &result.plots[0];
     let key = format!("v({})", node.to_lowercase());
@@ -72,7 +75,7 @@ Rn  n1 0  100k
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     // Global nodes should have their expected voltages
     assert_abs_diff_eq!(op_voltage(&result, "n1001_t"), 2.0, epsilon = 1e-6);
@@ -132,7 +135,7 @@ x2    n1002_t n1003_t n1004_t n1005_t n1006_t n1007_t  sub2
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
 
     // x1 uses sub1's local .model my (r=2k) → v = 1A * 2k = 2k
     assert_abs_diff_eq!(op_voltage(&result, "n1001_t"), 2000.0, epsilon = 1.0);

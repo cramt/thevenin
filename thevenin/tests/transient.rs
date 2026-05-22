@@ -1,5 +1,8 @@
 //! Integration tests ported from ngspice-upstream/tests/transient/
 
+mod common;
+use common::simulate_tran;
+
 const FOURBITADDER_CIR: &str = include_str!("fixtures/transient/fourbitadder.cir");
 const FOURBITADDER_OUT: &str = include_str!("fixtures/transient/fourbitadder.out");
 
@@ -11,7 +14,7 @@ fn test_fourbitadder() {
     // Once BJT and subcircuit support are implemented, this should:
     // 1. Run transient analysis
     // 2. Compare v(1) output against fourbitadder.out reference
-    let result = thevenin::simulate_tran(&netlist).unwrap();
+    let result = simulate_tran(&netlist);
 
     // Reference output available as FOURBITADDER_OUT.
     let _ = FOURBITADDER_OUT;

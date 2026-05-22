@@ -5,6 +5,9 @@
 use approx::assert_abs_diff_eq;
 use thevenin_types::Netlist;
 
+mod common;
+use common::simulate_op;
+
 fn op_voltage(result: &thevenin_types::SimResult, node: &str) -> f64 {
     let plot = &result.plots[0];
     let key = format!("v({})", node.to_lowercase());
@@ -30,7 +33,7 @@ R1 1 0 1k
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     assert_abs_diff_eq!(op_voltage(&result, "1"), 5.0, epsilon = 1e-9);
 }
 
@@ -47,7 +50,7 @@ R1 1 0 1k
     )
     .unwrap();
 
-    let result = thevenin::simulate_op(&netlist).unwrap();
+    let result = simulate_op(&netlist);
     assert_abs_diff_eq!(op_voltage(&result, "1"), 5.0, epsilon = 1e-9);
 }
 
@@ -76,7 +79,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), *expected, epsilon = 1e-9);
     }
 }
@@ -117,7 +120,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), *expected, epsilon = 1e-9);
     }
 }
@@ -143,7 +146,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), *expected, epsilon = 1e-9);
     }
 }
@@ -190,7 +193,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), *expected, epsilon = 1e-6);
     }
 }
@@ -223,7 +226,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         let v = op_voltage(&result, "1");
         let rel_err = if expected.abs() > 1e-20 {
             (v - expected).abs() / expected.abs()
@@ -257,7 +260,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), expected_nint, epsilon = 1e-9);
 
         // floor
@@ -271,7 +274,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), expected_floor, epsilon = 1e-9);
 
         // ceil
@@ -285,7 +288,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), expected_ceil, epsilon = 1e-9);
     }
 }
@@ -315,7 +318,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), *expected, epsilon = 1e-9);
     }
 }
@@ -356,7 +359,7 @@ R1 1 0 1k
 "
         ))
         .unwrap();
-        let result = thevenin::simulate_op(&netlist).unwrap();
+        let result = simulate_op(&netlist);
         assert_abs_diff_eq!(op_voltage(&result, "1"), *expected, epsilon = 1e-9);
     }
 }

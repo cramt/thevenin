@@ -101,26 +101,6 @@ fn print_plots(plots: &[thevenin_types::SimPlot]) {
     }
 }
 
-/// Route SPICE source text through the Cirq IR pipeline.
-///
-/// Parses SPICE → imports into Cirq IR → converts back to Netlist for
-/// simulation. This is the IR round-trip the tests exercise. The runtime
-/// `run_circuits` path keeps the IR in hand instead of flattening to
-/// Netlists here, so this helper is only used by the integration tests.
-#[cfg(test)]
-fn spice_through_ir(
-    source: &str,
-) -> Result<Vec<thevenin_types::Netlist>, Box<dyn std::error::Error>> {
-    let circuits = cirq_spice_import::import_spice(source)?;
-    let mut all_netlists = Vec::new();
-    for circuit in &circuits {
-        let netlists = cirq_frontend::to_netlist::circuit_to_netlists(circuit)
-            .map_err(|e| format!("IR-to-netlist conversion failed: {e}"))?;
-        all_netlists.extend(netlists);
-    }
-    Ok(all_netlists)
-}
-
 /// Detect Cirq source files by extension.
 fn is_cirq_file(path: &str) -> bool {
     Path::new(path).extension().is_some_and(|ext| ext == "cirq")
@@ -131,7 +111,6 @@ mod tests {
     #[cfg(target_arch = "wasm32")]
     use wasm_bindgen_test::wasm_bindgen_test as test;
 
-    use super::spice_through_ir;
     use thevenin_types::VectorData;
 
     /// Check that two f64 values are approximately equal (absolute or relative).
@@ -139,19 +118,29 @@ mod tests {
         (a - b).abs() < 1e-9 || (a - b).abs() / a.abs().max(1e-15) < 1e-6
     }
 
-    /// Simulate SPICE source via legacy (direct) and IR paths, assert results match.
+    /// Simulate SPICE source through the IR pipeline twice (once via
+    /// `Netlist::parse_single` + `import_netlist`, once via
+    /// `import_spice`) and assert both produce identical results.
+    ///
+    /// Historically this compared the IR path against a Netlist-shaped
+    /// direct path, but the latter is `pub(crate)` post Stage 4; both legs
+    /// now exit through `thevenin::circuit::simulate`, so the assertion
+    /// exercises SPICE-parse fidelity rather than two distinct simulators.
     fn assert_roundtrip(spice: &str) {
         let legacy_netlist = thevenin_types::Netlist::parse_single(spice).unwrap();
-        let legacy_result = thevenin::simulate(&legacy_netlist).unwrap();
+        let mut resolved = legacy_netlist.clone();
+        thevenin::expr::resolve_netlist_exprs(&mut resolved).unwrap();
+        let legacy_circuit = cirq_spice_import::import_netlist(&resolved).unwrap();
+        let legacy_result = thevenin::circuit::simulate(&legacy_circuit).unwrap();
 
-        let ir_netlists = spice_through_ir(spice).unwrap();
+        let circuits = cirq_spice_import::import_spice(spice).unwrap();
         assert_eq!(
-            ir_netlists.len(),
+            circuits.len(),
             1,
-            "expected one netlist from IR path, got {}",
-            ir_netlists.len()
+            "expected one circuit from IR path, got {}",
+            circuits.len()
         );
-        let ir_result = thevenin::simulate(&ir_netlists[0]).unwrap();
+        let ir_result = thevenin::circuit::simulate(&circuits[0]).unwrap();
 
         assert_eq!(
             legacy_result.plots.len(),
