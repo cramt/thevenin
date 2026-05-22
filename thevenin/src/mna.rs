@@ -1101,14 +1101,6 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     assemble_mna_inner(netlist, false, None)
 }
 
-/// Assemble MNA with an XSPICE code model registry.
-pub fn assemble_mna_with_xspice(
-    netlist: &Netlist,
-    registry: Arc<CodeModelRegistry>,
-) -> Result<MnaSystem, MnaError> {
-    assemble_mna_inner(netlist, false, Some(registry))
-}
-
 fn assemble_mna_inner(
     netlist: &Netlist,
     modedc: bool,

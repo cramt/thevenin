@@ -20,9 +20,12 @@
 //! [`cirq_frontend::to_netlist::circuit_to_netlists`] themselves and dispatch
 //! each resulting netlist with [`crate::simulate_op`] / etc.
 
+use std::sync::Arc;
+
 use cirq_frontend::to_netlist::{ConvertError, circuit_to_netlists};
 use cirq_ir::Circuit;
 use thevenin_types::{Analysis, Netlist, SimPlot, SimResult};
+use thevenin_xspice::CodeModelRegistry;
 
 use crate::MnaError;
 use crate::mna_ir;
@@ -73,6 +76,31 @@ fn pick<'a>(
             expected,
             found: nls.len(),
         })
+}
+
+/// Compute the DC operating point with an XSPICE code model registry.
+///
+/// Assembles MNA directly from the IR through
+/// [`mna_ir::assemble_mna_from_circuit`] with the registry threaded
+/// through, then solves with default NR options and no nodeset —
+/// preserving the historical XSPICE-OP behaviour. The result is
+/// formatted via the shared `simulate_op_with_mna` so output shape stays
+/// canonical.
+pub fn simulate_op_with_xspice(
+    circuit: &Circuit,
+    registry: Arc<CodeModelRegistry>,
+) -> Result<SimResult, CircuitSimError> {
+    let mna =
+        mna_ir::assemble_mna_from_circuit(circuit, false, Some(registry))?.ok_or_else(|| {
+            CircuitSimError::Mna(MnaError::UnsupportedElement(
+                "circuit not representable in mna_ir for XSPICE OP".to_string(),
+            ))
+        })?;
+    Ok(crate::simulate::simulate_op_with_mna(
+        &mna,
+        &crate::newton::NrOptions::default(),
+        &[],
+    )?)
 }
 
 /// Run a DC operating-point analysis on the circuit.

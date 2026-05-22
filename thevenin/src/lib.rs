@@ -115,10 +115,6 @@ pub(crate) use tf::simulate_tf;
 pub(crate) use transient::simulate_tran;
 pub use transient::{TranOutcome, TranPauseSnapshot, TranRunParams, TranStartState, run_tran};
 
-// XSPICE convenience entry — still pub because there is no Circuit-input
-// equivalent yet (`circuit::simulate_op` takes no registry).
-pub use simulate::simulate_op_with_xspice;
-
 // Utilities
 pub use mna::MnaError;
 pub use subckt::flatten_netlist;

@@ -5,6 +5,9 @@ use std::sync::Arc;
 use thevenin_types::Netlist;
 use thevenin_xspice::*;
 
+mod common;
+use common::simulate_op_with_xspice;
+
 /// Register a simple VCCS gain code model:
 /// Reads V(in), outputs I(out) = gain * V(in)
 fn gain_vccs_registry(gain: f64) -> Arc<CodeModelRegistry> {
@@ -47,7 +50,7 @@ A1 in out amp1
 ";
     let netlist = Netlist::parse_single(cir).unwrap();
     let registry = gain_vccs_registry(0.01);
-    let result = thevenin::simulate_op_with_xspice(&netlist, registry).unwrap();
+    let result = simulate_op_with_xspice(&netlist, registry);
 
     let plot = &result.plots[0];
     let v_out = plot
@@ -126,7 +129,7 @@ A1 [mid 0] nlc1
 ";
     let netlist = Netlist::parse_single(cir).unwrap();
     let registry = nonlinear_conductance_registry();
-    let result = thevenin::simulate_op_with_xspice(&netlist, registry).unwrap();
+    let result = simulate_op_with_xspice(&netlist, registry);
 
     let plot = &result.plots[0];
     let v_mid = plot
@@ -157,7 +160,7 @@ R2 out 0 1k
 ";
     let netlist = Netlist::parse_single(cir).unwrap();
     let registry = Arc::new(CodeModelRegistry::new());
-    let result = thevenin::simulate_op_with_xspice(&netlist, registry).unwrap();
+    let result = simulate_op_with_xspice(&netlist, registry);
 
     let plot = &result.plots[0];
     let v_out = plot

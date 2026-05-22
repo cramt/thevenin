@@ -1,12 +1,9 @@
-use std::sync::Arc;
-
 use thevenin_types::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimVector};
-use thevenin_xspice::CodeModelRegistry;
 
 use crate::LinearSystem;
 use crate::device_stamp::DeviceVoltageState;
 use crate::expr_val;
-use crate::mna::{MnaError, MnaSystem, assemble_mna, assemble_mna_with_xspice};
+use crate::mna::{MnaError, MnaSystem, assemble_mna};
 use crate::newton::{NrMode, NrOptions, newton_raphson_solve_with_mode, source_stepping_solve};
 
 /// Extract Newton-Raphson options from netlist `.OPTIONS` directives.
@@ -114,18 +111,6 @@ pub fn simulate_op_with_mna(
             vecs,
         }],
     })
-}
-
-/// Compute the DC operating point with an XSPICE code model registry.
-pub fn simulate_op_with_xspice(
-    netlist: &Netlist,
-    registry: Arc<CodeModelRegistry>,
-) -> Result<SimResult, MnaError> {
-    let mna = assemble_mna_with_xspice(netlist, registry)?;
-    // XSPICE entry historically uses default NR options and no nodeset —
-    // preserve that, but route the solve + formatting through the shared
-    // `simulate_op_with_mna` so output shape stays canonical.
-    simulate_op_with_mna(&mna, &NrOptions::default(), &[])
 }
 
 /// Solve the DC operating point and return the raw solution vector.

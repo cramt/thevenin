@@ -24,9 +24,10 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
   `thevenin/tests/common/mod.rs` helper that wraps
   `cirq_spice_import::import_netlist` + the IR-shape dispatcher for the
   `Netlist::parse_single(spice) → simulate` flow that fixtures still
-  use). `simulate_op_with_xspice(&Netlist, registry)` stays `pub`
-  because there is no Circuit-input XSPICE equivalent yet.
-  *Resolved in:* Stage 4 + this session's demotion sweep.
+  use). `thevenin::circuit::simulate_op_with_xspice(&Circuit, registry)`
+  is the public XSPICE entry; the legacy Netlist-shape XSPICE wrapper
+  and its `mna::assemble_mna_with_xspice` plumbing are deleted.
+  *Resolved in:* Stage 4 + the demotion + xspice-circuit sweeps.
 
 ## Naming Conventions
 

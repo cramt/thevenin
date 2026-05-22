@@ -18,9 +18,12 @@
 
 #![allow(dead_code)]
 
+use std::sync::Arc;
+
 use cirq_ir::Analysis;
 use cirq_spice_import::import_netlist;
 use thevenin_types::{Netlist, SimResult};
+use thevenin_xspice::CodeModelRegistry;
 
 fn lift(netlist: &Netlist, override_analysis: Option<Analysis>) -> cirq_ir::Circuit {
     // The IR importer's mini-evaluator doesn't cover the full SPICE
@@ -64,6 +67,20 @@ pub fn try_simulate_dc(netlist: &Netlist) -> Result<SimResult, String> {
 pub fn try_simulate_op(netlist: &Netlist) -> Result<SimResult, String> {
     let c = lift(netlist, Some(Analysis::Op));
     thevenin::circuit::simulate_op(&c).map_err(|e| e.to_string())
+}
+
+/// Run a DC operating-point solve with an XSPICE code model registry.
+///
+/// Bridges the Netlist test fixtures to
+/// [`thevenin::circuit::simulate_op_with_xspice`] the same way
+/// [`simulate_op`] bridges the plain OP path. The netlist's analysis tag
+/// is overridden with `.op` so a `.tran`-declaring XSPICE fixture still
+/// resolves through the OP entry, matching the historical
+/// `thevenin::simulate_op_with_xspice` behaviour.
+pub fn simulate_op_with_xspice(netlist: &Netlist, registry: Arc<CodeModelRegistry>) -> SimResult {
+    let c = lift(netlist, Some(Analysis::Op));
+    thevenin::circuit::simulate_op_with_xspice(&c, registry)
+        .expect("circuit::simulate_op_with_xspice")
 }
 
 /// Run a transient analysis. Requires the netlist to declare `.tran`.
