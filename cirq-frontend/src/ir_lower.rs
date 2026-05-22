@@ -207,6 +207,11 @@ struct IrCtx {
     // Stacked per module instantiation level.
     net_remap: HashMap<String, String>,
 
+    // Param overrides supplied at the current module instantiation site,
+    // evaluated in the caller's scope. Consumed by `lower_param` to shadow
+    // the param's default. Cleared/saved per instantiation level.
+    param_overrides: HashMap<String, Value>,
+
     // Verbatim embedded code blocks (language + lines).
     code_blocks: Vec<cirq_ir::CodeBlock>,
 
@@ -244,6 +249,7 @@ impl IrCtx {
             save: Vec::new(),
             funcs: Vec::new(),
             initial_conditions: Vec::new(),
+            param_overrides: HashMap::new(),
         };
         // `gnd` always gets Id(0).
         ctx.intern_net("gnd", true);
@@ -357,6 +363,23 @@ impl IrCtx {
             return;
         }
 
+        // An override supplied at the instantiation site shadows the default.
+        // Overrides were evaluated in the caller's scope before we swapped
+        // into this module's, so we just consume the precomputed Value here.
+        if let Some(val) = self.param_overrides.remove(name) {
+            let output_name = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}.{name}")
+            };
+            self.resolved_params.push(ResolvedParam {
+                name: output_name,
+                value: val.clone(),
+            });
+            self.param_values.insert(name.clone(), val);
+            return;
+        }
+
         if let Some(ref default) = p.default {
             match self.eval_expr(default) {
                 Ok(val) => {
@@ -383,7 +406,9 @@ impl IrCtx {
                 }
             }
         }
-        // A param without a default is allowed (forward-declared for modules).
+        // A param without a default or override is allowed (forward-declared
+        // for modules); attempts to use it in expressions will fail at
+        // eval_expr time with "undefined param".
     }
 
     fn lower_let(&mut self, l: &LetDecl, prefix: &str) {
@@ -1058,24 +1083,69 @@ impl IrCtx {
             format!("{parent_prefix}.{inst_name}")
         };
 
-        // Build port-to-net remapping from instantiation arguments.
-        // The module's ports define formal parameters; the instantiation's
-        // arguments provide actual net bindings.
+        // Build port-to-net remapping and param-overrides from the
+        // instantiation arguments. The module's ports define formal net
+        // parameters; declared `param` items inside the module body define
+        // tunable values that the caller may override.
+        let port_names: std::collections::HashSet<&str> = module_def
+            .ports
+            .iter()
+            .map(|p| p.name.name.as_str())
+            .collect();
+        let param_names: std::collections::HashSet<&str> = module_def
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                CircuitItem::Param(p) => Some(p.name.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
         let mut port_remap: HashMap<String, String> = HashMap::new();
+        let mut overrides: HashMap<String, Value> = HashMap::new();
         let ports = &module_def.ports;
 
         for arg in &mi.args {
             match arg {
                 Argument::Named { name, value } => {
-                    // Named port binding: `in: caller_net`
-                    if let Some(net_name) = expr_as_net_name(value) {
-                        port_remap.insert(name.name.clone(), net_name);
-                    } else if let Expr::Ident(ident) = value {
-                        port_remap.insert(name.name.clone(), ident.name.clone());
+                    let arg_name = name.name.as_str();
+                    if port_names.contains(arg_name) {
+                        // Named port binding: `in: caller_net`
+                        if let Some(net_name) = expr_as_net_name(value) {
+                            port_remap.insert(name.name.clone(), net_name);
+                        } else if let Expr::Ident(ident) = value {
+                            port_remap.insert(name.name.clone(), ident.name.clone());
+                        } else {
+                            self.diags.push(
+                                Diagnostic::error(format!(
+                                    "module port `{}` must be bound to a net name",
+                                    name.name
+                                ))
+                                .with_span(name.span),
+                            );
+                        }
+                    } else if param_names.contains(arg_name) {
+                        // Named param override: `w: 2u`. Evaluate in the
+                        // caller's scope (which is the current `param_values`
+                        // because we haven't swapped scopes yet).
+                        match self.eval_expr(value) {
+                            Ok(val) => {
+                                overrides.insert(name.name.clone(), val);
+                            }
+                            Err(msg) => {
+                                self.diags.push(
+                                    Diagnostic::error(format!(
+                                        "cannot evaluate override for param `{}`: {msg}",
+                                        name.name
+                                    ))
+                                    .with_span(name.span),
+                                );
+                            }
+                        }
                     } else {
                         self.diags.push(
                             Diagnostic::error(format!(
-                                "module port `{}` must be bound to a net name",
+                                "module `{module_name}` has no port or param named `{}`",
                                 name.name
                             ))
                             .with_span(name.span),
@@ -1138,6 +1208,11 @@ impl IrCtx {
         // scope or collide across multiple instantiations of the same module.
         let saved_params = self.param_values.clone();
 
+        // Stash override map for the body; lower_param consumes it. Per-
+        // instance, so save/restore the outer one (an enclosing instantiation
+        // might still be unwinding).
+        let saved_overrides = std::mem::replace(&mut self.param_overrides, overrides);
+
         // Push onto the instantiation stack for cycle detection.
         self.module_inst_stack.push(module_name.clone());
 
@@ -1149,6 +1224,7 @@ impl IrCtx {
         // Restore state.
         self.module_inst_stack.pop();
         self.net_remap = saved_remap;
+        self.param_overrides = saved_overrides;
 
         // Restore outer param scope.
         self.param_values = saved_params;
@@ -1193,21 +1269,63 @@ impl IrCtx {
             format!("{prefix}.{inst_name}")
         };
 
-        // Build port-to-net remapping from the element's arguments.
+        // Build port-to-net remapping and param-overrides from the element's
+        // arguments. See `lower_module_inst` for the equivalent logic.
+        let port_names: std::collections::HashSet<&str> = module_def
+            .ports
+            .iter()
+            .map(|p| p.name.name.as_str())
+            .collect();
+        let param_names: std::collections::HashSet<&str> = module_def
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                CircuitItem::Param(p) => Some(p.name.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
         let mut port_remap: HashMap<String, String> = HashMap::new();
+        let mut overrides: HashMap<String, Value> = HashMap::new();
         let ports = &module_def.ports;
 
         for arg in &e.args {
             match arg {
                 Argument::Named { name, value } => {
-                    if let Some(net_name) = expr_as_net_name(value) {
-                        port_remap.insert(name.name.clone(), net_name);
-                    } else if let Expr::Ident(ident) = value {
-                        port_remap.insert(name.name.clone(), ident.name.clone());
+                    let arg_name = name.name.as_str();
+                    if port_names.contains(arg_name) {
+                        if let Some(net_name) = expr_as_net_name(value) {
+                            port_remap.insert(name.name.clone(), net_name);
+                        } else if let Expr::Ident(ident) = value {
+                            port_remap.insert(name.name.clone(), ident.name.clone());
+                        } else {
+                            self.diags.push(
+                                Diagnostic::error(format!(
+                                    "module port `{}` must be bound to a net name",
+                                    name.name
+                                ))
+                                .with_span(name.span),
+                            );
+                        }
+                    } else if param_names.contains(arg_name) {
+                        match self.eval_expr(value) {
+                            Ok(val) => {
+                                overrides.insert(name.name.clone(), val);
+                            }
+                            Err(msg) => {
+                                self.diags.push(
+                                    Diagnostic::error(format!(
+                                        "cannot evaluate override for param `{}`: {msg}",
+                                        name.name
+                                    ))
+                                    .with_span(name.span),
+                                );
+                            }
+                        }
                     } else {
                         self.diags.push(
                             Diagnostic::error(format!(
-                                "module port `{}` must be bound to a net name",
+                                "module `{module_name}` has no port or param named `{}`",
                                 name.name
                             ))
                             .with_span(name.span),
@@ -1264,12 +1382,16 @@ impl IrCtx {
         // scope or collide across multiple instantiations of the same module.
         let saved_params = self.param_values.clone();
 
+        // Stash override map for the body; lower_param consumes it.
+        let saved_overrides = std::mem::replace(&mut self.param_overrides, overrides);
+
         self.module_inst_stack.push(module_name.clone());
 
         self.lower_circuit_body_prefixed(&module_def.body, &inst_prefix);
 
         self.module_inst_stack.pop();
         self.net_remap = saved_remap;
+        self.param_overrides = saved_overrides;
 
         // Restore outer param scope.
         self.param_values = saved_params;
@@ -3695,5 +3817,203 @@ mod tests {
             gnd_net.name, "gnd",
             "gnd connection should point to ground net"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Module param overrides at instantiation
+    // -------------------------------------------------------------------
+
+    fn find_param<'a>(circuit: &'a Circuit, name: &str) -> &'a ResolvedParam {
+        circuit
+            .params
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| {
+                let names: Vec<&str> = circuit.params.iter().map(|p| p.name.as_str()).collect();
+                panic!("param `{name}` not found; have: {names:?}")
+            })
+    }
+
+    fn real_val(p: &ResolvedParam) -> f64 {
+        match p.value {
+            Value::Real(v) => v,
+            Value::Integer(i) => i as f64,
+            ref other => panic!("expected Real, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn module_param_override_basic() {
+        // A single instance overrides one of the module's params.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module rdiv {
+                    port inp: in
+                    port out: out
+                    param r = 1000
+                    R1: resistor(inp -> out, r)
+                }
+
+                d1: rdiv(inp: a, out: b, r: 4700)
+            }
+            "#,
+        );
+
+        // The override should land in resolved_params under the prefixed name.
+        let r = find_param(&circuit, "d1.r");
+        assert_eq!(real_val(r), 4700.0);
+    }
+
+    #[test]
+    fn module_param_override_two_instances_differ() {
+        // Two instances of the same module take different override values.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module rdiv {
+                    port inp: in
+                    port out: out
+                    param r = 1000
+                    R1: resistor(inp -> out, r)
+                }
+
+                d1: rdiv(inp: a, out: b, r: 2200)
+                d2: rdiv(inp: b, out: c, r: 4700)
+            }
+            "#,
+        );
+
+        assert_eq!(real_val(find_param(&circuit, "d1.r")), 2200.0);
+        assert_eq!(real_val(find_param(&circuit, "d2.r")), 4700.0);
+    }
+
+    #[test]
+    fn module_param_default_when_not_overridden() {
+        // Instance with no override falls back to the param's default.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module rdiv {
+                    port inp: in
+                    port out: out
+                    param r = 1000
+                    R1: resistor(inp -> out, r)
+                }
+
+                d1: rdiv(inp: a, out: b, r: 4700)
+                d2: rdiv(inp: b, out: c)
+            }
+            "#,
+        );
+
+        assert_eq!(real_val(find_param(&circuit, "d1.r")), 4700.0);
+        assert_eq!(real_val(find_param(&circuit, "d2.r")), 1000.0);
+    }
+
+    #[test]
+    fn module_param_override_evaluated_in_caller_scope() {
+        // Override expressions resolve against the *caller's* params, not the
+        // module's own scope.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                param base = 1000
+                param scale = 4.7
+
+                module rdiv {
+                    port inp: in
+                    port out: out
+                    param r = 100
+                    R1: resistor(inp -> out, r)
+                }
+
+                d1: rdiv(inp: a, out: b, r: base * scale)
+            }
+            "#,
+        );
+
+        let r = find_param(&circuit, "d1.r");
+        assert!((real_val(r) - 4700.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn module_param_override_with_no_default() {
+        // A module param without a default is fine as long as every instance
+        // supplies an override.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module rdiv {
+                    port inp: in
+                    port out: out
+                    param r
+                    R1: resistor(inp -> out, r)
+                }
+
+                d1: rdiv(inp: a, out: b, r: 8200)
+            }
+            "#,
+        );
+
+        assert_eq!(real_val(find_param(&circuit, "d1.r")), 8200.0);
+    }
+
+    #[test]
+    fn module_unknown_named_arg_errors() {
+        // Naming something that's neither a port nor a param is a hard error.
+        let result = compile(
+            r#"
+            circuit test {
+                module rdiv {
+                    port inp: in
+                    port out: out
+                    param r = 1000
+                    R1: resistor(inp -> out, r)
+                }
+
+                d1: rdiv(inp: a, out: b, w: 4700)
+            }
+            "#,
+        );
+
+        let diags = result.expect_err("should fail with unknown port/param diagnostic");
+        let found = diags
+            .iter()
+            .any(|d| d.message.contains("no port or param named `w`"));
+        assert!(
+            found,
+            "expected unknown port/param diagnostic, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn module_param_override_nested() {
+        // Outer module overrides inner module's param via its own param.
+        let circuit = compile_unwrap(
+            r#"
+            circuit test {
+                module leaf {
+                    port inp: in
+                    port out: out
+                    param r = 100
+                    R1: resistor(inp -> out, r)
+                }
+
+                module wrap {
+                    port inp: in
+                    port out: out
+                    param r_outer = 500
+                    inner: leaf(inp: inp, out: out, r: r_outer)
+                }
+
+                w1: wrap(inp: a, out: b)
+                w2: wrap(inp: b, out: c, r_outer: 2200)
+            }
+            "#,
+        );
+
+        assert_eq!(real_val(find_param(&circuit, "w1.inner.r")), 500.0);
+        assert_eq!(real_val(find_param(&circuit, "w2.inner.r")), 2200.0);
     }
 }
