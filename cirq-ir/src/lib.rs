@@ -4,6 +4,8 @@
 //! evaluation, subcircuit flattening, validation). All downstream consumers
 //! (simulator adapter, linting, formatting) should work from this representation.
 
+pub mod control;
+
 /// Unique identifier for IR nodes (nets, elements, modules, etc.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Id(pub u32);
@@ -45,11 +47,41 @@ pub struct Circuit {
     pub raw_directives: Vec<String>,
 }
 
-/// A verbatim embedded code block with a language tag.
+/// An embedded code block with a language tag.
+///
+/// `lines` is the verbatim source preserved for round-trip emission. For
+/// blocks the IR knows how to type (`language == "control"`), `parsed`
+/// holds the typed AST — interpreters consume that directly instead of
+/// re-parsing `lines` on every invocation. `parsed` is `None` for blocks
+/// in unrecognised languages, and may also be `None` for control blocks
+/// that were constructed programmatically without parsing.
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
     pub language: String,
     pub lines: Vec<String>,
+    /// Parsed typed AST for blocks whose `language` the IR understands.
+    /// Today that's only `language == "control"`. When `Some`, the
+    /// statement list is the authoritative form; `lines` is kept in
+    /// sync as the round-trip rendering.
+    pub parsed: Option<Vec<control::Statement>>,
+}
+
+impl CodeBlock {
+    /// Build a `CodeBlock` from raw lines, parsing `language == "control"`
+    /// blocks into the typed AST. Other languages keep `parsed: None`.
+    pub fn from_lines(language: impl Into<String>, lines: Vec<String>) -> Self {
+        let language = language.into();
+        let parsed = if language == "control" {
+            control::parse_control_block(&lines).ok()
+        } else {
+            None
+        };
+        Self {
+            language,
+            lines,
+            parsed,
+        }
+    }
 }
 
 /// A resolved electrical net.

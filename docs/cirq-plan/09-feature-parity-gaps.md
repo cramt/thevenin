@@ -70,19 +70,33 @@ something needs adjustment.
 
 ## Next gaps
 
-If the goal moves from "parity with SPICE" to "parity with what the
-simulator can do but SPICE can't express", the open frontier is:
+All three frontier items from the original list are now closed:
 
-- **Subcircuit/module parameter overrides at instantiation time.** The
-  IR lowers via inlining; param-only specialization (different param
-  bindings per instance without literal duplication) is implementation-
-  defined right now and untested.
-- **`.meas` extraction expressions.** `MeasureSpec` carries the verbatim
-  spec; full ngspice-compatible measurement evaluation is partial.
-- **Cirq-native control flow.** `code "control" { ... }` blocks are
-  still routed through the SPICE `.control` interpreter via the cached
-  Netlist adapter inside `thevenin-control`. A typed IR for control
-  flow would let the interpreter consume IR directly.
+- ~~**Subcircuit/module parameter overrides at instantiation time.**~~
+  Closed. `lower_module_inst` / `lower_local_module_inst` in
+  `cirq-frontend/src/ir_lower.rs` classify named args against the
+  module's port and param sets, evaluate param-override expressions
+  in the caller's scope, and `lower_param` consumes the overrides
+  ahead of the declared default. Different instances of the same
+  module can specialise the same param without body duplication.
+- ~~**`.meas` extraction expressions.**~~ Closed. `cirq_ir::MeasureSpec`
+  now carries a typed `expr: Option<MeasureExpr>` populated at
+  IR-construction time by `MeasureSpec::parse`. The simulator's
+  evaluator in `thevenin/src/measure.rs` consumes the typed form
+  directly. Added `PARAM=<expr>` (constant or arithmetic over earlier
+  measurements), `RISE/FALL/CROSS=LAST`, `FIND ... AT=LAST`, and
+  `TD=<time>` honored on TRIG clauses.
+- ~~**Cirq-native control flow.**~~ Closed. `cirq_ir::control` owns the
+  control-flow AST (`Statement`, `EchoFragment`, `AlterValue`,
+  `StopCondition`) plus `parse_control_block`. `CodeBlock` gained a
+  `parsed: Option<Vec<Statement>>` populated by
+  `CodeBlock::from_lines`. `thevenin-control::execute_control_block_ir`
+  consumes the typed AST directly, falling back to re-parsing
+  `lines` only for blocks constructed without `from_lines`.
 
-These aren't gaps for the harness corpus — they're directions for the
-Cirq language to become more expressive than SPICE.
+If the goal moves further, the remaining shape is no longer "fill in
+parity gaps" but rather "extend the language": full ngspice-equivalent
+`.meas` (AC-domain complex measurements, multi-TRIG clauses), Cirq
+surface syntax for `.meas` directives (currently only reachable via
+SPICE import), and richer language-level constructs that have no SPICE
+analogue.

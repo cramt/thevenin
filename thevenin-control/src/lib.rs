@@ -27,26 +27,35 @@ pub fn has_control_block_ir(circuit: &Circuit) -> bool {
 ///
 /// Builds a [`SimContext`] via [`SimContext::from_circuit`] so the analysis
 /// dispatcher in `exec.rs` routes Op / Dc / Tran / Ac through
-/// [`thevenin::circuit::simulate_*`]. Helpers that still operate on the
-/// SPICE Netlist shape (TEMPER eval, `@device[param]` lookups) consume the
-/// context's internal cached lowering.
+/// [`thevenin::circuit::simulate_*`]. The executor consumes the IR's typed
+/// `parsed` AST directly when present, falling back to re-parsing `lines`
+/// for blocks constructed without the typed form (e.g. by test fixtures
+/// that bypass [`cirq_ir::CodeBlock::from_lines`]).
 pub fn execute_control_block_ir(circuit: &Circuit) -> Result<ControlResult, String> {
-    let control_lines: Vec<&Vec<String>> = circuit
+    let control_blocks: Vec<&cirq_ir::CodeBlock> = circuit
         .code_blocks
         .iter()
         .filter(|b| b.language == "control")
-        .map(|b| &b.lines)
         .collect();
 
-    if control_lines.is_empty() {
+    if control_blocks.is_empty() {
         return Err("no .control block found".to_string());
     }
 
     let mut ctx = SimContext::from_circuit(circuit.clone())?;
 
-    for lines in control_lines {
-        let stmts = parse::parse_control_block(lines)?;
-        exec::execute(&stmts, &mut ctx)?;
+    for block in control_blocks {
+        // Prefer the IR's pre-parsed AST. Re-parse `lines` only as a
+        // fallback for blocks built without going through `from_lines`.
+        let fallback;
+        let stmts: &[cirq_ir::control::Statement] = match &block.parsed {
+            Some(p) => p.as_slice(),
+            None => {
+                fallback = cirq_ir::control::parse_control_block(&block.lines)?;
+                &fallback
+            }
+        };
+        exec::execute(stmts, &mut ctx)?;
         if ctx.exit_code.is_some() {
             break;
         }
@@ -163,10 +172,7 @@ mod tests {
             initial_conditions: vec![],
             nodeset: vec![],
             measures: vec![],
-            code_blocks: vec![CodeBlock {
-                language: "control".into(),
-                lines: control,
-            }],
+            code_blocks: vec![CodeBlock::from_lines("control", control)],
             raw_directives: vec![],
         }
     }
@@ -182,10 +188,7 @@ mod tests {
 
         // Other languages don't count.
         let other = Circuit {
-            code_blocks: vec![CodeBlock {
-                language: "scheme".into(),
-                lines: vec!["(display 42)".into()],
-            }],
+            code_blocks: vec![CodeBlock::from_lines("scheme", vec!["(display 42)".into()])],
             ..without
         };
         assert!(!has_control_block_ir(&other));
@@ -283,5 +286,64 @@ mod tests {
             (v - 2.5).abs() < 1e-12,
             "expected stashed v1[dc] = 2.5, got {v}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Typed-control-AST plumbing
+    // -----------------------------------------------------------------------
+
+    /// `CodeBlock::from_lines` populates `parsed` for control blocks. Other
+    /// languages stay unparsed.
+    #[test]
+    fn code_block_from_lines_parses_control_only() {
+        let control = CodeBlock::from_lines(
+            "control",
+            vec!["op".into(), "let gain = v(out)".into(), "quit 0".into()],
+        );
+        assert!(control.parsed.is_some(), "control block must be parsed");
+        let stmts = control.parsed.as_ref().unwrap();
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(
+            stmts[0],
+            cirq_ir::control::Statement::RunAnalysis(_)
+        ));
+        assert!(matches!(stmts[1], cirq_ir::control::Statement::Let { .. }));
+        assert!(matches!(
+            stmts[2],
+            cirq_ir::control::Statement::Quit(Some(0))
+        ));
+
+        let other = CodeBlock::from_lines("scheme", vec!["(display 42)".into()]);
+        assert!(other.parsed.is_none(), "non-control blocks stay unparsed");
+    }
+
+    /// The executor honors the IR's pre-parsed AST: if `parsed` is `Some`
+    /// but `lines` is garbage, execution still succeeds — and conversely,
+    /// the fallback re-parser fires when `parsed` is `None`.
+    #[test]
+    fn executor_prefers_parsed_form_over_lines() {
+        // Build a circuit whose CodeBlock has a real parsed AST but
+        // `lines` that would fail to parse if re-tokenized.
+        let mut circuit = divider_with_control(vec!["op".into(), "quit 0".into()]);
+        let parsed = circuit.code_blocks[0].parsed.clone();
+        circuit.code_blocks[0].lines = vec!["@@ not valid control @@".into()];
+        circuit.code_blocks[0].parsed = parsed;
+
+        let result = execute_control_block_ir(&circuit).expect("typed path runs");
+        assert_eq!(result.exit_code, 0);
+        let v_mid = vec_value(&result, 0, "v(mid)");
+        assert!((v_mid - 2.0 / 3.0).abs() < 1e-6, "got {v_mid}");
+    }
+
+    /// When `parsed` is `None`, the executor falls back to parsing `lines`
+    /// — so the same circuit still runs even if `from_lines` was bypassed.
+    #[test]
+    fn executor_falls_back_to_lines_when_parsed_is_none() {
+        let mut circuit = divider_with_control(vec!["op".into(), "quit 0".into()]);
+        circuit.code_blocks[0].parsed = None;
+        let result = execute_control_block_ir(&circuit).expect("fallback path runs");
+        assert_eq!(result.exit_code, 0);
+        let v_mid = vec_value(&result, 0, "v(mid)");
+        assert!((v_mid - 2.0 / 3.0).abs() < 1e-6, "got {v_mid}");
     }
 }

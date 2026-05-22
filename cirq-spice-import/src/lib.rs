@@ -971,10 +971,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     let mut ir_code_blocks: Vec<cirq_ir::CodeBlock> = Vec::new();
     for item in &netlist.items {
         if let Item::Control(lines) = item {
-            ir_code_blocks.push(cirq_ir::CodeBlock {
-                language: "control".to_owned(),
-                lines: lines.clone(),
-            });
+            ir_code_blocks.push(cirq_ir::CodeBlock::from_lines("control", lines.clone()));
         }
     }
 

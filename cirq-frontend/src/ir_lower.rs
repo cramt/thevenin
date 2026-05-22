@@ -333,10 +333,10 @@ impl IrCtx {
                 CircuitItem::Ic(ic) => self.lower_ic_decl(ic),
                 CircuitItem::CoupledLine(cl) => self.lower_coupled_line_decl(cl, prefix),
                 CircuitItem::Code(c) => {
-                    self.code_blocks.push(cirq_ir::CodeBlock {
-                        language: c.language.clone(),
-                        lines: c.lines.clone(),
-                    });
+                    self.code_blocks.push(cirq_ir::CodeBlock::from_lines(
+                        c.language.clone(),
+                        c.lines.clone(),
+                    ));
                 }
                 // Already handled in pass 1, or collected above.
                 CircuitItem::Param(_)
