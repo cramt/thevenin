@@ -234,8 +234,7 @@ fn run_all_analyses(
             thevenin::mna_ir::assemble_mna_from_circuit(circuit, false, None)
                 .map_err(|e| format!("mna_ir assembly error: {e}"))?
                 .ok_or_else(|| {
-                    "mna_ir rejected circuit (every IrElementKind should be supported)"
-                        .to_string()
+                    "mna_ir rejected circuit (every IrElementKind should be supported)".to_string()
                 })
         };
 

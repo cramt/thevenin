@@ -659,10 +659,7 @@ fn find_sweep_source(mna: &MnaSystem, src_name: &str) -> Result<SweepSource, Mna
 /// Reads `mna.current_sources` directly — `CurrentSourceInstance` already
 /// carries the resolved (name, pos_idx, neg_idx) tuple, so no Netlist or
 /// Circuit walk is needed at all.
-fn find_current_source_sweep(
-    mna: &MnaSystem,
-    src_name: &str,
-) -> Result<SweepSource, MnaError> {
+fn find_current_source_sweep(mna: &MnaSystem, src_name: &str) -> Result<SweepSource, MnaError> {
     let src_lower = src_name.to_lowercase();
     mna.current_sources
         .iter()
@@ -672,9 +669,7 @@ fn find_current_source_sweep(
             nj: c.neg_idx,
         })
         .ok_or_else(|| {
-            MnaError::UnsupportedElement(format!(
-                "sweep source '{src_name}' not found in circuit"
-            ))
+            MnaError::UnsupportedElement(format!("sweep source '{src_name}' not found in circuit"))
         })
 }
 
@@ -768,10 +763,7 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// produce identically-shaped `SimResult` values regardless of how the MNA
 /// was assembled. The Netlist is still needed for `.dc` analysis params,
 /// source resolution, and option lookups.
-pub fn simulate_dc_with_mna(
-    mna: MnaSystem,
-    netlist: &Netlist,
-) -> Result<SimResult, MnaError> {
+pub fn simulate_dc_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mut nr_opts = nr_options_from_netlist(netlist);
     // Match ngspice: CKTdiagGmin starts at 0 for DC analysis (cktop.c).
     // Device models already include options.gmin in their junction

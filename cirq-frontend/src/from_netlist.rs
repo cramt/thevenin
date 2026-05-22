@@ -34,6 +34,14 @@ pub enum AnalysisConversionError {
     NonNumericExpr { field: String, expr: String },
     #[error("`.sens` requires at least one output expression")]
     EmptySensOutputs,
+    #[error("`.sens` AC tail: expected AC|DC marker after output, got `{0}`")]
+    SensAcMarker(String),
+    #[error("`.sens` AC tail: needs variation n fstart fstop, got `{tokens:?}`")]
+    SensAcArity { tokens: Vec<String> },
+    #[error("`.sens` AC tail: unknown variation `{0}`")]
+    SensAcVariation(String),
+    #[error("`.sens` AC tail: bad {field}: `{token}`")]
+    SensAcNumber { field: &'static str, token: String },
 }
 
 /// Lift a parsed-Netlist [`Analysis`](thevenin_types::Analysis) into its
@@ -116,18 +124,27 @@ pub fn netlist_analysis_to_ir(
             n,
             fstart,
             fstop,
-        } => cirq_ir::Analysis::Noise(cirq_ir::NoiseAnalysis {
-            output_net: lookup_net(circuit, output)?,
-            reference_net: match ref_node {
-                Some(name) => lookup_net(circuit, name)?,
-                None => ground_net_id(circuit),
-            },
-            source: lookup_source(circuit, src)?,
-            scale: ac_variation_to_scale(*variation),
-            points: *n,
-            start: expr_to_f64(fstart, "noise.fstart")?,
-            stop: expr_to_f64(fstop, "noise.fstop")?,
-        }),
+        } => {
+            // SPICE permits `v(node)` or `v(node,ref)` as the output spec
+            // (the `.control` parser preserves it verbatim). The IR has
+            // separate `output_net` and `reference_net` Ids so we unpack
+            // the parenthesised form here and override `ref_node` when an
+            // inline reference is given.
+            let (out_name, inline_ref) = parse_voltage_spec(output);
+            let ref_name = inline_ref.or_else(|| ref_node.clone());
+            cirq_ir::Analysis::Noise(cirq_ir::NoiseAnalysis {
+                output_net: lookup_net(circuit, &out_name)?,
+                reference_net: match ref_name.as_deref() {
+                    Some(name) => lookup_net(circuit, name)?,
+                    None => ground_net_id(circuit),
+                },
+                source: lookup_source(circuit, src)?,
+                scale: ac_variation_to_scale(*variation),
+                points: *n,
+                start: expr_to_f64(fstart, "noise.fstart")?,
+                stop: expr_to_f64(fstop, "noise.fstop")?,
+            })
+        }
 
         NA::Tf { output, input } => cirq_ir::Analysis::Tf(cirq_ir::TfAnalysis {
             output: output.clone(),
@@ -135,25 +152,16 @@ pub fn netlist_analysis_to_ir(
         }),
 
         NA::Sens { output } => {
-            // The IR currently models Sens as a single output expression
-            // + optional AC sweep. The Netlist shape allows multiple
-            // outputs but every harness fixture uses exactly one, so we
-            // preserve that without losing data: empty is rejected, a
-            // single string is taken verbatim, and multiple are joined
-            // back into one whitespace-separated SPICE token list so the
-            // simulator's text-driven output formatter still sees the
-            // exact expressions it expects.
-            if output.is_empty() {
-                return Err(AnalysisConversionError::EmptySensOutputs);
-            }
-            cirq_ir::Analysis::Sens(cirq_ir::SensAnalysis {
-                output: if output.len() == 1 {
-                    output[0].clone()
-                } else {
-                    output.join(" ")
-                },
-                ac: None,
-            })
+            // `.sens` takes the form `output [AC|DC variation n fstart fstop]`.
+            // The Netlist parser preserves it as a token vector; the IR
+            // splits the first token (the output expression) from the
+            // optional AC sweep tail.
+            let first = output
+                .first()
+                .ok_or(AnalysisConversionError::EmptySensOutputs)?
+                .clone();
+            let ac = parse_sens_ac_tail(&output[1..])?;
+            cirq_ir::Analysis::Sens(cirq_ir::SensAnalysis { output: first, ac })
         }
 
         NA::Pz {
@@ -239,6 +247,74 @@ fn lookup_source(circuit: &Circuit, name: &str) -> Result<Id, AnalysisConversion
 /// and `cirq-spice-import/src/lib.rs`).
 fn ground_net_id(_circuit: &Circuit) -> Id {
     Id(0)
+}
+
+/// Strip SPICE voltage syntax `v(node[,ref])` from a `.noise` output spec.
+///
+/// Returns `(bare_node_name, optional_inline_ref)`. A bare token is
+/// returned as-is with no inline ref. Mirrors
+/// `thevenin::noise::parse_output_spec` so the IR sees the same node
+/// resolution the Netlist path applies.
+fn parse_voltage_spec(spec: &str) -> (String, Option<String>) {
+    let s = spec.trim();
+    let stripped = s.strip_prefix("v(").or_else(|| s.strip_prefix("V("));
+    let Some(rest) = stripped else {
+        return (s.to_string(), None);
+    };
+    let inner = rest.strip_suffix(')').unwrap_or(rest);
+    if let Some((pos, neg)) = inner.split_once(',') {
+        (pos.trim().to_string(), Some(neg.trim().to_string()))
+    } else {
+        (inner.trim().to_string(), None)
+    }
+}
+
+/// Parse the optional AC tail of `.sens output [AC DEC|OCT|LIN n fstart fstop]`.
+///
+/// Mirrors `cirq_spice_import::parse_sens_ac_tail` so the `.control`
+/// interpreter and the SPICE importer agree on shape. A bare `dc` marker
+/// (legacy ngspice tolerance) yields `None`.
+fn parse_sens_ac_tail(
+    tail: &[String],
+) -> Result<Option<cirq_ir::SensAcSpec>, AnalysisConversionError> {
+    if tail.is_empty() {
+        return Ok(None);
+    }
+    let first = tail[0].to_ascii_lowercase();
+    if first == "dc" {
+        return Ok(None);
+    }
+    if first != "ac" {
+        return Err(AnalysisConversionError::SensAcMarker(tail[0].clone()));
+    }
+    if tail.len() < 5 {
+        return Err(AnalysisConversionError::SensAcArity {
+            tokens: tail.to_vec(),
+        });
+    }
+    let scale = match tail[1].to_ascii_lowercase().as_str() {
+        "dec" | "decade" => cirq_ir::FrequencyScale::Decade,
+        "oct" | "octave" => cirq_ir::FrequencyScale::Octave,
+        "lin" | "linear" => cirq_ir::FrequencyScale::Linear,
+        other => return Err(AnalysisConversionError::SensAcVariation(other.to_string())),
+    };
+    let parse_num = |token: &str, field: &'static str| -> Result<f64, AnalysisConversionError> {
+        thevenin_types::parse::parse_spice_number(token).ok_or_else(|| {
+            AnalysisConversionError::SensAcNumber {
+                field,
+                token: token.to_string(),
+            }
+        })
+    };
+    let points = parse_num(&tail[2], "n")? as u32;
+    let fstart = parse_num(&tail[3], "fstart")?;
+    let fstop = parse_num(&tail[4], "fstop")?;
+    Ok(Some(cirq_ir::SensAcSpec {
+        scale,
+        points,
+        fstart,
+        fstop,
+    }))
 }
 
 #[cfg(test)]
@@ -480,15 +556,81 @@ mod tests {
     }
 
     #[test]
-    fn sens_multiple_outputs_joined() {
+    fn sens_with_ac_tail_split() {
         let netlist_analysis = thevenin_types::Analysis::Sens {
-            output: vec!["v(out)".into(), "i(v1)".into()],
+            output: vec![
+                "v(out)".into(),
+                "ac".into(),
+                "lin".into(),
+                "1".into(),
+                "1e6".into(),
+                "1.1e6".into(),
+            ],
         };
         match netlist_analysis_to_ir(&netlist_analysis, &fixture_circuit()).unwrap() {
             cirq_ir::Analysis::Sens(s) => {
-                assert_eq!(s.output, "v(out) i(v1)");
+                assert_eq!(s.output, "v(out)");
+                let ac = s.ac.expect("ac spec");
+                assert_eq!(ac.scale, cirq_ir::FrequencyScale::Linear);
+                assert_eq!(ac.points, 1);
+                assert_eq!(ac.fstart, 1e6);
+                assert_eq!(ac.fstop, 1.1e6);
             }
             _ => panic!("expected Sens"),
+        }
+    }
+
+    #[test]
+    fn sens_dc_marker_yields_no_ac() {
+        let netlist_analysis = thevenin_types::Analysis::Sens {
+            output: vec!["v(out)".into(), "dc".into()],
+        };
+        match netlist_analysis_to_ir(&netlist_analysis, &fixture_circuit()).unwrap() {
+            cirq_ir::Analysis::Sens(s) => {
+                assert_eq!(s.output, "v(out)");
+                assert!(s.ac.is_none());
+            }
+            _ => panic!("expected Sens"),
+        }
+    }
+
+    #[test]
+    fn noise_unpacks_v_node_form() {
+        let netlist_analysis = thevenin_types::Analysis::Noise {
+            output: "v(out)".into(),
+            ref_node: None,
+            src: "v1".into(),
+            variation: thevenin_types::AcVariation::Dec,
+            n: 10,
+            fstart: thevenin_types::Expr::Num(1.0),
+            fstop: thevenin_types::Expr::Num(1e6),
+        };
+        match netlist_analysis_to_ir(&netlist_analysis, &fixture_circuit()).unwrap() {
+            cirq_ir::Analysis::Noise(n) => {
+                assert_eq!(n.output_net, Id(2)); // "out"
+                assert_eq!(n.reference_net, Id(0)); // gnd default
+            }
+            _ => panic!("expected Noise"),
+        }
+    }
+
+    #[test]
+    fn noise_inline_ref_overrides_ref_node() {
+        let netlist_analysis = thevenin_types::Analysis::Noise {
+            output: "v(out,in)".into(),
+            ref_node: None,
+            src: "v1".into(),
+            variation: thevenin_types::AcVariation::Dec,
+            n: 10,
+            fstart: thevenin_types::Expr::Num(1.0),
+            fstop: thevenin_types::Expr::Num(1e6),
+        };
+        match netlist_analysis_to_ir(&netlist_analysis, &fixture_circuit()).unwrap() {
+            cirq_ir::Analysis::Noise(n) => {
+                assert_eq!(n.output_net, Id(2));
+                assert_eq!(n.reference_net, Id(1)); // "in"
+            }
+            _ => panic!("expected Noise"),
         }
     }
 

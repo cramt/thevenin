@@ -479,5 +479,4 @@ mod tests {
             assert_eq!(av, bv, "drift in {}: direct={av} lowered={bv}", a.name);
         }
     }
-
 }

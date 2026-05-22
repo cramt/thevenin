@@ -46,7 +46,11 @@ fn assert_paths_equal(spice: &str) {
         netlist_plot.vecs.len(),
         "vec count mismatch for source:\n{spice}\ndirect: {:?}\nlowered: {:?}",
         direct_plot.vecs.iter().map(|v| &v.name).collect::<Vec<_>>(),
-        netlist_plot.vecs.iter().map(|v| &v.name).collect::<Vec<_>>(),
+        netlist_plot
+            .vecs
+            .iter()
+            .map(|v| &v.name)
+            .collect::<Vec<_>>(),
     );
 
     // Compare by name, not position — node ordering in the direct path
@@ -83,12 +87,8 @@ fn assert_paths_equal(spice: &str) {
 /// Generic helper: runs `run_via_circuit` and `run_via_netlist` for the same
 /// SPICE source and asserts every result vector matches element-wise across
 /// the full length. Handles both Real and Complex VectorData.
-fn assert_results_equal<C, N>(
-    spice: &str,
-    label: &str,
-    run_via_circuit: C,
-    run_via_netlist: N,
-) where
+fn assert_results_equal<C, N>(spice: &str, label: &str, run_via_circuit: C, run_via_netlist: N)
+where
     C: FnOnce(&cirq_ir::Circuit) -> SimResult,
     N: FnOnce(&thevenin_types::Netlist) -> SimResult,
 {
@@ -129,46 +129,46 @@ fn assert_results_equal<C, N>(
                         direct_vec.name
                     )
                 });
-        match (&direct_vec.data, &netlist_vec.data) {
-            (VectorData::Real(d), VectorData::Real(n)) => {
-                assert_eq!(
-                    d.len(),
-                    n.len(),
-                    "[{label}] length mismatch in {}: direct={} netlist={}",
-                    direct_vec.name,
-                    d.len(),
-                    n.len(),
-                );
-                for (i, (dv, nv)) in d.iter().zip(n.iter()).enumerate() {
+            match (&direct_vec.data, &netlist_vec.data) {
+                (VectorData::Real(d), VectorData::Real(n)) => {
                     assert_eq!(
-                        dv, nv,
-                        "[{label}] drift in {}[{i}]: direct={dv} netlist={nv}",
+                        d.len(),
+                        n.len(),
+                        "[{label}] length mismatch in {}: direct={} netlist={}",
                         direct_vec.name,
+                        d.len(),
+                        n.len(),
                     );
+                    for (i, (dv, nv)) in d.iter().zip(n.iter()).enumerate() {
+                        assert_eq!(
+                            dv, nv,
+                            "[{label}] drift in {}[{i}]: direct={dv} netlist={nv}",
+                            direct_vec.name,
+                        );
+                    }
                 }
-            }
-            (VectorData::Complex(d), VectorData::Complex(n)) => {
-                assert_eq!(
-                    d.len(),
-                    n.len(),
-                    "[{label}] length mismatch in {}: direct={} netlist={}",
-                    direct_vec.name,
-                    d.len(),
-                    n.len(),
-                );
-                for (i, (dv, nv)) in d.iter().zip(n.iter()).enumerate() {
+                (VectorData::Complex(d), VectorData::Complex(n)) => {
                     assert_eq!(
-                        (dv.re, dv.im),
-                        (nv.re, nv.im),
-                        "[{label}] drift in {}[{i}]: direct={dv:?} netlist={nv:?}",
+                        d.len(),
+                        n.len(),
+                        "[{label}] length mismatch in {}: direct={} netlist={}",
                         direct_vec.name,
+                        d.len(),
+                        n.len(),
                     );
+                    for (i, (dv, nv)) in d.iter().zip(n.iter()).enumerate() {
+                        assert_eq!(
+                            (dv.re, dv.im),
+                            (nv.re, nv.im),
+                            "[{label}] drift in {}[{i}]: direct={dv:?} netlist={nv:?}",
+                            direct_vec.name,
+                        );
+                    }
                 }
-            }
-            _ => panic!(
-                "[{label}] vec type mismatch in {}: direct={:?} netlist={:?}",
-                direct_vec.name, direct_vec.data, netlist_vec.data,
-            ),
+                _ => panic!(
+                    "[{label}] vec type mismatch in {}: direct={:?} netlist={:?}",
+                    direct_vec.name, direct_vec.data, netlist_vec.data,
+                ),
             }
         }
     }

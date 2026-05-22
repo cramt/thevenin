@@ -27,10 +27,7 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// IR-direct path (`thevenin::circuit::simulate_ac` via `mna_ir`). The
 /// Netlist is still needed for `.ac` analysis params, nodeset resolution,
 /// and AC source excitation lookups.
-pub fn simulate_ac_with_mna(
-    mna: MnaSystem,
-    netlist: &Netlist,
-) -> Result<SimResult, MnaError> {
+pub fn simulate_ac_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
     let (variation, n, fstart, fstop) = match &netlist.analysis {
         Analysis::Ac {
             variation,
@@ -83,10 +80,7 @@ pub struct AcSweepRunParams {
 /// resolved analysis parameters. Both the Netlist path (`simulate_ac_with_mna`)
 /// and the Circuit path ([`crate::circuit::simulate_ac`]) extract their
 /// respective parameters into this struct and hand it here.
-pub fn run_ac_sweep(
-    mna: MnaSystem,
-    params: AcSweepRunParams,
-) -> Result<SimResult, MnaError> {
+pub fn run_ac_sweep(mna: MnaSystem, params: AcSweepRunParams) -> Result<SimResult, MnaError> {
     let AcSweepRunParams {
         variation,
         n,
@@ -281,10 +275,7 @@ fn solve_ac_frequencies(
 /// Reassemble the complex MNA system at `omega` from the cached stamps and
 /// solve. This is the fast path: no device iteration, no model `companion`
 /// calls — just two triplet copies and a solve.
-fn solve_ac_point_cached(
-    cache: &AcStampCache,
-    omega: f64,
-) -> Result<Vec<(f64, f64)>, MnaError> {
+fn solve_ac_point_cached(cache: &AcStampCache, omega: f64) -> Result<Vec<(f64, f64)>, MnaError> {
     let mut sys = ComplexLinearSystem::new(cache.dim);
 
     for t in &cache.real_triplets {

@@ -2,8 +2,7 @@ use faer::Mat;
 use faer::linalg::solvers::Solve as _;
 
 use thevenin_types::{
-    Analysis, Complex, Netlist, PzAnalysisType, PzInputType, SimPlot, SimResult,
-    SimVector,
+    Analysis, Complex, Netlist, PzAnalysisType, PzInputType, SimPlot, SimResult, SimVector,
 };
 
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
@@ -26,10 +25,7 @@ pub fn simulate_pz(netlist: &Netlist) -> Result<SimResult, MnaError> {
 ///
 /// Shared between the Netlist path (`simulate_pz` above) and the Stage 4
 /// IR-direct path. The Netlist is still needed for `.pz` port-spec lookups.
-pub fn simulate_pz_with_mna(
-    mna: MnaSystem,
-    netlist: &Netlist,
-) -> Result<SimResult, MnaError> {
+pub fn simulate_pz_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
     let (node_i, node_g, node_j, node_k, input_type, analysis_type) = match &netlist.analysis {
         Analysis::Pz {
             node_i,

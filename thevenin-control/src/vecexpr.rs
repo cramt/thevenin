@@ -1007,11 +1007,11 @@ fn resolve_device_param(spec: &str, ctx: &SimContext) -> Option<f64> {
 
     // Search resolved model parameters (TEMPER-evaluated) first
     if let Some(params) = ctx.resolved_models.get(&device.to_uppercase()) {
-        for p in params {
-            if p.name.to_uppercase() == param_upper
-                && let thevenin_types::Expr::Num(v) = &p.value
+        for (name, value) in params {
+            if name.to_uppercase() == param_upper
+                && let Some(v) = value_as_real(value)
             {
-                return Some(*v);
+                return Some(v);
             }
         }
     }
@@ -1045,7 +1045,7 @@ fn resolve_device_param(spec: &str, ctx: &SimContext) -> Option<f64> {
 }
 
 /// Coerce a Cirq IR `Value` to `f64`, or `None` for non-numeric variants.
-fn value_as_real(value: &cirq_ir::Value) -> Option<f64> {
+pub(crate) fn value_as_real(value: &cirq_ir::Value) -> Option<f64> {
     match value {
         cirq_ir::Value::Real(v) => Some(*v),
         cirq_ir::Value::Integer(v) => Some(*v as f64),
@@ -1131,7 +1131,6 @@ fn resolve_element_param_vec_ir(element: &cirq_ir::Element, param: &str) -> Opti
         _ => None,
     }
 }
-
 
 /// Strip SPICE unit suffixes from a number string (V, A, W, Hz, Ohm, s).
 ///
@@ -1299,12 +1298,7 @@ mod tests {
     use super::*;
 
     fn empty_ctx() -> SimContext {
-        SimContext::new(thevenin_types::Netlist {
-            title: String::new(),
-            items: Vec::new(),
-            analysis: thevenin_types::Analysis::Op,
-            source: String::new(),
-        })
+        SimContext::new()
     }
 
     #[test]

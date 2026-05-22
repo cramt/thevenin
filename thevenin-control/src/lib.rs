@@ -266,17 +266,10 @@ mod tests {
     fn alter_fallback_stashes_named_vector() {
         use crate::context::SimContext;
         use crate::{exec, parse};
-        use thevenin_types::{Analysis, Netlist};
 
-        let nl = Netlist {
-            title: String::new(),
-            items: vec![],
-            analysis: Analysis::Op,
-            source: String::new(),
-        };
         let lines = vec!["alter @v1[dc] = 2.5".into(), "quit 0".into()];
         let stmts = parse::parse_control_block(&lines).unwrap();
-        let mut ctx = SimContext::new(nl);
+        let mut ctx = SimContext::new();
         exec::execute(&stmts, &mut ctx).unwrap();
 
         let stash = ctx

@@ -184,10 +184,7 @@ pub fn simulate_tf(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// Shared between the Netlist path (`simulate_tf` above) and the Stage 4
 /// IR-direct path. The Netlist is still needed for `.tf` output / input
 /// spec lookups.
-pub fn simulate_tf_with_mna(
-    mna: MnaSystem,
-    netlist: &Netlist,
-) -> Result<SimResult, MnaError> {
+pub fn simulate_tf_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
     let (output, input) = match &netlist.analysis {
         Analysis::Tf { output, input } => (output.clone(), input.clone()),
         _ => {
@@ -203,11 +200,7 @@ pub fn simulate_tf_with_mna(
 ///
 /// Shared between Netlist (`simulate_tf_with_mna`) and Circuit
 /// ([`crate::circuit::simulate_tf`]) entry points.
-pub fn run_tf(
-    mna: MnaSystem,
-    output: &str,
-    input: &str,
-) -> Result<SimResult, MnaError> {
+pub fn run_tf(mna: MnaSystem, output: &str, input: &str) -> Result<SimResult, MnaError> {
     let solution = solve_op_raw(&mna)?;
 
     // Build linearized Jacobian at OP

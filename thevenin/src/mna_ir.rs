@@ -19,9 +19,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use cirq_frontend::to_netlist::{
-    convert_model, convert_source_spec, extra_params, value_to_expr,
-};
+use cirq_frontend::to_netlist::{convert_model, convert_source_spec, extra_params, value_to_expr};
 use cirq_ir::{
     BehavioralMode, Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Model, Value,
     XspiceConnection as IrXspiceConnection,
@@ -33,31 +31,31 @@ use thevenin_xspice::{
 
 use crate::bjt::{BjtInstance, BjtModel};
 use crate::bsim3::{Bsim3Instance, Bsim3Model};
-use crate::cpl::{CplInstance, CplModel, setup_cpline};
-use crate::expr_val_or;
-use crate::ltra::{LtraInstance, LtraModel};
-use crate::txl::{TxlInstance, TxlModel, setup_txline};
 use crate::bsim3soi_dd::{Bsim3SoiDdInstance, Bsim3SoiDdModel};
 use crate::bsim3soi_fd::{Bsim3SoiFdInstance, Bsim3SoiFdModel};
 use crate::bsim3soi_pd::{Bsim3SoiPdInstance, Bsim3SoiPdModel};
 use crate::bsim4::{Bsim4Instance, Bsim4Model};
+use crate::cpl::{CplInstance, CplModel, setup_cpline};
 use crate::diode::DiodeModel;
+use crate::expr_val_or;
 use crate::hfet::{HfetInstance, HfetModel, HfetPrecomp};
 use crate::jfet::{JfetInstance, JfetModel};
+use crate::ltra::{LtraInstance, LtraModel};
 use crate::mesa::{MesaInstance, MesaModel, MesaPrecomp};
 use crate::mesfet::{MesfetInstance, MesfetModel};
 use crate::mna::{
     BehavioralSourceInstance, BehavioralVoltageSourceInstance, CapacitorInstance,
     CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
     MutualCouplingInstance, NodeMap, ResistorInstance, VoltageSourceInstance,
-    extract_resistor_noise_params, get_mosfet_level, get_mosfet_lw, get_nrd_nrs,
-    parse_bsrc_params, push_bjt_caps, push_mosfet_caps, resolve_model_with_bins,
-    resolve_resistor_value, stamp_conductance,
+    extract_resistor_noise_params, get_mosfet_level, get_mosfet_lw, get_nrd_nrs, parse_bsrc_params,
+    push_bjt_caps, push_mosfet_caps, resolve_model_with_bins, resolve_resistor_value,
+    stamp_conductance,
 };
 use crate::mos2::{Mos2Instance, Mos2Model};
 use crate::mos6::{Mos6Instance, Mos6Model};
 use crate::mosfet::{MosfetInstance, MosfetModel};
 use crate::newton::NrOptions;
+use crate::txl::{TxlInstance, TxlModel, setup_txline};
 use crate::vbic::{VbicInstance, VbicModel};
 
 /// Extract Newton-Raphson options from a circuit's `options` field.
@@ -570,9 +568,7 @@ pub fn pz_params_from_circuit(circuit: &Circuit) -> Result<crate::pz::PzRunParam
         .collect();
     let resolve = |id: Id, role: &str| -> Result<String, MnaError> {
         net_lookup.get(&id).cloned().ok_or_else(|| {
-            MnaError::UnsupportedElement(format!(
-                ".pz {role} references unknown net id {id:?}"
-            ))
+            MnaError::UnsupportedElement(format!(".pz {role} references unknown net id {id:?}"))
         })
     };
 
@@ -747,9 +743,9 @@ pub fn dc_sweep_params_from_circuit(
         })?;
 
     let mut sweeps = dc_analysis.sweeps.iter();
-    let sweep1 = sweeps.next().ok_or_else(|| {
-        MnaError::UnsupportedElement(".dc analysis has no sweeps".to_string())
-    })?;
+    let sweep1 = sweeps
+        .next()
+        .ok_or_else(|| MnaError::UnsupportedElement(".dc analysis has no sweeps".to_string()))?;
     let src1_name = element_name_by_id(circuit, sweep1.source)
         .ok_or_else(|| {
             MnaError::UnsupportedElement(format!(
@@ -949,9 +945,7 @@ fn stamp_circuit(
 
     for elem in &circuit.elements {
         match &elem.kind {
-            IrElementKind::Resistor
-            | IrElementKind::Capacitor
-            | IrElementKind::CurrentSource => {
+            IrElementKind::Resistor | IrElementKind::Capacitor | IrElementKind::CurrentSource => {
                 let pos = terminal_name(elem, "pos", &net_name)?;
                 let neg = terminal_name(elem, "neg", &net_name)?;
                 node_map.index(pos);
@@ -1007,10 +1001,7 @@ fn stamp_circuit(
                 node_map.index(c);
                 node_map.index(b);
                 node_map.index(e);
-                let has_substrate = elem
-                    .connections
-                    .iter()
-                    .any(|cn| cn.terminal == "substrate");
+                let has_substrate = elem.connections.iter().any(|cn| cn.terminal == "substrate");
                 if has_substrate {
                     let s = terminal_name(elem, "substrate", &net_name)?;
                     node_map.index(s);
@@ -1169,10 +1160,8 @@ fn stamp_circuit(
                         internal_node_count += mm.internal_node_count();
                     }
                     Some("NHFET" | "PHFET") => {
-                        let mm = HfetModel::from_model_def_with_level(
-                            mdef.as_ref().unwrap(),
-                            level,
-                        );
+                        let mm =
+                            HfetModel::from_model_def_with_level(mdef.as_ref().unwrap(), level);
                         internal_node_count += mm.internal_node_count();
                     }
                     _ => {
@@ -1428,12 +1417,8 @@ fn stamp_circuit(
                         elem.name
                     ))
                 })?;
-                let op = mna
-                    .node_map
-                    .get(terminal_name(elem, "out_pos", &net_name)?);
-                let on = mna
-                    .node_map
-                    .get(terminal_name(elem, "out_neg", &net_name)?);
+                let op = mna.node_map.get(terminal_name(elem, "out_pos", &net_name)?);
+                let on = mna.node_map.get(terminal_name(elem, "out_neg", &net_name)?);
                 let cp = mna.node_map.get(terminal_name(elem, "in_pos", &net_name)?);
                 let cn = mna.node_map.get(terminal_name(elem, "in_neg", &net_name)?);
                 let branch = n_nodes + vsource_idx;
@@ -1463,12 +1448,8 @@ fn stamp_circuit(
                         elem.name
                     ))
                 })?;
-                let op = mna
-                    .node_map
-                    .get(terminal_name(elem, "out_pos", &net_name)?);
-                let on = mna
-                    .node_map
-                    .get(terminal_name(elem, "out_neg", &net_name)?);
+                let op = mna.node_map.get(terminal_name(elem, "out_pos", &net_name)?);
+                let on = mna.node_map.get(terminal_name(elem, "out_neg", &net_name)?);
                 let cp = mna.node_map.get(terminal_name(elem, "in_pos", &net_name)?);
                 let cn = mna.node_map.get(terminal_name(elem, "in_neg", &net_name)?);
 
@@ -1512,12 +1493,8 @@ fn stamp_circuit(
                             ))
                         })?;
                 let ctrl_branch = n_nodes + ctrl_offset;
-                let op = mna
-                    .node_map
-                    .get(terminal_name(elem, "out_pos", &net_name)?);
-                let on = mna
-                    .node_map
-                    .get(terminal_name(elem, "out_neg", &net_name)?);
+                let op = mna.node_map.get(terminal_name(elem, "out_pos", &net_name)?);
+                let on = mna.node_map.get(terminal_name(elem, "out_neg", &net_name)?);
                 let branch = n_nodes + vsource_idx;
 
                 if let Some(i) = op {
@@ -1556,12 +1533,8 @@ fn stamp_circuit(
                             ))
                         })?;
                 let ctrl_branch = n_nodes + ctrl_offset;
-                let op = mna
-                    .node_map
-                    .get(terminal_name(elem, "out_pos", &net_name)?);
-                let on = mna
-                    .node_map
-                    .get(terminal_name(elem, "out_neg", &net_name)?);
+                let op = mna.node_map.get(terminal_name(elem, "out_pos", &net_name)?);
+                let on = mna.node_map.get(terminal_name(elem, "out_neg", &net_name)?);
 
                 if let Some(i) = op {
                     mna.system.matrix.add(i, ctrl_branch, gain);
@@ -2036,10 +2009,8 @@ fn stamp_circuit(
                         });
                     }
                     Some("NHFET" | "PHFET") => {
-                        let mm = HfetModel::from_model_def_with_level(
-                            mdef.as_ref().unwrap(),
-                            level,
-                        );
+                        let mm =
+                            HfetModel::from_model_def_with_level(mdef.as_ref().unwrap(), level);
 
                         let mut w = 10e-6;
                         let mut l = 1e-6;
@@ -2230,9 +2201,9 @@ fn stamp_circuit(
 
                 let params_nl = extra_params(elem, &["value"]);
                 let model_name = lookup_model(circuit, elem).map(|m| m.name.clone());
-                let resolved = model_name.as_deref().and_then(|name| {
-                    resolve_model_with_bins(&models_map, &bins_map, name, l, w)
-                });
+                let resolved = model_name
+                    .as_deref()
+                    .and_then(|name| resolve_model_with_bins(&models_map, &bins_map, name, l, w));
                 let level = get_mosfet_level(resolved.as_ref(), &params_nl);
 
                 if level == 8 || level == 49 {
@@ -2258,9 +2229,8 @@ fn stamp_circuit(
 
                     let size_params = bm.size_dep_param(w, l, 300.15);
                     let vth0_inst = size_params.vth0;
-                    let vfb_inst = size_params.vfbzb
-                        + size_params.phi
-                        + size_params.k1 * size_params.sqrt_phi;
+                    let vfb_inst =
+                        size_params.vfbzb + size_params.phi + size_params.k1 * size_params.sqrt_phi;
                     let vfbzb_inst = size_params.vfbzb;
                     mna.bsim3s.push(Bsim3Instance {
                         name: elem.name.clone(),
@@ -2732,14 +2702,12 @@ fn stamp_circuit(
                     }
                 }
 
-                let coll_idx = mna.node_map.get(terminal_name(elem, "collector", &net_name)?);
+                let coll_idx = mna
+                    .node_map
+                    .get(terminal_name(elem, "collector", &net_name)?);
                 let base_idx = mna.node_map.get(terminal_name(elem, "base", &net_name)?);
                 let emit_idx = mna.node_map.get(terminal_name(elem, "emitter", &net_name)?);
-                let subs_idx = if elem
-                    .connections
-                    .iter()
-                    .any(|cn| cn.terminal == "substrate")
-                {
+                let subs_idx = if elem.connections.iter().any(|cn| cn.terminal == "substrate") {
                     mna.node_map
                         .get(terminal_name(elem, "substrate", &net_name)?)
                 } else {

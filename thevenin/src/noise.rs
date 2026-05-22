@@ -39,10 +39,7 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// Shared between the Netlist path (`simulate_noise` above) and the
 /// Stage 4 IR-direct path. The Netlist is still needed for `.noise`
 /// analysis params and source resolution.
-pub fn simulate_noise_with_mna(
-    mna: MnaSystem,
-    netlist: &Netlist,
-) -> Result<SimResult, MnaError> {
+pub fn simulate_noise_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
     let (output, ref_node, src_name, variation, n, fstart, fstop) = match &netlist.analysis {
         Analysis::Noise {
             output,
@@ -71,8 +68,7 @@ pub fn simulate_noise_with_mna(
     let fstart_val = expr_val(&fstart, ".noise")?;
     let fstop_val = expr_val(&fstop, ".noise")?;
     let num_nodes_pre = mna.total_num_nodes();
-    let excitations =
-        crate::ac::collect_ac_excitations_from_netlist(netlist, &mna, num_nodes_pre);
+    let excitations = crate::ac::collect_ac_excitations_from_netlist(netlist, &mna, num_nodes_pre);
     let nr_opts = nr_options_from_netlist(netlist);
     let nodeset = resolve_nodeset(netlist, &mna);
 

@@ -187,6 +187,13 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
 }
 
 /// Run a simulation command (op, dc, ac, tran, sens, noise, pz, tf).
+///
+/// Routes through the Circuit-input simulator surface
+/// ([`thevenin::circuit::simulate_*`]) by lifting the parsed
+/// [`thevenin_types::Analysis`] to its IR equivalent via
+/// [`cirq_frontend::from_netlist::netlist_analysis_to_ir`]. TEMPER eval and
+/// `@model[param]` resolution both operate on the IR Circuit directly —
+/// no lowered Netlist is constructed.
 fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
     let parts: Vec<&str> = cmd_line.split_whitespace().collect();
     if parts.is_empty() {
@@ -199,41 +206,61 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
         return run_temp_sweep(parts[2], parts[3], parts[4], ctx);
     }
 
-    // Parse the command line into an Analysis and build a single-analysis netlist.
-    // `run` re-executes whatever analysis is declared in the netlist.
-    let analysis = if cmd == "run" {
-        ctx.netlist.analysis.clone()
+    let circuit_ref = ctx
+        .circuit()
+        .ok_or_else(|| format!("{cmd}: no circuit attached to context"))?;
+
+    // `run` re-executes the first analysis declared on the circuit; every
+    // other command is parsed fresh and lifted to IR shape against the
+    // current circuit (so source / net references resolve to Ids).
+    let ir_analysis = if cmd == "run" {
+        circuit_ref
+            .analyses
+            .first()
+            .cloned()
+            .unwrap_or(cirq_ir::Analysis::Op)
     } else {
-        parse_analysis_command(&cmd, &parts[1..])?
+        let parsed = parse_analysis_command(&cmd, &parts[1..])?;
+        cirq_frontend::from_netlist::netlist_analysis_to_ir(&parsed, circuit_ref)
+            .map_err(|e| format!("{cmd}: {e}"))?
     };
 
-    // Build a working copy of the netlist with the analysis set directly
-    let mut netlist = ctx.netlist.clone();
-    netlist.analysis = analysis.clone();
-    let temp_c = thevenin::netlist_temp(&netlist);
-    evaluate_temper_exprs(&mut netlist, temp_c);
+    // Build a working clone with only the requested analysis selected, then
+    // apply TEMPER on the IR shape before dispatch.
+    let mut circuit = circuit_ref.clone();
+    circuit.analyses = vec![ir_analysis.clone()];
+    let temp_c = thevenin::mna_ir::circuit_temp(&circuit);
+    evaluate_temper_exprs_circuit(&mut circuit, temp_c);
 
-    let result = match &analysis {
-        Analysis::Op => thevenin::simulate_op_dc(&netlist).map_err(|e| format!("OP: {e}")),
-        Analysis::Dc { .. } => thevenin::simulate_dc(&netlist).map_err(|e| format!("DC: {e}")),
-        Analysis::Tran { .. } => run_tran_with_pause(&netlist, ctx),
-        Analysis::Ac { .. } => thevenin::simulate_ac(&netlist).map_err(|e| format!("AC: {e}")),
-        Analysis::Sens { .. } => {
-            thevenin::simulate_sens(&netlist).map_err(|e| format!("Sens: {e}"))
+    let result = match &ir_analysis {
+        cirq_ir::Analysis::Op => {
+            thevenin::circuit::simulate_op(&circuit).map_err(|e| format!("OP: {e}"))
         }
-        Analysis::Noise { .. } => {
-            thevenin::simulate_noise(&netlist).map_err(|e| format!("Noise: {e}"))
+        cirq_ir::Analysis::Dc(_) => {
+            thevenin::circuit::simulate_dc(&circuit).map_err(|e| format!("DC: {e}"))
         }
-        Analysis::Pz { .. } => thevenin::simulate_pz(&netlist).map_err(|e| format!("PZ: {e}")),
-        Analysis::Tf { .. } => thevenin::simulate_tf(&netlist).map_err(|e| format!("TF: {e}")),
+        cirq_ir::Analysis::Tran(_) => run_tran_with_pause(&circuit, ctx),
+        cirq_ir::Analysis::Ac(_) => {
+            thevenin::circuit::simulate_ac(&circuit).map_err(|e| format!("AC: {e}"))
+        }
+        cirq_ir::Analysis::Sens(_) => {
+            thevenin::circuit::simulate_sens(&circuit).map_err(|e| format!("Sens: {e}"))
+        }
+        cirq_ir::Analysis::Noise(_) => {
+            thevenin::circuit::simulate_noise(&circuit).map_err(|e| format!("Noise: {e}"))
+        }
+        cirq_ir::Analysis::Pz(_) => {
+            thevenin::circuit::simulate_pz(&circuit).map_err(|e| format!("PZ: {e}"))
+        }
+        cirq_ir::Analysis::Tf(_) => {
+            thevenin::circuit::simulate_tf(&circuit).map_err(|e| format!("TF: {e}"))
+        }
     };
 
-    // Store resolved model parameters for @model[param] queries
-    for item in &netlist.items {
-        if let thevenin_types::Item::Model(model) = item {
-            ctx.resolved_models
-                .insert(model.name.to_uppercase(), model.params.clone());
-        }
+    // Capture post-TEMPER model params for @model[param] queries.
+    for model in &circuit.models {
+        ctx.resolved_models
+            .insert(model.name.to_uppercase(), model.params.clone());
     }
 
     match result {
@@ -258,15 +285,17 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
 /// The `stop_when` field is consumed (cleared) regardless of whether the run
 /// actually paused, matching ngspice's one-shot semantics.
 fn run_tran_with_pause(
-    netlist: &thevenin_types::Netlist,
+    circuit: &cirq_ir::Circuit,
     ctx: &mut SimContext,
 ) -> Result<SimResult, String> {
     let stop = ctx.stop_when.take();
     let t_pause = stop.map(|StopCondition::TimeEq(t)| t);
 
-    let mna = thevenin::mna::assemble_mna(netlist).map_err(|e| format!("Tran: {e}"))?;
-    let mut params =
-        thevenin::tran_run_params_from_netlist(netlist, &mna).map_err(|e| format!("Tran: {e}"))?;
+    let mna = thevenin::mna_ir::assemble_mna_from_circuit(circuit, false, None)
+        .map_err(|e| format!("Tran: {e}"))?
+        .ok_or_else(|| "Tran: circuit not representable in mna_ir".to_string())?;
+    let mut params = thevenin::mna_ir::tran_params_from_circuit(circuit, &mna)
+        .map_err(|e| format!("Tran: {e}"))?;
     params.t_pause = t_pause;
 
     match thevenin::run_tran(mna, params).map_err(|e| format!("Tran: {e}"))? {
@@ -301,28 +330,33 @@ fn execute_resume(ctx: &mut SimContext) -> Result<(), String> {
         .take()
         .ok_or_else(|| "resume: no paused transient simulation".to_string())?;
 
-    // Build a working netlist from the current ctx.netlist (already
-    // refreshed by any `alter` calls between pause and resume). Override
+    // Build a working circuit from the current ctx.circuit (already
+    // mutated by any `alter` calls between pause and resume). Override
     // its analysis with the paused leg's Tran params so the resumed run
     // honours the original `tstep`/`tstop` even when `tran` was an
-    // interpreter command (.control-only) rather than a netlist directive.
-    let mut netlist = ctx.netlist.clone();
-    netlist.analysis = Analysis::Tran {
-        tstep: Expr::Num(snapshot.t_step),
-        tstop: Expr::Num(snapshot.t_stop),
-        tstart: None,
-        tmax: snapshot.t_max.map(Expr::Num),
+    // interpreter command (.control-only) rather than a circuit directive.
+    let mut circuit = ctx
+        .circuit()
+        .ok_or_else(|| "resume: no circuit attached to context".to_string())?
+        .clone();
+    circuit.analyses = vec![cirq_ir::Analysis::Tran(cirq_ir::TranAnalysis {
+        step: snapshot.t_step,
+        stop: snapshot.t_stop,
+        start: 0.0,
+        tmax: snapshot.t_max,
         // The original paused leg may have been uic; the resumed leg
         // does not re-apply uic — it starts from the snapshot's solution
         // via `start_state` and so its IC/uic handling is short-circuited
         // inside run_tran (see the `start_state.is_none()` guard).
         uic: false,
-    };
-    let temp_c = thevenin::netlist_temp(&netlist);
-    evaluate_temper_exprs(&mut netlist, temp_c);
+    })];
+    let temp_c = thevenin::mna_ir::circuit_temp(&circuit);
+    evaluate_temper_exprs_circuit(&mut circuit, temp_c);
 
-    let mna = thevenin::mna::assemble_mna(&netlist).map_err(|e| format!("resume: {e}"))?;
-    let mut params = thevenin::tran_run_params_from_netlist(&netlist, &mna)
+    let mna = thevenin::mna_ir::assemble_mna_from_circuit(&circuit, false, None)
+        .map_err(|e| format!("resume: {e}"))?
+        .ok_or_else(|| "resume: circuit not representable in mna_ir".to_string())?;
+    let mut params = thevenin::mna_ir::tran_params_from_circuit(&circuit, &mna)
         .map_err(|e| format!("resume: {e}"))?;
     params.start_state = Some(TranStartState {
         t_initial: snapshot.t_paused,
@@ -370,8 +404,9 @@ fn execute_resume(ctx: &mut SimContext) -> Result<(), String> {
 
 /// Run a DC temperature sweep: `dc temp start stop step`.
 ///
-/// At each temperature point, modifies the netlist temperature, re-evaluates
-/// TEMPER-dependent expressions, re-assembles MNA, and solves the operating point.
+/// At each temperature point, sets `circuit.temps`, re-evaluates
+/// TEMPER-dependent expressions on a Circuit clone, and solves the operating
+/// point through the Circuit-input dispatcher.
 fn run_temp_sweep(
     start_s: &str,
     stop_s: &str,
@@ -405,24 +440,21 @@ fn run_temp_sweep(
     let mut first = true;
 
     for &temp_c in &temps {
-        // Set the temperature in the netlist
-        set_netlist_temp(&mut ctx.netlist, temp_c);
-
-        // Re-evaluate TEMPER-dependent expressions
-        let mut netlist_copy = ctx.netlist.clone();
-        evaluate_temper_exprs(&mut netlist_copy, temp_c);
-
-        // Re-resolve expressions (parameters may depend on temperature)
-        if let Err(e) = thevenin::expr::resolve_netlist_exprs(&mut netlist_copy) {
-            return Err(format!("dc temp: expression resolution at T={temp_c}: {e}"));
+        // Update the context circuit's temperature so the next analysis (or
+        // a follow-up `.control` step) inherits the sweep's final value,
+        // matching the old Netlist-side `set_netlist_temp` behaviour.
+        match ctx.circuit.as_mut() {
+            Some(c) => c.temps = vec![temp_c],
+            None => return Err("dc temp: no circuit attached to context".to_string()),
         }
 
-        // Flatten subcircuits
-        let flat = thevenin::flatten_netlist(&netlist_copy)
-            .map_err(|e| format!("dc temp: flatten at T={temp_c}: {e}"))?;
+        // Working clone for this point: apply TEMPER on IR shape and force
+        // an OP analysis (temp sweep is OP-only by definition).
+        let mut circuit = ctx.circuit().expect("ctx.circuit set above").clone();
+        evaluate_temper_exprs_circuit(&mut circuit, temp_c);
+        circuit.analyses = vec![cirq_ir::Analysis::Op];
 
-        // Solve OP
-        let result = thevenin::simulate_op_dc(&flat)
+        let result = thevenin::circuit::simulate_op(&circuit)
             .map_err(|e| format!("dc temp: OP at T={temp_c}: {e}"))?;
 
         if let Some(plot) = result.plots.first() {
@@ -455,170 +487,169 @@ fn run_temp_sweep(
     Ok(())
 }
 
-/// Set the simulation temperature in the netlist.
-fn set_netlist_temp(netlist: &mut thevenin_types::Netlist, temp_c: f64) {
-    // Remove existing .temp directives and add new one
-    netlist
-        .items
-        .retain(|item| !matches!(item, thevenin_types::Item::Temp(_)));
-    netlist.items.push(thevenin_types::Item::Temp(temp_c));
-}
-
-/// Evaluate model parameter expressions, substituting TEMPER keyword, and
-/// apply temperature coefficients (TC1/TC2/TCE) to resistor elements.
+/// Substitute the `temper` keyword in `Value::String("{...}")` model
+/// parameters with the current temperature and evaluate the inner
+/// expression to a `Value::Real`, then apply TC1/TC2/TCE temperature
+/// scaling to resistor models and instances.
 ///
-/// Scans model definitions for parameters with Brace expressions, substitutes
-/// 'temper' with the current temperature, and evaluates to numeric values.
-/// This also resolves non-TEMPER Brace expressions in models (e.g., `is='1e-12'`)
-/// that `resolve_netlist_exprs` doesn't touch.
-fn evaluate_temper_exprs(netlist: &mut thevenin_types::Netlist, temp_c: f64) {
-    use thevenin_types::{Expr, Item};
+/// TCE overrides TC1/TC2 at instance level, instance TC overrides model
+/// TC, and model-based resistor instances are left alone (their model's
+/// `R` was already scaled here).
+fn evaluate_temper_exprs_circuit(circuit: &mut cirq_ir::Circuit, temp_c: f64) {
+    use cirq_ir::{DeviceType, ElementKind, Value};
 
-    // Collect model TC parameters for resistor models
+    // Collect TC for resistor models, and apply TEMPER eval + model R scaling
+    // in a single pass.
     let mut model_tc: std::collections::HashMap<String, (f64, f64, f64)> =
         std::collections::HashMap::new();
 
-    for item in &mut netlist.items {
-        if let Item::Model(model) = item {
-            let mut has_tc = false;
-            let mut tc1 = 0.0_f64;
-            let mut tc2 = 0.0_f64;
-            let mut tce = 0.0_f64;
-
-            for param in &mut model.params {
-                if let Expr::Brace(expr) = &param.value {
-                    let replaced =
-                        crate::vecexpr::replace_word(expr, "temper", &temp_c.to_string());
-                    let eval_ctx = thevenin::expr::EvalContext::default();
-                    if let Ok(val) = eval_ctx.eval_str(&replaced) {
-                        param.value = Expr::Num(val);
-                    }
-                }
-                // Collect TC parameters from resistor models
-                if let Expr::Num(v) = &param.value {
-                    match param.name.to_uppercase().as_str() {
-                        "TC1" => {
-                            tc1 = *v;
-                            has_tc = true;
-                        }
-                        "TC2" => {
-                            tc2 = *v;
-                            has_tc = true;
-                        }
-                        "TCE" => {
-                            tce = *v;
-                            has_tc = true;
-                        }
-                        _ => {}
-                    }
+    for model in &mut circuit.models {
+        // TEMPER eval: replace 'temper' inside brace-quoted Value::String params.
+        for (_name, value) in &mut model.params {
+            if let Value::String(s) = value
+                && let Some(inner) = s.strip_prefix('{').and_then(|t| t.strip_suffix('}'))
+            {
+                let replaced = crate::vecexpr::replace_word(inner, "temper", &temp_c.to_string());
+                let eval_ctx = thevenin::expr::EvalContext::default();
+                if let Ok(val) = eval_ctx.eval_str(&replaced) {
+                    *value = Value::Real(val);
                 }
             }
-            if has_tc && model.kind.eq_ignore_ascii_case("r") {
-                model_tc.insert(model.name.to_uppercase(), (tc1, tc2, tce));
+        }
 
-                // Apply TC to the model's R parameter
-                let tdiff = temp_c - 27.0;
-                if tdiff != 0.0 {
-                    for param in &mut model.params {
-                        if (param.name.eq_ignore_ascii_case("r")
-                            || param.name.eq_ignore_ascii_case("resistance"))
-                            && let Expr::Num(r) = &param.value
-                        {
-                            let factor = if tce != 0.0 {
-                                1.01_f64.powf(tce * tdiff)
-                            } else {
-                                1.0 + tc1 * tdiff + tc2 * tdiff * tdiff
-                            };
-                            param.value = Expr::Num(*r * factor);
-                        }
+        // Resistor-model TC collection + R scaling.
+        let is_resistor_model = matches!(
+            &model.device_type,
+            DeviceType::Other(s) if s.eq_ignore_ascii_case("r")
+        );
+        if !is_resistor_model {
+            continue;
+        }
+        let mut has_tc = false;
+        let mut tc1 = 0.0_f64;
+        let mut tc2 = 0.0_f64;
+        let mut tce = 0.0_f64;
+        for (name, value) in &model.params {
+            if let Some(v) = crate::vecexpr::value_as_real(value) {
+                match name.to_uppercase().as_str() {
+                    "TC1" => {
+                        tc1 = v;
+                        has_tc = true;
+                    }
+                    "TC2" => {
+                        tc2 = v;
+                        has_tc = true;
+                    }
+                    "TCE" => {
+                        tce = v;
+                        has_tc = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if has_tc {
+            model_tc.insert(model.name.to_uppercase(), (tc1, tc2, tce));
+            let tdiff = temp_c - 27.0;
+            if tdiff != 0.0 {
+                for (name, value) in &mut model.params {
+                    if (name.eq_ignore_ascii_case("r") || name.eq_ignore_ascii_case("resistance"))
+                        && let Some(r) = crate::vecexpr::value_as_real(value)
+                    {
+                        let factor = if tce != 0.0 {
+                            1.01_f64.powf(tce * tdiff)
+                        } else {
+                            1.0 + tc1 * tdiff + tc2 * tdiff * tdiff
+                        };
+                        *value = Value::Real(r * factor);
                     }
                 }
             }
         }
     }
 
-    // Apply TC1/TC2/TCE to resistor elements (instance-level params)
-    let tnom = 27.0_f64; // default TNOM
+    // Snapshot model id -> name (uppercase) so the instance loop below can
+    // look up TC fallbacks without re-borrowing `circuit.models`.
+    let model_name_by_id: std::collections::HashMap<cirq_ir::Id, String> = circuit
+        .models
+        .iter()
+        .map(|m| (m.id, m.name.to_uppercase()))
+        .collect();
+
+    // Apply TC to resistor element instances.
+    let tnom = 27.0_f64;
     let tdiff = temp_c - tnom;
 
-    for item in &mut netlist.items {
-        if let Item::Element(el) = item
-            && let thevenin_types::ElementKind::Resistor { value, params, .. } = &mut el.kind
-        {
-            // Get TC from instance params or model
-            let mut tc1 = 0.0_f64;
-            let mut tc2 = 0.0_f64;
-            let mut tce = 0.0_f64;
-            let mut has_instance_tc = false;
-            let mut has_instance_tce = false;
+    for elem in &mut circuit.elements {
+        if !matches!(elem.kind, ElementKind::Resistor) {
+            continue;
+        }
+        let mut tc1 = 0.0_f64;
+        let mut tc2 = 0.0_f64;
+        let mut tce = 0.0_f64;
+        let mut has_instance_tc = false;
+        let mut has_instance_tce = false;
 
-            for p in params.iter() {
-                if let Expr::Num(v) = &p.value {
-                    match p.name.to_uppercase().as_str() {
-                        "TC1" => {
-                            tc1 = *v;
-                            has_instance_tc = true;
-                        }
-                        "TC2" => {
-                            tc2 = *v;
-                            has_instance_tc = true;
-                        }
-                        "TCE" => {
-                            tce = *v;
-                            has_instance_tce = true;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            // If instance has TCE, it overrides TC1/TC2
-            if has_instance_tce {
-                has_instance_tc = false; // TCE takes precedence
-            }
-
-            // Fall back to model TC if no instance TC
-            if !has_instance_tc && !has_instance_tce {
-                // Check if element uses a resistor model
-                if let Expr::Param(model_name) = value
-                    && let Some(&(mtc1, mtc2, mtce)) = model_tc.get(&model_name.to_uppercase())
-                {
-                    tc1 = mtc1;
-                    tc2 = mtc2;
-                    tce = mtce;
-                    if mtce != 0.0 {
-                        has_instance_tce = true;
-                    } else {
+        for (name, value) in &elem.params {
+            if let Some(v) = crate::vecexpr::value_as_real(value) {
+                match name.to_uppercase().as_str() {
+                    "TC1" => {
+                        tc1 = v;
                         has_instance_tc = true;
                     }
+                    "TC2" => {
+                        tc2 = v;
+                        has_instance_tc = true;
+                    }
+                    "TCE" => {
+                        tce = v;
+                        has_instance_tce = true;
+                    }
+                    _ => {}
                 }
             }
+        }
+        // TCE takes precedence over TC1/TC2 at instance level.
+        if has_instance_tce {
+            has_instance_tc = false;
+        }
 
-            // Apply temperature scaling to resistance value
-            if (has_instance_tc || has_instance_tce) && tdiff != 0.0 {
-                // Get the base resistance value
-                let base_r = match value {
-                    Expr::Num(r) => Some(*r),
-                    Expr::Param(_model_name) => {
-                        // Model-based resistor: look up the model's R parameter
-                        // The model params were already resolved above
-                        None // handled below via model_r lookup
-                    }
-                    _ => None,
-                };
+        let is_model_based = elem.model.is_some();
 
-                let factor = if has_instance_tce || tce != 0.0 {
-                    1.01_f64.powf(tce * tdiff)
-                } else {
-                    1.0 + tc1 * tdiff + tc2 * tdiff * tdiff
-                };
+        // Model-TC fallback only when no instance TC was set AND the element
+        // is freestanding. For model-based resistors, the model's R parameter
+        // was already scaled above; touching the instance "value" would
+        // double-apply.
+        if !has_instance_tc
+            && !has_instance_tce
+            && let Some(model_id) = elem.model
+            && let Some(model_name_upper) = model_name_by_id.get(&model_id)
+            && let Some(&(mtc1, mtc2, mtce)) = model_tc.get(model_name_upper)
+        {
+            tc1 = mtc1;
+            tc2 = mtc2;
+            tce = mtce;
+            if mtce != 0.0 {
+                has_instance_tce = true;
+            } else {
+                has_instance_tc = true;
+            }
+        }
 
-                if let Some(r) = base_r {
-                    *value = Expr::Num(r * factor);
+        // Scale the instance "value" only for freestanding resistors with TC.
+        if (has_instance_tc || has_instance_tce) && tdiff != 0.0 && !is_model_based {
+            let factor = if has_instance_tce || tce != 0.0 {
+                1.01_f64.powf(tce * tdiff)
+            } else {
+                1.0 + tc1 * tdiff + tc2 * tdiff * tdiff
+            };
+            for (name, value) in &mut elem.params {
+                if (name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("resistance"))
+                    && let Some(r) = crate::vecexpr::value_as_real(value)
+                {
+                    *value = Value::Real(r * factor);
+                    break;
                 }
-                // For model-based resistors, we can't modify the element value
-                // directly (it's a model reference). Instead, we need to modify
-                // the model's R parameter.
             }
         }
     }
@@ -817,13 +848,11 @@ fn execute_alter(spec: &str, value: &AlterValue, ctx: &mut SimContext) -> Result
         .as_mut()
         .is_some_and(|circuit| alter_circuit(circuit, &device, param.as_deref(), scalar));
     if mutated {
-        // Re-derive the cached netlist so the next analysis (which
-        // still reads through the SPICE-Expr-shape adapter) sees the
-        // mutation. Both `ctx.circuit` and `ctx.netlist` track the
-        // same logical state.
-        ctx.refresh_netlist_cache()?;
-        // Also stash the new value as a named vector so expressions
-        // that look up `@device[param]` via find_vector keep working.
+        // The Circuit is the single source of truth for the next analysis
+        // (assemble_mna_from_circuit reads it directly); no cache refresh
+        // needed. Also stash the new value as a named vector so
+        // expressions that look up `@device[param]` via find_vector keep
+        // working.
         ctx.store_vector(SimVector::real(spec_trimmed.to_lowercase(), vec![scalar]));
         return Ok(());
     }

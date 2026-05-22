@@ -148,7 +148,10 @@ fn perf_rca3040() {
         eprintln!("skipped (set THEVENIN_PERF_BENCH=1 to enable)");
         return;
     }
-    report("rca3040", run_fixture("ngspice-upstream/tests/general/rca3040.cir"));
+    report(
+        "rca3040",
+        run_fixture("ngspice-upstream/tests/general/rca3040.cir"),
+    );
 }
 
 #[test]
@@ -169,7 +172,10 @@ fn perf_mosamp() {
         eprintln!("skipped (set THEVENIN_PERF_BENCH=1 to enable)");
         return;
     }
-    report("mosamp", run_fixture("ngspice-upstream/tests/general/mosamp.cir"));
+    report(
+        "mosamp",
+        run_fixture("ngspice-upstream/tests/general/mosamp.cir"),
+    );
 }
 
 /// MOS6 bypass fixture: 20 Level 6 MOSFETs in an inverter chain,

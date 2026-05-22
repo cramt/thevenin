@@ -1,15 +1,13 @@
 //! Simulation context for `.control` block execution.
 //!
-//! Holds the driving IR circuit, a cached SPICE-Expr-shape lowering used by
-//! helpers that haven't moved onto the IR (TEMPER, `@device[param]`),
-//! simulation results (plots), variables, and output. Public entry through
-//! [`SimContext::from_circuit`].
+//! Holds the driving IR circuit, simulation results (plots), variables, and
+//! output. Public entry through [`SimContext::from_circuit`].
 
 use std::collections::HashMap;
 
 use cirq_ir::Circuit;
 use thevenin::TranPauseSnapshot;
-use thevenin_types::{Netlist, SimPlot, SimVector};
+use thevenin_types::{SimPlot, SimVector};
 
 use crate::ast::StopCondition;
 
@@ -17,22 +15,10 @@ use crate::ast::StopCondition;
 pub struct SimContext {
     /// The Cirq IR circuit driving this context, if any. Present when the
     /// context was constructed via [`SimContext::from_circuit`] (the IR
-    /// entry point). The analysis dispatcher consults this first so the
-    /// Stage 4 IR-shaped simulator API drives `.control` runs end-to-end
-    /// when possible.
-    ///
-    /// `None` for legacy [`SimContext::new`] callers, where the working
-    /// `netlist` cache is the sole source of truth. External callers
-    /// inspect this via [`SimContext::circuit`].
+    /// entry point). Both TEMPER eval and analysis dispatch read this
+    /// directly — there is no parallel lowered Netlist anymore. External
+    /// callers inspect it via [`SimContext::circuit`].
     pub(crate) circuit: Option<Circuit>,
-    /// SPICE-Expr-shape adapter for helpers that don't yet operate on the IR: TEMPER expression
-    /// rewriting, `@device[param]` lookups, and the Sens/Noise/Pz/Tf analyses that still take
-    /// `&Netlist`. On the IR path this is a cached lowering of `circuit`, refreshed via
-    /// `refresh_netlist_cache` after every `alter`; on the legacy path it *is* the source of
-    /// truth. Crate-private — removing this field is the deeper TEMPER+`@device` IR lift; until
-    /// then it stays an internal implementation detail so the public API doesn't leak
-    /// `thevenin_types::Netlist`.
-    pub(crate) netlist: Netlist,
     /// Named plots from simulation runs, in insertion order.
     pub plots: Vec<SimPlot>,
     /// Current plot index (most recent simulation result).
@@ -50,9 +36,11 @@ pub struct SimContext {
     /// Vectors in the "constants" pseudo-plot (user-created via `let` outside
     /// a simulation context, or via `compose`).
     pub user_vectors: Vec<SimVector>,
-    /// Resolved model parameters from the last analysis run.
+    /// Resolved model parameters from the last analysis run, captured
+    /// post-TEMPER eval. Keyed by uppercase model name; values are
+    /// IR-shape `(param_name, Value)` pairs taken from `circuit.models`.
     /// Used by `@model[param]` queries to return TEMPER-evaluated values.
-    pub resolved_models: HashMap<String, Vec<thevenin_types::Param>>,
+    pub resolved_models: HashMap<String, Vec<(String, cirq_ir::Value)>>,
     /// Pending pause condition for the next transient analysis.
     ///
     /// Set by `stop when` and consumed by the next `tran` run. Cleared after
@@ -69,10 +57,9 @@ impl SimContext {
     /// the vector / variable / expression machinery without a driving
     /// [`Circuit`]. External callers use [`SimContext::from_circuit`].
     #[cfg(test)]
-    pub(crate) fn new(netlist: Netlist) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             circuit: None,
-            netlist,
             plots: Vec::new(),
             current_plot: None,
             plot_counters: HashMap::new(),
@@ -89,24 +76,11 @@ impl SimContext {
 
     /// Create a new context from a Cirq IR circuit.
     ///
-    /// Eagerly lowers the circuit to a working `Netlist` via
-    /// [`cirq_frontend::to_netlist::circuit_to_netlists`] +
-    /// [`thevenin::flatten_netlist`]; that cached netlist is what the
-    /// helpers still operating on the SPICE shape consume. The Circuit
-    /// itself remains the source of truth for analysis dispatch (see
-    /// `exec.rs::run_analysis`).
+    /// The Circuit is the single source of truth for both TEMPER eval and
+    /// analysis dispatch — see `exec.rs::run_analysis`.
     pub fn from_circuit(circuit: Circuit) -> Result<Self, String> {
-        let netlists = cirq_frontend::to_netlist::circuit_to_netlists(&circuit)
-            .map_err(|e| format!("circuit_to_netlists: {e}"))?;
-        let netlist = netlists
-            .into_iter()
-            .next()
-            .ok_or_else(|| "circuit produced no netlists".to_string())?;
-        let netlist =
-            thevenin::flatten_netlist(&netlist).map_err(|e| format!("flatten_netlist: {e}"))?;
         Ok(Self {
             circuit: Some(circuit),
-            netlist,
             plots: Vec::new(),
             current_plot: None,
             plot_counters: HashMap::new(),
@@ -123,33 +97,11 @@ impl SimContext {
 
     /// The Cirq IR circuit driving this context, if any.
     ///
-    /// Returns `None` for crate-internal `new(netlist)` constructions (used
-    /// only by tests). External callers always go through
+    /// Returns `None` only for the crate-internal test-only constructor
+    /// [`SimContext::new`]. External callers always go through
     /// [`SimContext::from_circuit`] and so always see `Some`.
     pub fn circuit(&self) -> Option<&Circuit> {
         self.circuit.as_ref()
-    }
-
-    /// Re-derive the cached internal Netlist after mutating the driving
-    /// [`Circuit`] (e.g. through `alter`). No-op on legacy contexts where
-    /// no Circuit is present.
-    ///
-    /// Kept `pub(crate)` because the cached Netlist is an internal
-    /// SPICE-Expr-shape adapter that callers outside the crate must not
-    /// rely on.
-    pub(crate) fn refresh_netlist_cache(&mut self) -> Result<(), String> {
-        let Some(circuit) = self.circuit.as_ref() else {
-            return Ok(());
-        };
-        let netlists = cirq_frontend::to_netlist::circuit_to_netlists(circuit)
-            .map_err(|e| format!("refresh_netlist_cache: {e}"))?;
-        let netlist = netlists
-            .into_iter()
-            .next()
-            .ok_or_else(|| "refresh_netlist_cache: circuit produced no netlists".to_string())?;
-        self.netlist = thevenin::flatten_netlist(&netlist)
-            .map_err(|e| format!("refresh_netlist_cache: flatten_netlist: {e}"))?;
-        Ok(())
     }
 
     /// Add a plot from a simulation result, returning its name.
@@ -364,16 +316,7 @@ fn format_number(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thevenin_types::{Analysis, Complex, Netlist, SimPlot, SimVector, VectorData};
-
-    fn empty_netlist() -> Netlist {
-        Netlist {
-            title: String::new(),
-            items: Vec::new(),
-            analysis: Analysis::Op,
-            source: String::new(),
-        }
-    }
+    use thevenin_types::{Complex, SimPlot, SimVector, VectorData};
 
     fn make_real_vec(name: &str, data: Vec<f64>) -> SimVector {
         SimVector {
@@ -407,8 +350,8 @@ mod tests {
 
     #[test]
     fn new_context_has_empty_state() {
-        let ctx = SimContext::new(empty_netlist());
-        assert!(ctx.circuit.is_none(), "legacy ctor leaves circuit None");
+        let ctx = SimContext::new();
+        assert!(ctx.circuit.is_none(), "test ctor leaves circuit None");
         assert!(ctx.plots.is_empty());
         assert!(ctx.current_plot.is_none());
         assert!(ctx.plot_counters.is_empty());
@@ -420,9 +363,7 @@ mod tests {
     }
 
     /// Builds the smallest legal Circuit (an empty one with a single
-    /// gnd net) so `from_circuit` has something to lower. The harness's
-    /// circuit_to_netlists tolerates this — the resulting netlist is
-    /// effectively empty but valid.
+    /// gnd net) so `from_circuit` has something to attach to.
     fn minimal_circuit() -> cirq_ir::Circuit {
         cirq_ir::Circuit {
             name: "empty".into(),
@@ -460,11 +401,10 @@ mod tests {
     }
 
     #[test]
-    fn from_circuit_derives_a_working_netlist() {
-        let ctx = SimContext::from_circuit(minimal_circuit()).expect("from_circuit");
-        // The lowered netlist should at least be present; concrete shape
-        // is owned by cirq_frontend, we only assert it's been derived.
-        assert!(ctx.netlist.items.is_empty() || !ctx.netlist.items.is_empty());
+    fn from_circuit_attaches_the_circuit() {
+        let c = minimal_circuit();
+        let ctx = SimContext::from_circuit(c).expect("from_circuit");
+        assert!(ctx.circuit.is_some());
     }
 
     // -----------------------------------------------------------------------
@@ -473,7 +413,7 @@ mod tests {
 
     #[test]
     fn add_plot_autonaming_op() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         let name = ctx.add_plot(make_plot("op", vec![]));
         assert_eq!(name, "op1");
         let name = ctx.add_plot(make_plot("op", vec![]));
@@ -482,7 +422,7 @@ mod tests {
 
     #[test]
     fn add_plot_autonaming_dc() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         let name = ctx.add_plot(make_plot("dc", vec![]));
         assert_eq!(name, "dc1");
         let name = ctx.add_plot(make_plot("dc", vec![]));
@@ -491,7 +431,7 @@ mod tests {
 
     #[test]
     fn add_plot_mixed_types() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         assert_eq!(ctx.add_plot(make_plot("op", vec![])), "op1");
         assert_eq!(ctx.add_plot(make_plot("dc", vec![])), "dc1");
         assert_eq!(ctx.add_plot(make_plot("tran", vec![])), "tran1");
@@ -500,7 +440,7 @@ mod tests {
 
     #[test]
     fn add_plot_sets_current_plot() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.add_plot(make_plot("op", vec![]));
         assert_eq!(ctx.current_plot, Some(0));
         ctx.add_plot(make_plot("dc", vec![]));
@@ -513,14 +453,14 @@ mod tests {
 
     #[test]
     fn current_plot_none_before_adding() {
-        let ctx = SimContext::new(empty_netlist());
+        let ctx = SimContext::new();
         assert!(ctx.current_plot().is_none());
         assert_eq!(ctx.current_plot_name(), "");
     }
 
     #[test]
     fn current_plot_reflects_latest() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.add_plot(make_plot("op", vec![]));
         assert_eq!(ctx.current_plot_name(), "op1");
         ctx.add_plot(make_plot("dc", vec![]));
@@ -533,7 +473,7 @@ mod tests {
 
     #[test]
     fn find_vector_in_current_plot() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         let plot = make_plot("op", vec![make_real_vec("v(out)", vec![1.5])]);
         ctx.add_plot(plot);
         let v = ctx.find_vector("v(out)").unwrap();
@@ -542,7 +482,7 @@ mod tests {
 
     #[test]
     fn find_vector_in_user_vectors() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.user_vectors.push(make_real_vec("myvec", vec![42.0]));
         let v = ctx.find_vector("myvec").unwrap();
         assert_eq!(v.data.as_real(), &[42.0]);
@@ -550,7 +490,7 @@ mod tests {
 
     #[test]
     fn find_vector_in_other_plots() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         let plot1 = make_plot("op", vec![make_real_vec("v(a)", vec![1.0])]);
         ctx.add_plot(plot1);
         let plot2 = make_plot("dc", vec![make_real_vec("v(b)", vec![2.0])]);
@@ -562,13 +502,13 @@ mod tests {
 
     #[test]
     fn find_vector_missing_returns_none() {
-        let ctx = SimContext::new(empty_netlist());
+        let ctx = SimContext::new();
         assert!(ctx.find_vector("nonexistent").is_none());
     }
 
     #[test]
     fn find_vector_ibranch_alias() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         let plot = make_plot("op", vec![make_real_vec("vsrc#branch", vec![0.5])]);
         ctx.add_plot(plot);
         // i(vsrc) should resolve to vsrc#branch
@@ -578,7 +518,7 @@ mod tests {
 
     #[test]
     fn find_vector_case_insensitive() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         let plot = make_plot("op", vec![make_real_vec("V(Out)", vec![3.3])]);
         ctx.add_plot(plot);
         let v = ctx.find_vector("v(out)").unwrap();
@@ -591,7 +531,7 @@ mod tests {
 
     #[test]
     fn find_vector_in_specific_plot() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         let plot = make_plot("op", vec![make_real_vec("v(x)", vec![7.0])]);
         ctx.add_plot(plot);
         let v = ctx.find_vector_in_plot("op1", "v(x)").unwrap();
@@ -600,7 +540,7 @@ mod tests {
 
     #[test]
     fn find_vector_in_wrong_plot_returns_none() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         let plot = make_plot("op", vec![make_real_vec("v(x)", vec![7.0])]);
         ctx.add_plot(plot);
         assert!(ctx.find_vector_in_plot("dc1", "v(x)").is_none());
@@ -612,7 +552,7 @@ mod tests {
 
     #[test]
     fn store_vector_appends_to_current_plot() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.add_plot(make_plot("op", vec![]));
         ctx.store_vector(make_real_vec("result", vec![10.0]));
         let v = ctx.find_vector("result").unwrap();
@@ -621,7 +561,7 @@ mod tests {
 
     #[test]
     fn store_vector_replaces_existing_in_current_plot() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.add_plot(make_plot("op", vec![make_real_vec("x", vec![1.0])]));
         ctx.store_vector(make_real_vec("x", vec![99.0]));
         let v = ctx.find_vector("x").unwrap();
@@ -639,7 +579,7 @@ mod tests {
 
     #[test]
     fn store_vector_without_current_plot_goes_to_user_vectors() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.store_vector(make_real_vec("uv", vec![5.0]));
         assert_eq!(ctx.user_vectors.len(), 1);
         assert_eq!(ctx.user_vectors[0].data.as_real(), &[5.0]);
@@ -647,7 +587,7 @@ mod tests {
 
     #[test]
     fn store_vector_replaces_existing_user_vector() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.store_vector(make_real_vec("uv", vec![1.0]));
         ctx.store_vector(make_real_vec("uv", vec![2.0]));
         assert_eq!(ctx.user_vectors.len(), 1);
@@ -656,7 +596,7 @@ mod tests {
 
     #[test]
     fn store_vector_cross_sync_user_vectors() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         // Pre-populate user_vectors
         ctx.user_vectors.push(make_real_vec("shared", vec![0.0]));
         // Add a plot and store — should also update user_vectors
@@ -671,21 +611,21 @@ mod tests {
 
     #[test]
     fn resolve_var_normal() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.variables.insert("foo".to_string(), "bar".to_string());
         assert_eq!(ctx.resolve_var("foo"), "bar");
     }
 
     #[test]
     fn resolve_var_curplot_special() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.add_plot(make_plot("tran", vec![]));
         assert_eq!(ctx.resolve_var("curplot"), "tran1");
     }
 
     #[test]
     fn resolve_var_missing_returns_empty() {
-        let ctx = SimContext::new(empty_netlist());
+        let ctx = SimContext::new();
         assert_eq!(ctx.resolve_var("missing"), "");
     }
 
@@ -695,14 +635,14 @@ mod tests {
 
     #[test]
     fn resolve_vec_scalar_single_real() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.user_vectors.push(make_real_vec("x", vec![3.14]));
         assert_eq!(ctx.resolve_vec_scalar("x"), "3.14");
     }
 
     #[test]
     fn resolve_vec_scalar_multi_element_returns_last() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.user_vectors
             .push(make_real_vec("sweep", vec![1.0, 2.0, 3.0]));
         assert_eq!(ctx.resolve_vec_scalar("sweep"), "3");
@@ -710,14 +650,14 @@ mod tests {
 
     #[test]
     fn resolve_vec_scalar_empty_returns_zero() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.user_vectors.push(make_real_vec("empty", vec![]));
         assert_eq!(ctx.resolve_vec_scalar("empty"), "0");
     }
 
     #[test]
     fn resolve_vec_scalar_complex() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.user_vectors
             .push(make_complex_vec("z", vec![(1.5, 2.5)]));
         assert_eq!(ctx.resolve_vec_scalar("z"), "1.5,2.5");
@@ -725,7 +665,7 @@ mod tests {
 
     #[test]
     fn resolve_vec_scalar_missing_vector() {
-        let ctx = SimContext::new(empty_netlist());
+        let ctx = SimContext::new();
         assert_eq!(ctx.resolve_vec_scalar("nope"), "0");
     }
 
@@ -735,7 +675,7 @@ mod tests {
 
     #[test]
     fn set_current_plot_by_name() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.add_plot(make_plot("op", vec![]));
         ctx.add_plot(make_plot("dc", vec![]));
         assert_eq!(ctx.current_plot_name(), "dc1");
@@ -745,7 +685,7 @@ mod tests {
 
     #[test]
     fn set_current_plot_new_creates_empty() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.set_current_plot("new");
         assert!(ctx.current_plot().is_some());
         assert_eq!(ctx.current_plot().unwrap().name, "user");
@@ -754,7 +694,7 @@ mod tests {
 
     #[test]
     fn set_current_plot_missing_name_is_noop() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.add_plot(make_plot("op", vec![]));
         assert_eq!(ctx.current_plot, Some(0));
         ctx.set_current_plot("nonexistent");
@@ -768,7 +708,7 @@ mod tests {
 
     #[test]
     fn echo_appends_with_newline() {
-        let mut ctx = SimContext::new(empty_netlist());
+        let mut ctx = SimContext::new();
         ctx.echo("hello");
         ctx.echo("world");
         assert_eq!(ctx.output, "hello\nworld\n");

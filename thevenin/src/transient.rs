@@ -606,10 +606,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// IR-direct path (`thevenin::circuit::simulate_tran` via `mna_ir`). The
 /// Netlist is still needed for `.tran` analysis params, `.ic` overrides,
 /// nodeset resolution, and `.OPTIONS` lookups.
-pub fn simulate_tran_with_mna(
-    mna: MnaSystem,
-    netlist: &Netlist,
-) -> Result<SimResult, MnaError> {
+pub fn simulate_tran_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
     let params = tran_run_params_from_netlist(netlist, &mna)?;
     run_tran(mna, params).map(TranOutcome::into_result)
 }
@@ -792,10 +789,7 @@ impl TranOutcome {
 /// [`TranOutcome`] so callers that set [`TranRunParams::t_pause`] can
 /// recover the [`TranPauseSnapshot`]; callers that don't always get
 /// [`TranOutcome::Complete`].
-pub fn run_tran(
-    mut mna: MnaSystem,
-    params: TranRunParams,
-) -> Result<TranOutcome, MnaError> {
+pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome, MnaError> {
     let TranRunParams {
         t_step: h_print,
         t_stop,
@@ -2237,10 +2231,7 @@ fn parse_device_param_query(var: &str) -> Option<(String, String)> {
 /// Takes an iterator of `.print`-bearing lines so both the Netlist path
 /// (which reads from `netlist.source`) and the Circuit path (which reads
 /// from `circuit.raw_directives`) can share this code.
-pub fn collect_device_param_queries<'a, I>(
-    print_lines: I,
-    mna: &MnaSystem,
-) -> Vec<(String, String)>
+pub fn collect_device_param_queries<'a, I>(print_lines: I, mna: &MnaSystem) -> Vec<(String, String)>
 where
     I: IntoIterator<Item = &'a str>,
 {
@@ -3354,7 +3345,9 @@ fn solve_timestep(
             prev_solution,
             Some(nr_cache),
         )
-        .map_err(|e| MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string())))?;
+        .map_err(|e| {
+            MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string()))
+        })?;
         Ok(result.solution)
     } else {
         // Linear: single solve.
