@@ -2011,3 +2011,162 @@ C1 cap 0 1n
         data[0]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Native Cirq `measure { ... }` block
+// ---------------------------------------------------------------------------
+
+/// Cirq source carrying a native measure block parses and lowers to the
+/// same typed `MeasureExpr::TrigTarg` shape the SPICE importer would produce.
+#[test]
+fn cirq_native_measure_trig_targ_block() {
+    let source = r#"
+        circuit rise_test {
+            V1: vsource(in -> gnd, dc: 0)
+            R1: resistor(in -> out, 1000)
+            C1: capacitor(out -> gnd, 1n)
+
+            analysis tran {
+                step: 1n
+                stop: 100n
+            }
+
+            measure tran "rise" {
+                spec: "TRIG v(out) VAL=0.5 RISE=1 TARG v(out) VAL=4.5 RISE=1"
+            }
+        }
+    "#;
+
+    let ir = cirq_frontend::compile(source).expect("compile native measure block");
+    assert_eq!(ir.measures.len(), 1);
+    let m = &ir.measures[0];
+    assert_eq!(m.name, "rise");
+    assert_eq!(m.analysis_type, "tran");
+    let expr = m.expr.as_ref().expect("spec parsed into typed expr");
+    match expr {
+        cirq_ir::MeasureExpr::TrigTarg { trig, targ } => {
+            match trig {
+                cirq_ir::TrigTargClause::Signal {
+                    signal,
+                    val,
+                    crossing,
+                    td,
+                } => {
+                    assert_eq!(signal, "v(out)");
+                    assert!((val - 0.5).abs() < 1e-12);
+                    assert_eq!(
+                        *crossing,
+                        cirq_ir::CrossingKind::Rise(cirq_ir::CrossingPick::Nth(1))
+                    );
+                    assert!(td.is_none());
+                }
+                other => panic!("unexpected TRIG clause: {other:?}"),
+            }
+            match targ {
+                cirq_ir::TrigTargClause::Signal {
+                    signal,
+                    val,
+                    crossing,
+                    td,
+                } => {
+                    assert_eq!(signal, "v(out)");
+                    assert!((val - 4.5).abs() < 1e-12);
+                    assert_eq!(
+                        *crossing,
+                        cirq_ir::CrossingKind::Rise(cirq_ir::CrossingPick::Nth(1))
+                    );
+                    assert!(td.is_none());
+                }
+                other => panic!("unexpected TARG clause: {other:?}"),
+            }
+        }
+        other => panic!("expected TrigTarg, got {other:?}"),
+    }
+}
+
+/// A measurement expressed natively in Cirq lowers to the same IR shape as
+/// the equivalent SPICE `.meas` directive imported through `cirq-spice-import`.
+#[test]
+fn cirq_native_measure_round_trips_with_spice() {
+    let cirq_src = r#"
+        circuit rise_test {
+            V1: vsource(in -> gnd, dc: 0)
+            R1: resistor(in -> out, 1000)
+            C1: capacitor(out -> gnd, 1n)
+
+            analysis tran {
+                step: 1n
+                stop: 100n
+            }
+
+            measure tran "rise" {
+                spec: "TRIG v(out) VAL=0.5 RISE=1 TARG v(out) VAL=4.5 RISE=1"
+            }
+        }
+    "#;
+
+    let cirq_ir = cirq_frontend::compile(cirq_src).expect("compile native");
+    assert_eq!(cirq_ir.measures.len(), 1);
+    let cirq_meas = &cirq_ir.measures[0];
+
+    let spice_src = "\
+Rise Test
+V1 in 0 0
+R1 in out 1k
+C1 out 0 1n
+.tran 1n 100n
+.meas tran rise TRIG v(out) VAL=0.5 RISE=1 TARG v(out) VAL=4.5 RISE=1
+.end
+";
+    let netlists = thevenin_types::Netlist::parse(spice_src).expect("SPICE parse");
+    let nl = &netlists[0];
+    let spice_ir = cirq_spice_import::import_netlist(nl).expect("import");
+    assert_eq!(spice_ir.measures.len(), 1);
+    let spice_meas = &spice_ir.measures[0];
+
+    // Both paths produce the same name / analysis / spec / typed expr.
+    assert_eq!(cirq_meas.name, spice_meas.name);
+    assert_eq!(cirq_meas.analysis_type, spice_meas.analysis_type);
+    assert_eq!(cirq_meas.spec, spice_meas.spec);
+
+    // The typed forms are equal up to the structural Debug representation —
+    // MeasureExpr has no PartialEq, so format/compare strings stand in.
+    let cirq_expr = cirq_meas.expr.as_ref().expect("cirq typed expr");
+    let spice_expr = spice_meas.expr.as_ref().expect("spice typed expr");
+    assert_eq!(format!("{cirq_expr:?}"), format!("{spice_expr:?}"));
+}
+
+/// A malformed measure spec produces an error diagnostic whose span points
+/// at the spec string in the user's source.
+#[test]
+fn cirq_native_measure_malformed_emits_diagnostic() {
+    // `BOGUS` is not a recognised .meas keyword, so MeasureSpec::parse fails.
+    let source = r#"
+        circuit bad {
+            V1: vsource(in -> gnd, dc: 0)
+            R1: resistor(in -> out, 1000)
+
+            analysis tran {
+                step: 1n
+                stop: 100n
+            }
+
+            measure tran "bad_meas" {
+                spec: "BOGUS v(out)"
+            }
+        }
+    "#;
+
+    let diags = cirq_frontend::compile(source).expect_err("malformed spec should error");
+    let found = diags.iter().find(|d| {
+        matches!(d.severity, cirq_frontend::diagnostics::Severity::Error)
+            && d.message.contains("bad_meas")
+    });
+    let diag = found.expect("expected a diagnostic naming the bad measurement");
+    let span = diag.span.expect("diagnostic should carry a span");
+    let slice = &source[span.start as usize..span.end as usize];
+    assert!(
+        slice.contains("BOGUS"),
+        "span should cover the spec string literal, got: {slice:?}"
+    );
+}

@@ -5,13 +5,13 @@ use std::collections::HashMap;
 
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, BinOp, CircuitItem, CoupledLineDecl, ElementInst, Expr,
-    FuncDecl, IcDecl, LetDecl, ModelDef, ModuleDef, ModuleInst, OptionsDecl, ParamDecl, SaveDecl,
-    SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp,
+    FuncDecl, IcDecl, LetDecl, MeasureDecl, ModelDef, ModuleDef, ModuleInst, OptionsDecl,
+    ParamDecl, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp,
 };
 use cirq_ir::{
     AcAnalysis, AcSpec, Analysis, BehavioralMode, Circuit, Connection, DcAnalysis, DcSweep,
-    Element, ElementKind, FrequencyScale, FuncDef, Id, Model, Net, ResolvedParam, SourceSpec,
-    TranAnalysis, Value, Waveform,
+    Element, ElementKind, FrequencyScale, FuncDef, Id, MeasureSpec, Model, Net, ResolvedParam,
+    SourceSpec, TranAnalysis, Value, Waveform,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -72,7 +72,7 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         options: ctx.options,
         temps: ctx.temps,
         nodeset: Vec::new(),
-        measures: Vec::new(),
+        measures: ctx.measures,
         save: ctx.save,
         funcs: ctx.funcs,
         initial_conditions: ctx.initial_conditions,
@@ -222,6 +222,7 @@ struct IrCtx {
     save: Vec<String>,
     funcs: Vec<FuncDef>,
     initial_conditions: Vec<(Id, f64)>,
+    measures: Vec<MeasureSpec>,
 }
 
 impl IrCtx {
@@ -251,6 +252,7 @@ impl IrCtx {
             funcs: Vec::new(),
             initial_conditions: Vec::new(),
             param_overrides: HashMap::new(),
+            measures: Vec::new(),
         };
         // `gnd` always gets Id(0).
         ctx.intern_net("gnd", true);
@@ -339,6 +341,7 @@ impl IrCtx {
                         c.lines.clone(),
                     ));
                 }
+                CircuitItem::Measure(m) => self.lower_measure_decl(m),
                 // Already handled in pass 1, or collected above.
                 CircuitItem::Param(_)
                 | CircuitItem::Let(_)
@@ -1489,6 +1492,31 @@ impl IrCtx {
                 );
             }
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Measure (.meas) lowering
+    // -------------------------------------------------------------------
+
+    fn lower_measure_decl(&mut self, m: &MeasureDecl) {
+        // Build the IR's typed MeasureSpec by funnelling the spec string
+        // through the same parser the SPICE importer uses. That keeps native
+        // Cirq measure blocks and `.meas`-imported entries semantically
+        // identical and round-trippable.
+        let spec = MeasureSpec::parse(m.name.clone(), m.analysis_kind.name.clone(), m.spec.clone());
+
+        // Surface a diagnostic when the spec string is well-formed at the
+        // grammar level but the body fails to parse into a typed expr — the
+        // evaluator would otherwise silently skip the measurement.
+        if spec.expr.is_none() {
+            self.diags.push(
+                Diagnostic::error(format!("could not parse measurement spec for `{}`", m.name))
+                    .with_span(m.spec_span)
+                    .with_note(format!("spec text: `{}`", m.spec)),
+            );
+        }
+
+        self.measures.push(spec);
     }
 
     // -------------------------------------------------------------------

@@ -61,6 +61,7 @@ pub enum CircuitItem {
     Ic(IcDecl),
     CoupledLine(CoupledLineDecl),
     Code(CodeDecl),
+    Measure(MeasureDecl),
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +269,34 @@ pub struct CoupledLineField {
 pub struct CodeDecl {
     pub language: String,
     pub lines: Vec<String>,
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
+// Measure
+// ---------------------------------------------------------------------------
+
+/// A native Cirq `measure` block, the source-language counterpart to SPICE's
+/// `.meas` directive.
+///
+/// The body contains a single required `spec` field whose value is a string
+/// literal carrying the measurement clauses in SPICE syntax (e.g.
+/// `"TRIG v(out) VAL=0.5 RISE=1 TARG v(out) VAL=4.5 RISE=1"`). Reusing the
+/// SPICE spec string here lets the IR lowering call straight into
+/// `cirq_ir::MeasureSpec::parse` and gives a lossless round-trip with the
+/// SPICE importer.
+#[derive(Debug, Clone)]
+pub struct MeasureDecl {
+    /// The analysis kind this measurement applies to (`tran`, `ac`, `dc`, ...).
+    pub analysis_kind: Ident,
+    /// The measurement name (the value SPICE attaches to the result vector).
+    pub name: String,
+    /// Span of the string-literal token carrying the name.
+    pub name_span: Span,
+    /// The verbatim measurement clauses (no surrounding quotes).
+    pub spec: String,
+    /// Span of the string-literal token carrying the spec body.
+    pub spec_span: Span,
     pub span: Span,
 }
 

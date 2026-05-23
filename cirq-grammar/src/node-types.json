@@ -603,6 +603,10 @@
           "named": true
         },
         {
+          "type": "measure_decl",
+          "named": true
+        },
+        {
           "type": "model_decl",
           "named": true
         },
@@ -1254,6 +1258,68 @@
     }
   },
   {
+    "type": "measure_decl",
+    "named": true,
+    "fields": {
+      "analysis_kind": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "measure_field",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "measure_field",
+    "named": true,
+    "fields": {
+      "key": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "model_decl",
     "named": true,
     "fields": {
@@ -1426,6 +1492,10 @@
         },
         {
           "type": "let_decl",
+          "named": true
+        },
+        {
+          "type": "measure_decl",
           "named": true
         },
         {
@@ -2511,6 +2581,10 @@
     "type": "line_comment",
     "named": true,
     "extra": true
+  },
+  {
+    "type": "measure",
+    "named": false
   },
   {
     "type": "model",

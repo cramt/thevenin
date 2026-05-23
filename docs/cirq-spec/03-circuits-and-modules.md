@@ -35,6 +35,7 @@ The circuit body is a block `{ ... }` containing:
 - `save { ... }` blocks
 - `ic { ... }` initial condition blocks
 - `global <net>` declarations
+- `measure { ... }` blocks (see `07-analysis.md`)
 
 ## Module Declaration
 

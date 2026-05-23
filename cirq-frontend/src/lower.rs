@@ -4,9 +4,9 @@
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CodeDecl,
     CoupledLineDecl, CoupledLineField, ElementInst, ExportDecl, Expr, FuncDecl, GlobalDecl, IcDecl,
-    IcEntry, Ident, Import, LetDecl, ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting,
-    OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl, SaveTarget,
-    SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
+    IcEntry, Ident, Import, LetDecl, MeasureDecl, ModelDef, ModelParam, ModuleDef, ModuleInst,
+    OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl,
+    SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -183,6 +183,7 @@ impl Ctx<'_> {
             "ic_decl" => self.lower_ic(node).map(CircuitItem::Ic),
             "coupled_line_decl" => self.lower_coupled_line(node).map(CircuitItem::CoupledLine),
             "code_decl" => self.lower_code(node).map(CircuitItem::Code),
+            "measure_decl" => self.lower_measure(node).map(CircuitItem::Measure),
             "line_comment" | "block_comment" => None,
             "ERROR" => {
                 self.error_at(node, "syntax error in circuit body");
@@ -685,6 +686,74 @@ impl Ctx<'_> {
             span: span_of(node),
         })
     }
+
+    fn lower_measure(&mut self, node: tree_sitter::Node) -> Option<MeasureDecl> {
+        let kind_node = self.required_field(node, "analysis_kind")?;
+        let analysis_kind = self.ident(kind_node);
+
+        let name_node = self.required_field(node, "name")?;
+        let name = strip_quotes(self.text(name_node)).to_owned();
+        let name_span = span_of(name_node);
+
+        let mut spec_value: Option<String> = None;
+        let mut spec_span: Option<Span> = None;
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() != "measure_field" {
+                continue;
+            }
+            let Some(key_node) = child.child_by_field_name("key") else {
+                continue;
+            };
+            let Some(value_node) = child.child_by_field_name("value") else {
+                continue;
+            };
+            let key = self.text(key_node);
+            if key.eq_ignore_ascii_case("spec") {
+                if spec_value.is_some() {
+                    self.error_at(child, "duplicate `spec:` field in measure block");
+                    continue;
+                }
+                spec_value = Some(strip_quotes(self.text(value_node)).to_owned());
+                spec_span = Some(span_of(value_node));
+            } else {
+                self.error_at(
+                    key_node,
+                    format!("unknown field `{key}` in measure block (expected `spec`)"),
+                );
+            }
+        }
+
+        let spec = match spec_value {
+            Some(s) => s,
+            None => {
+                self.error_at(node, "measure block requires a `spec` field");
+                return None;
+            }
+        };
+        // `spec_span` is set whenever `spec_value` is — match keeps that
+        // invariant explicit.
+        let spec_span = spec_span.unwrap_or_else(span_of_dummy);
+
+        Some(MeasureDecl {
+            analysis_kind,
+            name,
+            name_span,
+            spec,
+            spec_span,
+            span: span_of(node),
+        })
+    }
+}
+
+fn strip_quotes(raw: &str) -> &str {
+    raw.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(raw)
+}
+
+fn span_of_dummy() -> Span {
+    Span::dummy()
 }
 
 // ---------------------------------------------------------------------------
