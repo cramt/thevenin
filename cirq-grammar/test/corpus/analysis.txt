@@ -113,6 +113,36 @@ circuit test {
         step: (number_literal)))))
 
 ================================================================================
+Measure block
+================================================================================
+
+circuit test {
+    analysis tran {
+        step: 1n
+        stop: 100n
+    }
+    measure tran "rise" {
+        spec: "TRIG v(out) VAL=0.5 RISE=1 TARG v(out) VAL=4.5 RISE=1"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (analysis_decl
+      kind: (identifier)
+      (analysis_setting name: (identifier) value: (number_literal))
+      (analysis_setting name: (identifier) value: (number_literal)))
+    (measure_decl
+      analysis_kind: (identifier)
+      name: (string_literal)
+      (measure_field
+        key: (identifier)
+        value: (string_literal)))))
+
+================================================================================
 Multiple analyses
 ================================================================================
 

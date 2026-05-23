@@ -155,6 +155,58 @@ analysis tf {
 }
 ```
 
+## Measurements
+
+A `measure` block records a post-simulation measurement on the results of a
+preceding analysis. It is the native Cirq counterpart of SPICE's `.meas`
+directive:
+
+```cirq
+analysis tran {
+    step: 1n
+    stop: 100n
+}
+
+measure tran "rise" {
+    spec: "TRIG v(out) VAL=0.5 RISE=1 TARG v(out) VAL=4.5 RISE=1"
+}
+
+measure tran "vout_max" {
+    spec: "MAX v(out)"
+}
+
+measure tran "settle" {
+    spec: "WHEN v(out)=4.95 RISE=1"
+}
+
+measure tran "vout_swing" {
+    spec: "PARAM=vout_max - vout_min"
+}
+```
+
+The header has three pieces:
+
+1. The literal keyword `measure`.
+2. An analysis-kind identifier (`tran`, `ac`, `dc`, ...). The measurement is
+   evaluated against the results of that analysis when the simulator runs.
+3. A string literal naming the measurement. The value appears as a vector of
+   this name in the `measurements` result plot.
+
+The body holds a single required field:
+
+- `spec`: a string literal carrying the measurement clauses. The contents
+  use the same syntax as the right-hand side of a SPICE `.meas` directive
+  (everything after `.meas <type> <name>`). All keywords supported by the
+  importer (`MAX`/`MIN`/`AVG`/`RMS`/`PP`, `INTEG`, `FIND`, `WHEN`,
+  `TRIG`/`TARG`, `DERIV`, `PARAM=`) work here unchanged.
+
+Reusing the SPICE clause syntax keeps native Cirq `measure` blocks and
+SPICE-imported `.meas` directives identical in the IR, and makes
+round-tripping between the two source forms lossless. A measure block whose
+`spec` cannot be parsed surfaces an error diagnostic pointing at the spec
+string. Status of advanced `.meas` features (`ERROR` mode, conditional
+`IF`, file-referenced `PARAM`): planned.
+
 ## Multiple Analyses
 
 A circuit can contain multiple analysis commands. They run in declaration order:

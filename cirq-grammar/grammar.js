@@ -49,7 +49,8 @@ module.exports = grammar({
         $.func_decl,
         $.ic_decl,
         $.coupled_line_decl,
-        $.code_decl
+        $.code_decl,
+        $.measure_decl
       ),
 
     // ── Module ───────────────────────────────────────────────────────
@@ -211,6 +212,25 @@ module.exports = grammar({
     // extras (whitespace, semicolons, comments) don't interfere with
     // the embedded language lines inside.
     code_body: (_$) => token(prec(-1, /[^}]+/)),
+
+    // ── Measure block ───────────────────────────────────────────────
+
+    measure_decl: ($) =>
+      seq(
+        "measure",
+        field("analysis_kind", $.identifier),
+        field("name", $.string_literal),
+        "{",
+        repeat($.measure_field),
+        "}"
+      ),
+
+    measure_field: ($) =>
+      seq(
+        field("key", $.identifier),
+        ":",
+        field("value", $.string_literal)
+      ),
 
     // ── Options and Temperature ─────────────────────────────────────
 
