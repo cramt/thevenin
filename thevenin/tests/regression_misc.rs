@@ -431,3 +431,44 @@ v3 3 0 dc=0
         .expect("v3 branch current");
     assert_abs_diff_eq!(iv3.data.as_real()[0].abs(), gold, epsilon = 1e-9);
 }
+
+/// Plain (non-behavioural) resistor with `tc=tc1,tc2`: confirm the
+/// divider ratio shifts with temperature as ngspice does.
+#[test]
+fn plain_resistor_tc_shifts_with_temperature() {
+    // R1 carries tc1=1e-3 (a 0.1%/°C positive coefficient); R2 is
+    // temperature-flat. At TEMP=27 the divider sits at the room-temperature
+    // ratio; at TEMP=127 the dT=100 boost on R1 should pull V(mid) lower.
+    let nominal = Netlist::parse_single(
+        "Resistor tc divider nominal
+v1 in 0 dc=10
+r1 in mid 1k tc=1m,0
+r2 mid 0 1k
+.temp 27
+.op
+.end
+",
+    )
+    .unwrap();
+    let hot = Netlist::parse_single(
+        "Resistor tc divider hot
+v1 in 0 dc=10
+r1 in mid 1k tc=1m,0
+r2 mid 0 1k
+.temp 127
+.op
+.end
+",
+    )
+    .unwrap();
+
+    let v_mid_nominal = op_voltage(&simulate_op(&nominal), "mid");
+    let v_mid_hot = op_voltage(&simulate_op(&hot), "mid");
+
+    // At 27 °C: R1 = R2 = 1k → V(mid) = 5.
+    assert_abs_diff_eq!(v_mid_nominal, 5.0, epsilon = 1e-9);
+    // At 127 °C: dT = 100, tc_factor = 1.1, R1 = 1.1k.
+    // V(mid) = 10 * 1k / (1.1k + 1k) = 10/2.1.
+    let expected_hot = 10.0 * 1000.0 / (1100.0 + 1000.0);
+    assert_abs_diff_eq!(v_mid_hot, expected_hot, epsilon = 1e-9);
+}

@@ -652,6 +652,21 @@ fn evaluate_temper_exprs_circuit(circuit: &mut cirq_ir::Circuit, temp_c: f64) {
                 }
             }
         }
+
+        // Strip tc1 / tc2 / tce element params once we've baked them into
+        // `value`, so the downstream IR-level stamping (which now also
+        // recognises tc1/tc2 on plain resistors — see
+        // `mna_ir::resolve_resistor_tc`) does not re-apply the same factor.
+        // The `is_model_based` branch is intentionally also affected: model
+        // R is already pre-scaled above, so any leftover instance tc on a
+        // model-based resistor would be wrong to apply a second time.
+        if has_instance_tc || has_instance_tce {
+            elem.params.retain(|(name, _)| {
+                !name.eq_ignore_ascii_case("tc1")
+                    && !name.eq_ignore_ascii_case("tc2")
+                    && !name.eq_ignore_ascii_case("tce")
+            });
+        }
     }
 }
 
