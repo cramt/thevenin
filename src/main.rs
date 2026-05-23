@@ -1,8 +1,17 @@
+#![cfg_attr(target_arch = "wasm32", allow(unused))]
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
+#[cfg(not(target_arch = "wasm32"))]
 use facet::Facet;
+#[cfg(not(target_arch = "wasm32"))]
 use figue::{self as args, FigueBuiltins};
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Facet)]
 struct Cli {
     #[facet(args::subcommand)]
@@ -12,6 +21,7 @@ struct Cli {
     builtins: FigueBuiltins,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Facet)]
 #[repr(u8)]
 #[allow(dead_code)]
@@ -24,6 +34,7 @@ enum Command {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let cli: Cli = figue::from_std_args().unwrap();
     if let Err(e) = run(cli) {
@@ -32,6 +43,7 @@ fn main() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Run { input } => {
@@ -63,6 +75,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 /// the happy path. `.control` blocks still need the Netlist-shaped
 /// interpreter context (TEMPER + `@device[param]` are not yet on IR — see
 /// `docs/migration/old-path-retirement-checklist.md`).
+#[cfg(not(target_arch = "wasm32"))]
 fn run_circuits(circuits: &[cirq_ir::Circuit]) -> Result<(), Box<dyn std::error::Error>> {
     for circuit in circuits {
         if thevenin_control::has_control_block_ir(circuit) {
@@ -78,6 +91,7 @@ fn run_circuits(circuits: &[cirq_ir::Circuit]) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn print_control_result(ctrl_result: &thevenin_control::exec::ControlResult) {
     if !ctrl_result.output.is_empty() {
         print!("{}", ctrl_result.output);
@@ -85,6 +99,7 @@ fn print_control_result(ctrl_result: &thevenin_control::exec::ControlResult) {
     print_plots(&ctrl_result.sim_result.plots);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn print_plots(plots: &[thevenin_types::SimPlot]) {
     for plot in plots {
         println!("{}:", plot.name);
@@ -102,6 +117,7 @@ fn print_plots(plots: &[thevenin_types::SimPlot]) {
 }
 
 /// Detect Cirq source files by extension.
+#[cfg(not(target_arch = "wasm32"))]
 fn is_cirq_file(path: &str) -> bool {
     Path::new(path).extension().is_some_and(|ext| ext == "cirq")
 }
