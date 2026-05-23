@@ -967,6 +967,15 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     }
 
     // 8. Collect .options items.
+    //
+    // Every `.option <key>=<value>` line survives verbatim into
+    // `Circuit::options`; downstream consumers (the simulator, the IR-side
+    // option resolvers) decide which keys to honour. ngspice-specific
+    // entries such as `scale` (global MOSFET geometry multiplier on L/W/AD/
+    // AS/PD/PS) are preserved here so the value is available, but the
+    // actual rescaling pass is deferred — no in-scope 1.0 fixture exercises
+    // it yet, and the deferred work is tracked in `docs/1.0-checklist.md`
+    // section C6.
     let mut ir_options: Vec<(String, cirq_ir::Value)> = Vec::new();
     for item in &netlist.items {
         if let Item::Options(params) = item {
@@ -3189,5 +3198,184 @@ V1 a 0 DC 1
             matches!(result, Err(ImportError::UnevaluableExpr(_))),
             "expected error for lo > hi, got {result:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // C3 / devices.md: Resistor `tc=tc1,tc2` parsing
+    // -----------------------------------------------------------------------
+
+    /// Helper: pull a numeric param off an IR element.
+    fn elem_num(c: &Circuit, name: &str, param: &str) -> Option<f64> {
+        let e = c.elements.iter().find(|e| e.name == name)?;
+        e.params.iter().find_map(|(k, v)| {
+            if k.eq_ignore_ascii_case(param) {
+                match v {
+                    Value::Real(f) => Some(*f),
+                    Value::Integer(i) => Some(*i as f64),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+    }
+
+    #[test]
+    fn resistor_tc_pair_split() {
+        // `tc=tc1,tc2` on a plain resistor — ngspice supports this; the
+        // importer must surface tc1 and tc2 as separate numeric params.
+        let spice = "\
+Resistor tc pair
+R1 a 0 1k tc=1m,1u
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        let r1 = c.elements.iter().find(|e| e.name == "R1").unwrap();
+        let params_dbg: Vec<_> = r1.params.iter().collect();
+        let tc1 = elem_num(c, "R1", "tc1");
+        let tc2 = elem_num(c, "R1", "tc2");
+        assert!(
+            tc1.is_some() && (tc1.unwrap() - 1e-3).abs() < 1e-12,
+            "tc1 should be 1m, got {tc1:?}; all params: {params_dbg:?}"
+        );
+        assert!(
+            tc2.is_some() && (tc2.unwrap() - 1e-6).abs() < 1e-18,
+            "tc2 should be 1u, got {tc2:?}; all params: {params_dbg:?}"
+        );
+    }
+
+    #[test]
+    fn resistor_tc_single_value() {
+        // `tc=X` (single value) → tc1=X, tc2=0.
+        let spice = "\
+Resistor tc single
+R1 a 0 1k tc=2m
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        assert!((elem_num(c, "R1", "tc1").unwrap() - 2e-3).abs() < 1e-12);
+        // tc2 defaults to 0 when only one value is supplied (and is therefore
+        // absent / zero on the element).
+        let tc2 = elem_num(c, "R1", "tc2").unwrap_or(0.0);
+        assert!(tc2.abs() < 1e-18);
+    }
+
+    // -----------------------------------------------------------------------
+    // C6: `.option scale` survives into IR
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn option_scale_preserved() {
+        // ngspice's `.options scale=<f>` is a globally-applied geometry
+        // multiplier for MOSFET L/W/AD/AS/PD/PS. For 1.0 we only require it
+        // to round-trip into `Circuit::options`; the actual geometric
+        // rescaling pass is deferred (no fixture currently exercises it).
+        let spice = "\
+Option scale test
+.options scale=1e-6
+R1 a 0 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        let scale = c
+            .options
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("scale"));
+        assert!(scale.is_some(), "scale option missing: {:?}", c.options);
+        match &scale.unwrap().1 {
+            Value::Real(v) => assert!((v - 1e-6).abs() < 1e-18, "scale = {v}, expected 1e-6"),
+            other => panic!("expected Real, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // C3: `.width` no-op handler
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn width_directive_is_no_op() {
+        // `.width out=<n>` is an output-formatting directive — we never
+        // print to fixed-width columns. Accept silently (preserved as a
+        // raw directive alongside `.print` / `.plot`) and don't error.
+        let spice = "\
+Width directive test
+.width out=80
+R1 a 0 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        assert_eq!(circuits.len(), 1, "import should succeed");
+        // The directive is preserved in raw_directives, mirroring how the
+        // importer handles other output-formatting directives like .print.
+        let c = &circuits[0];
+        let raw_has_width = c
+            .raw_directives
+            .iter()
+            .any(|d| d.to_ascii_lowercase().starts_with(".width"));
+        assert!(
+            raw_has_width,
+            ".width should survive as a raw directive: {:?}",
+            c.raw_directives
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // C6: graceful unknown-directive policy
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unknown_directive_does_not_error() {
+        // Per docs/1.0-checklist.md C6: unknown dot-directives are kept as
+        // warnings + ignored (ngspice convention). They surface as raw
+        // directives in the IR and never fail the import.
+        let spice = "\
+Unknown directive test
+.totally_unknown_directive arg1 arg2
+R1 a 0 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        assert_eq!(circuits.len(), 1, "import should succeed");
+    }
+
+    #[test]
+    fn option_scale_case_insensitive() {
+        let spice = "\
+Option SCALE test
+.OPTION SCALE=2e-6
+R1 a 0 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        let scale = c
+            .options
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("scale"));
+        assert!(scale.is_some(), "scale option missing: {:?}", c.options);
+    }
+
+    #[test]
+    fn resistor_tc_split_keys() {
+        // ngspice also accepts tc1= / tc2= as separate keys.
+        let spice = "\
+Resistor tc split
+R1 a 0 1k tc1=3m tc2=4u
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        assert!((elem_num(c, "R1", "tc1").unwrap() - 3e-3).abs() < 1e-12);
+        assert!((elem_num(c, "R1", "tc2").unwrap() - 4e-6).abs() < 1e-18);
     }
 }

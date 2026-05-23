@@ -483,6 +483,56 @@ fn parse_kv(tok: &str) -> Option<Param> {
     })
 }
 
+/// Expand a comma-joined `tc=tc1[,tc2]` resistor / capacitor / inductor
+/// parameter into separate `tc1=` / `tc2=` entries, sourcing the value
+/// from the raw token text so we can split on `,` before the SI-suffix
+/// number parser greedily consumes the first half.
+///
+/// ngspice accepts both `tc=a,b` and the explicit `tc1=a tc2=b` forms; this
+/// helper normalises the former to the latter so stamping code only ever
+/// needs to read `tc1` / `tc2`. If the value is a single numeric (no comma),
+/// it becomes `tc1=value` with `tc2` defaulting to absent (0). Explicit
+/// `tc1=` / `tc2=` values that already exist are not overwritten.
+fn expand_tc_pair_from_tokens(tokens: &[String], params: &mut Vec<Param>) {
+    // Find the raw `tc=...` token, preserving the textual right-hand side.
+    let tc_raw = tokens.iter().find_map(|t| {
+        let lower = t.to_ascii_lowercase();
+        lower.strip_prefix("tc=").map(|_| {
+            // Slice the original token (not the lowercased copy) past the
+            // first '=' to keep case-sensitive expressions intact.
+            t.split_once('=')
+                .map(|(_, v)| v.to_string())
+                .unwrap_or_default()
+        })
+    });
+    let Some(raw) = tc_raw else {
+        return;
+    };
+    let parts: Vec<&str> = raw.split(',').map(str::trim).collect();
+
+    let has_tc1 = params.iter().any(|p| p.name.eq_ignore_ascii_case("tc1"));
+    let has_tc2 = params.iter().any(|p| p.name.eq_ignore_ascii_case("tc2"));
+
+    if let Some(first) = parts.first()
+        && !first.is_empty()
+        && !has_tc1
+    {
+        params.push(Param {
+            name: "tc1".to_string(),
+            value: parse_expr(first),
+        });
+    }
+    if let Some(second) = parts.get(1)
+        && !second.is_empty()
+        && !has_tc2
+    {
+        params.push(Param {
+            name: "tc2".to_string(),
+            value: parse_expr(second),
+        });
+    }
+}
+
 /// Collect parameters from tokens: any token containing `=` (or following a
 /// bare `PARAMS:` / `PARAM:` keyword) is treated as a key=value pair.
 fn collect_params(tokens: &[String]) -> Vec<Param> {
@@ -923,6 +973,11 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                 let mut params: Vec<Param> = rest[3..]
                     .iter()
                     .filter(|t| t.contains('='))
+                    // Skip tc= here; expand_tc_pair_from_tokens handles the
+                    // comma-joined form directly from the raw token string.
+                    // parse_kv → parse_expr would otherwise greedily eat the
+                    // SI suffix (`1m`) and drop the trailing `,1u` half.
+                    .filter(|t| !t.to_ascii_lowercase().starts_with("tc="))
                     .filter_map(|t| parse_kv(t))
                     .collect();
                 // Capture model name: a non-key=value token after the value that
@@ -936,6 +991,11 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                         break;
                     }
                 }
+                // ngspice accepts `tc=tc1[,tc2]` (comma-joined pair) on R/L/C
+                // elements. We split it into separate tc1=/tc2= params so
+                // downstream stamping always reads a uniform shape regardless
+                // of which surface form (tc=, tc1=/tc2=) was used.
+                expand_tc_pair_from_tokens(&rest[3..], &mut params);
                 match letter {
                     'R' => ElementKind::Resistor {
                         pos,
@@ -1706,7 +1766,26 @@ fn parse_dot(
             })))
         }
 
-        _ => Ok(ParsedLine::Item(Item::Raw(line.to_string()))),
+        // Output-formatting directives we deliberately accept-and-pass-through:
+        //   .print / .plot — preserved as raw so the text output writer
+        //     can read column lists.
+        //   .width — ngspice column-width hint for `.print`; we never emit
+        //     fixed-width output, so this is a true no-op. Kept as raw for
+        //     round-trip fidelity.
+        // These are silently consumed (no warning) — they are well-known
+        // directives whose absence isn't a user-facing concern. `.probe`
+        // is handled higher up as an alias for `.save`.
+        ".PRINT" | ".PLOT" | ".WIDTH" => Ok(ParsedLine::Item(Item::Raw(line.to_string()))),
+
+        // Graceful unknown-directive policy (1.0 checklist C6): match
+        // ngspice's behaviour of "unknown directive ⇒ warning, ignored".
+        // We preserve the line as raw so downstream tooling sees the
+        // original text, but surface a stderr warning so users notice
+        // unrecognised input rather than silently losing it.
+        _ => {
+            eprintln!("[thevenin-types] line {lineno}: ignoring unknown directive: {line}");
+            Ok(ParsedLine::Item(Item::Raw(line.to_string())))
+        }
     }
 }
 
@@ -1955,6 +2034,41 @@ mod tests {
         assert!(matches!(&elems[0].kind, ElementKind::Resistor { .. }));
         assert!(matches!(&elems[1].kind, ElementKind::Capacitor { .. }));
         assert!(matches!(&elems[2].kind, ElementKind::Inductor { .. }));
+    }
+
+    #[test]
+    fn resistor_tc_pair_splits_into_tc1_tc2() {
+        // ngspice accepts `tc=tc1,tc2`; we normalise to separate tc1=/tc2=
+        // params at parse time.
+        let n = parse_ok("T\nR1 a 0 1k tc=1m,1u\n.end");
+        let elem = n.elements().next().unwrap();
+        if let ElementKind::Resistor { params, .. } = &elem.kind {
+            let tc1 = params.iter().find(|p| p.name.eq_ignore_ascii_case("tc1"));
+            let tc2 = params.iter().find(|p| p.name.eq_ignore_ascii_case("tc2"));
+            assert!(tc1.is_some(), "tc1 missing, all params: {params:?}");
+            assert!(tc2.is_some(), "tc2 missing, all params: {params:?}");
+            if let Some(p) = tc1
+                && let Expr::Num(v) = &p.value
+            {
+                assert!((v - 1e-3).abs() < 1e-12);
+            } else {
+                panic!("tc1 not numeric: {tc1:?}");
+            }
+            if let Some(p) = tc2
+                && let Expr::Num(v) = &p.value
+            {
+                assert!((v - 1e-6).abs() < 1e-18);
+            } else {
+                panic!("tc2 not numeric: {tc2:?}");
+            }
+            // The combined `tc` param should not survive.
+            assert!(
+                !params.iter().any(|p| p.name.eq_ignore_ascii_case("tc")),
+                "combined tc should have been removed: {params:?}"
+            );
+        } else {
+            panic!("expected Resistor");
+        }
     }
 
     #[test]

@@ -748,6 +748,28 @@ pub(crate) fn extract_resistor_noise_params(
     }
 }
 
+/// Resolve a plain resistor's effective element-level `tc1` / `tc2`
+/// temperature coefficients. Legacy Netlist-shaped twin of
+/// `mna_ir::resolve_resistor_tc`; reads only element params so the
+/// `.control` path's pre-scaling stays the single source of truth for
+/// model TC.
+pub(crate) fn resolve_resistor_tc_legacy(params: &[thevenin_types::Param]) -> (f64, f64) {
+    fn get_num(list: &[thevenin_types::Param], name: &str) -> Option<f64> {
+        list.iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .and_then(|p| {
+                if let Expr::Num(v) = &p.value {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
+    }
+    let tc1 = get_num(params, "tc1").unwrap_or(0.0);
+    let tc2 = get_num(params, "tc2").unwrap_or(0.0);
+    (tc1, tc2)
+}
+
 /// Apply `m` (multiplicity) and `scale` instance parameters to a resistance.
 fn apply_multipliers(r: f64, params: &[thevenin_types::Param]) -> f64 {
     let m = params
@@ -3166,6 +3188,7 @@ fn assemble_mna_flat(
                     &mut resistors,
                     &models,
                     modedc,
+                    crate::netlist_temp(netlist) - 27.0,
                 )?;
             }
         }
@@ -3311,7 +3334,7 @@ pub(crate) fn parse_bsrc_params(raw: &str) -> BsrcParams<'_> {
 }
 
 /// Stamp a single element into the MNA system.
-#[expect(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn stamp_element(
     element: &Element,
     node_map: &NodeMap,
@@ -3324,6 +3347,7 @@ fn stamp_element(
     resistors: &mut Vec<ResistorInstance>,
     models: &std::collections::BTreeMap<String, &thevenin_types::ModelDef>,
     modedc: bool,
+    circuit_dt: f64,
 ) -> Result<(), MnaError> {
     match &element.kind {
         ElementKind::Resistor {
@@ -3332,7 +3356,15 @@ fn stamp_element(
             value,
             params,
         } => {
-            let r = resolve_resistor_value(value, &element.name, params, models)?;
+            let mut r = resolve_resistor_value(value, &element.name, params, models)?;
+            // Apply element-level temperature coefficients (`tc=tc1[,tc2]`
+            // or `tc1=`/`tc2=` element params). Model-side TC stays the
+            // responsibility of `evaluate_temper_exprs_circuit` in the
+            // `.control` path; mirroring `mna_ir::resolve_resistor_tc`.
+            let (tc1, tc2) = resolve_resistor_tc_legacy(params);
+            if tc1 != 0.0 || tc2 != 0.0 {
+                r *= 1.0 + tc1 * circuit_dt + tc2 * circuit_dt * circuit_dt;
+            }
             let g = 1.0 / r;
             let ni = node_map.get(pos);
             let nj = node_map.get(neg);

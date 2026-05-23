@@ -777,6 +777,20 @@ pub fn dc_sweep_params_from_circuit(
     })
 }
 
+/// Resolve a resistor's effective element-level `tc1` / `tc2` temperature
+/// coefficients.
+///
+/// Reads only element parameters — the model-side `TC1` / `TC2` (and the
+/// `RTC1` / `RTC2` aliases) application is the responsibility of the
+/// `.control` execution path's `evaluate_temper_exprs_circuit`, which
+/// pre-scales the model's `R` param in-place and strips the corresponding
+/// instance params so this helper never double-applies on the IR pass.
+fn resolve_resistor_tc(elem: &IrElement) -> (f64, f64) {
+    let tc1 = numeric_param(elem, &["tc1"]).unwrap_or(0.0);
+    let tc2 = numeric_param(elem, &["tc2"]).unwrap_or(0.0);
+    (tc1, tc2)
+}
+
 /// Circuit-side analogue of `crate::netlist_tnom(&Netlist) -> f64`.
 ///
 /// Reads `TNOM` from `circuit.options` and returns Kelvin (default 300.15 K
@@ -1276,8 +1290,20 @@ fn stamp_circuit(
                         ))
                     })?;
                 let instance_params = extra_params(elem, &["value"]);
-                let r =
+                let mut r =
                     resolve_resistor_value(&value_expr, &elem.name, &instance_params, &models_map)?;
+                // Apply element-level tc1/tc2 temperature scaling. Mirrors
+                // the behavioural B-source resistor's `parse_bsrc_params`
+                // + tc_factor logic. Note: the `.control` execution path's
+                // `evaluate_temper_exprs_circuit` may pre-scale `value` and
+                // strip the corresponding tc1/tc2 params; we therefore only
+                // honour params still present here, and only at the
+                // instance level (model-side TC is handled there).
+                let (tc1, tc2) = resolve_resistor_tc(elem);
+                if tc1 != 0.0 || tc2 != 0.0 {
+                    let dt = circuit_temp(circuit) - 27.0;
+                    r *= 1.0 + tc1 * dt + tc2 * dt * dt;
+                }
                 let g = 1.0 / r;
                 let pi = mna.node_map.get(pos);
                 let ni = mna.node_map.get(neg);
