@@ -74,7 +74,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 /// Stage 4 Circuit-input dispatcher that bypasses the lowered Netlist on
 /// the happy path. `.control` blocks still need the Netlist-shaped
 /// interpreter context (TEMPER + `@device[param]` are not yet on IR — see
-/// `docs/migration/old-path-retirement-checklist.md`).
+/// `docs/archive/migration/old-path-retirement-checklist.md`).
 #[cfg(not(target_arch = "wasm32"))]
 fn run_circuits(circuits: &[cirq_ir::Circuit]) -> Result<(), Box<dyn std::error::Error>> {
     for circuit in circuits {

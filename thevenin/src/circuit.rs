@@ -1,7 +1,7 @@
 //! Cirq IR — direct simulation entry points.
 //!
 //! These are the **Stage 4 surface** of the Cirq adoption plan
-//! (`docs/migration/cirq-adoption-plan.md`). Callers pass a
+//! (`docs/archive/migration/cirq-adoption-plan.md`). Callers pass a
 //! [`cirq_ir::Circuit`] directly instead of constructing a
 //! [`thevenin_types::Netlist`] themselves.
 //!
@@ -138,7 +138,7 @@ fn has_op_analysis(circuit: &Circuit) -> bool {
 /// Returns `Some(result)` if [`mna_ir::assemble_mna_from_circuit`] accepts
 /// the circuit (currently the linear subset R / V / I / C / L / E / G / H /
 /// F; future sessions extend to nonlinear devices per
-/// `docs/migration/mna-ir-pivot-plan.md`). Otherwise returns `None` and the
+/// `docs/archive/migration/mna-ir-pivot-plan.md`). Otherwise returns `None` and the
 /// caller falls back to the lowering path.
 ///
 /// The solve and SimResult formatting route through
@@ -230,7 +230,7 @@ pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
 ///
 /// This is the Circuit-input analogue of [`thevenin::simulate(&Netlist)`],
 /// covering the same eight analysis kinds. Per the Stage 4 plan
-/// (`docs/migration/cirq-adoption-plan.md`) this is the recommended entry
+/// (`docs/archive/migration/cirq-adoption-plan.md`) this is the recommended entry
 /// for new code; the Netlist-shaped wrapper remains available for legacy
 /// callers.
 ///

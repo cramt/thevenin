@@ -107,7 +107,7 @@ The regression harness runs every test fixture from `ngspice-upstream/tests/` th
 
 ## Status
 
-The project is pre-1.0. The simulator core and the Cirq IR pipeline are stable enough for regression-corpus coverage, but the public API is subject to change. See `docs/migration/` for the ongoing Stage 4 retirement work that's pruning the `thevenin-types::Netlist`-shaped API surface in favour of `cirq_ir::Circuit`.
+The project is pre-1.0. The simulator core and the Cirq IR pipeline are stable enough for regression-corpus coverage, but the public API is subject to change. See `docs/archive/migration/` for the historical Stage 4 retirement work that pruned the `thevenin-types::Netlist`-shaped API surface in favour of `cirq_ir::Circuit`.
 
 ## License
 
