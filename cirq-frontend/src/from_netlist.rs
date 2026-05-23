@@ -12,7 +12,7 @@
 //! `thevenin-control`: once `.control` can set a parsed Analysis directly
 //! on a `Circuit` clone, the analysis-dispatch sites can move to
 //! `circuit::simulate_*(&Circuit)` and the Netlist cache disappears. See
-//! `docs/migration/old-path-retirement-checklist.md` for the broader plan.
+//! `docs/archive/migration/old-path-retirement-checklist.md` for the broader plan.
 //!
 //! All inputs are expected to come from `parse_analysis_command` at
 //! runtime, where the `Expr` fields are bare numeric literals

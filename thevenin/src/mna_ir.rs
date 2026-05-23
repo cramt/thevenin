@@ -1,6 +1,6 @@
 //! Direct Cirq IR → MNA assembly (linear element subset).
 //!
-//! Stage 4 of `docs/migration/cirq-adoption-plan.md`. For circuits whose
+//! Stage 4 of `docs/archive/migration/cirq-adoption-plan.md`. For circuits whose
 //! elements are all in the linear subset — R / V / I / C / L plus the E /
 //! G / H / F dependent sources — this module builds an [`MnaSystem`]
 //! directly from a [`cirq_ir::Circuit`], skipping the
@@ -11,7 +11,7 @@
 //! [`assemble_mna_from_circuit`] returns `Ok(None)` so the caller can fall
 //! back to the Netlist-shaped path. Subsequent sessions in the
 //! `feat/mna-circuit-input` branch grow the supported subset device class
-//! by device class, per `docs/migration/mna-ir-pivot-plan.md`.
+//! by device class, per `docs/archive/migration/mna-ir-pivot-plan.md`.
 //!
 //! Bit-for-bit equivalence with the lowered path is pinned by
 //! `thevenin-cirq/tests/direct_path_equivalence.rs`.
@@ -137,7 +137,7 @@ pub fn assemble_mna_from_circuit(
 /// currently handles. Anything outside — BJTs, MOSFETs, JFETs, behavioural
 /// sources, distributed elements, XSPICE — sends the caller back to the
 /// Netlist path. Coverage grows session by session per
-/// `docs/migration/mna-ir-pivot-plan.md`.
+/// `docs/archive/migration/mna-ir-pivot-plan.md`.
 fn circuit_is_supported_subset(circuit: &Circuit) -> bool {
     circuit.elements.iter().all(|e| {
         matches!(
@@ -449,7 +449,7 @@ pub fn ac_sweep_params_from_circuit(
 /// against `mna.node_map`), and `.print @device[param]` queries come from
 /// `circuit.raw_directives` (which preserves verbatim SPICE directives via
 /// the harness fix in
-/// `docs/migration/cirq-harness-status.md`).
+/// `docs/archive/migration/cirq-harness-status.md`).
 pub fn tran_params_from_circuit(
     circuit: &Circuit,
     mna: &MnaSystem,

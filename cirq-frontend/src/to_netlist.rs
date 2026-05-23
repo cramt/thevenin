@@ -269,7 +269,7 @@ fn build_model_name_map(circuit: &Circuit) -> HashMap<Id, String> {
 /// the simulator's expression evaluator can still resolve `temper` and other
 /// runtime references. Bare strings become [`Expr::Param`].
 ///
-/// Public so the MNA-on-IR pivot (`docs/migration/mna-ir-pivot-plan.md`) can
+/// Public so the MNA-on-IR pivot (`docs/archive/migration/mna-ir-pivot-plan.md`) can
 /// reuse this conversion in `thevenin::mna_ir` without duplicating it.
 pub fn value_to_expr(val: &Value) -> Expr {
     match val {
@@ -375,7 +375,7 @@ fn get_param_f64(elem: &IrElement, name: &str) -> Option<f64> {
 /// `Vec<Param>`, skipping any name in `exclude` (typically `"value"`).
 ///
 /// Promoted to `pub` for the MNA-on-IR pivot
-/// (`docs/migration/mna-ir-pivot-plan.md`) so `thevenin::mna_ir` can hand
+/// (`docs/archive/migration/mna-ir-pivot-plan.md`) so `thevenin::mna_ir` can hand
 /// instance params straight to existing `*Model::with_instance_params` and
 /// helpers like `apply_multipliers` / `get_bjt_level` / `get_mosfet_lw`
 /// without rewriting them per device.
@@ -393,7 +393,7 @@ pub fn extra_params(elem: &IrElement, exclude: &[&str]) -> Vec<Param> {
 /// Convert a Cirq IR [`cirq_ir::Waveform`] into a Netlist-shaped [`Waveform`].
 ///
 /// Promoted from private so the MNA-on-IR pivot
-/// (`docs/migration/mna-ir-pivot-plan.md`) can hand a Netlist-shaped waveform
+/// (`docs/archive/migration/mna-ir-pivot-plan.md`) can hand a Netlist-shaped waveform
 /// directly to `thevenin::waveform::evaluate` without rebuilding the whole
 /// element record. Every numeric field in IR is already an `f64`, so this is
 /// a straight enum-to-enum translation through [`Expr::Num`].
@@ -490,7 +490,7 @@ fn convert_ac_spec(ac: &IrAcSpec) -> AcSpec {
 /// fields; otherwise fall back to reading `value` / `dc` from the param list.
 ///
 /// Promoted to `pub` for the MNA-on-IR pivot
-/// (`docs/migration/mna-ir-pivot-plan.md`) so the new direct path can read
+/// (`docs/archive/migration/mna-ir-pivot-plan.md`) so the new direct path can read
 /// IR-shaped sources and hand them to `thevenin::waveform::evaluate`.
 pub fn convert_source_spec(elem: &IrElement) -> Source {
     if let Some(spec) = &elem.source_spec {
@@ -1006,7 +1006,7 @@ fn resolve_inductor_spice_name(
 /// verbatim) and translates each `(String, Value)` param via
 /// [`value_to_expr`].
 ///
-/// Public so the MNA-on-IR pivot (`docs/migration/mna-ir-pivot-plan.md`) can
+/// Public so the MNA-on-IR pivot (`docs/archive/migration/mna-ir-pivot-plan.md`) can
 /// reuse it to feed `thevenin`'s existing `*Model::from_model_def` loaders
 /// without rewriting them per device family.
 pub fn convert_model(model: &cirq_ir::Model) -> ModelDef {
