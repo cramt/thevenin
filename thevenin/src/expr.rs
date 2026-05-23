@@ -641,6 +641,21 @@ fn eval_function(name: &str, args: &[f64], ctx: &EvalContext) -> Result<f64, Exp
         "MIN" => require_args(name, args, 2).map(|_| args[0].min(args[1])),
         "MAX" => require_args(name, args, 2).map(|_| args[0].max(args[1])),
 
+        // Decibel (voltage/amplitude). ngspice/SPICE convention: 20 * log10(|x|).
+        "DB" | "DB20" => require_args(name, args, 1).map(|_| 20.0 * args[0].abs().log10()),
+
+        // Clamp x to [lo, hi]. Errors if lo > hi.
+        "LIMIT" => {
+            require_args(name, args, 3)?;
+            let (x, lo, hi) = (args[0], args[1], args[2]);
+            if lo > hi {
+                return Err(ExprError::ParseError(format!(
+                    "limit: lower bound ({lo}) is greater than upper bound ({hi})"
+                )));
+            }
+            Ok(x.clamp(lo, hi))
+        }
+
         // Step/ramp functions (B-source)
         "U" => require_args(name, args, 1).map(|_| if args[0] > 0.0 { 1.0 } else { 0.0 }),
         "U2" => require_args(name, args, 1).map(|_| {
@@ -1295,6 +1310,95 @@ mod tests {
         assert_eq!(eval("eq0(1)"), 0.0);
         assert_eq!(eval("gt0(1)"), 1.0);
         assert_eq!(eval("lt0(-1)"), 1.0);
+    }
+
+    // ----- Math function additions (B2 of 1.0 checklist) -----
+    // The resolver already has atan, atan2, asin, acos, sinh, cosh, tanh,
+    // sgn, ceil, floor and int(trunc). New built-ins: db, db20, limit.
+
+    #[test]
+    fn math_inverse_trig() {
+        let eps = 1e-12;
+        // asin(1) = pi/2, acos(0) = pi/2, atan(1) = pi/4
+        assert!((eval("asin(1)") - std::f64::consts::FRAC_PI_2).abs() < eps);
+        assert!((eval("acos(0)") - std::f64::consts::FRAC_PI_2).abs() < eps);
+        assert!((eval("atan(1)") - std::f64::consts::FRAC_PI_4).abs() < eps);
+        // atan2(1, 1) = pi/4
+        assert!((eval("atan2(1, 1)") - std::f64::consts::FRAC_PI_4).abs() < eps);
+    }
+
+    #[test]
+    fn math_hyperbolic() {
+        let eps = 1e-12;
+        assert!(eval("sinh(0)").abs() < eps);
+        assert!((eval("cosh(0)") - 1.0).abs() < eps);
+        assert!(eval("tanh(0)").abs() < eps);
+    }
+
+    #[test]
+    fn math_sgn() {
+        assert_eq!(eval("sgn(5)"), 1.0);
+        assert_eq!(eval("sgn(-5)"), -1.0);
+        // edge: sgn(0) == 0
+        assert_eq!(eval("sgn(0)"), 0.0);
+        // sign alias
+        assert_eq!(eval("sign(-3)"), -1.0);
+    }
+
+    #[test]
+    fn math_int_trunc_toward_zero() {
+        // int(x) truncates toward zero — both positive and negative.
+        assert_eq!(eval("int(1.9)"), 1.0);
+        assert_eq!(eval("int(-1.9)"), -1.0);
+        assert_eq!(eval("floor(-1.9)"), -2.0);
+        assert_eq!(eval("ceil(-1.9)"), -1.0);
+    }
+
+    #[test]
+    fn math_db_basic() {
+        let eps = 1e-9;
+        // db(10) = 20 dB (amplitude convention).
+        assert!((eval("db(10)") - 20.0).abs() < eps);
+        // db(0.1) = -20 dB.
+        assert!((eval("db(0.1)") - (-20.0)).abs() < eps);
+        // db(-10) = 20 (uses |x|).
+        assert!((eval("db(-10)") - 20.0).abs() < eps);
+        // db20 is an alias.
+        assert!((eval("db20(100)") - 40.0).abs() < eps);
+    }
+
+    #[test]
+    fn math_db_at_zero_is_non_finite() {
+        // db(0) is log10(0) * 20 == -infinity.
+        let v = eval("db(0)");
+        assert!(!v.is_finite(), "db(0) should be non-finite, got {v}");
+    }
+
+    #[test]
+    fn math_limit_in_range() {
+        assert_eq!(eval("limit(5, 0, 10)"), 5.0);
+    }
+
+    #[test]
+    fn math_limit_below() {
+        assert_eq!(eval("limit(-5, 0, 10)"), 0.0);
+    }
+
+    #[test]
+    fn math_limit_above() {
+        assert_eq!(eval("limit(50, 0, 10)"), 10.0);
+    }
+
+    #[test]
+    fn math_limit_invalid_bounds_errors() {
+        let ctx = EvalContext::default();
+        // lo > hi must error.
+        let err = ctx.eval_str("limit(1, 10, 0)").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("limit"),
+            "error message should mention limit: {msg}"
+        );
     }
 
     #[test]

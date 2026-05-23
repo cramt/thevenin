@@ -2381,6 +2381,81 @@ fn eval_builtin_call(name: &str, args: &[Value]) -> Result<Value, String> {
             let b = value_as_f64(&args[1])?;
             Ok(Value::Real(a.max(b)))
         }
+        "asin" => {
+            let v = one_arg_f64(args, "asin")?;
+            Ok(Value::Real(v.asin()))
+        }
+        "acos" => {
+            let v = one_arg_f64(args, "acos")?;
+            Ok(Value::Real(v.acos()))
+        }
+        "atan" => {
+            let v = one_arg_f64(args, "atan")?;
+            Ok(Value::Real(v.atan()))
+        }
+        "atan2" => {
+            if args.len() != 2 {
+                return Err(format!("atan2 expects 2 arguments, got {}", args.len()));
+            }
+            let y = value_as_f64(&args[0])?;
+            let x = value_as_f64(&args[1])?;
+            Ok(Value::Real(y.atan2(x)))
+        }
+        "sinh" => {
+            let v = one_arg_f64(args, "sinh")?;
+            Ok(Value::Real(v.sinh()))
+        }
+        "cosh" => {
+            let v = one_arg_f64(args, "cosh")?;
+            Ok(Value::Real(v.cosh()))
+        }
+        "tanh" => {
+            let v = one_arg_f64(args, "tanh")?;
+            Ok(Value::Real(v.tanh()))
+        }
+        "sgn" => {
+            let v = one_arg_f64(args, "sgn")?;
+            let s = if v > 0.0 {
+                1.0
+            } else if v < 0.0 {
+                -1.0
+            } else {
+                0.0
+            };
+            Ok(Value::Real(s))
+        }
+        "floor" => {
+            let v = one_arg_f64(args, "floor")?;
+            Ok(Value::Real(v.floor()))
+        }
+        "ceil" => {
+            let v = one_arg_f64(args, "ceil")?;
+            Ok(Value::Real(v.ceil()))
+        }
+        "int" => {
+            // SPICE/ngspice convention: int(x) truncates toward zero.
+            let v = one_arg_f64(args, "int")?;
+            Ok(Value::Real(v.trunc()))
+        }
+        "db" | "db20" => {
+            // Voltage/amplitude dB: 20 * log10(|x|). ngspice/SPICE convention.
+            let v = one_arg_f64(args, name)?;
+            Ok(Value::Real(20.0 * v.abs().log10()))
+        }
+        "limit" => {
+            if args.len() != 3 {
+                return Err(format!("limit expects 3 arguments, got {}", args.len()));
+            }
+            let x = value_as_f64(&args[0])?;
+            let lo = value_as_f64(&args[1])?;
+            let hi = value_as_f64(&args[2])?;
+            if lo > hi {
+                return Err(format!(
+                    "limit: lower bound ({lo}) is greater than upper bound ({hi})"
+                ));
+            }
+            Ok(Value::Real(x.clamp(lo, hi)))
+        }
         _ => Err(format!("unknown function: `{name}`")),
     }
 }
@@ -2623,6 +2698,111 @@ mod tests {
             Value::Real(v) => assert!((v - 30.0).abs() < 1e-6),
             _ => panic!("expected Real value for c"),
         }
+    }
+
+    // ---- Helpers for math-function tests (B2 of 1.0 checklist) ----
+
+    fn eval_param_real(source: &str, name: &str) -> f64 {
+        let circuit = compile_unwrap(source);
+        let p = circuit
+            .params
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| panic!("param `{name}` not found"));
+        match &p.value {
+            Value::Real(v) => *v,
+            Value::Integer(v) => *v as f64,
+            other => panic!("expected Real value for `{name}`, got {other:?}"),
+        }
+    }
+
+    fn one(name: &str, expr: &str) -> f64 {
+        let src = format!("circuit test {{ let {name} = {expr} }}");
+        eval_param_real(&src, name)
+    }
+
+    fn compile_err(source: &str) -> Vec<Diagnostic> {
+        compile(source).expect_err("expected diagnostics")
+    }
+
+    #[test]
+    fn builtin_atan_atan2() {
+        let eps = 1e-12;
+        assert!((one("a", "atan(1)") - std::f64::consts::FRAC_PI_4).abs() < eps);
+        assert!((one("a", "atan2(1, 1)") - std::f64::consts::FRAC_PI_4).abs() < eps);
+        // edge case: atan2(0, -1) = pi
+        assert!((one("a", "atan2(0, -1)") - std::f64::consts::PI).abs() < eps);
+    }
+
+    #[test]
+    fn builtin_asin_acos() {
+        let eps = 1e-12;
+        assert!((one("a", "asin(1)") - std::f64::consts::FRAC_PI_2).abs() < eps);
+        assert!((one("a", "acos(0)") - std::f64::consts::FRAC_PI_2).abs() < eps);
+    }
+
+    #[test]
+    fn builtin_hyperbolic() {
+        let eps = 1e-12;
+        assert!(one("a", "sinh(0)").abs() < eps);
+        assert!((one("a", "cosh(0)") - 1.0).abs() < eps);
+        assert!(one("a", "tanh(0)").abs() < eps);
+        // edge: tanh(large) approaches 1
+        assert!((one("a", "tanh(10)") - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn builtin_sgn() {
+        assert_eq!(one("a", "sgn(5)"), 1.0);
+        assert_eq!(one("a", "sgn(-5)"), -1.0);
+        // edge: sgn(0) == 0
+        assert_eq!(one("a", "sgn(0)"), 0.0);
+    }
+
+    #[test]
+    fn builtin_int_trunc_toward_zero() {
+        // int truncates toward zero — distinct from floor for negative values.
+        assert_eq!(one("a", "int(1.9)"), 1.0);
+        assert_eq!(one("a", "int(-1.9)"), -1.0);
+        assert_eq!(one("a", "floor(-1.9)"), -2.0);
+        assert_eq!(one("a", "ceil(-1.9)"), -1.0);
+    }
+
+    #[test]
+    fn builtin_db() {
+        let eps = 1e-9;
+        // db(10) = 20 (amplitude convention).
+        assert!((one("a", "db(10)") - 20.0).abs() < eps);
+        // db20 alias.
+        assert!((one("a", "db20(100)") - 40.0).abs() < eps);
+        // Uses |x|: db(-10) == 20.
+        assert!((one("a", "db(-10)") - 20.0).abs() < eps);
+    }
+
+    #[test]
+    fn builtin_limit() {
+        // x within range
+        assert_eq!(one("a", "limit(5, 0, 10)"), 5.0);
+        // x below lo
+        assert_eq!(one("a", "limit(-5, 0, 10)"), 0.0);
+        // x above hi
+        assert_eq!(one("a", "limit(50, 0, 10)"), 10.0);
+    }
+
+    #[test]
+    fn builtin_limit_invalid_bounds_errors() {
+        // lo > hi should produce a diagnostic.
+        let diags = compile_err(
+            r#"
+            circuit test {
+                let a = limit(1, 10, 0)
+            }
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("limit")),
+            "expected diagnostic about limit, got {diags:?}"
+        );
     }
 
     #[test]

@@ -397,6 +397,15 @@ fn eval_function(name: &str, args: &[f64]) -> Result<f64, ImportError> {
         "asin" => Ok(args.first().ok_or_else(err)?.asin()),
         "acos" => Ok(args.first().ok_or_else(err)?.acos()),
         "atan" => Ok(args.first().ok_or_else(err)?.atan()),
+        "atan2" => {
+            if args.len() < 2 {
+                return Err(err());
+            }
+            Ok(args[0].atan2(args[1]))
+        }
+        "sinh" => Ok(args.first().ok_or_else(err)?.sinh()),
+        "cosh" => Ok(args.first().ok_or_else(err)?.cosh()),
+        "tanh" => Ok(args.first().ok_or_else(err)?.tanh()),
         "pow" => {
             if args.len() < 2 {
                 return Err(err());
@@ -415,8 +424,34 @@ fn eval_function(name: &str, args: &[f64]) -> Result<f64, ImportError> {
             }
             Ok(args[0].max(args[1]))
         }
-        "int" | "floor" => Ok(args.first().ok_or_else(err)?.floor()),
+        "sgn" | "sign" => {
+            let v = *args.first().ok_or_else(err)?;
+            Ok(if v > 0.0 {
+                1.0
+            } else if v < 0.0 {
+                -1.0
+            } else {
+                0.0
+            })
+        }
+        // SPICE convention: int(x) truncates toward zero (not floor).
+        "int" => Ok(args.first().ok_or_else(err)?.trunc()),
+        "floor" => Ok(args.first().ok_or_else(err)?.floor()),
         "ceil" => Ok(args.first().ok_or_else(err)?.ceil()),
+        // Voltage/amplitude dB: 20 * log10(|x|). ngspice/SPICE convention.
+        "db" | "db20" => Ok(20.0 * args.first().ok_or_else(err)?.abs().log10()),
+        "limit" => {
+            if args.len() < 3 {
+                return Err(err());
+            }
+            let (x, lo, hi) = (args[0], args[1], args[2]);
+            if lo > hi {
+                return Err(ImportError::UnevaluableExpr(format!(
+                    "limit: lower bound ({lo}) is greater than upper bound ({hi})"
+                )));
+            }
+            Ok(x.clamp(lo, hi))
+        }
         _ => Err(ImportError::UnevaluableExpr(format!(
             "unknown function: {name}"
         ))),
@@ -3002,5 +3037,86 @@ V1 a 0 DC 1
         // 2.5n * 4 = 10n
         let result2 = eval_brace_expr("2.5n * 4", &params).unwrap();
         assert!((result2 - 10e-9).abs() < 1e-18, "2.5n * 4 = 10n");
+    }
+
+    // ----- Math function additions (B2 of 1.0 checklist) -----
+
+    fn eval_b(s: &str) -> f64 {
+        let params = HashMap::new();
+        eval_brace_expr(s, &params).unwrap()
+    }
+
+    #[test]
+    fn brace_atan2() {
+        // atan2(1, 1) = pi/4
+        assert!((eval_b("atan2(1, 1)") - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+        // atan2(0, -1) = pi  (edge case: y == 0, x < 0)
+        assert!((eval_b("atan2(0, -1)") - std::f64::consts::PI).abs() < 1e-12);
+    }
+
+    #[test]
+    fn brace_hyperbolic() {
+        // sinh(0) = 0, cosh(0) = 1, tanh(0) = 0
+        assert!(eval_b("sinh(0)").abs() < 1e-12);
+        assert!((eval_b("cosh(0)") - 1.0).abs() < 1e-12);
+        assert!(eval_b("tanh(0)").abs() < 1e-12);
+        // tanh(large) -> 1
+        assert!((eval_b("tanh(10)") - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn brace_sgn() {
+        assert_eq!(eval_b("sgn(2)"), 1.0);
+        assert_eq!(eval_b("sgn(-2)"), -1.0);
+        // edge case: sgn(0) == 0
+        assert_eq!(eval_b("sgn(0)"), 0.0);
+    }
+
+    #[test]
+    fn brace_int_trunc_toward_zero() {
+        // int(x) truncates toward zero — distinguishes from floor for negatives.
+        assert_eq!(eval_b("int(1.9)"), 1.0);
+        assert_eq!(eval_b("int(-1.9)"), -1.0);
+        // floor still rounds down.
+        assert_eq!(eval_b("floor(-1.9)"), -2.0);
+    }
+
+    #[test]
+    fn brace_ceil_floor() {
+        assert_eq!(eval_b("ceil(1.2)"), 2.0);
+        assert_eq!(eval_b("floor(1.9)"), 1.0);
+    }
+
+    #[test]
+    fn brace_db() {
+        // db(10) = 20 dB; db(0.1) = -20 dB; db(-10) = 20 (uses |x|).
+        assert!((eval_b("db(10)") - 20.0).abs() < 1e-9);
+        assert!((eval_b("db(0.1)") - (-20.0)).abs() < 1e-9);
+        assert!((eval_b("db(-10)") - 20.0).abs() < 1e-9);
+        // db20 alias.
+        assert!((eval_b("db20(10)") - 20.0).abs() < 1e-9);
+        // db(0) == -infinity. We only assert it is non-finite.
+        assert!(!eval_b("db(0)").is_finite());
+    }
+
+    #[test]
+    fn brace_limit() {
+        // x within range
+        assert_eq!(eval_b("limit(5, 0, 10)"), 5.0);
+        // x below lo
+        assert_eq!(eval_b("limit(-5, 0, 10)"), 0.0);
+        // x above hi
+        assert_eq!(eval_b("limit(20, 0, 10)"), 10.0);
+    }
+
+    #[test]
+    fn brace_limit_invalid_bounds() {
+        // lo > hi should error.
+        let params = HashMap::new();
+        let result = eval_brace_expr("limit(1, 10, 0)", &params);
+        assert!(
+            matches!(result, Err(ImportError::UnevaluableExpr(_))),
+            "expected error for lo > hi, got {result:?}"
+        );
     }
 }

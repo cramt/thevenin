@@ -50,6 +50,20 @@ Division by zero is a compile-time error if detectable, runtime error otherwise.
 | `sin(x)` | Sine (radians) | ✓ implemented |
 | `cos(x)` | Cosine (radians) | ✓ implemented |
 | `tan(x)` | Tangent (radians) | ✓ implemented |
+| `asin(x)` | Arcsine (radians) | ✓ implemented |
+| `acos(x)` | Arccosine (radians) | ✓ implemented |
+| `atan(x)` | Arctangent (radians) | ✓ implemented |
+| `atan2(y, x)` | Two-argument arctangent (radians) | ✓ implemented |
+| `sinh(x)` | Hyperbolic sine | ✓ implemented |
+| `cosh(x)` | Hyperbolic cosine | ✓ implemented |
+| `tanh(x)` | Hyperbolic tangent | ✓ implemented |
+| `sgn(x)` | Sign of `x`: `-1`, `0`, or `+1` | ✓ implemented |
+| `floor(x)` | Largest integer `<= x` | ✓ implemented |
+| `ceil(x)` | Smallest integer `>= x` | ✓ implemented |
+| `int(x)` | Truncate toward zero (SPICE convention) | ✓ implemented |
+| `db(x)` | Voltage/amplitude decibels: `20 * log10(|x|)` | ✓ implemented |
+| `db20(x)` | Alias for `db(x)` | ✓ implemented |
+| `limit(x, lo, hi)` | Clamp `x` to `[lo, hi]`; errors if `lo > hi` | ✓ implemented |
 | `min(a, b)` | Minimum | ✓ implemented |
 | `max(a, b)` | Maximum | ✓ implemented |
 
@@ -58,9 +72,11 @@ Division by zero is a compile-time error if detectable, runtime error otherwise.
 Users can define named functions using Haskell-style syntax:
 
 ```cirq
-limit(x, lo, hi) = min(max(x, lo), hi)
-clamp01(v) = limit(v, 0, 1)
+clamp(x, lo, hi) = min(max(x, lo), hi)
+clamp01(v) = clamp(v, 0, 1)
 ```
+
+User-defined functions of the same name shadow built-ins for the surrounding scope.
 
 Function declarations are allowed at the top level of a file or inside circuit/module bodies. The body is a single expression. See `05-parameters.md` for how functions interact with parameter scoping.
 
