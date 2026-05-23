@@ -9,6 +9,7 @@ use thevenin_types::{
 use crate::ast::{AlterValue, EchoFragment, Statement, StopCondition};
 use crate::context::SimContext;
 use crate::vecexpr::{eval_condition, eval_vec_expr};
+use cirq_ir::control::MAX_LOOP_ITERS;
 
 /// Result of executing a `.control` block.
 pub struct ControlResult {
@@ -130,6 +131,64 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
                 execute(body, ctx)?;
                 if ctx.exit_code.is_some() {
                     return Ok(());
+                }
+            }
+            Ok(())
+        }
+
+        Statement::While { cond, body } => {
+            let mut iters = 0usize;
+            loop {
+                let resolved = interpolate_vars(cond, ctx);
+                if !eval_condition(&resolved, ctx)? {
+                    break;
+                }
+                execute(body, ctx)?;
+                if ctx.exit_code.is_some() {
+                    return Ok(());
+                }
+                iters += 1;
+                if iters >= MAX_LOOP_ITERS {
+                    return Err(format!(
+                        "while: exceeded MAX_LOOP_ITERS ({MAX_LOOP_ITERS}) — runaway loop?"
+                    ));
+                }
+            }
+            Ok(())
+        }
+
+        Statement::Repeat { count, body } => {
+            // Evaluate count once at entry, matching ngspice's semantics.
+            let resolved = interpolate_vars(count, ctx);
+            let val = eval_vec_expr(&resolved, ctx)?;
+            let n_raw = val.as_scalar();
+            // Truncate toward zero so non-integer expressions round
+            // predictably; n <= 0 ⇒ zero iterations.
+            let n = if n_raw <= 0.0 { 0 } else { n_raw as usize };
+            let n_capped = n.min(MAX_LOOP_ITERS);
+            if n > MAX_LOOP_ITERS {
+                return Err(format!(
+                    "repeat: count {n} exceeds MAX_LOOP_ITERS ({MAX_LOOP_ITERS})"
+                ));
+            }
+            for _ in 0..n_capped {
+                execute(body, ctx)?;
+                if ctx.exit_code.is_some() {
+                    return Ok(());
+                }
+            }
+            Ok(())
+        }
+
+        Statement::Save { specs } => {
+            // Append to the driving circuit's recording set so the next
+            // analysis run (op/dc/tran/...) honours the additions. Dedupe
+            // so repeated `save v(out)` lines don't bloat the list.
+            if let Some(circuit) = ctx.circuit.as_mut() {
+                for spec in specs {
+                    if !circuit.save.iter().any(|existing| existing == spec) {
+                        circuit.save.push(spec.clone());
+                    }
                 }
             }
             Ok(())

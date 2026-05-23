@@ -389,6 +389,251 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // while / repeat / save (A4 checklist)
+    // -----------------------------------------------------------------------
+
+    /// `while` evaluates its condition before each iteration and stops once
+    /// it becomes false. Counter starts at 5; loop decrements by 1; final
+    /// value is 0 after exactly 5 iterations.
+    ///
+    /// Use `k` as the counter name because `i` collides with the built-in
+    /// imaginary-unit constant in the expression evaluator.
+    #[test]
+    fn while_decrements_counter() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+
+        let lines = vec![
+            "let k = 5".into(),
+            "let count = 0".into(),
+            "while k > 0".into(),
+            "  let k = k - 1".into(),
+            "  let count = count + 1".into(),
+            "end".into(),
+        ];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        let mut ctx = SimContext::new();
+        exec::execute(&stmts, &mut ctx).unwrap();
+
+        let k = ctx
+            .find_vector("k")
+            .expect("loop variable k present after while");
+        let count = ctx
+            .find_vector("count")
+            .expect("iteration counter present after while");
+        assert_eq!(k.data.as_real(), &[0.0], "counter ran to zero");
+        assert_eq!(count.data.as_real(), &[5.0], "ran exactly 5 iterations");
+    }
+
+    /// A condition that's false from the start runs the body zero times.
+    #[test]
+    fn while_condition_false_from_start_runs_zero_times() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+
+        let lines = vec![
+            "let count = 0".into(),
+            "while 0".into(),
+            "  let count = count + 1".into(),
+            "end".into(),
+        ];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        let mut ctx = SimContext::new();
+        exec::execute(&stmts, &mut ctx).unwrap();
+
+        let count = ctx.find_vector("count").unwrap();
+        assert_eq!(count.data.as_real(), &[0.0]);
+    }
+
+    /// A `while` whose condition never goes false must hit the iteration cap
+    /// and surface a clear error rather than hang.
+    #[test]
+    fn while_runaway_loop_caps_at_max_iters() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+
+        let lines = vec![
+            "let k = 0".into(),
+            "while 1".into(),
+            "  let k = k + 1".into(),
+            "end".into(),
+        ];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        let mut ctx = SimContext::new();
+        let result = exec::execute(&stmts, &mut ctx);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("MAX_LOOP_ITERS"),
+            "expected MAX_LOOP_ITERS in error, got: {err}"
+        );
+    }
+
+    /// A body that references an undefined vector errors out, and the error
+    /// propagates from `execute` rather than being silently swallowed.
+    #[test]
+    fn while_body_error_propagates() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+
+        let lines = vec![
+            "let k = 2".into(),
+            "while k > 0".into(),
+            "  let bogus = no_such_vec + 1".into(),
+            "  let k = k - 1".into(),
+            "end".into(),
+        ];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        let mut ctx = SimContext::new();
+        let result = exec::execute(&stmts, &mut ctx);
+        assert!(result.is_err(), "expected body error to propagate");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("no_such_vec") || err.contains("undefined"),
+            "expected undefined-vector error, got: {err}"
+        );
+    }
+
+    /// `repeat N` runs the body exactly N times. Counter starts at 0;
+    /// after `repeat 3` of `count = count + 1`, count is 3.
+    #[test]
+    fn repeat_runs_body_n_times() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+
+        let lines = vec![
+            "let count = 0".into(),
+            "repeat 3".into(),
+            "  let count = count + 1".into(),
+            "end".into(),
+        ];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        let mut ctx = SimContext::new();
+        exec::execute(&stmts, &mut ctx).unwrap();
+
+        let count = ctx.find_vector("count").unwrap();
+        assert_eq!(count.data.as_real(), &[3.0]);
+    }
+
+    /// `repeat 0` and `repeat -5` both run the body zero times — matches
+    /// ngspice's permissive behaviour.
+    #[test]
+    fn repeat_non_positive_count_runs_zero_times() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+
+        for count_expr in ["0", "-5"] {
+            let lines = vec![
+                "let count = 0".into(),
+                format!("repeat {count_expr}"),
+                "  let count = count + 1".into(),
+                "end".into(),
+            ];
+            let stmts = parse::parse_control_block(&lines).unwrap();
+            let mut ctx = SimContext::new();
+            exec::execute(&stmts, &mut ctx).unwrap();
+
+            let count = ctx.find_vector("count").unwrap();
+            assert_eq!(
+                count.data.as_real(),
+                &[0.0],
+                "repeat {count_expr} must skip body entirely"
+            );
+        }
+    }
+
+    /// `repeat` re-evaluates `count` only once at entry; mutating the
+    /// referenced variable inside the body must not change the loop count.
+    #[test]
+    fn repeat_count_evaluated_once_at_entry() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+
+        // Inside the body we mutate `n`, but `repeat n` should run exactly
+        // 3 times because `n` was 3 at entry.
+        let lines = vec![
+            "let n = 3".into(),
+            "let count = 0".into(),
+            "repeat n".into(),
+            "  let count = count + 1".into(),
+            "  let n = 0".into(),
+            "end".into(),
+        ];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        let mut ctx = SimContext::new();
+        exec::execute(&stmts, &mut ctx).unwrap();
+
+        let count = ctx.find_vector("count").unwrap();
+        assert_eq!(count.data.as_real(), &[3.0]);
+    }
+
+    /// `save v(out)` inside `.control` appends to the driving circuit's
+    /// save list so the next `op` (and any future analysis) honours it.
+    #[test]
+    fn save_appends_to_circuit_save_list() {
+        let circuit = divider_with_control(vec![
+            "save v(mid)".into(),
+            "save i(v1)".into(),
+            "op".into(),
+            "quit 0".into(),
+        ]);
+        let result = execute_control_block_ir(&circuit).expect("op runs");
+        assert_eq!(result.exit_code, 0);
+        // The op plot still contains v(mid) — save doesn't prune what the
+        // analysis would otherwise produce. The important assertion is the
+        // circuit's save list is populated. We can re-execute against a
+        // fresh context to inspect the circuit, but the ctx consumed the
+        // circuit by value. Easier: directly drive the executor with a
+        // fresh SimContext and inspect the mutated circuit through it.
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+
+        let lines = vec!["save v(mid) i(v1)".into(), "save v(out)".into()];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        let mut ctx = SimContext::from_circuit(circuit).unwrap();
+        exec::execute(&stmts, &mut ctx).unwrap();
+
+        let circuit_after = ctx.circuit().expect("circuit still attached");
+        assert!(
+            circuit_after.save.iter().any(|s| s == "v(mid)"),
+            "v(mid) recorded, got {:?}",
+            circuit_after.save
+        );
+        assert!(
+            circuit_after.save.iter().any(|s| s == "i(v1)"),
+            "i(v1) recorded, got {:?}",
+            circuit_after.save
+        );
+        assert!(
+            circuit_after.save.iter().any(|s| s == "v(out)"),
+            "v(out) recorded, got {:?}",
+            circuit_after.save
+        );
+    }
+
+    /// Repeated `save` of the same spec is deduplicated; the list grows
+    /// monotonically without redundant entries.
+    #[test]
+    fn save_dedupes_repeated_specs() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+
+        let circuit = divider_with_control(vec![]);
+        let mut ctx = SimContext::from_circuit(circuit).unwrap();
+        let lines = vec!["save v(mid)".into(), "save v(mid)".into()];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        exec::execute(&stmts, &mut ctx).unwrap();
+
+        let circuit_after = ctx.circuit().unwrap();
+        let count = circuit_after
+            .save
+            .iter()
+            .filter(|s| s.as_str() == "v(mid)")
+            .count();
+        assert_eq!(count, 1, "duplicate save specs deduped");
+    }
+
     /// End-to-end: `.csparam` parsed from SPICE text survives all the way
     /// into the control-block executor's variable scope.
     #[test]

@@ -32,6 +32,29 @@ pub enum Statement {
         values: Vec<String>,
         body: Vec<Statement>,
     },
+    /// `while <cond> ... end`
+    ///
+    /// Executes `body` repeatedly while `cond` evaluates to a non-zero value.
+    /// `cond` is re-evaluated against the live vector environment on every
+    /// iteration. The executor caps iteration count at
+    /// [`MAX_LOOP_ITERS`] to keep a runaway condition from hanging the
+    /// interpreter.
+    While { cond: String, body: Vec<Statement> },
+    /// `repeat <n> ... end`
+    ///
+    /// Executes `body` exactly `n` times. `count` is an expression that is
+    /// evaluated once at entry (matching ngspice's semantics); mutating the
+    /// referenced variables inside the body does not change the loop count.
+    /// `n <= 0` ⇒ zero iterations. Hard-capped at [`MAX_LOOP_ITERS`].
+    Repeat { count: String, body: Vec<Statement> },
+    /// `save <vec_spec> [<vec_spec> ...]`
+    ///
+    /// Inside `.control`, `save v(out) i(v1)` appends to the same recording
+    /// set that the netlist-level `.save` directive populates (i.e. it
+    /// extends `Circuit::save`) so the next `run` / `op` / `tran` / etc.
+    /// honours the additions. The strings are not re-parsed here — the
+    /// existing output-vector parser handles them downstream.
+    Save { specs: Vec<String> },
     /// `quit [exitcode]`
     Quit(Option<i32>),
     /// `set key = value` or `set key`
@@ -107,6 +130,13 @@ pub enum EchoFragment {
     /// `$&varname` — substitute vector's scalar value as string.
     VecScalar(String),
 }
+
+/// Upper bound on the number of iterations any `.control` loop (`while` /
+/// `repeat`) is allowed to execute before the interpreter aborts the run.
+///
+/// Matches ngspice's hardcoded loop cap. Exposed so that both the IR and
+/// the executor agree on the limit.
+pub const MAX_LOOP_ITERS: usize = 10_000;
 
 // ---------------------------------------------------------------------------
 // Parser
@@ -188,6 +218,9 @@ fn parse_statement(
         "echo" => Ok(Statement::Echo(parse_echo(rest))),
         "if" => parse_if(rest, iter),
         "foreach" => parse_foreach(rest, iter),
+        "while" => parse_while(rest, iter),
+        "repeat" => parse_repeat(rest, iter),
+        "save" => Ok(parse_save(rest)),
         "quit" => parse_quit(rest),
         "set" => parse_set(rest),
         "setplot" => Ok(Statement::Setplot(rest.to_string())),
@@ -330,6 +363,42 @@ fn parse_foreach(rest: &str, iter: &mut LineIter<'_>) -> Result<Statement, Strin
     parse_block(iter, &mut body, Some("foreach"))?;
 
     Ok(Statement::Foreach { var, values, body })
+}
+
+fn parse_while(rest: &str, iter: &mut LineIter<'_>) -> Result<Statement, String> {
+    let cond = rest.trim();
+    if cond.is_empty() {
+        return Err("while without condition".to_string());
+    }
+    let mut body = Vec::new();
+    parse_block(iter, &mut body, Some("while"))?;
+    Ok(Statement::While {
+        cond: cond.to_string(),
+        body,
+    })
+}
+
+fn parse_repeat(rest: &str, iter: &mut LineIter<'_>) -> Result<Statement, String> {
+    let count = rest.trim();
+    if count.is_empty() {
+        return Err("repeat without count".to_string());
+    }
+    let mut body = Vec::new();
+    parse_block(iter, &mut body, Some("repeat"))?;
+    Ok(Statement::Repeat {
+        count: count.to_string(),
+        body,
+    })
+}
+
+/// Parse a `.control`-level `save` command: `save v(out) i(v1) ...`.
+///
+/// Whitespace splits the spec list; empty `save` is a no-op (matches
+/// ngspice). Specs are not validated here — downstream consumers parse them
+/// via the existing output-vector parser.
+fn parse_save(rest: &str) -> Statement {
+    let specs: Vec<String> = rest.split_whitespace().map(|s| s.to_string()).collect();
+    Statement::Save { specs }
 }
 
 fn parse_quit(rest: &str) -> Result<Statement, String> {
@@ -1045,5 +1114,89 @@ mod tests {
         let lines = vec!["resume".to_string()];
         let stmts = parse_control_block(&lines).unwrap();
         assert!(matches!(stmts[0], Statement::Resume));
+    }
+
+    #[test]
+    fn parse_while_block() {
+        let lines = vec![
+            "while $i > 0".to_string(),
+            "  let i = $i - 1".to_string(),
+            "end".to_string(),
+        ];
+        let stmts = parse_control_block(&lines).unwrap();
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::While { cond, body } => {
+                assert_eq!(cond, "$i > 0");
+                assert_eq!(body.len(), 1);
+            }
+            other => panic!("expected While, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_while_empty_condition_errors() {
+        let lines = vec!["while".to_string(), "end".to_string()];
+        let result = parse_control_block(&lines);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("while without condition"));
+    }
+
+    #[test]
+    fn parse_while_unterminated_errors() {
+        let lines = vec!["while 1".to_string(), "  echo hi".to_string()];
+        let result = parse_control_block(&lines);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unterminated while"));
+    }
+
+    #[test]
+    fn parse_repeat_block() {
+        let lines = vec![
+            "repeat 3".to_string(),
+            "  echo hi".to_string(),
+            "end".to_string(),
+        ];
+        let stmts = parse_control_block(&lines).unwrap();
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::Repeat { count, body } => {
+                assert_eq!(count, "3");
+                assert_eq!(body.len(), 1);
+            }
+            other => panic!("expected Repeat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_repeat_empty_count_errors() {
+        let lines = vec!["repeat".to_string(), "end".to_string()];
+        let result = parse_control_block(&lines);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("repeat without count"));
+    }
+
+    #[test]
+    fn parse_save_multiple_specs() {
+        let lines = vec!["save v(out) i(v1) v(mid)".to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::Save { specs } => {
+                assert_eq!(specs, &["v(out)", "i(v1)", "v(mid)"]);
+            }
+            other => panic!("expected Save, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_save_empty_specs_is_ok() {
+        let lines = vec!["save".to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::Save { specs } => assert!(specs.is_empty()),
+            other => panic!("expected Save, got {other:?}"),
+        }
     }
 }
