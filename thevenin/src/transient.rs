@@ -337,9 +337,6 @@ impl BreakpointTable {
 /// Matches ngspice CKTtrtol default of 7.0.
 const TRTOL: f64 = 7.0;
 
-/// Charge tolerance for LTE estimation (matches ngspice CHGTOL).
-const CHGTOL: f64 = 1e-14;
-
 /// Minimum factor to shrink timestep on rejection.
 const MIN_SHRINK: f64 = 0.125; // 1/8
 
@@ -351,7 +348,7 @@ const MAX_GROW: f64 = 2.0;
 /// as sqrt(tol / |divided_diff|).
 ///
 /// Returns the recommended new timestep.
-#[expect(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn estimate_new_timestep(
     h: f64,
     h_prev: f64,
@@ -363,6 +360,7 @@ fn estimate_new_timestep(
     soidd_charge_histories: &[Bsim3SoiDdChargeHistory],
     reltol: f64,
     abstol: f64,
+    chgtol: f64,
 ) -> f64 {
     let mut new_h = f64::MAX;
 
@@ -387,7 +385,7 @@ fn estimate_new_timestep(
 
         // Tolerance: max of voltage-based and charge-based.
         let vol_tol = abstol + reltol * i_cur.abs().max(cap_histories[ci].current.abs());
-        let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
+        let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
         let tol = TRTOL * vol_tol.max(chg_tol);
 
         // Divided differences: 2nd divided difference of Q.
@@ -431,7 +429,7 @@ fn estimate_new_timestep(
         let flux_new = ind.inductance * i_new;
         let flux_old = ind.inductance * i_old;
         let cur_tol = abstol + reltol * i_new.abs().max(i_old.abs());
-        let flux_tol = reltol * flux_new.abs().max(flux_old.abs()).max(CHGTOL);
+        let flux_tol = reltol * flux_new.abs().max(flux_old.abs()).max(chgtol);
         let tol = TRTOL * cur_tol.max(flux_tol);
 
         if lte > 1e-30 {
@@ -461,7 +459,7 @@ fn estimate_new_timestep(
 
             // Tolerance matching ngspice CKTterr.
             let vol_tol = abstol + reltol * hist.cqbe.abs().max((q0 - q1).abs() / h);
-            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
             let tol = TRTOL * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
@@ -483,7 +481,7 @@ fn estimate_new_timestep(
             let q2 = hist.qbc_prev;
 
             let vol_tol = abstol + reltol * hist.cqbc.abs().max((q0 - q1).abs() / h);
-            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
             let tol = TRTOL * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
@@ -526,7 +524,7 @@ fn estimate_new_timestep(
             let q2 = hist.qgate_prev;
 
             let vol_tol = abstol + reltol * hist.cqgate.abs().max((q0 - q1).abs() / h);
-            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
             let tol = TRTOL * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
@@ -548,7 +546,7 @@ fn estimate_new_timestep(
             let q2 = hist.qbody_prev;
 
             let vol_tol = abstol + reltol * hist.cqbody.abs().max((q0 - q1).abs() / h);
-            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
             let tol = TRTOL * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
@@ -570,7 +568,7 @@ fn estimate_new_timestep(
             let q2 = hist.qdrn_prev;
 
             let vol_tol = abstol + reltol * hist.cqdrn.abs().max((q0 - q1).abs() / h);
-            let chg_tol = reltol * q0.abs().max(q1.abs()).max(CHGTOL) / h;
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
             let tol = TRTOL * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
@@ -1399,6 +1397,10 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
     let mut is_first_step = true;
     let mut force_be = false; // Order upgrade check: stay at BE until Trap LTE allows upgrade.
 
+    // Total NR iteration counter across the whole run (ngspice ITL5 sentinel).
+    // Only enforced when nr_options.itl5 > 0 — the default 0 means "no cap".
+    let mut total_nr_iterations: usize = 0;
+
     // Adaptive time-stepping loop.
     while t < t_stop - h_min {
         // The step size for this iteration (separate from h which tracks the
@@ -1540,7 +1542,18 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             &vbic_charge_histories,
             &mut nr_cache,
         ) {
-            Ok(sol) => sol,
+            Ok((sol, iters)) => {
+                total_nr_iterations = total_nr_iterations.saturating_add(iters);
+                if nr_options.itl5 > 0 && total_nr_iterations > nr_options.itl5 {
+                    return Err(MnaError::SolveError(
+                        crate::SparseMatrixError::SingularMatrix(format!(
+                            "transient aborted: total NR iterations ({}) exceeded ITL5={}",
+                            total_nr_iterations, nr_options.itl5
+                        )),
+                    ));
+                }
+                sol
+            }
             Err(e) if step_h > h_min * 2.0 => {
                 // NR failed — shrink h and retry without advancing time.
                 // Demote to Backward Euler on retry, matching ngspice dctran.c
@@ -1582,6 +1595,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                 &soidd_charge_histories,
                 nr_options.reltol,
                 nr_options.abstol,
+                nr_options.chgtol,
             );
 
             if new_h < 0.9 * step_h {
@@ -1623,6 +1637,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                 &soidd_charge_histories,
                 nr_options.reltol,
                 nr_options.abstol,
+                nr_options.chgtol,
             );
             force_be = trap_h <= 1.05 * step_h;
             // Use Trap LTE estimate to control next step size, matching ngspice
@@ -2327,7 +2342,7 @@ fn solve_timestep(
     soidd_charge_histories: &[Bsim3SoiDdChargeHistory],
     vbic_charge_histories: &[VbicChargeHistory],
     nr_cache: &mut crate::sparse::SparseLuCache,
-) -> Result<Vec<f64>, MnaError> {
+) -> Result<(Vec<f64>, usize), MnaError> {
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
     let capacitors = &mna.capacitors;
@@ -3348,9 +3363,9 @@ fn solve_timestep(
         .map_err(|e| {
             MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string()))
         })?;
-        Ok(result.solution)
+        Ok((result.solution, result.iterations))
     } else {
-        // Linear: single solve.
+        // Linear: single solve — no NR iterations to attribute.
         let mut system = LinearSystem::new(dim);
         load(
             prev_solution,
@@ -3360,7 +3375,7 @@ fn solve_timestep(
             NrMode::Float,
         );
         let sol = system.solve()?;
-        Ok(sol)
+        Ok((sol, 0))
     }
 }
 
@@ -3854,6 +3869,61 @@ K1 L1 L2 {k}
         assert!(
             peak_high > peak_low * 1.5,
             "higher k should produce larger secondary voltage: k=0.8 peak={peak_high}, k=0.2 peak={peak_low}"
+        );
+    }
+
+    /// `.OPTIONS ITL5=0` (the sentinel for "unlimited") lets a long transient
+    /// complete. Uses a diode-loaded PULSE circuit so each timestep actually
+    /// performs NR iterations (linear circuits hit the dense-solve path with
+    /// iters=0 and would tell us nothing about ITL5).
+    #[test]
+    fn itl5_zero_sentinel_allows_long_transient() {
+        let netlist = Netlist::parse_single(
+            "ITL5=0 unlimited
+V1 1 0 PULSE(0 5 0 1u 1u 1m 2m)
+R1 1 2 1k
+D1 2 0 DMOD
+.model DMOD D IS=1e-14
+.options ITL5=0
+.tran 100u 5m
+.end
+",
+        )
+        .unwrap();
+        let result = simulate_tran(&netlist);
+        assert!(
+            result.is_ok(),
+            "ITL5=0 should not cap total iterations, got: {result:?}"
+        );
+    }
+
+    /// `.OPTIONS ITL5=5` aborts a transient that needs more than 5 NR
+    /// iterations in total. The same diode-PULSE circuit takes well over
+    /// 5 NR iterations across the run.
+    #[test]
+    fn itl5_small_cap_aborts_transient() {
+        let netlist = Netlist::parse_single(
+            "ITL5=5 too small
+V1 1 0 PULSE(0 5 0 1u 1u 1m 2m)
+R1 1 2 1k
+D1 2 0 DMOD
+.model DMOD D IS=1e-14
+.options ITL5=5
+.tran 100u 5m
+.end
+",
+        )
+        .unwrap();
+        let result = simulate_tran(&netlist);
+        assert!(
+            result.is_err(),
+            "ITL5=5 should abort before completing 5ms of nonlinear transient"
+        );
+        // The error message should mention the cap so users can diagnose.
+        let msg = result.err().unwrap().to_string().to_lowercase();
+        assert!(
+            msg.contains("itl5") || msg.contains("iterations"),
+            "ITL5 abort error should mention ITL5/iterations, got: {msg}"
         );
     }
 }

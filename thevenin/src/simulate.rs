@@ -21,6 +21,12 @@ pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
                         "ITL1" => opts.itl1 = *v as usize,
                         "ITL2" => opts.itl2 = *v as usize,
                         "ITL4" => opts.itl4 = *v as usize,
+                        "ITL5" => opts.itl5 = *v as usize,
+                        // ITL6 is ngspice's alias for SRCSTEPS — both control
+                        // the number of source-stepping iterations. Accept
+                        // either spelling.
+                        "ITL6" | "SRCSTEPS" => opts.itl6 = *v as usize,
+                        "CHGTOL" => opts.chgtol = *v,
                         _ => {}
                     }
                 }
@@ -1773,5 +1779,76 @@ vin 1 0 dc 5.0
         // With gate=5V, VTO=0.8V, NMOS is on. V(2) should be pulled low.
         eprintln!("Spaced kv: V(2) = {v2:.6e}");
         assert!(v2 < 1.0, "NMOS should pull V(2) low, got {v2:.6e}");
+    }
+
+    /// `.OPTIONS` defaults — when no `.OPTIONS` is given, `NrOptions::default()`
+    /// is returned. Locks in the current defaults so a future refactor can't
+    /// silently weaken them.
+    #[test]
+    fn nr_options_default_when_no_options_directive() {
+        let netlist = Netlist::parse_single(
+            "no options
+V1 1 0 1
+R1 1 0 1k
+.op
+.end
+",
+        )
+        .unwrap();
+        let opts = nr_options_from_netlist(&netlist);
+        let defaults = NrOptions::default();
+        assert_eq!(opts.itl1, defaults.itl1);
+        assert_eq!(opts.itl2, defaults.itl2);
+        assert_eq!(opts.itl4, defaults.itl4);
+        assert_eq!(opts.itl5, defaults.itl5);
+        assert_eq!(opts.itl6, defaults.itl6);
+        assert_abs_diff_eq!(opts.chgtol, defaults.chgtol, epsilon = 0.0);
+        // ITL5 sentinel: 0 = unlimited.
+        assert_eq!(opts.itl5, 0);
+        // ITL6 sentinel: 0 = adaptive (use built-in schedule).
+        assert_eq!(opts.itl6, 0);
+        assert_abs_diff_eq!(opts.chgtol, 1e-14, epsilon = 0.0);
+    }
+
+    /// `.OPTIONS ITL1=200 ITL4=25 CHGTOL=1e-12` lands in the parsed options
+    /// struct. Same pattern the existing RELTOL/ABSTOL plumbing tests would
+    /// follow.
+    #[test]
+    fn nr_options_parses_new_iteration_keys() {
+        let netlist = Netlist::parse_single(
+            "options parsing
+V1 1 0 1
+R1 1 0 1k
+.options ITL1=200 ITL2=300 ITL4=25 ITL5=7000 ITL6=42 CHGTOL=1e-12
+.op
+.end
+",
+        )
+        .unwrap();
+        let opts = nr_options_from_netlist(&netlist);
+        assert_eq!(opts.itl1, 200);
+        assert_eq!(opts.itl2, 300);
+        assert_eq!(opts.itl4, 25);
+        assert_eq!(opts.itl5, 7000);
+        assert_eq!(opts.itl6, 42);
+        assert_abs_diff_eq!(opts.chgtol, 1e-12, epsilon = 1e-30);
+    }
+
+    /// SRCSTEPS is ngspice's alias for ITL6 — both must populate the same
+    /// field.
+    #[test]
+    fn nr_options_srcsteps_aliases_itl6() {
+        let netlist = Netlist::parse_single(
+            "srcsteps alias
+V1 1 0 1
+R1 1 0 1k
+.options SRCSTEPS=12
+.op
+.end
+",
+        )
+        .unwrap();
+        let opts = nr_options_from_netlist(&netlist);
+        assert_eq!(opts.itl6, 12);
     }
 }
