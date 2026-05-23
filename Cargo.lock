@@ -2051,6 +2051,7 @@ version = "0.1.0"
 dependencies = [
  "cirq-frontend",
  "cirq-ir",
+ "cirq-spice-import",
  "thevenin",
  "thevenin-types",
  "thiserror 2.0.18",

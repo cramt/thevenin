@@ -489,17 +489,22 @@ fn build_param_table(netlist: &Netlist) -> HashMap<String, f64> {
     let mut table = HashMap::new();
     let mut pending: Vec<(&str, &Expr)> = Vec::new();
 
-    // First pass: collect all .param items.
+    // First pass: collect all .param and .csparam items. `.csparam` is
+    // semantically identical to `.param` at the netlist-resolution layer
+    // (it additionally seeds the control-block variable scope — see
+    // `circuit_from_netlist`), so both kinds feed the same table here.
     for item in &netlist.items {
-        if let Item::Param(params) = item {
-            for p in params {
-                match &p.value {
-                    Expr::Num(v) => {
-                        table.insert(p.name.clone(), *v);
-                    }
-                    _ => {
-                        pending.push((&p.name, &p.value));
-                    }
+        let params = match item {
+            Item::Param(p) | Item::Csparam(p) => p,
+            _ => continue,
+        };
+        for p in params {
+            match &p.value {
+                Expr::Num(v) => {
+                    table.insert(p.name.clone(), *v);
+                }
+                _ => {
+                    pending.push((&p.name, &p.value));
                 }
             }
         }
@@ -909,6 +914,23 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         }
     }
 
+    // 7b. Collect .csparam items. These live in a parallel list so the
+    //     control-block interpreter can seed them as named variables; they
+    //     have already been merged into the parameter resolution table
+    //     above so any element value or waveform referencing them resolves
+    //     identically to a `.param` of the same name.
+    let mut ir_csparams: Vec<ResolvedParam> = Vec::new();
+    for item in &netlist.items {
+        if let Item::Csparam(params) = item {
+            for p in params {
+                ir_csparams.push(ResolvedParam {
+                    name: p.name.clone(),
+                    value: expr_to_value(&p.value),
+                });
+            }
+        }
+    }
+
     // 8. Collect .options items.
     let mut ir_options: Vec<(String, cirq_ir::Value)> = Vec::new();
     for item in &netlist.items {
@@ -1024,6 +1046,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
         models: ir_models,
         analyses: ir_analyses,
         params: ir_params,
+        csparams: ir_csparams,
         options: ir_options,
         temps: ir_temps,
         save: ir_save,
@@ -2201,6 +2224,54 @@ R1 a 0 1k
         assert_eq!(c.params.len(), 2);
         assert_eq!(c.params[0].name, "Rval");
         assert_eq!(c.params[1].name, "Cval");
+    }
+
+    #[test]
+    fn csparam_collected() {
+        let spice = "\
+Csparam test
+.csparam vcstart=-0.2
+.csparam ibstop=200u
+R1 a 0 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+
+        assert_eq!(c.csparams.len(), 2);
+        assert_eq!(c.csparams[0].name, "vcstart");
+        match &c.csparams[0].value {
+            cirq_ir::Value::Real(v) => assert!((v - (-0.2)).abs() < 1e-12),
+            other => panic!("expected Real, got {other:?}"),
+        }
+        assert_eq!(c.csparams[1].name, "ibstop");
+        match &c.csparams[1].value {
+            cirq_ir::Value::Real(v) => assert!((v - 200e-6).abs() < 1e-18),
+            other => panic!("expected Real, got {other:?}"),
+        }
+        // .csparam must not bleed into the regular .param list.
+        assert!(c.params.is_empty());
+    }
+
+    #[test]
+    fn csparam_and_param_coexist() {
+        let spice = "\
+Mixed param test
+.param a=1
+.csparam b=2
+.param c=3
+R1 n1 0 1k
+.op
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        assert_eq!(c.params.len(), 2);
+        assert_eq!(c.params[0].name, "a");
+        assert_eq!(c.params[1].name, "c");
+        assert_eq!(c.csparams.len(), 1);
+        assert_eq!(c.csparams[0].name, "b");
     }
 
     #[test]

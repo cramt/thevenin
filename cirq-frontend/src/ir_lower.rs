@@ -68,6 +68,7 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
         models: ctx.models,
         analyses: ctx.analyses,
         params: ctx.resolved_params,
+        csparams: Vec::new(),
         options: ctx.options,
         temps: ctx.temps,
         nodeset: Vec::new(),

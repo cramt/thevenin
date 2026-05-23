@@ -3028,6 +3028,7 @@ mod tests {
             models: vec![],
             analyses: vec![IrAnalysis::Op],
             params: Vec::<ResolvedParam>::new(),
+            csparams: Vec::<ResolvedParam>::new(),
             options: vec![],
             temps: vec![],
             save: vec![],

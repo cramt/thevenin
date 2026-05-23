@@ -359,6 +359,7 @@ mod tests {
             models: vec![],
             analyses: vec![],
             params: vec![],
+            csparams: vec![],
             options: vec![],
             temps: vec![],
             save: vec![],

@@ -78,13 +78,23 @@ impl SimContext {
     ///
     /// The Circuit is the single source of truth for both TEMPER eval and
     /// analysis dispatch — see `exec.rs::run_analysis`.
+    ///
+    /// `.csparam` entries on the circuit are seeded into the initial
+    /// variable scope, mirroring ngspice's behaviour where `.csparam`
+    /// names are usable as `$name` references inside `.control` blocks.
+    /// `.param` names are intentionally not seeded — only `.csparam` is
+    /// exposed to the control namespace.
     pub fn from_circuit(circuit: Circuit) -> Result<Self, String> {
+        let mut variables = HashMap::new();
+        for p in &circuit.csparams {
+            variables.insert(p.name.clone(), value_to_string(&p.value));
+        }
         Ok(Self {
             circuit: Some(circuit),
             plots: Vec::new(),
             current_plot: None,
             plot_counters: HashMap::new(),
-            variables: HashMap::new(),
+            variables,
             functions: HashMap::new(),
             exit_code: None,
             output: String::new(),
@@ -302,6 +312,18 @@ fn plot_analysis_type(name: &str) -> String {
     s.trim_end_matches(|c: char| c.is_ascii_digit()).to_string()
 }
 
+/// Render an IR [`cirq_ir::Value`] as a string for the control-block
+/// variable scope. Reals use the same compact decimal/scientific form as
+/// `$&vector` lookups; integers/bools/strings stringify naturally.
+fn value_to_string(value: &cirq_ir::Value) -> String {
+    match value {
+        cirq_ir::Value::Real(v) => format_number(*v),
+        cirq_ir::Value::Integer(v) => v.to_string(),
+        cirq_ir::Value::Bool(v) => v.to_string(),
+        cirq_ir::Value::String(v) => v.clone(),
+    }
+}
+
 /// Format a number matching ngspice's output conventions.
 fn format_number(v: f64) -> String {
     if v == 0.0 {
@@ -376,6 +398,7 @@ mod tests {
             models: vec![],
             analyses: vec![cirq_ir::Analysis::Op],
             params: vec![],
+            csparams: vec![],
             options: vec![],
             temps: vec![],
             save: vec![],
