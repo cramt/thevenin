@@ -62,7 +62,8 @@ use crate::vbic::{VbicInstance, VbicModel};
 ///
 /// Circuit-side equivalent of `crate::simulate::nr_options_from_netlist`.
 /// Recognises the same `.OPTIONS` keys (GMIN, ABSTOL, RELTOL, VNTOL,
-/// ITL1/ITL2/ITL4) and ignores non-numeric values silently.
+/// ITL1/ITL2/ITL4/ITL5/ITL6, SRCSTEPS, CHGTOL) and ignores non-numeric
+/// values silently.
 pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
     let mut opts = NrOptions::default();
     for (name, value) in &circuit.options {
@@ -79,6 +80,10 @@ pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
             "ITL1" => opts.itl1 = v as usize,
             "ITL2" => opts.itl2 = v as usize,
             "ITL4" => opts.itl4 = v as usize,
+            "ITL5" => opts.itl5 = v as usize,
+            // ITL6 is ngspice's alias for SRCSTEPS.
+            "ITL6" | "SRCSTEPS" => opts.itl6 = v as usize,
+            "CHGTOL" => opts.chgtol = v,
             _ => {}
         }
     }
@@ -3102,5 +3107,50 @@ mod tests {
             .expect("ok");
         assert!(mna.node_map.get("gnd").is_none());
         assert!(mna.node_map.get("0").is_none());
+    }
+
+    /// IR-side mirror of `nr_options_parses_new_iteration_keys` from
+    /// `simulate.rs`: `.options ITL1=… ITL5=… ITL6=… CHGTOL=…` must land on
+    /// the same fields when sourced from a Circuit instead of a Netlist.
+    #[test]
+    fn nr_options_from_circuit_parses_new_keys() {
+        let mut c = divider();
+        c.options.push(("ITL1".into(), Value::Integer(200)));
+        c.options.push(("ITL2".into(), Value::Integer(300)));
+        c.options.push(("ITL4".into(), Value::Integer(25)));
+        c.options.push(("ITL5".into(), Value::Integer(7000)));
+        c.options.push(("ITL6".into(), Value::Integer(42)));
+        c.options.push(("CHGTOL".into(), Value::Real(1e-12)));
+        let opts = nr_options_from_circuit(&c);
+        assert_eq!(opts.itl1, 200);
+        assert_eq!(opts.itl2, 300);
+        assert_eq!(opts.itl4, 25);
+        assert_eq!(opts.itl5, 7000);
+        assert_eq!(opts.itl6, 42);
+        assert!((opts.chgtol - 1e-12).abs() < 1e-30);
+    }
+
+    /// SRCSTEPS is ngspice's alias for ITL6 — IR side.
+    #[test]
+    fn nr_options_from_circuit_srcsteps_aliases_itl6() {
+        let mut c = divider();
+        c.options.push(("SRCSTEPS".into(), Value::Integer(12)));
+        let opts = nr_options_from_circuit(&c);
+        assert_eq!(opts.itl6, 12);
+    }
+
+    /// Defaults — when a Circuit carries no `.options`, every wired field
+    /// matches `NrOptions::default()`. Sentinels: itl5=0, itl6=0,
+    /// chgtol=1e-14.
+    #[test]
+    fn nr_options_from_circuit_defaults_match_struct_defaults() {
+        let opts = nr_options_from_circuit(&divider());
+        let defaults = NrOptions::default();
+        assert_eq!(opts.itl5, defaults.itl5);
+        assert_eq!(opts.itl6, defaults.itl6);
+        assert!((opts.chgtol - defaults.chgtol).abs() < 1e-30);
+        assert_eq!(opts.itl5, 0);
+        assert_eq!(opts.itl6, 0);
+        assert!((opts.chgtol - 1e-14).abs() < 1e-30);
     }
 }

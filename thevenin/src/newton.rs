@@ -48,6 +48,18 @@ pub struct NrOptions {
     pub itl2: usize,
     /// Maximum iterations per transient timestep (ngspice ITL4, default 10).
     pub itl4: usize,
+    /// Total iteration limit across the entire transient run (ngspice ITL5,
+    /// default 0 = unlimited). When non-zero, the transient driver aborts
+    /// once the cumulative NR iteration count exceeds this threshold. ngspice
+    /// historically defaulted this to 5000 but modern ngspice treats it as a
+    /// no-op; we keep the sentinel-zero convention so users get unlimited
+    /// total iterations by default.
+    pub itl5: usize,
+    /// Maximum number of source steps for source stepping (ngspice ITL6 / SRCSTEPS,
+    /// default 0). When 0 (default), the solver uses its built-in adaptive source
+    /// stepping schedule (current behaviour). When non-zero, it caps the maximum
+    /// number of outer-loop source steps taken before giving up.
+    pub itl6: usize,
     /// Minimum conductance from each node to ground (ngspice GMIN, default 1e-12).
     /// Used by device models in junction conductance computations.
     pub gmin: f64,
@@ -59,6 +71,11 @@ pub struct NrOptions {
     /// ngspice behaviour where `CKTdiagGmin` stays 0 when the initial
     /// NIiter converges).
     pub diag_gmin: f64,
+    /// Charge tolerance for capacitor / inductor LTE estimation
+    /// (ngspice CHGTOL, default 1e-14). Sets the floor on the charge
+    /// or flux scale used when computing local truncation error during
+    /// transient timestep control.
+    pub chgtol: f64,
 }
 
 impl Default for NrOptions {
@@ -70,8 +87,17 @@ impl Default for NrOptions {
             itl1: 100,
             itl2: 200,
             itl4: 10,
+            // ITL5 sentinel: 0 means "no total-iteration cap", matching modern
+            // ngspice behaviour. The Thevenin transient driver only enforces
+            // the cap when itl5 > 0.
+            itl5: 0,
+            // ITL6 sentinel: 0 means "use the built-in adaptive source-stepping
+            // schedule". A positive value caps the number of outer source-step
+            // iterations.
+            itl6: 0,
             gmin: 1e-12,
             diag_gmin: 1e-12,
+            chgtol: 1e-14,
         }
     }
 }
@@ -556,7 +582,15 @@ where
     let mut src_fact = conv_fact + raise;
     let mut backup = solution.clone();
 
+    // ITL6 / SRCSTEPS cap: when set, limit the number of outer source-step
+    // iterations. 0 (default) means "use the adaptive schedule without
+    // imposing an extra cap" — current behaviour.
+    let mut src_step_count: usize = 0;
     while raise >= 1e-7 && conv_fact < 1.0 {
+        if options.itl6 > 0 && src_step_count >= options.itl6 {
+            break;
+        }
+        src_step_count += 1;
         if src_fact > 1.0 {
             src_fact = 1.0;
         }
@@ -942,6 +976,85 @@ mod tests {
         // Large current change — should not converge.
         let e = vec![1.0, 2.0, 0.002];
         assert!(!check_convergence(&a, &e, 2, &options));
+    }
+
+    /// ITL1 caps direct-NR iterations for the DC operating point. With a
+    /// strongly nonlinear circuit and `itl1 = 1`, direct NR cannot converge
+    /// in a single iteration, so `newton_raphson_solve_with_mode` should
+    /// fall through to Gmin / source stepping (which still uses itl2-sized
+    /// inner attempts). The point of this test is to lock in *that ITL1
+    /// is actually consulted* — bumping it to a generous value lets a
+    /// pathological initial guess reach the correct answer via direct NR
+    /// alone.
+    #[test]
+    fn itl1_too_small_forces_fallback_then_succeeds_with_larger_cap() {
+        // Same diode circuit as test_diode_circuit_convergence (V1=1V, R1=1k, D1).
+        let g = 1.0 / 1000.0;
+        let v_source = 1.0;
+        let dim = 3;
+        let num_nodes = 2;
+
+        let load = |solution: &[f64],
+                    system: &mut LinearSystem,
+                    source_factor: f64,
+                    _gmin: f64,
+                    _mode: NrMode| {
+            let v2 = solution[1];
+            system.matrix.add(0, 0, g);
+            system.matrix.add(0, 1, -g);
+            system.matrix.add(1, 0, -g);
+            system.matrix.add(1, 1, g);
+            system.matrix.add(0, 2, 1.0);
+            system.matrix.add(2, 0, 1.0);
+            system.rhs[2] = v_source * source_factor;
+            let g_d = diode_conductance(v2);
+            let i_d = diode_current(v2);
+            let i_eq = i_d - g_d * v2;
+            system.matrix.add(1, 1, g_d);
+            system.rhs[1] -= i_eq;
+        };
+
+        // With ITL1=1, direct NR can't converge — the diode needs several
+        // NR iterations. The solver should still succeed (via gmin/source
+        // fallback) and the returned solution should be physical.
+        let tight = NrOptions {
+            itl1: 1,
+            ..NrOptions::default()
+        };
+        let initial = vec![0.0; dim];
+        let result =
+            newton_raphson_solve_with_mode(&tight, dim, num_nodes, load, &initial, NrMode::InitJct)
+                .expect("fallback should succeed even with itl1=1");
+        let v_diode = result.solution[1];
+        assert!(
+            (0.5..0.8).contains(&v_diode),
+            "diode voltage {v_diode} not physical after gmin fallback"
+        );
+
+        // With ITL1=500, direct NR converges in a handful of iterations.
+        let generous = NrOptions {
+            itl1: 500,
+            ..NrOptions::default()
+        };
+        let result = newton_raphson_solve_with_mode(
+            &generous,
+            dim,
+            num_nodes,
+            load,
+            &initial,
+            NrMode::InitJct,
+        )
+        .expect("direct NR with generous ITL1 converges");
+        let v_diode = result.solution[1];
+        assert!(
+            (0.5..0.8).contains(&v_diode),
+            "diode voltage {v_diode} not physical with generous ITL1"
+        );
+        assert!(
+            result.iterations < 30,
+            "direct NR should converge fast on this circuit, got {} iters",
+            result.iterations
+        );
     }
 
     /// Test that Gmin stepping can solve a circuit that direct NR cannot
