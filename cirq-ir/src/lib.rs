@@ -19,6 +19,13 @@ pub struct Circuit {
     pub models: Vec<Model>,
     pub analyses: Vec<Analysis>,
     pub params: Vec<ResolvedParam>,
+    /// `.csparam` declarations. Semantically identical to `.param` for
+    /// netlist resolution, but additionally seeded into the `.control` block
+    /// interpreter's variable scope so control scripts can read them as
+    /// ordinary `$name` variables. When a name collides with a `.param` of
+    /// the same name, the `.csparam` value wins in the control scope —
+    /// matching ngspice's behaviour.
+    pub csparams: Vec<ResolvedParam>,
     /// Simulation options (e.g. GMIN, ABSTOL, RELTOL).
     pub options: Vec<(String, Value)>,
     /// Simulation temperatures in °C.

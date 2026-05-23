@@ -1050,6 +1050,9 @@ pub enum Item {
     Model(ModelDef),
     /// `.param key=val [key=val ...]`
     Param(Vec<Param>),
+    /// `.csparam key=val [key=val ...]` — like `.param`, but also exposed to
+    /// the `.control` block interpreter as a variable.
+    Csparam(Vec<Param>),
     /// `.include "filename"`
     Include(String),
     /// `.lib "filename" [entry]`
@@ -1090,6 +1093,10 @@ impl fmt::Display for Item {
             Item::Model(m) => write!(f, "{m}"),
             Item::Param(ps) => {
                 write!(f, ".param")?;
+                write_params(f, ps)
+            }
+            Item::Csparam(ps) => {
+                write!(f, ".csparam")?;
                 write_params(f, ps)
             }
             Item::Include(path) => write!(f, ".include \"{path}\""),

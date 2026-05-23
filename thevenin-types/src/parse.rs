@@ -1564,6 +1564,11 @@ fn parse_dot(
             Ok(ParsedLine::Item(Item::Param(params)))
         }
 
+        ".CSPARAM" => {
+            let params = collect_params(&tokens[1..]);
+            Ok(ParsedLine::Item(Item::Csparam(params)))
+        }
+
         ".FUNC" => {
             // .func name(arg1, arg2, ...) body
             // or .func name(arg1, arg2, ...) {body}

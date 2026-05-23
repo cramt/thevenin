@@ -12,3 +12,6 @@ thevenin = { path = "../thevenin", version = "0.3.0" }
 cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
 cirq-frontend = { path = "../cirq-frontend", version = "0.1.0" }
 thiserror.workspace = true
+
+[dev-dependencies]
+cirq-spice-import = { path = "../cirq-spice-import", version = "0.1.0" }

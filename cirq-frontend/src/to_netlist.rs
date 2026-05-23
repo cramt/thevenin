@@ -1236,6 +1236,7 @@ mod tests {
             models,
             analyses,
             params,
+            csparams: Vec::new(),
             options: Vec::new(),
             temps: Vec::new(),
             save: Vec::new(),

@@ -165,6 +165,7 @@ mod tests {
             models: vec![],
             analyses: vec![IrAnalysis::Op],
             params: Vec::<ResolvedParam>::new(),
+            csparams: Vec::<ResolvedParam>::new(),
             options: vec![],
             temps: vec![],
             save: vec![],
@@ -345,5 +346,73 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         let v_mid = vec_value(&result, 0, "v(mid)");
         assert!((v_mid - 2.0 / 3.0).abs() < 1e-6, "got {v_mid}");
+    }
+
+    /// `.csparam` entries land in the `.control` block's variable scope:
+    /// `echo $x` prints the seeded value.
+    #[test]
+    fn csparam_seeded_into_control_scope() {
+        let mut circuit = divider_with_control(vec!["echo $x".into(), "quit 0".into()]);
+        circuit.csparams = vec![ResolvedParam {
+            name: "x".into(),
+            value: Value::Real(42.0),
+        }];
+        let result = execute_control_block_ir(&circuit).expect("control runs");
+        assert_eq!(result.exit_code, 0);
+        assert!(
+            result.output.contains("42"),
+            "expected echo of csparam x=42, got: {:?}",
+            result.output
+        );
+    }
+
+    /// When `.csparam` and `.param` collide on a name, `.csparam` wins in
+    /// the control scope (ngspice behaviour).
+    #[test]
+    fn csparam_overrides_param_on_name_collision() {
+        let mut circuit = divider_with_control(vec!["echo $x".into(), "quit 0".into()]);
+        circuit.params = vec![ResolvedParam {
+            name: "x".into(),
+            value: Value::Real(1.0),
+        }];
+        circuit.csparams = vec![ResolvedParam {
+            name: "x".into(),
+            value: Value::Real(99.0),
+        }];
+        let result = execute_control_block_ir(&circuit).expect("control runs");
+        // `.param` must not leak into the variable scope; only `.csparam`
+        // is seeded. The output must reflect the csparam value.
+        assert!(
+            result.output.contains("99"),
+            "expected csparam to win, got: {:?}",
+            result.output
+        );
+    }
+
+    /// End-to-end: `.csparam` parsed from SPICE text survives all the way
+    /// into the control-block executor's variable scope.
+    #[test]
+    fn csparam_round_trip_from_spice_to_control() {
+        let spice = "\
+csparam round trip
+.csparam gain=2.5
+V1 in 0 1
+R1 in mid 1k
+R2 mid 0 1k
+.control
+echo $gain
+quit 0
+.endc
+.op
+.end
+";
+        let circuits = cirq_spice_import::import_spice(spice).expect("import");
+        let result = execute_control_block_ir(&circuits[0]).expect("control runs");
+        assert_eq!(result.exit_code, 0);
+        assert!(
+            result.output.contains("2.5"),
+            "expected gain echoed as 2.5, got: {:?}",
+            result.output
+        );
     }
 }
