@@ -4,7 +4,12 @@
 //! Cirq IR. It enables gradual migration: existing SPICE files can be imported
 //! into the Cirq toolchain without manual rewriting.
 
+mod preprocess;
+
+pub use preprocess::{IncludeError, IncludeOptions};
+
 use std::collections::HashMap;
+use std::path::Path;
 
 use cirq_ir::{
     AcAnalysis, AcSpec as IrAcSpec, Analysis as IrAnalysis, BehavioralMode, Circuit, Connection,
@@ -56,6 +61,10 @@ pub enum ImportError {
     /// An analysis directive could not be lowered into the IR.
     #[error("unsupported analysis: {0}")]
     UnsupportedAnalysis(String),
+
+    /// `.include` / `.lib` resolution failed.
+    #[error("include resolution failed: {0}")]
+    Include(#[from] preprocess::IncludeError),
 }
 
 /// Parse the optional AC tail of `.sens output [AC DEC|OCT|LIN n fstart fstop]`.
@@ -1250,9 +1259,62 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
 }
 
 /// Parse SPICE source text and convert each resulting netlist into a `Circuit`.
+///
+/// `.include` and `.lib` directives in `source` are NOT resolved by this entry
+/// point — they are parsed as opaque [`Item::Include`] / [`Item::Lib`] values.
+/// To resolve them against the filesystem, use [`import_spice_with_options`]
+/// or [`import_spice_path`].
 pub fn import_spice(source: &str) -> Result<Vec<Circuit>, ImportError> {
     let netlists = Netlist::parse(source)?;
     netlists.iter().map(import_netlist).collect()
+}
+
+/// Parse SPICE source text with full `.include` / `.lib` resolution.
+///
+/// The preprocessor runs before the SPICE tokenizer and produces a flat
+/// netlist string. `opts` controls search paths, encoding tolerance, and the
+/// originating source directory. Pass `IncludeOptions::default()` to fall back
+/// to CWD-relative resolution.
+pub fn import_spice_with_options(
+    source: &str,
+    opts: &IncludeOptions,
+) -> Result<Vec<Circuit>, ImportError> {
+    let flattened = preprocess::preprocess_includes(source, opts)?;
+    let netlists = Netlist::parse(&flattened)?;
+    netlists.iter().map(import_netlist).collect()
+}
+
+/// Read a SPICE file from disk and import it, resolving `.include` / `.lib`
+/// relative to the file's directory and the supplied `lib_paths`.
+pub fn import_spice_path(
+    path: impl AsRef<Path>,
+    lib_paths: &[std::path::PathBuf],
+) -> Result<Vec<Circuit>, ImportError> {
+    let path = path.as_ref();
+    let bytes = std::fs::read(path).map_err(|e| {
+        ImportError::Include(preprocess::IncludeError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })
+    })?;
+    let source: String = match std::str::from_utf8(&bytes) {
+        Ok(s) => s.to_owned(),
+        Err(_) => {
+            eprintln!(
+                "warning: {} is not valid UTF-8; falling back to Latin-1 decoding",
+                path.display()
+            );
+            bytes.iter().map(|&b| b as char).collect()
+        }
+    };
+    let mut opts = IncludeOptions::new();
+    if let Some(dir) = path.parent() {
+        opts = opts.with_source_dir(dir);
+    }
+    for lp in lib_paths {
+        opts = opts.add_lib_path(lp.clone());
+    }
+    import_spice_with_options(&source, &opts)
 }
 
 // ---------------------------------------------------------------------------
