@@ -14,3 +14,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 cirq-frontend = { path = "../cirq-frontend" }
+tempfile = "3"
