@@ -90,7 +90,7 @@ pub fn four_analysis(
     vector_names: &[&str],
     num_harmonics: usize,
 ) -> Result<Vec<FourResult>, FourierError> {
-    if !(fundamental > 0.0) {
+    if fundamental <= 0.0 || fundamental.is_nan() {
         return Err(FourierError::InvalidFundamental(fundamental));
     }
     let times = real_vector(plot, "time")?;
@@ -246,7 +246,7 @@ pub fn fft_analysis(plot: &SimPlot, opts: &FftOptions) -> Result<Vec<FftResult>,
         .stop
         .unwrap_or(times[times.len() - 1])
         .min(times[times.len() - 1]);
-    if !(t1 > t0) {
+    if t1 <= t0 || t0.is_nan() || t1.is_nan() {
         return Err(FourierError::EmptyWindow {
             start: t0,
             stop: t1,
@@ -451,12 +451,12 @@ pub fn format_four_table(result: &FourResult) -> String {
         result.harmonics.len(),
         result.thd_percent
     ));
-    s.push_str(&format!(
-        "Harmonic   Frequency       Magnitude       Phase           Norm. Mag       Norm. Phase\n"
-    ));
-    s.push_str(&format!(
-        "--------   ---------       ---------       -----           ---------       -----------\n"
-    ));
+    s.push_str(
+        "Harmonic   Frequency       Magnitude       Phase           Norm. Mag       Norm. Phase\n",
+    );
+    s.push_str(
+        "--------   ---------       ---------       -----           ---------       -----------\n",
+    );
     s.push_str(&format!(
         " 0         {:.6}      {:.6}       {:>10.6}     {:>10}     {:>10}\n",
         0.0_f64, result.dc, 0.0_f64, "0", "0"
