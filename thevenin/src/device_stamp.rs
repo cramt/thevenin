@@ -23,6 +23,7 @@ use crate::mna::{MnaSystem, stamp_conductance};
 use crate::mos2::stamp_mos2;
 use crate::mosfet::{MosfetCompanion, mos_limit, stamp_mosfet};
 use crate::newton::NrMode;
+use crate::switch::SwitchState;
 use crate::vbic::{compute_self_heating_power, stamp_vbic_with_voltages};
 
 /// Bypass tolerance for nonlinear device re-evaluation, matching ngspice's
@@ -536,6 +537,10 @@ impl DeviceVoltageState {
                 prev[i] = hfet.junction_voltages(solution);
             }
         }
+        // Note: switch latched state persists across NR attempts and
+        // timesteps inside `SwitchInstance::latched_state` itself
+        // (interior-mutable `Cell`).  No reset is performed here — that
+        // would defeat the hysteresis tracking the model relies on.
     }
 
     /// Stamp all nonlinear device companion models into the MNA system.
@@ -1601,6 +1606,101 @@ impl DeviceVoltageState {
             // RHS: f(V*) - sum(df/dVi * Vi*) is the linearized constant term.
             // The base matrix already has +1/-1 for V(pos)-V(neg).
             system.rhs[branch] += f0 + rhs_adjust;
+        }
+
+        // Switches (S, W)
+        //
+        // The latched state lives on the instance itself (interior
+        // mutable `Cell`) so hysteresis carries across timesteps.
+        for switch in mna.switches.iter() {
+            let prev_state = switch.latched_state.get();
+            // Read the current control variable from the solution.
+            // For V-controlled: V(ctrl_pos) - V(ctrl_neg).
+            // For I-controlled: branch current of the sensing source.
+            let control = if init_jct {
+                // MODEINITJCT: bias the switch toward the threshold so
+                // the first iteration's hard decision settles
+                // immediately on the matching corner. Choose the
+                // OFF corner unless the instance was declared `ON`.
+                if matches!(prev_state, SwitchState::On) {
+                    switch.model.threshold + switch.model.hysteresis + 1.0
+                } else {
+                    switch.model.threshold - switch.model.hysteresis - 1.0
+                }
+            } else if let Some((cp, cn)) = switch.ctrl_nodes {
+                let v_cp = cp.map(|i| solution[i]).unwrap_or(0.0);
+                let v_cn = cn.map(|i| solution[i]).unwrap_or(0.0);
+                v_cp - v_cn
+            } else if let Some(br) = switch.ctrl_branch {
+                solution[br]
+            } else {
+                0.0
+            };
+
+            let (g, dg_dc, new_state) = switch.model.evaluate(control, prev_state);
+            switch.latched_state.set(new_state);
+
+            // The switch contributes a current
+            //     I = g(c) * (V(n+) - V(n-))
+            // between n+ and n-. Linearise about the current operating
+            // point so the NR system stays consistent:
+            //   I ≈ g0 (V(n+) - V(n-))
+            //       + dg/dc · (V(n+) - V(n-))_0 · (c - c0)
+            // The first term is the usual conductance stamp; the
+            // second is the off-diagonal Jacobian entry coupling the
+            // switch to its control variable.
+            let v_pos = switch.pos_idx.map(|i| solution[i]).unwrap_or(0.0);
+            let v_neg = switch.neg_idx.map(|i| solution[i]).unwrap_or(0.0);
+            let v_pn = v_pos - v_neg;
+            stamp_conductance(&mut system.matrix, switch.pos_idx, switch.neg_idx, g);
+
+            // dG/dc * v_pn = effective transconductance from the
+            // control variable into the switch branch. Only stamp
+            // when dg_dc is non-negligible — outside the hysteresis
+            // window it's exactly zero so we skip the work.
+            if dg_dc.abs() > 1e-30 {
+                let gm = dg_dc * v_pn;
+                if let Some((cp, cn)) = switch.ctrl_nodes {
+                    // V-controlled: gm couples ctrl_pos/ctrl_neg
+                    // columns into the n+/n- rows. The RHS
+                    // contribution is -gm * c0 (the standard NR
+                    // companion offset).
+                    let v_cp = cp.map(|i| solution[i]).unwrap_or(0.0);
+                    let v_cn = cn.map(|i| solution[i]).unwrap_or(0.0);
+                    let c0 = v_cp - v_cn;
+                    if let Some(p) = switch.pos_idx {
+                        if let Some(c) = cp {
+                            system.matrix.add(p, c, gm);
+                        }
+                        if let Some(c) = cn {
+                            system.matrix.add(p, c, -gm);
+                        }
+                        system.rhs[p] += gm * c0;
+                    }
+                    if let Some(n) = switch.neg_idx {
+                        if let Some(c) = cp {
+                            system.matrix.add(n, c, -gm);
+                        }
+                        if let Some(c) = cn {
+                            system.matrix.add(n, c, gm);
+                        }
+                        system.rhs[n] -= gm * c0;
+                    }
+                } else if let Some(br) = switch.ctrl_branch {
+                    // I-controlled: control variable is a branch
+                    // current row. Coupling has the same shape but
+                    // hits one matrix column.
+                    let c0 = solution[br];
+                    if let Some(p) = switch.pos_idx {
+                        system.matrix.add(p, br, gm);
+                        system.rhs[p] += gm * c0;
+                    }
+                    if let Some(n) = switch.neg_idx {
+                        system.matrix.add(n, br, -gm);
+                        system.rhs[n] -= gm * c0;
+                    }
+                }
+            }
         }
 
         // XSPICE code model instances

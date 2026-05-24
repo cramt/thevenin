@@ -88,10 +88,10 @@ Transient waveforms supported on V and I (all six from
 
 ## Switches
 
-| Type | SPICE letter | thevenin status | Notes |
-|---|---|---|---|
-| Voltage-controlled switch | S | **not implemented** — in 1.0 scope | Currently rejected by importer; no stamping path. |
-| Current-controlled switch | W | **not implemented** — in 1.0 scope | Same. |
+| Type | SPICE letter | thevenin status | Source file | Notes |
+|---|---|---|---|---|
+| Voltage-controlled switch | S | implemented | [switch.rs](../thevenin/src/switch.rs) | `.model NAME SW (Vt=… Vh=… Ron=… Roff=…)`. Hysteretic conductance; latched state carries across NR iterations + timesteps. `VSWITCH` accepted as a model-kind alias. |
+| Current-controlled switch | W | implemented | [switch.rs](../thevenin/src/switch.rs) | `.model NAME CSW (It=… Ih=… Ron=… Roff=…)`. Senses branch current through a named voltage source. `ISWITCH` accepted as a model-kind alias. |
 
 ## XSPICE code models
 
@@ -124,7 +124,6 @@ tree currently has no implementation:
 - **MOSFET Level 3** — checklist claims it; [mna_ir.rs](../thevenin/src/mna_ir.rs)
   has no `level == 3` branch (silently degrades to Level 1). Either implement
   the port or correct the checklist.
-- **Switches S, W** (voltage-controlled, current-controlled).
 - **URC** transmission line (`U` element).
 - **Ideal lossless line** (`T` element).
 - **BSIM1**, **BSIM2** MOSFET levels.

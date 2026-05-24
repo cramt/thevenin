@@ -536,6 +536,28 @@ pub enum ElementKind {
         connections: Vec<XspiceConnection>,
         model: String,
     },
+    /// `Sname n+ n- nc+ nc- model [ON|OFF]` (voltage-controlled switch).
+    VSwitch {
+        pos: String,
+        neg: String,
+        ctrl_pos: String,
+        ctrl_neg: String,
+        model: String,
+        /// Optional initial state. `Some(true)` = ON, `Some(false)` = OFF,
+        /// `None` = unspecified (the model defaults take over).
+        on: Option<bool>,
+        params: Vec<Param>,
+    },
+    /// `Wname n+ n- vsense model [ON|OFF]` (current-controlled switch).
+    ISwitch {
+        pos: String,
+        neg: String,
+        /// Name of the sensing voltage source (the W element reads its current).
+        vsense: String,
+        model: String,
+        on: Option<bool>,
+        params: Vec<Param>,
+    },
     /// Any element type not explicitly handled — stored verbatim after name.
     Raw(String),
 }
@@ -771,6 +793,35 @@ impl fmt::Display for Element {
                     write!(f, " {conn}")?;
                 }
                 write!(f, " {model}")
+            }
+            ElementKind::VSwitch {
+                pos,
+                neg,
+                ctrl_pos,
+                ctrl_neg,
+                model,
+                on,
+                params,
+            } => {
+                write!(f, "{} {pos} {neg} {ctrl_pos} {ctrl_neg} {model}", self.name)?;
+                if let Some(state) = on {
+                    write!(f, " {}", if *state { "ON" } else { "OFF" })?;
+                }
+                write_params(f, params)
+            }
+            ElementKind::ISwitch {
+                pos,
+                neg,
+                vsense,
+                model,
+                on,
+                params,
+            } => {
+                write!(f, "{} {pos} {neg} {vsense} {model}", self.name)?;
+                if let Some(state) = on {
+                    write!(f, " {}", if *state { "ON" } else { "OFF" })?;
+                }
+                write_params(f, params)
             }
             ElementKind::Raw(rest) => {
                 write!(f, "{} {rest}", self.name)

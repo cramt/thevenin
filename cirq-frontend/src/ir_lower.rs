@@ -119,6 +119,12 @@ fn standard_pins(kind: &ElementKind) -> &'static [&'static str] {
         ElementKind::Coupling => &[],
         // CoupledLine and Xspice have variable-width connections; no static pin list.
         ElementKind::CoupledLine { .. } | ElementKind::Xspice { .. } => &[],
+        // Switches: voltage-controlled exposes 4 pins, current-controlled
+        // exposes 2 (the control variable is a branch current). Cirq
+        // source code addresses switches by name in the `code` block
+        // rather than via positional Cirq syntax (B1 spec hasn't shipped
+        // switch syntax yet), so positional lowering isn't used here.
+        ElementKind::Switch { .. } => &[],
     }
 }
 

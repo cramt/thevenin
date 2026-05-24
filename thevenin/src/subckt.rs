@@ -595,6 +595,38 @@ fn remap_element(
                 .collect(),
             model: model.clone(),
         },
+        ElementKind::VSwitch {
+            pos,
+            neg,
+            ctrl_pos,
+            ctrl_neg,
+            model,
+            on,
+            params,
+        } => ElementKind::VSwitch {
+            pos: remap(pos),
+            neg: remap(neg),
+            ctrl_pos: remap(ctrl_pos),
+            ctrl_neg: remap(ctrl_neg),
+            model: model.clone(),
+            on: *on,
+            params: resolve_params(params, param_map),
+        },
+        ElementKind::ISwitch {
+            pos,
+            neg,
+            vsense,
+            model,
+            on,
+            params,
+        } => ElementKind::ISwitch {
+            pos: remap(pos),
+            neg: remap(neg),
+            vsense: format!("{}.{}", prefix, vsense.to_lowercase()),
+            model: model.clone(),
+            on: *on,
+            params: resolve_params(params, param_map),
+        },
         ElementKind::Raw(s) => ElementKind::Raw(s.clone()),
     };
 

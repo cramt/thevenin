@@ -76,6 +76,7 @@ pub mod mesfet;
 pub mod mos2;
 pub mod mos6;
 pub mod mosfet;
+pub mod switch;
 pub mod txl;
 pub mod vbic;
 

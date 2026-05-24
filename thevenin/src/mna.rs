@@ -298,6 +298,10 @@ pub struct MnaSystem {
     pub xspice_instances: Vec<XspiceInstance>,
     /// XSPICE code model registry (shared across instances).
     pub xspice_registry: Option<Arc<CodeModelRegistry>>,
+    /// Resolved voltage- and current-controlled switch instances
+    /// (SPICE S / W elements). Stamped through the NR loop because
+    /// conductance depends nonlinearly on the control variable.
+    pub switches: Vec<crate::switch::SwitchInstance>,
 }
 
 impl MnaSystem {
@@ -342,6 +346,7 @@ impl MnaSystem {
             behavioral_voltage_sources: Vec::new(),
             xspice_instances: Vec::new(),
             xspice_registry,
+            switches: Vec::new(),
         }
     }
 
@@ -378,6 +383,7 @@ impl MnaSystem {
             || !self.behavioral_sources.is_empty()
             || !self.behavioral_voltage_sources.is_empty()
             || !self.xspice_instances.is_empty()
+            || !self.switches.is_empty()
     }
 
     /// Total number of nodes including internal nodes created by nonlinear
@@ -3282,6 +3288,12 @@ fn assemble_mna_flat(
         behavioral_voltage_sources,
         xspice_instances,
         xspice_registry,
+        // Legacy Netlist path does not stamp S/W switches yet — switches
+        // are exclusively handled via the `cirq_ir::Circuit` IR path
+        // (see `thevenin::mna_ir::assemble_mna_from_circuit`). Leave the
+        // bucket empty so downstream `has_nonlinear()` and NR stamping
+        // skip over it cleanly.
+        switches: Vec::new(),
     })
 }
 
