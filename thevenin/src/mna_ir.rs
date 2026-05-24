@@ -16,8 +16,8 @@
 //! Bit-for-bit equivalence with the lowered path is pinned by
 //! `thevenin-cirq/tests/direct_path_equivalence.rs`.
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use cirq_frontend::to_netlist::{convert_model, convert_source_spec, extra_params, value_to_expr};
 use cirq_ir::{
@@ -57,6 +57,41 @@ use crate::mosfet::{MosfetInstance, MosfetModel};
 use crate::newton::NrOptions;
 use crate::txl::{TxlInstance, TxlModel, setup_txline};
 use crate::vbic::{VbicInstance, VbicModel};
+
+/// Emit a one-time stderr warning when a MOSFET model declares a LEVEL that
+/// this build does not yet implement. The warning is deduplicated per
+/// `(model_name, level)` pair across the entire run so it does not flood the
+/// log on every NR iteration or two-pass MNA build.
+///
+/// The fallthrough silently degrades to Level 1 (Shichman-Hodges) for
+/// backwards compatibility — see `docs/devices.md` MOSFET table — but the
+/// user is now told exactly which model and level triggered it.
+pub(crate) fn warn_unhandled_mosfet_level(model_name: Option<&str>, level: i32) {
+    // Levels currently dispatched explicitly. Keep in sync with the
+    // `if/else if` ladders in this module and `mna.rs`.
+    const HANDLED: &[i32] = &[1, 2, 6, 8, 49, 14, 54, 55, 56, 57];
+    if HANDLED.contains(&level) {
+        return;
+    }
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let key = format!("{}|{}", model_name.unwrap_or("<unnamed>"), level);
+    let mut guard = match seen.lock() {
+        Ok(g) => g,
+        // If the mutex is poisoned (test parallelism + a prior panic), still
+        // emit the warning rather than swallow it silently.
+        Err(p) => p.into_inner(),
+    };
+    if guard.insert(key) {
+        eprintln!(
+            "[thevenin] WARNING: MOSFET model `{}` declares LEVEL={} which is \
+             not implemented — falling back to Level 1 (Shichman-Hodges). \
+             This may produce inaccurate results.",
+            model_name.unwrap_or("<unnamed>"),
+            level
+        );
+    }
+}
 
 /// Extract Newton-Raphson options from a circuit's `options` field.
 ///
@@ -1229,6 +1264,7 @@ fn stamp_circuit(
                     resolve_model_with_bins(&models_map, &bins_map, name, inst_l, inst_w)
                 });
                 let level = get_mosfet_level(resolved.as_ref(), &params_nl);
+                warn_unhandled_mosfet_level(model_name.as_deref(), level);
 
                 if level == 8 || level == 49 {
                     let bm = resolved
@@ -2250,6 +2286,7 @@ fn stamp_circuit(
                     .as_deref()
                     .and_then(|name| resolve_model_with_bins(&models_map, &bins_map, name, l, w));
                 let level = get_mosfet_level(resolved.as_ref(), &params_nl);
+                warn_unhandled_mosfet_level(model_name.as_deref(), level);
 
                 if level == 8 || level == 49 {
                     // BSIM3.
