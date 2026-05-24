@@ -85,6 +85,15 @@ pub enum Statement {
         exprs: Vec<String>,
         file: Option<String>,
     },
+    /// `write [filename] [vector_list]` — write simulation results to a
+    /// file. With no filename defaults to `thevenin.raw`; with no vector
+    /// list saves all vectors from the current plot. Format is determined
+    /// by extension: `.csv` → CSV, anything else → ngspice raw (binary
+    /// unless the `filetype` variable is set to `ascii`).
+    Write {
+        file: Option<String>,
+        vectors: Vec<String>,
+    },
     /// Simulation commands: op, dc, ac, tran, sens, noise, pz, tf
     RunAnalysis(String),
     /// `eprint ...` — print element info (treated as echo for now)
@@ -229,6 +238,7 @@ fn parse_statement(
         "alter" => parse_alter(rest),
         "strcmp" => parse_strcmp(rest),
         "print" => parse_print(rest),
+        "write" => Ok(parse_write(rest)),
         "eprint" | "eprvcd" => Ok(Statement::Eprint(
             rest.split_whitespace().map(|s| s.to_string()).collect(),
         )),
@@ -557,6 +567,34 @@ fn parse_print(rest: &str) -> Result<Statement, String> {
         .map(|s| s.to_string())
         .collect();
     Ok(Statement::Print { exprs, file })
+}
+
+/// Parse `write [filename] [vec1 vec2 ...]`. The first token (if any) is
+/// treated as the filename when it looks like one (contains `.` or `/`,
+/// or has no parens / no `$`); otherwise it's part of the vector list and
+/// the default filename `thevenin.raw` is used.
+fn parse_write(rest: &str) -> Statement {
+    let parts: Vec<&str> = rest.split_whitespace().collect();
+    if parts.is_empty() {
+        return Statement::Write {
+            file: None,
+            vectors: Vec::new(),
+        };
+    }
+    let first = parts[0];
+    let looks_like_filename = first.contains('.')
+        || first.contains('/')
+        || first.contains('\\')
+        || (!first.contains('(') && !first.starts_with('$') && !first.starts_with('@'));
+    let (file, vectors) = if looks_like_filename {
+        (
+            Some(first.to_string()),
+            parts[1..].iter().map(|s| s.to_string()).collect(),
+        )
+    } else {
+        (None, parts.iter().map(|s| s.to_string()).collect())
+    };
+    Statement::Write { file, vectors }
 }
 
 /// Parse `stop when <condition>`. Only `stop when time = <value>` is supported
@@ -1023,6 +1061,77 @@ mod tests {
                 assert!(file.is_none());
             }
             other => panic!("expected Print, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_write_no_args() {
+        match parse_write("") {
+            Statement::Write { file, vectors } => {
+                assert!(file.is_none());
+                assert!(vectors.is_empty());
+            }
+            other => panic!("expected Write, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_write_with_filename_only() {
+        match parse_write("results.raw") {
+            Statement::Write { file, vectors } => {
+                assert_eq!(file.as_deref(), Some("results.raw"));
+                assert!(vectors.is_empty());
+            }
+            other => panic!("expected Write, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_write_with_filename_and_vectors() {
+        match parse_write("out.raw v(out) i(v1)") {
+            Statement::Write { file, vectors } => {
+                assert_eq!(file.as_deref(), Some("out.raw"));
+                assert_eq!(vectors, vec!["v(out)".to_string(), "i(v1)".to_string()]);
+            }
+            other => panic!("expected Write, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_write_vectors_only_uses_default_filename() {
+        // `v(out)` looks like a vector (has parens), so no filename is
+        // captured and the executor falls back to thevenin.raw.
+        match parse_write("v(out) i(v1)") {
+            Statement::Write { file, vectors } => {
+                assert!(file.is_none(), "no filename inferred from vector list");
+                assert_eq!(vectors, vec!["v(out)".to_string(), "i(v1)".to_string()]);
+            }
+            other => panic!("expected Write, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_write_csv_filename() {
+        match parse_write("out.csv v(a) v(b)") {
+            Statement::Write { file, vectors } => {
+                assert_eq!(file.as_deref(), Some("out.csv"));
+                assert_eq!(vectors.len(), 2);
+            }
+            other => panic!("expected Write, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_write_routed_through_top_level_parser() {
+        // The `parse_statement` dispatcher should route `write` correctly.
+        let stmts = parse_control_block(&["write out.raw v(out)".to_string(), ".endc".to_string()])
+            .unwrap();
+        match &stmts[0] {
+            Statement::Write { file, vectors } => {
+                assert_eq!(file.as_deref(), Some("out.raw"));
+                assert_eq!(vectors, &vec!["v(out)".to_string()]);
+            }
+            other => panic!("expected Write, got {:?}", other),
         }
     }
 

@@ -229,6 +229,8 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
 
         Statement::RunAnalysis(cmd_line) => run_analysis(cmd_line, ctx),
 
+        Statement::Write { file, vectors } => execute_write(file.as_deref(), vectors, ctx),
+
         Statement::Alter { spec, value } => execute_alter(spec, value, ctx),
 
         Statement::Eprint(_) => {
@@ -458,6 +460,82 @@ fn execute_resume(ctx: &mut SimContext) -> Result<(), String> {
             vecs: resumed_vecs,
         });
     }
+    Ok(())
+}
+
+/// Execute the `write` control command. Mirrors ngspice's behaviour:
+/// no filename ⇒ `thevenin.raw`, no vector list ⇒ everything in the
+/// current plot. Format is `.csv` → CSV, anything else → ngspice raw.
+/// Within raw, the `filetype` variable (`ascii` / `binary`) chooses ASCII
+/// vs binary; default is binary, matching ngspice.
+///
+/// Vector filtering only applies inside the current plot — other plots
+/// in the `SimResult` are emitted in full so multi-analysis sessions
+/// produce a faithful multi-plot raw file.
+fn execute_write(
+    file: Option<&str>,
+    vectors: &[String],
+    ctx: &mut SimContext,
+) -> Result<(), String> {
+    let filename = file
+        .map(|f| interpolate_vars(f, ctx))
+        .unwrap_or_else(|| "thevenin.raw".to_string());
+
+    // Build a SimResult holding the plots we want to write. By default
+    // that's `ctx.plots` verbatim. When the user specified a vector list,
+    // filter the *current* plot down to those vectors (matching the
+    // ngspice command's behaviour); leave other plots intact.
+    let title = ctx
+        .circuit()
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| "thevenin".to_string());
+
+    let mut plots: Vec<SimPlot> = ctx.plots.clone();
+    if !vectors.is_empty()
+        && let Some(idx) = ctx.current_plot
+        && let Some(plot) = plots.get_mut(idx)
+    {
+        let wanted: Vec<String> = vectors.iter().map(|v| v.to_lowercase()).collect();
+        plot.vecs.retain(|v| {
+            let lower = v.name.to_lowercase();
+            // Match either the literal name or an `i(<x>)` against
+            // `<x>#branch`.
+            wanted.iter().any(|w| {
+                if &lower == w {
+                    return true;
+                }
+                if let Some(stripped) = w.strip_prefix("i(").and_then(|s| s.strip_suffix(')'))
+                    && lower == format!("{stripped}#branch")
+                {
+                    return true;
+                }
+                false
+            })
+        });
+    }
+
+    let result = SimResult { plots };
+
+    // Pick format by filename extension, then by `filetype` set var.
+    let lower = filename.to_lowercase();
+    let csv = lower.ends_with(".csv");
+    let ascii_raw = !csv
+        && ctx
+            .variables
+            .get("filetype")
+            .map(|s| s.eq_ignore_ascii_case("ascii"))
+            .unwrap_or(false);
+
+    let mut file = std::fs::File::create(&filename)
+        .map_err(|e| format!("write: cannot create '{filename}': {e}"))?;
+    let write_result = if csv {
+        thevenin::raw_output::write_csv(&mut file, &result)
+    } else if ascii_raw {
+        thevenin::raw_output::write_ascii_raw(&mut file, &result, &title)
+    } else {
+        thevenin::raw_output::write_binary_raw(&mut file, &result, &title)
+    };
+    write_result.map_err(|e| format!("write: I/O error on '{filename}': {e}"))?;
     Ok(())
 }
 

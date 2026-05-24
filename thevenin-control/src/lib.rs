@@ -660,4 +660,60 @@ quit 0
             result.output
         );
     }
+
+    /// The `write` control command should drop a real file on disk. Using a
+    /// unique temp filename so parallel test runs don't collide.
+    #[test]
+    fn write_command_emits_raw_file() {
+        let path =
+            std::env::temp_dir().join(format!("thevenin_write_test_{}.raw", std::process::id()));
+        let path_str = path.to_string_lossy().into_owned();
+        // Clean up any stale fixture from a previous failed run.
+        let _ = std::fs::remove_file(&path);
+
+        let circuit = divider_with_control(vec![
+            "op".into(),
+            format!("write {path_str}"),
+            "quit 0".into(),
+        ]);
+        let result = execute_control_block_ir(&circuit).expect("control runs");
+        assert_eq!(result.exit_code, 0);
+
+        let bytes = std::fs::read(&path).expect("raw file written");
+        // Binary raw by default — header is text, payload is bytes.
+        let header_end = bytes
+            .windows(b"Binary:\n".len())
+            .position(|w| w == b"Binary:\n")
+            .expect("Binary: marker present");
+        let header = std::str::from_utf8(&bytes[..header_end]).expect("header is utf-8");
+        assert!(header.contains("Plotname: Operating Point"));
+        assert!(header.contains("v(mid)"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// `.csv` extension switches the writer to CSV regardless of `filetype`.
+    #[test]
+    fn write_command_csv_extension() {
+        let path =
+            std::env::temp_dir().join(format!("thevenin_write_test_{}.csv", std::process::id()));
+        let path_str = path.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&path);
+
+        let circuit = divider_with_control(vec![
+            "op".into(),
+            format!("write {path_str}"),
+            "quit 0".into(),
+        ]);
+        let result = execute_control_block_ir(&circuit).expect("control runs");
+        assert_eq!(result.exit_code, 0);
+
+        let text = std::fs::read_to_string(&path).expect("csv written");
+        let mut lines = text.lines();
+        let header = lines.next().expect("header row");
+        assert!(
+            header.contains("v(mid)"),
+            "csv header lists v(mid): {header:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
 }

@@ -86,6 +86,7 @@ pub mod circuit;
 pub mod expr;
 pub mod libproc;
 pub mod output;
+pub mod raw_output;
 pub mod subckt;
 
 // ── Crate-internal re-exports (used across internal modules via `crate::`) ───
