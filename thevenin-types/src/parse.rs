@@ -78,6 +78,20 @@ fn strip_inline_comment(s: &str) -> &str {
 
 /// Convert raw text into logical lines (continuations folded, comments
 /// stripped, blank lines discarded).
+///
+/// Continuation forms supported:
+///   * Classic SPICE `+` at the start of the next line (after comment-
+///     stripping); appended to the last non-comment logical line with a
+///     single space separator.
+///   * HSPICE/PSpice trailing-backslash `\\` at end-of-line (after stripping
+///     comments). The next line is glued onto the current line without
+///     inserting any extra whitespace — any space that should appear in
+///     the joined result must be present before the `\\` on the prior line.
+///     Mid-line `\\` is NOT a continuation; only the backslash that is the
+///     last non-whitespace character (after comment stripping) on a line
+///     triggers folding. A line that is just `\\` is a continuation
+///     marker: the next line continues from where the previous logical
+///     line ended.
 fn preprocess(input: &str) -> Vec<(usize, String)> {
     // (original_line_number, logical_line_text)
     let mut out: Vec<(usize, String)> = Vec::new();
@@ -85,6 +99,10 @@ fn preprocess(input: &str) -> Vec<(usize, String)> {
     // Index into `out` of the last non-comment logical line, for attaching
     // continuation lines past comment lines.
     let mut last_noncomment: Option<usize> = None;
+
+    // When the previous logical line ended with `\`, the next non-blank
+    // logical line is appended onto it instead of pushed as a fresh line.
+    let mut pending_backslash = false;
 
     // Inside .control/.endc blocks, pass lines through verbatim — the `$`
     // character is used for variable references, not inline comments.
@@ -96,6 +114,7 @@ fn preprocess(input: &str) -> Vec<(usize, String)> {
         if trimmed_upper.starts_with(".CONTROL") {
             in_control = true;
             last_noncomment = Some(out.len());
+            pending_backslash = false;
             out.push((lineno + 1, raw.trim().to_string()));
             continue;
         }
@@ -111,27 +130,73 @@ fn preprocess(input: &str) -> Vec<(usize, String)> {
             continue;
         }
 
-        let line = strip_inline_comment(raw).trim();
-        if line.is_empty() {
+        // Strip inline comments but leave trailing whitespace intact, so the
+        // backslash check below can see whether `\` is the final non-space
+        // character on the line and so an authoring `R1 1 \` keeps the
+        // space before the backslash for the join.
+        let stripped = strip_inline_comment(raw);
+        // Need an owned, leading-trimmed string so we can detect the prefix
+        // (`+`, `*`, bare `\`) without losing the trailing space that the
+        // user put before `\`.
+        let leading_trimmed = stripped.trim_start();
+        if leading_trimmed.is_empty() {
             continue;
         }
-        if let Some(stripped) = line.strip_prefix('+') {
-            // Continuation: append to the last non-comment logical line.
-            // Standard SPICE allows comment lines between a statement and its
-            // continuation lines (e.g. `*+ commented-out param` before `+ real=val`).
+
+        // Detect end-of-line backslash continuation. The backslash must be
+        // the last non-whitespace character; whitespace *between* the
+        // backslash and the newline is allowed (and the trailing-whitespace
+        // gap before `\` is preserved in `payload` so users control the
+        // join spacing).
+        let trimmed_for_eol = leading_trimmed.trim_end();
+        let (payload, has_trailing_backslash) =
+            if let Some(without_bs) = trimmed_for_eol.strip_suffix('\\') {
+                (without_bs, true)
+            } else {
+                (leading_trimmed, false)
+            };
+
+        if pending_backslash {
+            // The previous logical line ended with `\` — glue this payload
+            // verbatim. No implicit separator: callers control join
+            // spacing by leaving (or not leaving) whitespace before the
+            // backslash on the preceding line. A leading `+` is stripped
+            // so mixed `\` + `+` continuation forms produce a clean join.
+            let glued: &str = payload.strip_prefix('+').unwrap_or(payload);
+            if !glued.is_empty()
+                && let Some(idx) = last_noncomment
+            {
+                out[idx].1.push_str(glued);
+            }
+            pending_backslash = has_trailing_backslash;
+            continue;
+        }
+
+        if let Some(after_plus) = payload.strip_prefix('+') {
+            // Classic SPICE `+` continuation: append to the last
+            // non-comment logical line with a single space separator.
+            // Comment lines between a statement and its continuation
+            // (e.g. `*+ commented-out param`) are tolerated.
             if let Some(idx) = last_noncomment {
                 out[idx].1.push(' ');
-                out[idx].1.push_str(stripped.trim());
+                out[idx].1.push_str(after_plus.trim());
             }
             // If there's no previous non-comment line, silently drop it.
-        } else if line.starts_with('*') {
-            // Full-line comment: keep in output (produces Item::Comment) but
-            // do NOT update last_noncomment so that subsequent '+' lines
-            // still attach to the previous non-comment line.
-            out.push((lineno + 1, line.to_string()));
+            pending_backslash = has_trailing_backslash;
+        } else if payload.starts_with('*') {
+            // Full-line comment: keep in output (produces Item::Comment)
+            // but do NOT update last_noncomment so subsequent `+` lines
+            // still attach to the previous non-comment line. A trailing
+            // `\` on a comment line is treated as part of the comment.
+            out.push((lineno + 1, payload.to_string()));
+            pending_backslash = false;
+        } else if payload.is_empty() {
+            // Bare `\` line: continuation marker only, no payload.
+            pending_backslash = has_trailing_backslash;
         } else {
             last_noncomment = Some(out.len());
-            out.push((lineno + 1, line.to_string()));
+            out.push((lineno + 1, payload.to_string()));
+            pending_backslash = has_trailing_backslash;
         }
     }
 
@@ -1852,6 +1917,20 @@ fn parse_dot(
         // is handled higher up as an alias for `.save`.
         ".PRINT" | ".PLOT" | ".WIDTH" => Ok(ParsedLine::Item(Item::Raw(line.to_string()))),
 
+        // `.step` (PSPICE-style parametric sweep): parsed-with-diagnostic.
+        // We don't execute the sweep in 1.0 — users are expected to lower a
+        // `.step` invocation to a `.control` `foreach`/`while` loop — but we
+        // tolerate the directive so industrial netlists don't fail to import
+        // and emit a stderr warning so the omission is visible. See
+        // docs/1.0-checklist.md §C3.
+        ".STEP" => {
+            eprintln!(
+                "[thevenin-types] line {lineno}: .step is parsed but not executed in 1.0 \
+                 (use a `.control` loop for parametric sweeps): {line}"
+            );
+            Ok(ParsedLine::Item(Item::Raw(line.to_string())))
+        }
+
         // Graceful unknown-directive policy (1.0 checklist C6): match
         // ngspice's behaviour of "unknown directive ⇒ warning, ignored".
         // We preserve the line as raw so downstream tooling sees the
@@ -2023,6 +2102,79 @@ mod tests {
         } else {
             panic!("expected Model, got {:?}", n.items[0]);
         }
+    }
+
+    #[test]
+    fn backslash_continuation_model_mixed_with_plus() {
+        // HSPICE/PSpice-style trailing-backslash continuation mixed with the
+        // classic `+` form. Both should fold into one logical line so the
+        // model picks up both VTO and KP. The space before `\\` is what
+        // separates `VTO=1` from the next `+`-continued token.
+        let n = parse_ok("Title\n.model NMOD NMOS VTO=1 \\\n+ KP=2\n.end");
+        assert_eq!(n.items.len(), 1, "items: {:?}", n.items);
+        if let Item::Model(m) = &n.items[0] {
+            let vto = m.params.iter().find(|p| p.name.eq_ignore_ascii_case("VTO"));
+            let kp = m.params.iter().find(|p| p.name.eq_ignore_ascii_case("KP"));
+            assert!(vto.is_some(), "VTO missing, params={:?}", m.params);
+            assert!(kp.is_some(), "KP missing, params={:?}", m.params);
+        } else {
+            panic!("expected Model, got {:?}", n.items[0]);
+        }
+    }
+
+    #[test]
+    fn backslash_continuation_element_line() {
+        // `R1 1 \` on one line then `2 1k` on the next should fold to
+        // `R1 1 2 1k`.
+        let n = parse_ok("Title\nR1 1 \\\n2 1k\n.end");
+        let elem = n.elements().next().expect("at least one element expected");
+        assert_eq!(elem.name, "R1");
+        if let ElementKind::Resistor { value, .. } = &elem.kind {
+            match value {
+                crate::Expr::Num(v) => assert_abs_diff_eq!(*v, 1e3, epsilon = 1e-9),
+                other => panic!("expected numeric value, got {other:?}"),
+            }
+        } else {
+            panic!("expected Resistor, got {:?}", elem.kind);
+        }
+    }
+
+    #[test]
+    fn step_directive_parses_without_failing() {
+        // `.step` is recognised but not executed; it must not break parse.
+        // Use a Netlist::parse call directly so we exercise the dispatcher.
+        let result = Netlist::parse("Title\n.step VGS 0 1 0.1\nR1 a 0 1k\n.end");
+        assert!(result.is_ok(), "expected .step to parse, got {result:?}");
+        let netlists = result.unwrap();
+        let raw = netlists[0].items.iter().any(
+            |item| matches!(item, Item::Raw(s) if s.to_ascii_uppercase().starts_with(".STEP")),
+        );
+        assert!(raw, "expected .step preserved as Item::Raw");
+    }
+
+    #[test]
+    fn backslash_continuation_in_param_expression() {
+        // `.param X={1+\` then `2}` should fold without injecting whitespace
+        // so the brace expression stays a single contiguous token. The
+        // resulting `.param X={1+2}` must produce an `Expr::Brace("1+2")`
+        // entry — proof that the continuation didn't split the brace
+        // across tokens.
+        let n = parse_ok("Title\n.param X={1+\\\n2}\n.end");
+        let found = n.items.iter().any(|item| {
+            if let Item::Param(params) = item {
+                params.iter().any(|p| {
+                    p.name.eq_ignore_ascii_case("X")
+                        && matches!(&p.value, crate::Expr::Brace(s) if s.trim() == "1+2")
+                })
+            } else {
+                false
+            }
+        });
+        assert!(
+            found,
+            "expected .param X = Expr::Brace(\"1+2\"), got {:?}",
+            n.items
+        );
     }
 
     #[test]

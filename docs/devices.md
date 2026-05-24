@@ -53,7 +53,7 @@ Transient waveforms supported on V and I (all six from
 |---|---|---|---|---|
 | Shichman-Hodges | 1 | implemented | [mosfet.rs](../thevenin/src/mosfet.rs) | Default when no LEVEL is supplied. Body effect (GAMMA), channel-length modulation (LAMBDA), bulk diodes. |
 | Grove-Frohman | 2 | implemented | [mos2.rs](../thevenin/src/mos2.rs) | Velocity saturation, short/narrow channel effects, subthreshold conduction. |
-| MOS3 (semi-empirical) | 3 | **not implemented** | — | Checklist A1 claims this is done, but [mna_ir.rs](../thevenin/src/mna_ir.rs) has no `level == 3` branch — Level-3 models fall through to the Level-1 default. Worth fixing or correcting the checklist. |
+| MOS3 (semi-empirical) | 3 | **not implemented** | — | Checklist A1 claims this is done, but [mna_ir.rs](../thevenin/src/mna_ir.rs) has no `level == 3` branch — Level-3 (and any other unhandled LEVEL) models fall through to the Level-1 default, and the importer now emits an explicit one-time stderr warning naming the model and the unhandled level (deduplicated per `(model, level)` pair) so users notice rather than silently getting Level-1 behaviour. |
 | Sakurai-Newton n-th power | 6 | implemented | [mos6.rs](../thevenin/src/mos6.rs) | Exponential I-V instead of quadratic. |
 | BSIM3v3 | 8 / 49 | implemented | [bsim3.rs](../thevenin/src/bsim3.rs) | BSIM3v3.2.4. Both LEVEL=8 and LEVEL=49 dispatch here. Size-dependent params + W/L binning. |
 | BSIM4 | 14 / 54 | implemented | [bsim4.rs](../thevenin/src/bsim4.rs) | Gate tunneling current, GIDL/GISL, advanced capacitance, RDSMOD external R nodes. |
@@ -122,8 +122,10 @@ Items the checklist tags as in-scope for the 1.0 cut but where the source
 tree currently has no implementation:
 
 - **MOSFET Level 3** — checklist claims it; [mna_ir.rs](../thevenin/src/mna_ir.rs)
-  has no `level == 3` branch (silently degrades to Level 1). Either implement
-  the port or correct the checklist.
+  has no `level == 3` branch. Level-3 (and any other unhandled level)
+  silently degrades to Level 1 but now emits an explicit, deduplicated
+  stderr warning naming the offending model and level. Either implement the
+  port or correct the checklist.
 - **URC** transmission line (`U` element).
 - **Ideal lossless line** (`T` element).
 - **BSIM1**, **BSIM2** MOSFET levels.

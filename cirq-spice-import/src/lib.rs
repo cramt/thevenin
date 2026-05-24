@@ -199,7 +199,7 @@ fn expr_to_f64(expr: &Expr, params: &HashMap<String, f64>) -> Result<f64, Import
 fn eval_brace_expr(input: &str, params: &HashMap<String, f64>) -> Result<f64, ImportError> {
     let tokens = tokenize_expr(input);
     let mut pos = 0;
-    let result = parse_add_sub(&tokens, &mut pos, params)?;
+    let result = parse_ternary(&tokens, &mut pos, params)?;
     if pos < tokens.len() {
         return Err(ImportError::UnevaluableExpr(format!(
             "unexpected token in brace expression: {input}"
@@ -218,6 +218,12 @@ enum ExprToken {
     LParen,
     RParen,
     Comma,
+    /// Comparison operator. Stored as the canonical 1- or 2-byte form
+    /// (`>`, `<`, `>=`, `<=`, `==`, `!=`).
+    Cmp(&'static str),
+    /// Ternary delimiters.
+    Question,
+    Colon,
 }
 
 /// Tokenize a SPICE expression string.
@@ -255,6 +261,40 @@ fn tokenize_expr(input: &str) -> Vec<ExprToken> {
             '+' | '-' | '/' => {
                 tokens.push(ExprToken::Op(chars[i]));
                 i += 1;
+            }
+            '?' => {
+                tokens.push(ExprToken::Question);
+                i += 1;
+            }
+            ':' => {
+                tokens.push(ExprToken::Colon);
+                i += 1;
+            }
+            '>' => {
+                if i + 1 < chars.len() && chars[i + 1] == '=' {
+                    tokens.push(ExprToken::Cmp(">="));
+                    i += 2;
+                } else {
+                    tokens.push(ExprToken::Cmp(">"));
+                    i += 1;
+                }
+            }
+            '<' => {
+                if i + 1 < chars.len() && chars[i + 1] == '=' {
+                    tokens.push(ExprToken::Cmp("<="));
+                    i += 2;
+                } else {
+                    tokens.push(ExprToken::Cmp("<"));
+                    i += 1;
+                }
+            }
+            '=' if i + 1 < chars.len() && chars[i + 1] == '=' => {
+                tokens.push(ExprToken::Cmp("=="));
+                i += 2;
+            }
+            '!' if i + 1 < chars.len() && chars[i + 1] == '=' => {
+                tokens.push(ExprToken::Cmp("!="));
+                i += 2;
             }
             c if c.is_ascii_digit() || c == '.' => {
                 // Numeric literal — may include SI suffix
@@ -295,7 +335,74 @@ fn tokenize_expr(input: &str) -> Vec<ExprToken> {
     tokens
 }
 
-/// Parse addition and subtraction (lowest precedence).
+/// Parse the ternary operator `cond ? then : else` (lowest precedence,
+/// right-associative). Falls through to comparison when no `?` follows.
+fn parse_ternary(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+    params: &HashMap<String, f64>,
+) -> Result<f64, ImportError> {
+    let cond = parse_comparison(tokens, pos, params)?;
+    if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::Question) {
+        *pos += 1;
+        // Both branches are still ternary-level so we get right-associativity
+        // (`a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`).
+        let then_branch = parse_ternary(tokens, pos, params)?;
+        if *pos >= tokens.len() || !matches!(&tokens[*pos], ExprToken::Colon) {
+            return Err(ImportError::UnevaluableExpr(
+                "ternary expression: missing `:`".to_owned(),
+            ));
+        }
+        *pos += 1;
+        let else_branch = parse_ternary(tokens, pos, params)?;
+        Ok(if cond != 0.0 {
+            then_branch
+        } else {
+            else_branch
+        })
+    } else {
+        Ok(cond)
+    }
+}
+
+/// Parse comparison operators (`>`, `<`, `>=`, `<=`, `==`, `!=`).
+///
+/// Result is 1.0 for true / 0.0 for false to feed the ternary. Comparisons
+/// do not chain (left-associative, but multiple chained comparisons would
+/// mean comparing a 0.0/1.0 result against the next operand — almost
+/// certainly a bug, so we keep the simple precedence ladder).
+fn parse_comparison(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+    params: &HashMap<String, f64>,
+) -> Result<f64, ImportError> {
+    let lhs = parse_add_sub(tokens, pos, params)?;
+    if *pos < tokens.len()
+        && let ExprToken::Cmp(op) = &tokens[*pos]
+    {
+        let op = *op;
+        *pos += 1;
+        let rhs = parse_add_sub(tokens, pos, params)?;
+        let truthy = match op {
+            ">" => lhs > rhs,
+            "<" => lhs < rhs,
+            ">=" => lhs >= rhs,
+            "<=" => lhs <= rhs,
+            "==" => (lhs - rhs).abs() < 1e-15,
+            "!=" => (lhs - rhs).abs() >= 1e-15,
+            other => {
+                return Err(ImportError::UnevaluableExpr(format!(
+                    "unknown comparison operator: {other}"
+                )));
+            }
+        };
+        Ok(if truthy { 1.0 } else { 0.0 })
+    } else {
+        Ok(lhs)
+    }
+}
+
+/// Parse addition and subtraction.
 fn parse_add_sub(
     tokens: &[ExprToken],
     pos: &mut usize,
@@ -483,10 +590,10 @@ fn parse_primary(
                 *pos += 1; // consume '('
                 let mut args = Vec::new();
                 if *pos < tokens.len() && !matches!(&tokens[*pos], ExprToken::RParen) {
-                    args.push(parse_add_sub(tokens, pos, params)?);
+                    args.push(parse_ternary(tokens, pos, params)?);
                     while *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::Comma) {
                         *pos += 1;
-                        args.push(parse_add_sub(tokens, pos, params)?);
+                        args.push(parse_ternary(tokens, pos, params)?);
                     }
                 }
                 if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::RParen) {
@@ -494,15 +601,28 @@ fn parse_primary(
                 }
                 eval_function(&name, &args)
             } else {
-                // Parameter reference
-                params.get(&name).copied().ok_or_else(|| {
-                    ImportError::UnevaluableExpr(format!("unresolved parameter: {name}"))
-                })
+                // Parameter reference. Try exact match first (preserves
+                // user-chosen case for `.param` names); fall back to a
+                // case-insensitive sweep so SPICE built-ins like TEMPER /
+                // temper / Temper all resolve to the same entry.
+                if let Some(v) = params.get(&name) {
+                    Ok(*v)
+                } else if let Some(v) = params
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(&name))
+                    .map(|(_, v)| *v)
+                {
+                    Ok(v)
+                } else {
+                    Err(ImportError::UnevaluableExpr(format!(
+                        "unresolved parameter: {name}"
+                    )))
+                }
             }
         }
         ExprToken::LParen => {
             *pos += 1;
-            let val = parse_add_sub(tokens, pos, params)?;
+            let val = parse_ternary(tokens, pos, params)?;
             if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::RParen) {
                 *pos += 1;
             }
@@ -520,9 +640,33 @@ fn parse_primary(
 /// (e.g., `.param a=1k` then `.param b=2*a`). Parameters whose values
 /// are numeric are resolved immediately; parameters referencing other
 /// params are resolved in subsequent passes until no more progress is made.
+///
+/// `TEMPER` is seeded from `.options temp=<value>` (defaulting to 27 degC
+/// when not set) so brace expressions in element values and waveforms can
+/// reference it — matching ngspice's behaviour where TEMPER expands to the
+/// circuit temperature. The seed runs before the `.param` collection so
+/// users can override TEMPER via `.param TEMPER=…` if they need to.
 fn build_param_table(netlist: &Netlist) -> HashMap<String, f64> {
     let mut table = HashMap::new();
     let mut pending: Vec<(&str, &Expr)> = Vec::new();
+
+    // Seed TEMPER from `.options temp=…`. Case-insensitive match; numeric
+    // values only (anything else is dropped silently). Default is 27 degC
+    // — ngspice's TNOM, matching the simulator's circuit-temp fallback.
+    let mut temper: f64 = 27.0;
+    for item in &netlist.items {
+        if let Item::Options(opts) = item {
+            for p in opts {
+                if p.name.eq_ignore_ascii_case("TEMP")
+                    && let Expr::Num(v) = &p.value
+                {
+                    temper = *v;
+                }
+            }
+        }
+    }
+    table.insert("TEMPER".to_string(), temper);
+    table.insert("temper".to_string(), temper);
 
     // First pass: collect all .param and .csparam items. `.csparam` is
     // semantically identical to `.param` at the netlist-resolution layer
@@ -3285,6 +3429,75 @@ V1 a 0 DC 1
             matches!(result, Err(ImportError::UnevaluableExpr(_))),
             "expected error for lo > hi, got {result:?}"
         );
+    }
+
+    // ----- C4 of 1.0 checklist: ternary `?:` and TEMPER in brace expr -----
+
+    #[test]
+    fn brace_ternary_true_branch() {
+        let params = HashMap::new();
+        let result = eval_brace_expr("1 > 0 ? 5 : 10", &params).unwrap();
+        assert!((result - 5.0).abs() < 1e-12, "1>0 ? 5 : 10 should be 5");
+    }
+
+    #[test]
+    fn brace_ternary_false_branch() {
+        let params = HashMap::new();
+        let result = eval_brace_expr("1 < 0 ? 5 : 10", &params).unwrap();
+        assert!((result - 10.0).abs() < 1e-12, "1<0 ? 5 : 10 should be 10");
+    }
+
+    #[test]
+    fn brace_temper_with_options_temp_picks_then_branch() {
+        // `.options temp=100` → TEMPER=100. Expression `{TEMPER > 50 ? 1k : 2k}`
+        // should pick the then-branch (1000). Routed through `.tran step`
+        // because element values stay as string references — `.tran step`
+        // goes through `expr_to_f64` and yields a concrete numeric.
+        let spice = "\
+TEMPER ternary
+.options temp=100
+R1 a 0 1k
+V1 a 0 DC 1
+.tran {TEMPER > 50 ? 1k : 2k} 10u
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        match &c.analyses[0] {
+            IrAnalysis::Tran(tran) => {
+                assert!(
+                    (tran.step - 1000.0).abs() < 1e-6,
+                    "expected tran.step=1000 (then-branch), got {}",
+                    tran.step
+                );
+            }
+            other => panic!("expected Tran, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn brace_temper_default_picks_else_branch() {
+        // No `.options temp=` → TEMPER defaults to 27 degC, so
+        // `{TEMPER > 50 ? 1k : 2k}` should pick the else-branch (2000).
+        let spice = "\
+TEMPER default
+R1 a 0 1k
+V1 a 0 DC 1
+.tran {TEMPER > 50 ? 1k : 2k} 10u
+.end
+";
+        let circuits = import_spice(spice).unwrap();
+        let c = &circuits[0];
+        match &c.analyses[0] {
+            IrAnalysis::Tran(tran) => {
+                assert!(
+                    (tran.step - 2000.0).abs() < 1e-6,
+                    "expected tran.step=2000 (else-branch), got {}",
+                    tran.step
+                );
+            }
+            other => panic!("expected Tran, got {other:?}"),
+        }
     }
 
     // -----------------------------------------------------------------------

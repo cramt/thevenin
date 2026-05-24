@@ -1289,6 +1289,7 @@ fn assemble_mna_flat(
                 let (inst_l, inst_w) = get_mosfet_lw(params);
                 let resolved = resolve_model_with_bins(&models, &model_bins, model, inst_l, inst_w);
                 let level = get_mosfet_level(resolved.as_ref(), params);
+                crate::mna_ir::warn_unhandled_mosfet_level(Some(model.as_str()), level);
                 if level == 8 || level == 49 {
                     // BSIM3
                     let bm = if let Some(mdef) = resolved {
@@ -1877,6 +1878,7 @@ fn assemble_mna_flat(
 
                 let resolved = resolve_model_with_bins(&models, &model_bins, model, l, w);
                 let level = get_mosfet_level(resolved.as_ref(), params);
+                crate::mna_ir::warn_unhandled_mosfet_level(Some(model.as_str()), level);
 
                 if level == 8 || level == 49 {
                     // BSIM3
