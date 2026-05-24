@@ -52,6 +52,7 @@ use crate::mna::{
     stamp_conductance,
 };
 use crate::mos2::{Mos2Instance, Mos2Model};
+use crate::mos3::{Mos3Instance, Mos3Model};
 use crate::mos6::{Mos6Instance, Mos6Model};
 use crate::mosfet::{MosfetInstance, MosfetModel};
 use crate::newton::NrOptions;
@@ -69,7 +70,7 @@ use crate::vbic::{VbicInstance, VbicModel};
 pub(crate) fn warn_unhandled_mosfet_level(model_name: Option<&str>, level: i32) {
     // Levels currently dispatched explicitly. Keep in sync with the
     // `if/else if` ladders in this module and `mna.rs`.
-    const HANDLED: &[i32] = &[1, 2, 6, 8, 49, 14, 54, 55, 56, 57];
+    const HANDLED: &[i32] = &[1, 2, 3, 6, 8, 49, 14, 54, 55, 56, 57];
     if HANDLED.contains(&level) {
         return;
     }
@@ -1317,6 +1318,11 @@ fn stamp_circuit(
                     let mm = resolved
                         .map(Mos2Model::from_model_def)
                         .unwrap_or_else(|| Mos2Model::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += mm.internal_node_count();
+                } else if level == 3 {
+                    let mm = resolved
+                        .map(Mos3Model::from_model_def)
+                        .unwrap_or_else(|| Mos3Model::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += mm.internal_node_count();
                 } else if level == 6 {
                     let mm = resolved
@@ -2655,6 +2661,67 @@ fn stamp_circuit(
                         source_idx
                     };
                     mna.mos2s.push(Mos2Instance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm.clone(),
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
+                    push_mosfet_caps(
+                        &mut mna.capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
+                } else if level == 3 {
+                    // MOS Level 3 (semi-empirical short-channel).
+                    let mm = resolved
+                        .map(Mos3Model::from_model_def)
+                        .unwrap_or_else(|| Mos3Model::new(crate::mosfet::MosfetType::Nmos));
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    mna.mos3s.push(Mos3Instance {
                         name: elem.name.clone(),
                         drain_idx,
                         gate_idx,

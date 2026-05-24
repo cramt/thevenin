@@ -231,6 +231,7 @@ fn jct_initial_guess(
     use crate::bsim3soi_pd::{bsim3soi_pd_companion, stamp_bsim3soi_pd};
     use crate::hfet::{hfet_companion_full, stamp_hfet_with_voltages};
     use crate::mos2::stamp_mos2;
+    use crate::mos3::stamp_mos3;
     use crate::mosfet::stamp_mosfet;
 
     let mut system = LinearSystem::new(dim);
@@ -276,6 +277,18 @@ fn jct_initial_guess(
         let l_eff = mos.l_eff();
         let comp = mos.model.companion(vgs, vds, vbs, beta, mos.w, l_eff);
         stamp_mos2(&mut system.matrix, &mut system.rhs, mos, &comp);
+    }
+
+    // Stamp each Level-3 MOSFET at its threshold voltage (MODEINITJCT).
+    for mos in &mna.mos3s {
+        let sign = mos.model.mos_type.sign();
+        let vgs = sign * mos.model.vto;
+        let vds = 0.0;
+        let vbs = -1.0;
+        let beta = mos.beta();
+        let l_eff = mos.l_eff();
+        let comp = mos.model.companion(vgs, vds, vbs, beta, mos.w, l_eff);
+        stamp_mos3(&mut system.matrix, &mut system.rhs, mos, &comp);
     }
 
     // Stamp each HFET at MODEINITJCT initial bias.
@@ -493,6 +506,7 @@ fn solve_nonlinear_op_with_guess(
         }
     } else if !mna.mosfets.is_empty()
         || !mna.mos2s.is_empty()
+        || !mna.mos3s.is_empty()
         || !mna.bjts.is_empty()
         || !mna.vbics.is_empty()
         || !mna.hfets.is_empty()

@@ -258,6 +258,8 @@ pub struct MnaSystem {
     pub mosfets: Vec<MosfetInstance>,
     /// Resolved MOS Level 2 instances for NR iteration.
     pub mos2s: Vec<crate::mos2::Mos2Instance>,
+    /// Resolved MOS Level 3 instances for NR iteration.
+    pub mos3s: Vec<crate::mos3::Mos3Instance>,
     /// Resolved MOS6 MOSFET instances for NR iteration.
     pub mos6s: Vec<crate::mos6::Mos6Instance>,
     /// Resolved JFET instances for NR iteration.
@@ -328,6 +330,7 @@ impl MnaSystem {
             bjt_cap_indices: Vec::new(),
             mosfets: Vec::new(),
             mos2s: Vec::new(),
+            mos3s: Vec::new(),
             mos6s: Vec::new(),
             jfets: Vec::new(),
             mesas: Vec::new(),
@@ -372,6 +375,7 @@ impl MnaSystem {
             || !self.bjts.is_empty()
             || !self.mosfets.is_empty()
             || !self.mos2s.is_empty()
+            || !self.mos3s.is_empty()
             || !self.mos6s.is_empty()
             || !self.jfets.is_empty()
             || !self.bsim3s.is_empty()
@@ -405,6 +409,11 @@ impl MnaSystem {
                 .sum::<usize>()
             + self
                 .mosfets
+                .iter()
+                .map(|m| m.model.internal_node_count())
+                .sum::<usize>()
+            + self
+                .mos3s
                 .iter()
                 .map(|m| m.model.internal_node_count())
                 .sum::<usize>()
@@ -1358,6 +1367,14 @@ fn assemble_mna_flat(
                         crate::mos2::Mos2Model::new(crate::mosfet::MosfetType::Nmos)
                     };
                     internal_node_count += mm.internal_node_count();
+                } else if level == 3 {
+                    // MOS Level 3 (semi-empirical short-channel)
+                    let mm = if let Some(mdef) = resolved {
+                        crate::mos3::Mos3Model::from_model_def(mdef)
+                    } else {
+                        crate::mos3::Mos3Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    internal_node_count += mm.internal_node_count();
                 } else if level == 6 {
                     // MOS6
                     let mm = if let Some(mdef) = resolved {
@@ -1587,6 +1604,7 @@ fn assemble_mna_flat(
     let mut vbics = Vec::new();
     let mut mosfets = Vec::new();
     let mut mos2s = Vec::new();
+    let mut mos3s = Vec::new();
     let mut mos6s = Vec::new();
     let mut jfets = Vec::new();
     let mut mesas = Vec::new();
@@ -2227,6 +2245,72 @@ fn assemble_mna_flat(
                     };
 
                     mos2s.push(crate::mos2::Mos2Instance {
+                        name: element.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm.clone(),
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
+
+                    push_mosfet_caps(
+                        &mut capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
+                } else if level == 3 {
+                    // MOS Level 3 (semi-empirical short-channel)
+                    let mm = if let Some(mdef) = resolved {
+                        crate::mos3::Mos3Model::from_model_def(mdef)
+                    } else {
+                        crate::mos3::Mos3Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+
+                    mos3s.push(crate::mos3::Mos3Instance {
                         name: element.name.clone(),
                         drain_idx,
                         gate_idx,
@@ -3281,6 +3365,7 @@ fn assemble_mna_flat(
         bjt_cap_indices,
         mosfets,
         mos2s,
+        mos3s,
         mos6s,
         jfets,
         mesas,
