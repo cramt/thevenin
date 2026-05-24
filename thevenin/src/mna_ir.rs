@@ -97,14 +97,21 @@ pub(crate) fn warn_unhandled_mosfet_level(model_name: Option<&str>, level: i32) 
 ///
 /// Circuit-side equivalent of `crate::simulate::nr_options_from_netlist`.
 /// Recognises the same `.OPTIONS` keys (GMIN, ABSTOL, RELTOL, VNTOL,
-/// ITL1/ITL2/ITL4/ITL5/ITL6, SRCSTEPS, CHGTOL) and ignores non-numeric
-/// values silently.
+/// ITL1/ITL2/ITL4/ITL5/ITL6, SRCSTEPS, CHGTOL, RSHUNT, GMINSTEPS,
+/// NOOPITER) and ignores non-numeric values silently.
 pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
     let mut opts = NrOptions::default();
     for (name, value) in &circuit.options {
         let v = match value {
             Value::Real(f) => *f,
             Value::Integer(i) => *i as f64,
+            Value::Bool(b) => {
+                // Booleans only meaningful for the flag-style NOOPITER key.
+                if name.eq_ignore_ascii_case("NOOPITER") {
+                    opts.noopiter = *b;
+                }
+                continue;
+            }
             _ => continue,
         };
         match name.to_uppercase().as_str() {
@@ -119,6 +126,9 @@ pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
             // ITL6 is ngspice's alias for SRCSTEPS.
             "ITL6" | "SRCSTEPS" => opts.itl6 = v as usize,
             "CHGTOL" => opts.chgtol = v,
+            "RSHUNT" => opts.rshunt = v,
+            "GMINSTEPS" => opts.gminsteps = (v as i64).max(0) as u32,
+            "NOOPITER" => opts.noopiter = v != 0.0,
             _ => {}
         }
     }
@@ -3290,7 +3300,8 @@ mod tests {
 
     /// Defaults — when a Circuit carries no `.options`, every wired field
     /// matches `NrOptions::default()`. Sentinels: itl5=0, itl6=0,
-    /// chgtol=1e-14.
+    /// chgtol=1e-14, rshunt=0 (disabled), gminsteps=10 (matches
+    /// ngspice CKTnumGminSteps), noopiter=false.
     #[test]
     fn nr_options_from_circuit_defaults_match_struct_defaults() {
         let opts = nr_options_from_circuit(&divider());
@@ -3301,5 +3312,36 @@ mod tests {
         assert_eq!(opts.itl5, 0);
         assert_eq!(opts.itl6, 0);
         assert!((opts.chgtol - 1e-14).abs() < 1e-30);
+        assert_eq!(opts.rshunt, defaults.rshunt);
+        assert_eq!(opts.gminsteps, defaults.gminsteps);
+        assert_eq!(opts.noopiter, defaults.noopiter);
+        assert_eq!(opts.rshunt, 0.0);
+        assert_eq!(opts.gminsteps, 10);
+        assert!(!opts.noopiter);
+    }
+
+    /// Round-3 convergence options (RSHUNT, GMINSTEPS, NOOPITER) — IR side.
+    /// Same plumbing as `nr_options_parses_round3_convergence_keys` in
+    /// `simulate.rs`, but sourced from a `Circuit` instead of a `Netlist`.
+    #[test]
+    fn nr_options_from_circuit_parses_round3_keys() {
+        let mut c = divider();
+        c.options.push(("RSHUNT".into(), Value::Real(1.0e6)));
+        c.options.push(("GMINSTEPS".into(), Value::Integer(5)));
+        c.options.push(("NOOPITER".into(), Value::Integer(1)));
+        let opts = nr_options_from_circuit(&c);
+        assert_eq!(opts.rshunt, 1.0e6);
+        assert_eq!(opts.gminsteps, 5);
+        assert!(opts.noopiter);
+    }
+
+    /// `Value::Bool` form for NOOPITER lands on the same field — the IR
+    /// importer surfaces flag-style options as `Value::Bool(true)`.
+    #[test]
+    fn nr_options_from_circuit_noopiter_bool_form() {
+        let mut c = divider();
+        c.options.push(("NOOPITER".into(), Value::Bool(true)));
+        let opts = nr_options_from_circuit(&c);
+        assert!(opts.noopiter);
     }
 }
