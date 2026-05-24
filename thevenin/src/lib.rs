@@ -81,6 +81,7 @@ pub mod switch;
 pub mod tline;
 pub mod txl;
 pub mod vbic;
+pub mod vdmos;
 
 // ── Public modules (used by thevenin-control and test harness) ──────────────
 pub mod circuit;

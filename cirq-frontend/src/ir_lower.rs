@@ -173,6 +173,8 @@ fn device_type_from_str(name: &str) -> Option<cirq_ir::DeviceType> {
         "pjfet" => Some(cirq_ir::DeviceType::PJfet),
         "nmesfet" => Some(cirq_ir::DeviceType::NMesfet),
         "pmesfet" => Some(cirq_ir::DeviceType::PMesfet),
+        "vdmos" => Some(cirq_ir::DeviceType::Vdmos),
+        "pvdmos" => Some(cirq_ir::DeviceType::Pvdmos),
         _ => None,
     }
 }

@@ -206,6 +206,8 @@ pub(crate) struct DeviceVoltageState {
     prev_mos6: RefCell<Vec<(f64, f64, f64, f64)>>,
     /// Companion from the previous MOS6 (Level 6) evaluation.
     cached_mos6_companion: RefCell<Vec<Option<MosfetCompanion>>>,
+    /// Previous (vgs, vds, von) per VDMOS instance for NR limiting.
+    prev_vdmos: RefCell<Vec<(f64, f64, f64)>>,
     prev_jfet: RefCell<Vec<(f64, f64)>>,
     jfet_vcrits: Vec<f64>,
     prev_bsim3: RefCell<Vec<(f64, f64, f64)>>,
@@ -248,6 +250,7 @@ impl DeviceVoltageState {
             cached_mos3_companion: RefCell::new(vec![None; mna.mos3s.len()]),
             prev_mos6: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos6s.len()]),
             cached_mos6_companion: RefCell::new(vec![None; mna.mos6s.len()]),
+            prev_vdmos: RefCell::new(vec![(0.0, 0.0, 0.0); mna.vdmoses.len()]),
             prev_jfet: RefCell::new(vec![(0.0, 0.0); mna.jfets.len()]),
             jfet_vcrits,
             prev_bsim3: RefCell::new(vec![(0.0, 0.0, 0.0); mna.bsim3s.len()]),
@@ -344,6 +347,15 @@ impl DeviceVoltageState {
                     .collect(),
             ),
             cached_mos6_companion: RefCell::new(vec![None; mna.mos6s.len()]),
+            prev_vdmos: RefCell::new(
+                mna.vdmoses
+                    .iter()
+                    .map(|v| {
+                        let (vgs, vds) = v.terminal_voltages(prev_solution);
+                        (vgs, vds, 0.0)
+                    })
+                    .collect(),
+            ),
             prev_jfet: RefCell::new(
                 mna.jfets
                     .iter()
@@ -521,6 +533,14 @@ impl DeviceVoltageState {
             }
             for cached in self.cached_mos6_companion.borrow_mut().iter_mut() {
                 *cached = None;
+            }
+        }
+        // Reset VDMOS prev voltages (von reset to 0.0 for fresh NR sequence).
+        {
+            let mut prev = self.prev_vdmos.borrow_mut();
+            for (i, v) in mna.vdmoses.iter().enumerate() {
+                let (vgs, vds) = v.terminal_voltages(solution);
+                prev[i] = (vgs, vds, 0.0);
             }
         }
         // Reset JFET prev voltages
@@ -911,6 +931,27 @@ impl DeviceVoltageState {
 
                 prev[mi] = (vgs, vds, vbs, comp.von);
                 crate::mos6::stamp_mos6(&mut system.matrix, &mut system.rhs, mos, &comp);
+            }
+        }
+
+        // VDMOS (vertical-DMOS power MOSFET — `.model NAME VDMOS (…)`)
+        {
+            let mut prev = self.prev_vdmos.borrow_mut();
+            for (vi, v) in mna.vdmoses.iter().enumerate() {
+                let (vgs, vds) = if init_jct {
+                    // MODEINITJCT for VDMOS (vdmosload.c:106-115):
+                    // when off, vds = vgs = 0; otherwise seed at vto+0.1.
+                    let sign = v.model.mos_type.sign();
+                    let seed = sign * v.model.vto + 0.1;
+                    (seed, 0.0)
+                } else {
+                    let (raw_vgs, raw_vds) = v.terminal_voltages(solution);
+                    let von_prev = prev[vi].2;
+                    mos_limit(raw_vgs, raw_vds, prev[vi].0, prev[vi].1, von_prev)
+                };
+                let comp = v.model.companion(vgs, vds);
+                prev[vi] = (vgs, vds, comp.von);
+                crate::vdmos::stamp_vdmos(&mut system.matrix, &mut system.rhs, v, &comp);
             }
         }
 

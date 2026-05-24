@@ -262,6 +262,8 @@ pub struct MnaSystem {
     pub mos3s: Vec<crate::mos3::Mos3Instance>,
     /// Resolved MOS6 MOSFET instances for NR iteration.
     pub mos6s: Vec<crate::mos6::Mos6Instance>,
+    /// Resolved VDMOS power-MOSFET instances for NR iteration.
+    pub vdmoses: Vec<crate::vdmos::VdmosInstance>,
     /// Resolved JFET instances for NR iteration.
     pub jfets: Vec<JfetInstance>,
     /// Resolved MESA FET instances for NR iteration.
@@ -332,6 +334,7 @@ impl MnaSystem {
             mos2s: Vec::new(),
             mos3s: Vec::new(),
             mos6s: Vec::new(),
+            vdmoses: Vec::new(),
             jfets: Vec::new(),
             mesas: Vec::new(),
             mesfets: Vec::new(),
@@ -377,6 +380,7 @@ impl MnaSystem {
             || !self.mos2s.is_empty()
             || !self.mos3s.is_empty()
             || !self.mos6s.is_empty()
+            || !self.vdmoses.is_empty()
             || !self.jfets.is_empty()
             || !self.bsim3s.is_empty()
             || !self.bsim3soi_dds.is_empty()
@@ -419,6 +423,11 @@ impl MnaSystem {
                 .sum::<usize>()
             + self
                 .mos6s
+                .iter()
+                .map(|m| m.model.internal_node_count())
+                .sum::<usize>()
+            + self
+                .vdmoses
                 .iter()
                 .map(|m| m.model.internal_node_count())
                 .sum::<usize>()
@@ -3367,6 +3376,11 @@ fn assemble_mna_flat(
         mos2s,
         mos3s,
         mos6s,
+        // VDMOS is dispatched exclusively through the cirq_ir::Circuit IR
+        // path; the legacy Netlist-shape assembler doesn't yet recognise
+        // VDMOS model kinds. Leave empty so downstream has_nonlinear()
+        // and NR stamping correctly skip this bucket here.
+        vdmoses: Vec::new(),
         jfets,
         mesas,
         mesfets,

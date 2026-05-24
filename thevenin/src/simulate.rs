@@ -291,6 +291,15 @@ fn jct_initial_guess(
         stamp_mos3(&mut system.matrix, &mut system.rhs, mos, &comp);
     }
 
+    // Stamp each VDMOS at its threshold voltage (MODEINITJCT analogue).
+    for v in &mna.vdmoses {
+        let sign = v.model.mos_type.sign();
+        let vgs = sign * v.model.vto + 0.1;
+        let vds = 0.0;
+        let comp = v.model.companion(vgs, vds);
+        crate::vdmos::stamp_vdmos(&mut system.matrix, &mut system.rhs, v, &comp);
+    }
+
     // Stamp each HFET at MODEINITJCT initial bias.
     // HFET1 (hfetload.c:116-117): vgs=vgd=-1 (reverse-biased gate junctions).
     //
@@ -507,6 +516,7 @@ fn solve_nonlinear_op_with_guess(
     } else if !mna.mosfets.is_empty()
         || !mna.mos2s.is_empty()
         || !mna.mos3s.is_empty()
+        || !mna.vdmoses.is_empty()
         || !mna.bjts.is_empty()
         || !mna.vbics.is_empty()
         || !mna.hfets.is_empty()

@@ -1,0 +1,16 @@
+VDMOS DC operating point
+* Simple N-channel VDMOS power MOSFET in saturation.
+* Vds = 10V, Vgs = 5V (well above Vto=3V), so the device is in saturation
+* and conducting significant drain current.
+
+* M element: drain, gate, source, bulk, model. VDMOS bulk is normally
+* tied to source.
+m1 d g 0 0 NCH
+vds d 0 10
+vgs g 0 5
+
+.model NCH VDMOS Vto=3 Kp=5 lambda=0.0 theta=0.0 ksubthres=0.1
++ Cgdmin=1p Cgdmax=10p Cgs=10p Rg=1 rds=1e9
+
+.op
+.end

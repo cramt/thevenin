@@ -253,6 +253,10 @@ pub enum DeviceType {
     PJfet,
     NMesfet,
     PMesfet,
+    /// N-channel vertical-DMOS power MOSFET (`.model … VDMOS (…)` or `VDMOSN`).
+    Vdmos,
+    /// P-channel vertical-DMOS power MOSFET (`.model … VDMOSP (…)`).
+    Pvdmos,
     /// Voltage-controlled switch (`.model … SW (…)`).
     VSwitch,
     /// Current-controlled switch (`.model … CSW (…)`).

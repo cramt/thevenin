@@ -1098,6 +1098,8 @@ pub fn convert_model(model: &cirq_ir::Model) -> ModelDef {
         DeviceType::PJfet => "PJF".into(),
         DeviceType::NMesfet => "NMF".into(),
         DeviceType::PMesfet => "PMF".into(),
+        DeviceType::Vdmos => "VDMOS".into(),
+        DeviceType::Pvdmos => "VDMOSP".into(),
         DeviceType::VSwitch => "SW".into(),
         DeviceType::ISwitch => "CSW".into(),
         DeviceType::Other(s) => s.clone(),

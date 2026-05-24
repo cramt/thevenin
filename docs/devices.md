@@ -62,7 +62,7 @@ Transient waveforms supported on V and I (all six from
 | BSIM3SOI-PD | 57 | implemented | [bsim3soi_pd.rs](../thevenin/src/bsim3soi_pd.rs) | Partially-depleted SOI; floating body, self-heating disabled (SHMOD=0). |
 | BSIM1 | — (ngspice level varies) | not yet — in 1.0 scope | — | ~3500 LOC port from ngspice. |
 | BSIM2 | — (ngspice level varies) | not yet — in 1.0 scope | — | ~2500 LOC port from ngspice. |
-| VDMOS | — | not yet — in 1.0 scope | — | Power-MOSFET model. |
+| VDMOS | — (separate model kind, no LEVEL) | implemented | [vdmos.rs](../thevenin/src/vdmos.rs) | Vertical-DMOS power MOSFET. `.model NAME VDMOS (…)` / `VDMOSN` / `VDMOSP` — dispatched off the model kind string in `mna_ir.rs`, not via LEVEL. Built-in body diode, Vgd-dependent Miller cap, smooth triode/saturation blend with `mtr`/`theta`/`lambda`/`ksubthres`. |
 | HiSIM (bulk) | — | not yet — in 1.0 scope | — | Modern compact model. |
 | HiSIMHV | — | not yet — in 1.0 scope | — | High-voltage HiSIM variant. |
 
@@ -123,7 +123,6 @@ tree currently has no implementation:
 
 - **URC** transmission line (`U` element).
 - **BSIM1**, **BSIM2** MOSFET levels.
-- **VDMOS** power MOSFET.
 - **HiSIM** and **HiSIMHV** compact models.
 - Other "weird MOSFET / niche device" variants (HICUM2, NUMOS, …) flagged in
   the checklist for an enumeration pass against

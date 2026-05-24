@@ -895,6 +895,8 @@ fn map_device_type(kind: &str) -> cirq_ir::DeviceType {
         "PJF" => cirq_ir::DeviceType::PJfet,
         "NMF" | "GASFET" | "MESA" => cirq_ir::DeviceType::NMesfet,
         "PMF" => cirq_ir::DeviceType::PMesfet,
+        "VDMOS" | "VDMOSN" => cirq_ir::DeviceType::Vdmos,
+        "VDMOSP" => cirq_ir::DeviceType::Pvdmos,
         "SW" | "VSWITCH" => cirq_ir::DeviceType::VSwitch,
         "CSW" | "ISWITCH" => cirq_ir::DeviceType::ISwitch,
         _ => cirq_ir::DeviceType::Other(kind.to_owned()),
@@ -920,6 +922,13 @@ fn mosfet_kind(
 ) -> Result<IrElementKind, ImportError> {
     match model_table.get(&model_name.to_ascii_uppercase()) {
         Some(cirq_ir::DeviceType::Pmos) => Ok(IrElementKind::Pmos),
+        // VDMOS / PVDMOS share the SPICE `M` element letter with lateral
+        // MOSFETs. The IR keeps a single `Nmos` / `Pmos` ElementKind for all
+        // four-terminal MOSFET-like devices; the simulator's mna_ir layer
+        // discriminates VDMOS by inspecting the resolved model's DeviceType,
+        // not via the LEVEL parameter (VDMOS has no LEVEL).
+        Some(cirq_ir::DeviceType::Pvdmos) => Ok(IrElementKind::Pmos),
+        Some(cirq_ir::DeviceType::Vdmos) => Ok(IrElementKind::Nmos),
         Some(cirq_ir::DeviceType::Nmos) | Some(_) => Ok(IrElementKind::Nmos),
         None => Err(ImportError::ModelNotFound(model_name.to_owned())),
     }

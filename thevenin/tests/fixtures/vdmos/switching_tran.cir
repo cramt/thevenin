@@ -1,0 +1,16 @@
+VDMOS switching transient
+* Ramp Vgs from 0V to 10V over 1us through a power N-channel VDMOS driving
+* a 10-ohm resistor between VDD and the drain. As Vgs rises above Vto=3V,
+* drain current ramps up.
+
+vdd vdd 0 5
+rload vdd d 10
+* M element terminals: drain, gate, source, bulk, model.
+m1 d g 0 0 PWR
+vg g 0 PWL(0 0 1u 10)
+
+.model PWR VDMOS Vto=3 Kp=2 lambda=0.0 theta=0.0 ksubthres=0.1
++ Cgdmin=10p Cgdmax=100p Cgs=100p Rg=1 rds=1e9
+
+.tran 10n 1u
+.end

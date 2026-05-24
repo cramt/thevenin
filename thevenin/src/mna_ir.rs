@@ -1282,14 +1282,28 @@ fn stamp_circuit(
                 let params_nl = extra_params(elem, &["value"]);
                 let (inst_l, inst_w) = get_mosfet_lw(&params_nl);
                 let (nrd, nrs) = get_nrd_nrs(&params_nl);
-                let model_name = lookup_model(circuit, elem).map(|m| m.name.clone());
+                let model_ref = lookup_model(circuit, elem);
+                let model_name = model_ref.map(|m| m.name.clone());
+                let is_vdmos = matches!(
+                    model_ref.map(|m| &m.device_type),
+                    Some(cirq_ir::DeviceType::Vdmos | cirq_ir::DeviceType::Pvdmos)
+                );
                 let resolved = model_name.as_deref().and_then(|name| {
                     resolve_model_with_bins(&models_map, &bins_map, name, inst_l, inst_w)
                 });
                 let level = get_mosfet_level(resolved.as_ref(), &params_nl);
-                warn_unhandled_mosfet_level(model_name.as_deref(), level);
+                if !is_vdmos {
+                    warn_unhandled_mosfet_level(model_name.as_deref(), level);
+                }
 
-                if level == 8 || level == 49 {
+                if is_vdmos {
+                    let vm = resolved
+                        .map(crate::vdmos::VdmosModel::from_model_def)
+                        .unwrap_or_else(|| {
+                            crate::vdmos::VdmosModel::new(crate::vdmos::VdmosType::Nmos)
+                        });
+                    internal_node_count += vm.internal_node_count();
+                } else if level == 8 || level == 49 {
                     let bm = resolved
                         .map(Bsim3Model::from_model_def)
                         .unwrap_or_else(|| Bsim3Model::new(crate::mosfet::MosfetType::Nmos));
@@ -2352,14 +2366,69 @@ fn stamp_circuit(
                 }
 
                 let params_nl = extra_params(elem, &["value"]);
-                let model_name = lookup_model(circuit, elem).map(|m| m.name.clone());
+                let model_ref = lookup_model(circuit, elem);
+                let model_name = model_ref.map(|m| m.name.clone());
+                let is_vdmos = matches!(
+                    model_ref.map(|m| &m.device_type),
+                    Some(cirq_ir::DeviceType::Vdmos | cirq_ir::DeviceType::Pvdmos)
+                );
                 let resolved = model_name
                     .as_deref()
                     .and_then(|name| resolve_model_with_bins(&models_map, &bins_map, name, l, w));
                 let level = get_mosfet_level(resolved.as_ref(), &params_nl);
-                warn_unhandled_mosfet_level(model_name.as_deref(), level);
+                if !is_vdmos {
+                    warn_unhandled_mosfet_level(model_name.as_deref(), level);
+                }
 
-                if level == 8 || level == 49 {
+                if is_vdmos {
+                    // VDMOS power MOSFET. Use the model's polarity tag to pick
+                    // the NMOS / PMOS default for `from_model_def` fallback.
+                    let pvdmos = matches!(
+                        model_ref.map(|m| &m.device_type),
+                        Some(cirq_ir::DeviceType::Pvdmos)
+                    );
+                    let default_type = if pvdmos {
+                        crate::vdmos::VdmosType::Pmos
+                    } else {
+                        crate::vdmos::VdmosType::Nmos
+                    };
+                    let vm = resolved
+                        .map(crate::vdmos::VdmosModel::from_model_def)
+                        .unwrap_or_else(|| crate::vdmos::VdmosModel::new(default_type));
+                    let drain_prime_idx = if vm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if vm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    let gate_prime_idx = if vm.rg > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        gate_idx
+                    };
+                    mna.vdmoses.push(crate::vdmos::VdmosInstance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        gate_prime_idx,
+                        model: vm,
+                        m: m_mult,
+                    });
+                } else if level == 8 || level == 49 {
                     // BSIM3.
                     let bm = resolved
                         .map(Bsim3Model::from_model_def)
