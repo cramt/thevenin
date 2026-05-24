@@ -1102,6 +1102,11 @@ pub enum Analysis {
     Pz(PzAnalysis),
     Sens(SensAnalysis),
     Tf(TfAnalysis),
+    /// `.four <freq> <vec> [<vec> ...]` — Fourier post-processing of a
+    /// transient simulation.
+    Four(FourAnalysis),
+    /// `.fft <vec> [<vec> ...] [opts]` — windowed FFT of transient output.
+    Fft(FftAnalysis),
 }
 
 #[derive(Debug, Clone)]
@@ -1197,6 +1202,56 @@ pub struct SensAcSpec {
 pub struct TfAnalysis {
     pub output: String,
     pub source: Id,
+}
+
+/// `.four <freq> <vec> [<vec> ...]` — Fourier post-processing.
+///
+/// Operates on the result of the preceding `.tran` simulation: it isolates
+/// the final `1/fundamental` window of the transient response and computes
+/// the DC component plus harmonic magnitudes/phases up to `num_harmonics`
+/// (ngspice's default is 9, controllable via the `nfreqs` option).
+#[derive(Debug, Clone)]
+pub struct FourAnalysis {
+    /// Fundamental frequency in Hz.
+    pub fundamental: f64,
+    /// Vector expressions to analyse (e.g. `"v(out)"`, `"i(vsense)"`).
+    pub vectors: Vec<String>,
+    /// Number of harmonics to report (DC excluded). Defaults to 9.
+    pub num_harmonics: usize,
+}
+
+/// Window function for `.fft`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FftWindow {
+    Rectangular,
+    Hann,
+    Hamming,
+    Blackman,
+    Bartlett,
+}
+
+/// Whether `.fft` outputs magnitudes (real) or complex spectra.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FftFormat {
+    /// Magnitudes only.
+    Magnitude,
+    /// Complex re/im pairs.
+    Complex,
+}
+
+/// `.fft <vec> [<vec> ...] [start=... stop=... npoints=... window=... format=...]`.
+#[derive(Debug, Clone)]
+pub struct FftAnalysis {
+    pub vectors: Vec<String>,
+    /// Window start time in seconds. `None` → use the transient `tstart`.
+    pub start: Option<f64>,
+    /// Window stop time in seconds. `None` → use the transient `tstop`.
+    pub stop: Option<f64>,
+    /// Requested point count. Rounded up to the next power of two for the
+    /// radix-2 FFT. Defaults to 1024.
+    pub npoints: usize,
+    pub window: FftWindow,
+    pub format: FftFormat,
 }
 
 #[cfg(test)]

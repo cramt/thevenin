@@ -276,10 +276,130 @@ fn simulate_single(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
             cirq_ir::Analysis::Sens(_) => simulate_sens(circuit)?,
             cirq_ir::Analysis::Pz(_) => simulate_pz(circuit)?,
             cirq_ir::Analysis::Tf(_) => simulate_tf(circuit)?,
+            cirq_ir::Analysis::Four(four) => simulate_four(circuit, four)?,
+            cirq_ir::Analysis::Fft(fft) => simulate_fft(circuit, fft)?,
         };
         plots.extend(result.plots);
     }
     Ok(SimResult { plots })
+}
+
+/// Run `.four` Fourier post-processing.
+///
+/// `.four` is post-processing on a transient run. We require the circuit
+/// to declare a `.tran` analysis (the SPICE convention); we run that
+/// transient, then compute the harmonic table on its plot.
+pub fn simulate_four(
+    circuit: &Circuit,
+    four: &cirq_ir::FourAnalysis,
+) -> Result<SimResult, CircuitSimError> {
+    let tran_result = simulate_tran(circuit)?;
+    let tran_plot = tran_result
+        .plots
+        .iter()
+        .find(|p| p.name.starts_with("tran"))
+        .ok_or_else(|| {
+            CircuitSimError::Mna(MnaError::UnsupportedElement(
+                ".four needs a .tran analysis to post-process".to_string(),
+            ))
+        })?;
+    let vec_refs: Vec<&str> = four.vectors.iter().map(String::as_str).collect();
+    let results =
+        crate::fourier::four_analysis(tran_plot, four.fundamental, &vec_refs, four.num_harmonics)
+            .map_err(|e| CircuitSimError::Mna(MnaError::UnsupportedElement(e.to_string())))?;
+    Ok(SimResult {
+        plots: vec![four_to_plot(&results)],
+    })
+}
+
+/// Run `.fft` Fourier post-processing.
+pub fn simulate_fft(
+    circuit: &Circuit,
+    fft: &cirq_ir::FftAnalysis,
+) -> Result<SimResult, CircuitSimError> {
+    let tran_result = simulate_tran(circuit)?;
+    let tran_plot = tran_result
+        .plots
+        .iter()
+        .find(|p| p.name.starts_with("tran"))
+        .ok_or_else(|| {
+            CircuitSimError::Mna(MnaError::UnsupportedElement(
+                ".fft needs a .tran analysis to post-process".to_string(),
+            ))
+        })?;
+    let opts = crate::fourier::FftOptions {
+        vectors: fft.vectors.clone(),
+        start: fft.start,
+        stop: fft.stop,
+        npoints: fft.npoints,
+        window: fft.window,
+        format: fft.format,
+    };
+    let results = crate::fourier::fft_analysis(tran_plot, &opts)
+        .map_err(|e| CircuitSimError::Mna(MnaError::UnsupportedElement(e.to_string())))?;
+    Ok(SimResult {
+        plots: vec![fft_to_plot(&results)],
+    })
+}
+
+fn four_to_plot(results: &[crate::fourier::FourResult]) -> SimPlot {
+    use thevenin_types::SimVector;
+    // For each vector we emit four real vectors: <name>_freq, <name>_mag,
+    // <name>_phase, <name>_norm. The DC component is index 0 of each.
+    let mut vecs = Vec::new();
+    for r in results {
+        let mut freqs = vec![0.0];
+        let mut mags = vec![r.dc.abs()];
+        let mut phases = vec![0.0];
+        let mut norms = vec![0.0];
+        for h in &r.harmonics {
+            freqs.push(h.frequency);
+            mags.push(h.magnitude);
+            phases.push(h.phase_deg);
+            norms.push(h.normalised);
+        }
+        let prefix = sanitize_vec_name(&r.vector);
+        vecs.push(SimVector::real(format!("{prefix}_freq"), freqs));
+        vecs.push(SimVector::real(format!("{prefix}_mag"), mags));
+        vecs.push(SimVector::real(format!("{prefix}_phase"), phases));
+        vecs.push(SimVector::real(format!("{prefix}_norm"), norms));
+    }
+    SimPlot {
+        name: "fourier1".to_string(),
+        vecs,
+    }
+}
+
+fn fft_to_plot(results: &[crate::fourier::FftResult]) -> SimPlot {
+    use thevenin_types::SimVector;
+    let mut vecs = Vec::new();
+    for r in results {
+        let prefix = sanitize_vec_name(&r.vector);
+        vecs.push(SimVector::real(
+            format!("{prefix}_freq"),
+            r.frequencies.clone(),
+        ));
+        vecs.push(SimVector::complex(
+            format!("{prefix}_fft"),
+            r.values.clone(),
+        ));
+    }
+    SimPlot {
+        name: "fft1".to_string(),
+        vecs,
+    }
+}
+
+fn sanitize_vec_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Run every analysis at each requested temperature, labelling plots so the

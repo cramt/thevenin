@@ -179,6 +179,59 @@ pub fn netlist_analysis_to_ir(
             transfer: pz_input_to_transfer(*input_type),
             analysis_type: pz_type_to_ir(*analysis_type),
         }),
+
+        NA::Four {
+            fundamental,
+            vectors,
+        } => cirq_ir::Analysis::Four(cirq_ir::FourAnalysis {
+            fundamental: expr_to_f64(fundamental, "four.fundamental")?,
+            vectors: vectors.clone(),
+            num_harmonics: 9,
+        }),
+
+        NA::Fft {
+            vectors,
+            start,
+            stop,
+            npoints,
+            window,
+            format,
+        } => {
+            let start_v = match start {
+                Some(e) => Some(expr_to_f64(e, "fft.start")?),
+                None => None,
+            };
+            let stop_v = match stop {
+                Some(e) => Some(expr_to_f64(e, "fft.stop")?),
+                None => None,
+            };
+            let np = match npoints {
+                Some(e) => expr_to_f64(e, "fft.npoints")? as usize,
+                None => 1024,
+            };
+            let window_kind = match window.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                Some("rect") | Some("rectangular") | Some("none") => {
+                    cirq_ir::FftWindow::Rectangular
+                }
+                Some("hann") | Some("hanning") => cirq_ir::FftWindow::Hann,
+                Some("hamming") => cirq_ir::FftWindow::Hamming,
+                Some("blackman") => cirq_ir::FftWindow::Blackman,
+                Some("bartlett") | Some("triangular") => cirq_ir::FftWindow::Bartlett,
+                _ => cirq_ir::FftWindow::Hann,
+            };
+            let fmt = match format.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                Some("complex") => cirq_ir::FftFormat::Complex,
+                _ => cirq_ir::FftFormat::Magnitude,
+            };
+            cirq_ir::Analysis::Fft(cirq_ir::FftAnalysis {
+                vectors: vectors.clone(),
+                start: start_v,
+                stop: stop_v,
+                npoints: np,
+                window: window_kind,
+                format: fmt,
+            })
+        }
     })
 }
 

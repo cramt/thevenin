@@ -1286,6 +1286,33 @@ fn convert_analysis(
                 input,
             }
         }
+
+        cirq_ir::Analysis::Four(four) => Analysis::Four {
+            fundamental: Expr::Num(four.fundamental),
+            vectors: four.vectors.clone(),
+        },
+
+        cirq_ir::Analysis::Fft(fft) => {
+            let window = match fft.window {
+                cirq_ir::FftWindow::Rectangular => "rect",
+                cirq_ir::FftWindow::Hann => "hann",
+                cirq_ir::FftWindow::Hamming => "hamming",
+                cirq_ir::FftWindow::Blackman => "blackman",
+                cirq_ir::FftWindow::Bartlett => "bartlett",
+            };
+            let format = match fft.format {
+                cirq_ir::FftFormat::Magnitude => "mag",
+                cirq_ir::FftFormat::Complex => "complex",
+            };
+            Analysis::Fft {
+                vectors: fft.vectors.clone(),
+                start: fft.start.map(Expr::Num),
+                stop: fft.stop.map(Expr::Num),
+                npoints: Some(Expr::Num(fft.npoints as f64)),
+                window: Some(window.to_string()),
+                format: Some(format.to_string()),
+            }
+        }
     }
 }
 

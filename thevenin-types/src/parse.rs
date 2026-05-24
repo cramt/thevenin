@@ -1751,6 +1751,52 @@ fn parse_dot(
             }))
         }
 
+        ".FOUR" | ".FOURIER" => {
+            // .four <freq> <vec> [<vec> ...]
+            let fundamental = parse_expr(tokens.get(1).map(|s| s.as_str()).unwrap_or("0"));
+            let vectors: Vec<String> = tokens.iter().skip(2).cloned().collect();
+            Ok(ParsedLine::Analysis(Analysis::Four {
+                fundamental,
+                vectors,
+            }))
+        }
+
+        ".FFT" => {
+            // .fft <vec> [<vec> ...] [start=t1] [stop=t2] [np=N|npoints=N]
+            //                         [window=hann|...] [format=mag|complex]
+            // Tokens that contain `=` are options; everything else is a vector
+            // expression. Order is not load-bearing — ngspice tolerates any
+            // ordering.
+            let mut vectors = Vec::new();
+            let mut start: Option<Expr> = None;
+            let mut stop: Option<Expr> = None;
+            let mut npoints: Option<Expr> = None;
+            let mut window: Option<String> = None;
+            let mut format: Option<String> = None;
+            for tok in &tokens[1..] {
+                if let Some((k, v)) = tok.split_once('=') {
+                    match k.to_ascii_lowercase().as_str() {
+                        "start" => start = Some(parse_expr(v)),
+                        "stop" => stop = Some(parse_expr(v)),
+                        "np" | "npoints" | "n" => npoints = Some(parse_expr(v)),
+                        "window" | "win" => window = Some(v.to_string()),
+                        "format" | "fmt" => format = Some(v.to_string()),
+                        _ => {} // ignore unrecognised options
+                    }
+                } else {
+                    vectors.push(tok.clone());
+                }
+            }
+            Ok(ParsedLine::Analysis(Analysis::Fft {
+                vectors,
+                start,
+                stop,
+                npoints,
+                window,
+                format,
+            }))
+        }
+
         ".MODEL" => {
             let name = tokens
                 .get(1)

@@ -52,6 +52,7 @@ pub(crate) mod waveform;
 
 // ── Analysis modules ────────────────────────────────────────────────────────
 pub(crate) mod ac;
+pub mod fourier;
 pub(crate) mod measure;
 pub(crate) mod noise;
 pub(crate) mod pz;
@@ -224,6 +225,12 @@ fn simulate_single(netlist: &Netlist) -> Result<thevenin_types::SimResult, MnaEr
         Analysis::Sens { .. } => simulate_sens(netlist),
         Analysis::Tf { .. } => simulate_tf(netlist),
         Analysis::Pz { .. } => simulate_pz(netlist),
+        // Fourier post-processing has no Netlist-shape simulator entry —
+        // the Netlist-side dispatch is test-only and dropped after Stage 4.
+        // Callers exercising .four/.fft should use the Circuit-based API.
+        Analysis::Four { .. } | Analysis::Fft { .. } => Err(MnaError::UnsupportedElement(
+            ".four/.fft are only supported via thevenin::circuit::simulate".to_string(),
+        )),
     }
 }
 

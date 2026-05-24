@@ -316,6 +316,12 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
         cirq_ir::Analysis::Tf(_) => {
             thevenin::circuit::simulate_tf(&circuit).map_err(|e| format!("TF: {e}"))
         }
+        cirq_ir::Analysis::Four(four) => {
+            thevenin::circuit::simulate_four(&circuit, four).map_err(|e| format!("Four: {e}"))
+        }
+        cirq_ir::Analysis::Fft(fft) => {
+            thevenin::circuit::simulate_fft(&circuit, fft).map_err(|e| format!("FFT: {e}"))
+        }
     };
 
     // Capture post-TEMPER model params for @model[param] queries.

@@ -1100,6 +1100,25 @@ fn resolve_analysis(
             try_resolve_expr(fstop, ctx);
         }
         Analysis::Tf { .. } | Analysis::Sens { .. } | Analysis::Pz { .. } => {}
+        Analysis::Four { fundamental, .. } => {
+            try_resolve_expr(fundamental, ctx);
+        }
+        Analysis::Fft {
+            start,
+            stop,
+            npoints,
+            ..
+        } => {
+            if let Some(e) = start {
+                try_resolve_expr(e, ctx);
+            }
+            if let Some(e) = stop {
+                try_resolve_expr(e, ctx);
+            }
+            if let Some(e) = npoints {
+                try_resolve_expr(e, ctx);
+            }
+        }
     }
     Ok(())
 }

@@ -14,9 +14,10 @@ use std::path::Path;
 use cirq_ir::{
     AcAnalysis, AcSpec as IrAcSpec, Analysis as IrAnalysis, BehavioralMode, Circuit, Connection,
     DcAnalysis, DcSweep as IrDcSweep, Element as IrElement, ElementKind as IrElementKind,
-    FrequencyScale, Id, Model as IrModel, Net, NoiseAnalysis, PzAnalysis, PzType, ResolvedParam,
-    SensAcSpec, SensAnalysis, SourceSpec, TfAnalysis, TranAnalysis, TransferType, Value,
-    Waveform as IrWaveform, XspiceConnection as IrXspiceConnection,
+    FftAnalysis, FftFormat, FftWindow, FourAnalysis, FrequencyScale, Id, Model as IrModel, Net,
+    NoiseAnalysis, PzAnalysis, PzType, ResolvedParam, SensAcSpec, SensAnalysis, SourceSpec,
+    TfAnalysis, TranAnalysis, TransferType, Value, Waveform as IrWaveform,
+    XspiceConnection as IrXspiceConnection,
 };
 use thevenin_types::{
     AcVariation, Analysis as SpiceAnalysis, ElementKind as SpiceElementKind, Expr, Item, Netlist,
@@ -2364,6 +2365,51 @@ fn convert_analysis(
                 output_neg: nets.intern(node_k),
                 transfer,
                 analysis_type: pz_type,
+            })
+        }
+
+        SpiceAnalysis::Four {
+            fundamental,
+            vectors,
+        } => IrAnalysis::Four(FourAnalysis {
+            fundamental: resolve(fundamental)?,
+            vectors: vectors.clone(),
+            num_harmonics: 9,
+        }),
+
+        SpiceAnalysis::Fft {
+            vectors,
+            start,
+            stop,
+            npoints,
+            window,
+            format,
+        } => {
+            let np = npoints
+                .as_ref()
+                .map(&resolve)
+                .transpose()?
+                .map(|n| n as usize)
+                .unwrap_or(1024);
+            let window_kind = match window.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                Some("rect") | Some("rectangular") | Some("none") => FftWindow::Rectangular,
+                Some("hann") | Some("hanning") => FftWindow::Hann,
+                Some("hamming") => FftWindow::Hamming,
+                Some("blackman") => FftWindow::Blackman,
+                Some("bartlett") | Some("triangular") => FftWindow::Bartlett,
+                _ => FftWindow::Hann, // ngspice default
+            };
+            let fmt = match format.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                Some("complex") => FftFormat::Complex,
+                _ => FftFormat::Magnitude,
+            };
+            IrAnalysis::Fft(FftAnalysis {
+                vectors: vectors.clone(),
+                start: start.as_ref().map(&resolve).transpose()?,
+                stop: stop.as_ref().map(&resolve).transpose()?,
+                npoints: np,
+                window: window_kind,
+                format: fmt,
             })
         }
     };

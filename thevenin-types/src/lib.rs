@@ -991,6 +991,25 @@ pub enum Analysis {
         input_type: PzInputType,
         analysis_type: PzAnalysisType,
     },
+    /// `.four <freq> <vec> [<vec> ...]` — Fourier post-processing of the
+    /// preceding `.tran` simulation.
+    Four {
+        fundamental: Expr,
+        vectors: Vec<String>,
+    },
+    /// `.fft <vec> [<vec> ...] [start=t1 stop=t2 npoints=N window=W format=F]`
+    Fft {
+        vectors: Vec<String>,
+        start: Option<Expr>,
+        stop: Option<Expr>,
+        /// Requested sample count. Rounded up to the next power of two by
+        /// the analyser.
+        npoints: Option<Expr>,
+        /// One of `rect`, `hann`, `hamming`, `blackman`, `bartlett`.
+        window: Option<String>,
+        /// One of `mag`, `complex`.
+        format: Option<String>,
+    },
 }
 
 impl fmt::Display for Analysis {
@@ -1072,6 +1091,45 @@ impl fmt::Display for Analysis {
                     f,
                     ".pz {node_i} {node_g} {node_j} {node_k} {input_type} {analysis_type}"
                 )
+            }
+            Analysis::Four {
+                fundamental,
+                vectors,
+            } => {
+                write!(f, ".four {fundamental}")?;
+                for v in vectors {
+                    write!(f, " {v}")?;
+                }
+                Ok(())
+            }
+            Analysis::Fft {
+                vectors,
+                start,
+                stop,
+                npoints,
+                window,
+                format,
+            } => {
+                write!(f, ".fft")?;
+                for v in vectors {
+                    write!(f, " {v}")?;
+                }
+                if let Some(s) = start {
+                    write!(f, " start={s}")?;
+                }
+                if let Some(s) = stop {
+                    write!(f, " stop={s}")?;
+                }
+                if let Some(n) = npoints {
+                    write!(f, " np={n}")?;
+                }
+                if let Some(w) = window {
+                    write!(f, " window={w}")?;
+                }
+                if let Some(fmt) = format {
+                    write!(f, " format={fmt}")?;
+                }
+                Ok(())
             }
         }
     }

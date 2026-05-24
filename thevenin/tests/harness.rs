@@ -263,6 +263,15 @@ fn run_all_analyses(
                 .map_err(|e| format!("Sens error: {e}"))?,
             Analysis::Pz { .. } => thevenin::circuit::simulate_pz(&per_analysis)
                 .map_err(|e| format!("PZ error: {e}"))?,
+            Analysis::Four { .. } | Analysis::Fft { .. } => {
+                // Fourier post-processing happens on the .tran result and is
+                // dispatched through the per-analysis `simulate_four` /
+                // `simulate_fft` IR APIs. The Netlist-shaped harness fixtures
+                // don't currently exercise it — fall through to the IR's
+                // top-level simulate to pick up Four/Fft from the IR clone.
+                thevenin::circuit::simulate(&per_analysis)
+                    .map_err(|e| format!("Fourier error: {e}"))?
+            }
         };
         all_plots.extend(result.plots);
     }
@@ -283,6 +292,8 @@ fn matches_kind(ir: &cirq_ir::Analysis, netlist: &Analysis) -> bool {
             | (I::Tf(_), N::Tf { .. })
             | (I::Sens(_), N::Sens { .. })
             | (I::Pz(_), N::Pz { .. })
+            | (I::Four(_), N::Four { .. })
+            | (I::Fft(_), N::Fft { .. })
     )
 }
 
