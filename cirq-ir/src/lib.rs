@@ -152,6 +152,17 @@ pub enum ElementKind {
     TransmissionLine,
     /// Single lossy transmission line (SPICE Y element / TXL model).
     Txl,
+    /// Ideal lossless transmission line (SPICE `T` element).
+    /// Terminals appear in `connections` under the names `"port1_pos"`,
+    /// `"port1_neg"`, `"port2_pos"`, `"port2_neg"`.
+    Tline {
+        /// Characteristic impedance Z0 in ohms.
+        z0: f64,
+        /// One-way propagation delay TD in seconds.
+        td: f64,
+        /// Optional initial conditions `(v1, i1, v2, i2)`.
+        ic: Option<[f64; 4]>,
+    },
     /// Coupled multiconductor transmission line (P element).
     /// Connections use terminal names `"in0"`, `"in1"`, ..., `"gnd"`,
     /// `"out0"`, `"out1"`, ... in the element's `connections` field.

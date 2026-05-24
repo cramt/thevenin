@@ -866,6 +866,30 @@ fn convert_element(
             })
         }
 
+        IrElementKind::Tline { z0, td, ic } => {
+            let pos1 = get_conn(elem, "port1_pos", net_names)?;
+            let neg1 = get_conn(elem, "port1_neg", net_names)?;
+            let pos2 = get_conn(elem, "port2_pos", net_names)?;
+            let neg2 = get_conn(elem, "port2_neg", net_names)?;
+            let ic_expr = ic.map(|[v1, i1, v2, i2]| {
+                [Expr::Num(v1), Expr::Num(i1), Expr::Num(v2), Expr::Num(i2)]
+            });
+            Ok(Element {
+                name: spice_name(&elem.name, 'T'),
+                kind: ElementKind::Tline {
+                    pos1,
+                    neg1,
+                    pos2,
+                    neg2,
+                    z0: Expr::Num(*z0),
+                    td: Some(Expr::Num(*td)),
+                    f: None,
+                    nl: None,
+                    ic: ic_expr,
+                },
+            })
+        }
+
         IrElementKind::Coupling => {
             // Coupling references two inductor names and a coupling coefficient.
             // The Cirq IR stores these as params: l1, l2, coupling.

@@ -286,6 +286,8 @@ pub struct MnaSystem {
     pub txls: Vec<crate::txl::TxlInstance>,
     /// Resolved CPL (coupled multiconductor transmission line) instances.
     pub cpls: Vec<crate::cpl::CplInstance>,
+    /// Resolved ideal lossless transmission line (T element) instances.
+    pub tlines: Vec<crate::tline::TlineInstance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
@@ -340,6 +342,7 @@ impl MnaSystem {
             ltras: Vec::new(),
             txls: Vec::new(),
             cpls: Vec::new(),
+            tlines: Vec::new(),
             voltage_sources: Vec::new(),
             current_sources: Vec::new(),
             behavioral_sources: Vec::new(),
@@ -565,6 +568,17 @@ impl MnaSystem {
         let n = self.total_num_nodes();
         for inst in &self.txls {
             crate::txl::stamp_txl_dc(inst, system, n);
+        }
+    }
+
+    /// Stamp T-line (ideal lossless line) DC equations.
+    ///
+    /// Mirrors the LTRA / TXL / CPL pattern: kept out of the base matrix so
+    /// transient and AC paths can write their own stamps without conflict.
+    pub fn stamp_tline_dc_all(&self, system: &mut crate::LinearSystem) {
+        let n = self.total_num_nodes();
+        for inst in &self.tlines {
+            crate::tline::stamp_tline_dc(inst, system, n);
         }
     }
 
@@ -3286,6 +3300,11 @@ fn assemble_mna_flat(
         ltras,
         txls,
         cpls,
+        // The legacy Netlist-shape MNA assembler doesn't yet stamp T elements;
+        // they're stamped exclusively through the `cirq_ir::Circuit` path
+        // (`mna_ir::assemble_mna_from_circuit`). Leave empty so the transient
+        // / AC sweeps that read this vec skip over it cleanly.
+        tlines: Vec::new(),
         behavioral_sources,
         behavioral_voltage_sources,
         xspice_instances,

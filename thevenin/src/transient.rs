@@ -17,6 +17,7 @@ use crate::ltra::{LtraCoeffs, LtraState};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::newton::{NrMode, NrOptions, transient_nr_solve_with_cache};
 use crate::simulate::{nr_options_from_netlist, solve_op_raw_with_opts};
+use crate::tline::TlineState;
 use crate::txl::TxlTransientStamp;
 use crate::waveform::{self, TranParams};
 
@@ -1219,6 +1220,32 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
     // Time points history for LTRA convolution.
     let mut ltra_time_points: Vec<f64> = if has_ltra { vec![0.0] } else { Vec::new() };
 
+    // Initialize ideal-lossless-T-line transient state.
+    let has_tline = !mna.tlines.is_empty();
+    let mut tline_states: Vec<TlineState> = mna
+        .tlines
+        .iter()
+        .map(|inst| {
+            let mut state = TlineState::new();
+            // Seed from IC= if supplied, otherwise from the DC operating
+            // point. Both paths leave the history with a single sample at
+            // t=0 so the first transient interpolation has a bracket.
+            let (v1, i1, v2, i2) = if let Some([v1, i1, v2, i2]) = inst.model.ic {
+                (v1, i1, v2, i2)
+            } else {
+                let v1 =
+                    node_voltage(&solution, inst.pos1_idx) - node_voltage(&solution, inst.neg1_idx);
+                let i1 = solution[num_nodes + inst.br_eq1];
+                let v2 =
+                    node_voltage(&solution, inst.pos2_idx) - node_voltage(&solution, inst.neg2_idx);
+                let i2 = solution[num_nodes + inst.br_eq2];
+                (v1, i1, v2, i2)
+            };
+            state.init_from_dc(v1, i1, v2, i2);
+            state
+        })
+        .collect();
+
     // Initialize TXL transient state from DC operating point.
     let has_txl = !mna.txls.is_empty();
     if has_txl {
@@ -1534,6 +1561,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             },
             if has_txl { Some(&txl_stamps) } else { None },
             if has_cpl { Some(&cpl_stamps) } else { None },
+            if has_tline { Some(&tline_states) } else { None },
             &mesa_charge_histories,
             &hfet_charge_histories,
             &mosfet_charge_histories,
@@ -2117,6 +2145,19 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             }
         }
 
+        // Update ideal-lossless-T-line histories.
+        if has_tline {
+            for (ti, inst) in mna.tlines.iter().enumerate() {
+                let v1 =
+                    node_voltage(&solution, inst.pos1_idx) - node_voltage(&solution, inst.neg1_idx);
+                let i1 = solution[num_nodes + inst.br_eq1];
+                let v2 =
+                    node_voltage(&solution, inst.pos2_idx) - node_voltage(&solution, inst.neg2_idx);
+                let i2 = solution[num_nodes + inst.br_eq2];
+                tline_states[ti].accept(t, v1, i1, v2, i2, inst.model.td);
+            }
+        }
+
         // Update TXL histories and convolution accumulators.
         if has_txl {
             let time_ps = (t * 1.0e12) as i64;
@@ -2335,6 +2376,7 @@ fn solve_timestep(
     ltra_time_points: Option<&[f64]>,
     txl_stamps: Option<&[TxlTransientStamp]>,
     cpl_stamps: Option<&[crate::cpl::CplTransientStamp]>,
+    tline_states: Option<&[TlineState]>,
     mesa_charge_histories: &[MesaChargeHistory],
     hfet_charge_histories: &[HfetChargeHistory],
     mosfet_charge_histories: &[MosfetChargeHistory],
@@ -2420,6 +2462,13 @@ fn solve_timestep(
         if let Some(stamps) = txl_stamps {
             for stamp in stamps {
                 crate::txl::apply_txl_transient(stamp, system);
+            }
+        }
+
+        // 1d2. Stamp ideal-lossless T-line transient equations.
+        if let Some(states) = tline_states {
+            for (ti, inst) in mna.tlines.iter().enumerate() {
+                crate::tline::stamp_tline_transient(inst, &states[ti], system, num_nodes, t);
             }
         }
 

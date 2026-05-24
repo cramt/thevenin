@@ -520,6 +520,20 @@ pub enum ElementKind {
         model: String,
         params: Vec<Param>,
     },
+    /// `Tname n1+ n1- n2+ n2- Z0=val [TD=delay | F=freq [NL=count]] [IC=v1,i1,v2,i2]`
+    /// (ideal lossless transmission line — the `T` element).
+    Tline {
+        pos1: String,
+        neg1: String,
+        pos2: String,
+        neg2: String,
+        z0: Expr,
+        td: Option<Expr>,
+        f: Option<Expr>,
+        nl: Option<Expr>,
+        /// Initial conditions `(v1, i1, v2, i2)` when `IC=` is supplied.
+        ic: Option<[Expr; 4]>,
+    },
     /// `Pname <in_nodes...> 0 <out_nodes...> 0 model` (CPL coupled lines)
     Cpl {
         /// Input port nodes (one per line).
@@ -768,6 +782,32 @@ impl fmt::Display for Element {
             } => {
                 write!(f, "{} {pos1} {neg1} {pos2} {neg2} {model}", self.name)?;
                 write_params(f, params)
+            }
+            ElementKind::Tline {
+                pos1,
+                neg1,
+                pos2,
+                neg2,
+                z0,
+                td,
+                f: freq,
+                nl,
+                ic,
+            } => {
+                write!(f, "{} {pos1} {neg1} {pos2} {neg2} Z0={z0}", self.name)?;
+                if let Some(td) = td {
+                    write!(f, " TD={td}")?;
+                }
+                if let Some(freq) = freq {
+                    write!(f, " F={freq}")?;
+                }
+                if let Some(nl) = nl {
+                    write!(f, " NL={nl}")?;
+                }
+                if let Some([v1, i1, v2, i2]) = ic {
+                    write!(f, " IC={v1},{i1},{v2},{i2}")?;
+                }
+                Ok(())
             }
             ElementKind::Cpl {
                 in_nodes,

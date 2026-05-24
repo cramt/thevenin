@@ -214,6 +214,7 @@ fn circuit_is_supported_subset(circuit: &Circuit) -> bool {
                 | IrElementKind::BehavioralSource { .. }
                 | IrElementKind::TransmissionLine
                 | IrElementKind::Txl
+                | IrElementKind::Tline { .. }
                 | IrElementKind::CoupledLine { .. }
                 | IrElementKind::Xspice { .. }
                 | IrElementKind::Switch { .. }
@@ -1131,6 +1132,17 @@ fn stamp_circuit(
                 // Both LTRA and TXL add 2 branch equations (one per port).
                 vsource_count += 2;
             }
+            IrElementKind::Tline { .. } => {
+                for term in ["port1_pos", "port1_neg", "port2_pos", "port2_neg"] {
+                    let n = terminal_name(elem, term, &net_name)?;
+                    node_map.index(n);
+                }
+                // Two branch currents (one per port). The lossless line
+                // absorbs its Z0 series impedance into the branch equation
+                // directly — no internal nodes required (matches the LTRA
+                // LC pattern in stamp_ltra_transient).
+                vsource_count += 2;
+            }
             IrElementKind::CoupledLine { width } => {
                 for i in 0..*width {
                     let n = terminal_name(elem, &format!("in{i}"), &net_name)?;
@@ -1816,6 +1828,49 @@ fn stamp_circuit(
                     length,
                     dc_given: false,
                 });
+            }
+            IrElementKind::Tline { z0, td, ic } => {
+                let pos1_idx = mna
+                    .node_map
+                    .get(terminal_name(elem, "port1_pos", &net_name)?);
+                let neg1_idx = mna
+                    .node_map
+                    .get(terminal_name(elem, "port1_neg", &net_name)?);
+                let pos2_idx = mna
+                    .node_map
+                    .get(terminal_name(elem, "port2_pos", &net_name)?);
+                let neg2_idx = mna
+                    .node_map
+                    .get(terminal_name(elem, "port2_neg", &net_name)?);
+
+                let br1 = vsource_idx;
+                let br2 = vsource_idx + 1;
+                vsource_idx += 2;
+                mna.vsource_names
+                    .push(format!("{}#branch1", elem.name.to_lowercase()));
+                mna.vsource_names
+                    .push(format!("{}#branch2", elem.name.to_lowercase()));
+
+                let model = crate::tline::TlineModel {
+                    z0: *z0,
+                    td: *td,
+                    ic: *ic,
+                };
+                let inst = crate::tline::TlineInstance {
+                    name: elem.name.clone(),
+                    pos1_idx,
+                    neg1_idx,
+                    pos2_idx,
+                    neg2_idx,
+                    br_eq1: br1,
+                    br_eq2: br2,
+                    model,
+                };
+                // T-line DC stamps are added at OP/DC time via
+                // `MnaSystem::stamp_tline_dc_all`, mirroring how LTRA/TXL/CPL
+                // keep their stamps out of the base matrix so transient and
+                // AC can use distinct forms.
+                mna.tlines.push(inst);
             }
             IrElementKind::CoupledLine { width } => {
                 // CPL stores its model name in the `model` string param, not

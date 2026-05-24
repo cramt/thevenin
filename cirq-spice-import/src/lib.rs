@@ -1416,6 +1416,13 @@ fn intern_element_nodes(kind: &SpiceElementKind, nets: &mut NetTable) {
             pos2,
             neg2,
             ..
+        }
+        | SpiceElementKind::Tline {
+            pos1,
+            neg1,
+            pos2,
+            neg2,
+            ..
         } => {
             nets.intern(pos1);
             nets.intern(neg1);
@@ -1922,6 +1929,78 @@ fn convert_element(
                 ],
                 params: convert_params(params),
                 model: model_id,
+                source_spec: None,
+            }))
+        }
+
+        SpiceElementKind::Tline {
+            pos1,
+            neg1,
+            pos2,
+            neg2,
+            z0,
+            td,
+            f,
+            nl,
+            ic,
+        } => {
+            let z0_val = expr_to_f64(z0, params)?;
+            let td_val = if let Some(td_expr) = td {
+                expr_to_f64(td_expr, params)?
+            } else {
+                let nl_val = nl
+                    .as_ref()
+                    .map(|e| expr_to_f64(e, params))
+                    .transpose()?
+                    .unwrap_or(0.25);
+                let f_val = f
+                    .as_ref()
+                    .map(|e| expr_to_f64(e, params))
+                    .transpose()?
+                    .unwrap_or(1.0e9);
+                if f_val <= 0.0 {
+                    return Err(ImportError::UnevaluableExpr(format!(
+                        "T element `{name}`: F= must be positive"
+                    )));
+                }
+                nl_val / f_val
+            };
+            let ic_val: Option<[f64; 4]> = if let Some(ic_arr) = ic {
+                Some([
+                    expr_to_f64(&ic_arr[0], params)?,
+                    expr_to_f64(&ic_arr[1], params)?,
+                    expr_to_f64(&ic_arr[2], params)?,
+                    expr_to_f64(&ic_arr[3], params)?,
+                ])
+            } else {
+                None
+            };
+            let mut ir_params: Vec<(String, Value)> = vec![
+                ("z0".to_owned(), Value::Real(z0_val)),
+                ("td".to_owned(), Value::Real(td_val)),
+            ];
+            if let Some([v1, i1, v2, i2]) = ic_val {
+                ir_params.push(("ic_v1".to_owned(), Value::Real(v1)));
+                ir_params.push(("ic_i1".to_owned(), Value::Real(i1)));
+                ir_params.push(("ic_v2".to_owned(), Value::Real(v2)));
+                ir_params.push(("ic_i2".to_owned(), Value::Real(i2)));
+            }
+            Ok(Some(IrElement {
+                id,
+                name: name.clone(),
+                kind: IrElementKind::Tline {
+                    z0: z0_val,
+                    td: td_val,
+                    ic: ic_val,
+                },
+                connections: vec![
+                    connection("port1_pos", nets.intern(pos1)),
+                    connection("port1_neg", nets.intern(neg1)),
+                    connection("port2_pos", nets.intern(pos2)),
+                    connection("port2_neg", nets.intern(neg2)),
+                ],
+                params: ir_params,
+                model: None,
                 source_spec: None,
             }))
         }

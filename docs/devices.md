@@ -83,7 +83,7 @@ Transient waveforms supported on V and I (all six from
 | LTRA (lossy 2-port) | O | implemented | [ltra.rs](../thevenin/src/ltra.rs) | Convolution-based; `.model LTRA`. |
 | TXL (single lossy line) | Y | implemented | [txl.rs](../thevenin/src/txl.rs) | Padé approximation of Y(s) and propagation. `.model TXL`. |
 | CPL (coupled multiconductor) | P | implemented | [cpl.rs](../thevenin/src/cpl.rs) | Jacobi eigendecomposition + Padé per modal line. `.model CPL`. |
-| Ideal lossless line | T | **not implemented** | — | Separate from O/Y. Tracked in checklist C1. |
+| Ideal lossless line | T | implemented | [tline.rs](../thevenin/src/tline.rs) | `T<name> n1+ n1- n2+ n2- Z0=val [TD=delay \| F=freq [NL=count]] [IC=v1,i1,v2,i2]`. DC = wire (V1=V2, I1=-I2), transient = method of characteristics with `VecDeque` history + linear interpolation, AC = closed-form lossless ABCD matrix. |
 | Uniform RC line | U | **not implemented** — in 1.0 scope | — | URC. Confirmed in scope; checklist A1. |
 
 ## Switches
@@ -127,7 +127,6 @@ tree currently has no implementation:
   stderr warning naming the offending model and level. Either implement the
   port or correct the checklist.
 - **URC** transmission line (`U` element).
-- **Ideal lossless line** (`T` element).
 - **BSIM1**, **BSIM2** MOSFET levels.
 - **VDMOS** power MOSFET.
 - **HiSIM** and **HiSIMHV** compact models.

@@ -99,8 +99,26 @@ pub fn run_ac_sweep(mna: MnaSystem, params: AcSweepRunParams) -> Result<SimResul
         } else {
             solve_nonlinear_op_with_nodeset(&mna, &nr_opts, &nodeset)?
         }
-    } else {
+    } else if mna.ltras.is_empty()
+        && mna.txls.is_empty()
+        && mna.cpls.is_empty()
+        && mna.tlines.is_empty()
+    {
         mna.system.solve()?
+    } else {
+        // Transmission-line DC stamps live outside the base matrix
+        // (see simulate.rs::solve_op_raw_with_opts). Replicate the
+        // augmented-copy pattern here so OP for AC sweep matches.
+        let mut system = crate::LinearSystem::new(mna.system.dim());
+        for triplet in mna.system.matrix.triplets() {
+            system.matrix.add(triplet.row, triplet.col, triplet.value);
+        }
+        system.rhs = mna.system.rhs.clone();
+        mna.stamp_ltra_dc_all(&mut system);
+        mna.stamp_txl_dc_all(&mut system);
+        mna.stamp_cpl_dc_all(&mut system);
+        mna.stamp_tline_dc_all(&mut system);
+        system.solve()?
     };
 
     // Generate frequency sweep points.
@@ -231,6 +249,27 @@ fn solve_ac_frequencies(
     excitations: &[AcExcitation],
     gmin: f64,
 ) -> Result<Vec<AcFreqResult>, MnaError> {
+    // The `AcStampCache` fast path assumes every imaginary contribution is
+    // linear in ω (caps, inductors, transit-time × g, etc.). The ideal
+    // lossless T-line's ABCD matrix has `cos(ωTD)` and `sin(ωTD)` terms
+    // that aren't, so re-stamp sequentially at each frequency when T-lines
+    // are present. `MnaSystem` isn't `Send` (the switch instances aren't),
+    // so parallel rayon dispatch would need a wrapper — sequential is fine
+    // for the rare T-line-in-AC case.
+    if !mna.tlines.is_empty() {
+        let num_nodes = mna.total_num_nodes();
+        return frequencies
+            .iter()
+            .map(|&freq| {
+                let omega = 2.0 * PI * freq;
+                let sys = build_ac_system(mna, op_solution, omega, excitations, num_nodes, gmin);
+                sys.solve()
+                    .map_err(MnaError::SolveError)
+                    .map(|sol| (freq, sol))
+            })
+            .collect();
+    }
+
     let cache = build_ac_stamp_cache(mna, op_solution, excitations, gmin);
 
     #[cfg(not(target_family = "wasm"))]
@@ -327,6 +366,17 @@ pub fn stamp_ac_devices(
     // 1. Stamp DC conductance matrix (real part) from base MNA stamps.
     for triplet in mna.system.matrix.triplets() {
         sys.real.add(triplet.row, triplet.col, triplet.value);
+    }
+
+    // 1a. Stamp ideal-lossless T-line ABCD matrix.
+    //
+    // T-line DC stamps live outside the base matrix (same pattern as
+    // LTRA/TXL/CPL), so add the AC form directly. At ω → 0 this reduces
+    // to the DC wire (cos(0) = 1, sin(0) = 0), matching the OP behaviour
+    // exactly when the AC sweep starts near DC.
+    let num_nodes = mna.total_num_nodes();
+    for inst in &mna.tlines {
+        crate::tline::stamp_tline_ac(inst, sys, num_nodes, omega);
     }
 
     // 1b. Adjust for resistors with explicit AC resistance (ac= parameter).

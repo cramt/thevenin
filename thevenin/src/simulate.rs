@@ -142,10 +142,15 @@ pub(crate) fn solve_op_raw_with_opts(
     base_opts: &NrOptions,
 ) -> Result<Vec<f64>, MnaError> {
     if !mna.has_nonlinear() {
-        if mna.ltras.is_empty() && mna.txls.is_empty() && mna.cpls.is_empty() {
+        if mna.ltras.is_empty()
+            && mna.txls.is_empty()
+            && mna.cpls.is_empty()
+            && mna.tlines.is_empty()
+        {
             mna.system.solve().map_err(MnaError::from)
         } else {
-            // LTRA/TXL DC stamps are not in the base matrix; add them to a copy.
+            // Transmission-line DC stamps are not in the base matrix; add
+            // them to a copy.
             let mut system = LinearSystem::new(mna.system.dim());
             for triplet in mna.system.matrix.triplets() {
                 system.matrix.add(triplet.row, triplet.col, triplet.value);
@@ -154,6 +159,7 @@ pub(crate) fn solve_op_raw_with_opts(
             mna.stamp_ltra_dc_all(&mut system);
             mna.stamp_txl_dc_all(&mut system);
             mna.stamp_cpl_dc_all(&mut system);
+            mna.stamp_tline_dc_all(&mut system);
             system.solve().map_err(MnaError::from)
         }
     } else {
@@ -239,6 +245,7 @@ fn jct_initial_guess(
     mna.stamp_ltra_dc_all(&mut system);
     mna.stamp_txl_dc_all(&mut system);
     mna.stamp_cpl_dc_all(&mut system);
+    mna.stamp_tline_dc_all(&mut system);
 
     // Stamp each Level-1 MOSFET at its threshold voltage.
     // Initial guess: ngspice's MODEINITJCT (mos1load.c:397-411) sets:
@@ -539,10 +546,11 @@ fn solve_nonlinear_op_with_guess(
             system.rhs[i] += val * source_factor;
         }
 
-        // 2. Stamp LTRA/TXL/CPL DC equations (not in base matrix).
+        // 2. Stamp transmission-line DC equations (not in base matrix).
         mna.stamp_ltra_dc_all(system);
         mna.stamp_txl_dc_all(system);
         mna.stamp_cpl_dc_all(system);
+        mna.stamp_tline_dc_all(system);
 
         // 3. Stamp all nonlinear device companions.
         //    When gmin stepping elevates the diagonal gmin above the nominal

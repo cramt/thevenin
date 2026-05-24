@@ -116,6 +116,7 @@ fn standard_pins(kind: &ElementKind) -> &'static [&'static str] {
         ElementKind::TransmissionLine | ElementKind::Txl => {
             &["in_pos", "in_neg", "out_pos", "out_neg"]
         }
+        ElementKind::Tline { .. } => &["port1_pos", "port1_neg", "port2_pos", "port2_neg"],
         ElementKind::Coupling => &[],
         // CoupledLine and Xspice have variable-width connections; no static pin list.
         ElementKind::CoupledLine { .. } | ElementKind::Xspice { .. } => &[],

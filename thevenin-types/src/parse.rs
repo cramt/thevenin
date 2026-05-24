@@ -1325,6 +1325,79 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                 params,
             }
         }
+        'T' => {
+            // T<name> n1+ n1- n2+ n2- Z0=val [TD=delay | F=freq [NL=count]]
+            //          [IC=v1,i1,v2,i2]
+            let pos1 = need!(0, "n1+").to_string();
+            let neg1 = need!(1, "n1-").to_string();
+            let pos2 = need!(2, "n2+").to_string();
+            let neg2 = need!(3, "n2-").to_string();
+            let mut z0: Option<Expr> = None;
+            let mut td: Option<Expr> = None;
+            let mut freq: Option<Expr> = None;
+            let mut nl: Option<Expr> = None;
+            let mut ic: Option<[Expr; 4]> = None;
+            for tok in &rest[4..] {
+                let upper = tok.to_uppercase();
+                if let Some(eq) = tok.find('=') {
+                    let key = &tok[..eq];
+                    let val = &tok[eq + 1..];
+                    let key_up = key.to_uppercase();
+                    match key_up.as_str() {
+                        "Z0" | "ZO" => z0 = Some(parse_expr(val)),
+                        "TD" => td = Some(parse_expr(val)),
+                        "F" | "FREQ" => freq = Some(parse_expr(val)),
+                        "NL" => nl = Some(parse_expr(val)),
+                        "IC" => {
+                            // Comma-separated v1,i1,v2,i2.
+                            let parts: Vec<&str> = val.split(',').map(str::trim).collect();
+                            if parts.len() == 4 {
+                                ic = Some([
+                                    parse_expr(parts[0]),
+                                    parse_expr(parts[1]),
+                                    parse_expr(parts[2]),
+                                    parse_expr(parts[3]),
+                                ]);
+                            } else {
+                                return Err(syntax(
+                                    lineno,
+                                    "T: IC= must supply v1,i1,v2,i2 (4 comma-separated values)",
+                                ));
+                            }
+                        }
+                        _ => {
+                            // Unknown key=value — silently ignore (matches ngspice's permissive
+                            // parsing of stray trailing parameters).
+                        }
+                    }
+                } else if upper == "PARAMS:" || upper == "PARAM:" {
+                    // Skip; subsequent tokens supply key=value pairs.
+                } else {
+                    return Err(syntax(
+                        lineno,
+                        format!("T: unrecognised positional token `{tok}`"),
+                    ));
+                }
+            }
+            let z0 = z0.ok_or_else(|| syntax(lineno, "T: missing Z0= parameter"))?;
+            if td.is_none() && freq.is_none() {
+                return Err(syntax(
+                    lineno,
+                    "T: must supply either TD= or F= [NL=] parameter",
+                ));
+            }
+            ElementKind::Tline {
+                pos1,
+                neg1,
+                pos2,
+                neg2,
+                z0,
+                td,
+                f: freq,
+                nl,
+                ic,
+            }
+        }
         'P' => {
             // P<name> <in_nodes...> gnd <out_nodes...> gnd model
             let positional: Vec<&str> = rest

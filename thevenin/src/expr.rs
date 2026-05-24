@@ -952,6 +952,25 @@ fn resolve_element(
         ElementKind::Txl { params, .. } => {
             resolve_params(params, ctx);
         }
+        ElementKind::Tline {
+            z0, td, f, nl, ic, ..
+        } => {
+            try_resolve_expr(z0, ctx);
+            if let Some(e) = td {
+                try_resolve_expr(e, ctx);
+            }
+            if let Some(e) = f {
+                try_resolve_expr(e, ctx);
+            }
+            if let Some(e) = nl {
+                try_resolve_expr(e, ctx);
+            }
+            if let Some(arr) = ic {
+                for e in arr.iter_mut() {
+                    try_resolve_expr(e, ctx);
+                }
+            }
+        }
         ElementKind::Cpl { params, .. } => {
             resolve_params(params, ctx);
         }

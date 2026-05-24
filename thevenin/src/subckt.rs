@@ -566,6 +566,34 @@ fn remap_element(
             model: model.clone(),
             params: resolve_params(params, param_map),
         },
+        ElementKind::Tline {
+            pos1,
+            neg1,
+            pos2,
+            neg2,
+            z0,
+            td,
+            f,
+            nl,
+            ic,
+        } => ElementKind::Tline {
+            pos1: remap(pos1),
+            neg1: remap(neg1),
+            pos2: remap(pos2),
+            neg2: remap(neg2),
+            z0: resolve_expr(z0),
+            td: td.as_ref().map(resolve_expr),
+            f: f.as_ref().map(resolve_expr),
+            nl: nl.as_ref().map(resolve_expr),
+            ic: ic.as_ref().map(|arr| {
+                [
+                    resolve_expr(&arr[0]),
+                    resolve_expr(&arr[1]),
+                    resolve_expr(&arr[2]),
+                    resolve_expr(&arr[3]),
+                ]
+            }),
+        },
         ElementKind::Cpl {
             in_nodes,
             out_nodes,
