@@ -742,6 +742,8 @@ fn map_device_type(kind: &str) -> cirq_ir::DeviceType {
         "PJF" => cirq_ir::DeviceType::PJfet,
         "NMF" | "GASFET" | "MESA" => cirq_ir::DeviceType::NMesfet,
         "PMF" => cirq_ir::DeviceType::PMesfet,
+        "SW" | "VSWITCH" => cirq_ir::DeviceType::VSwitch,
+        "CSW" | "ISWITCH" => cirq_ir::DeviceType::ISwitch,
         _ => cirq_ir::DeviceType::Other(kind.to_owned()),
     }
 }
@@ -1241,6 +1243,22 @@ fn intern_element_nodes(kind: &SpiceElementKind, nets: &mut NetTable) {
                     }
                 }
             }
+        }
+        SpiceElementKind::VSwitch {
+            pos,
+            neg,
+            ctrl_pos,
+            ctrl_neg,
+            ..
+        } => {
+            nets.intern(pos);
+            nets.intern(neg);
+            nets.intern(ctrl_pos);
+            nets.intern(ctrl_neg);
+        }
+        SpiceElementKind::ISwitch { pos, neg, .. } => {
+            nets.intern(pos);
+            nets.intern(neg);
         }
         SpiceElementKind::Raw(_) => {}
     }
@@ -1808,6 +1826,75 @@ fn convert_element(
             }))
         }
 
+        SpiceElementKind::VSwitch {
+            pos,
+            neg,
+            ctrl_pos,
+            ctrl_neg,
+            model,
+            on,
+            params,
+        } => {
+            let model_id = model_ids.get(&model.to_ascii_uppercase()).copied();
+            let pos_id = nets.intern(pos);
+            let neg_id = nets.intern(neg);
+            let ctrl_pos_id = nets.intern(ctrl_pos);
+            let ctrl_neg_id = nets.intern(ctrl_neg);
+            let mut ir_params = convert_params(params);
+            if let Some(state) = on {
+                ir_params.push(("on".to_owned(), Value::Bool(*state)));
+            }
+            Ok(Some(IrElement {
+                id,
+                name: name.clone(),
+                kind: IrElementKind::Switch {
+                    kind: cirq_ir::SwitchKind::Voltage,
+                    control: cirq_ir::SwitchControl::Nodes {
+                        pos: ctrl_pos_id,
+                        neg: ctrl_neg_id,
+                    },
+                },
+                connections: vec![
+                    connection("pos", pos_id),
+                    connection("neg", neg_id),
+                    connection("ctrl_pos", ctrl_pos_id),
+                    connection("ctrl_neg", ctrl_neg_id),
+                ],
+                params: ir_params,
+                model: model_id,
+                source_spec: None,
+            }))
+        }
+        SpiceElementKind::ISwitch {
+            pos,
+            neg,
+            vsense,
+            model,
+            on,
+            params,
+        } => {
+            let model_id = model_ids.get(&model.to_ascii_uppercase()).copied();
+            let pos_id = nets.intern(pos);
+            let neg_id = nets.intern(neg);
+            let mut ir_params = convert_params(params);
+            if let Some(state) = on {
+                ir_params.push(("on".to_owned(), Value::Bool(*state)));
+            }
+            Ok(Some(IrElement {
+                id,
+                name: name.clone(),
+                kind: IrElementKind::Switch {
+                    kind: cirq_ir::SwitchKind::Current,
+                    control: cirq_ir::SwitchControl::Vsense {
+                        name: vsense.clone(),
+                    },
+                },
+                connections: vec![connection("pos", pos_id), connection("neg", neg_id)],
+                params: ir_params,
+                model: model_id,
+                source_spec: None,
+            }))
+        }
         SpiceElementKind::Raw(_) => {
             // Unrecognized element — skip gracefully rather than failing the
             // entire import.  The element is lost but the rest of the circuit

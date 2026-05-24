@@ -983,6 +983,60 @@ fn convert_element(
                 },
             })
         }
+
+        IrElementKind::Switch { kind, control } => {
+            let pos = get_conn(elem, "pos", net_names)?;
+            let neg = get_conn(elem, "neg", net_names)?;
+            let model = resolve_model_name(elem, model_names)?;
+            let on = elem.params.iter().find_map(|(k, v)| {
+                if k.eq_ignore_ascii_case("on") {
+                    if let Value::Bool(b) = v {
+                        Some(*b)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            });
+            let params = extra_params(elem, &["value", "on"]);
+            match (kind, control) {
+                (cirq_ir::SwitchKind::Voltage, cirq_ir::SwitchControl::Nodes { .. }) => {
+                    let ctrl_pos = get_conn(elem, "ctrl_pos", net_names)?;
+                    let ctrl_neg = get_conn(elem, "ctrl_neg", net_names)?;
+                    Ok(Element {
+                        name: spice_name(&elem.name, 'S'),
+                        kind: ElementKind::VSwitch {
+                            pos,
+                            neg,
+                            ctrl_pos,
+                            ctrl_neg,
+                            model,
+                            on,
+                            params,
+                        },
+                    })
+                }
+                (cirq_ir::SwitchKind::Current, cirq_ir::SwitchControl::Vsense { name }) => {
+                    Ok(Element {
+                        name: spice_name(&elem.name, 'W'),
+                        kind: ElementKind::ISwitch {
+                            pos,
+                            neg,
+                            vsense: name.clone(),
+                            model,
+                            on,
+                            params,
+                        },
+                    })
+                }
+                // Mismatched kind/control combinations shouldn't occur — the
+                // importer keeps them aligned and the IR never constructs
+                // crossed forms — but return an error rather than panic if
+                // somebody hand-builds an inconsistent IR element.
+                _ => Err(ConvertError::MissingValue(elem.name.clone())),
+            }
+        }
     }
 }
 
@@ -1020,6 +1074,8 @@ pub fn convert_model(model: &cirq_ir::Model) -> ModelDef {
         DeviceType::PJfet => "PJF".into(),
         DeviceType::NMesfet => "NMF".into(),
         DeviceType::PMesfet => "PMF".into(),
+        DeviceType::VSwitch => "SW".into(),
+        DeviceType::ISwitch => "CSW".into(),
         DeviceType::Other(s) => s.clone(),
     };
 

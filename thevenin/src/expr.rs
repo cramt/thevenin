@@ -955,6 +955,9 @@ fn resolve_element(
         ElementKind::Cpl { params, .. } => {
             resolve_params(params, ctx);
         }
+        ElementKind::VSwitch { params, .. } | ElementKind::ISwitch { params, .. } => {
+            resolve_params(params, ctx);
+        }
         ElementKind::Xspice { .. } | ElementKind::BehavioralSource { .. } | ElementKind::Raw(_) => {
         }
     }

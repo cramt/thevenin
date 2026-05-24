@@ -1304,6 +1304,64 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             let (connections, model) = parse_xspice_connections(lineno, rest)?;
             ElementKind::Xspice { connections, model }
         }
+        'S' => {
+            // S<name> n+ n- nc+ nc- model [ON|OFF]
+            let pos = need!(0, "n+").to_string();
+            let neg = need!(1, "n-").to_string();
+            let ctrl_pos = need!(2, "nc+").to_string();
+            let ctrl_neg = need!(3, "nc-").to_string();
+            let model = need!(4, "model").to_string();
+            let mut on: Option<bool> = None;
+            for tok in &rest[5..] {
+                if tok.eq_ignore_ascii_case("ON") {
+                    on = Some(true);
+                } else if tok.eq_ignore_ascii_case("OFF") {
+                    on = Some(false);
+                }
+            }
+            let params: Vec<_> = rest[5..]
+                .iter()
+                .filter(|t| !t.eq_ignore_ascii_case("ON") && !t.eq_ignore_ascii_case("OFF"))
+                .filter_map(|t| parse_kv(t))
+                .collect();
+            ElementKind::VSwitch {
+                pos,
+                neg,
+                ctrl_pos,
+                ctrl_neg,
+                model,
+                on,
+                params,
+            }
+        }
+        'W' => {
+            // W<name> n+ n- vsense model [ON|OFF]
+            let pos = need!(0, "n+").to_string();
+            let neg = need!(1, "n-").to_string();
+            let vsense = need!(2, "vsense").to_string();
+            let model = need!(3, "model").to_string();
+            let mut on: Option<bool> = None;
+            for tok in &rest[4..] {
+                if tok.eq_ignore_ascii_case("ON") {
+                    on = Some(true);
+                } else if tok.eq_ignore_ascii_case("OFF") {
+                    on = Some(false);
+                }
+            }
+            let params: Vec<_> = rest[4..]
+                .iter()
+                .filter(|t| !t.eq_ignore_ascii_case("ON") && !t.eq_ignore_ascii_case("OFF"))
+                .filter_map(|t| parse_kv(t))
+                .collect();
+            ElementKind::ISwitch {
+                pos,
+                neg,
+                vsense,
+                model,
+                on,
+                params,
+            }
+        }
         _ => {
             // Unknown element — store everything after the name verbatim
             ElementKind::Raw(rest.join(" "))
@@ -1567,6 +1625,8 @@ fn parse_dot(
 
             // Handle parenthesized params: "NPN(BF=80 RB=100 ...)"
             // The tokenizer keeps everything inside parens as one token.
+            // Also accept the spaced form "NPN (BF=80 RB=100 ...)" where the
+            // parenthesized block lands in tokens[3..].
             let (kind, params) = if let Some(paren_start) = raw_kind.find('(') {
                 let type_part = raw_kind[..paren_start].to_uppercase();
                 let inner = raw_kind[paren_start + 1..].trim_end_matches(')');
@@ -1578,7 +1638,22 @@ fn parse_dot(
                 params.extend(collect_params(&tokens[3..]));
                 (type_part, params)
             } else {
-                (raw_kind.to_uppercase(), collect_model_params(&tokens[3..]))
+                // Spaced parens form `TYPE (k=v k=v ...)`: tokens[3] is the
+                // single parens-wrapped token; the tokenizer keeps it as
+                // one piece because depth > 0 inside it.
+                let mut params = Vec::new();
+                let mut idx = 3;
+                if let Some(first) = tokens.get(3)
+                    && first.starts_with('(')
+                {
+                    let trimmed = first.trim_start_matches('(').trim_end_matches(')');
+                    let inner_tokens: Vec<String> =
+                        trimmed.split_whitespace().map(String::from).collect();
+                    params.extend(collect_params(&inner_tokens));
+                    idx = 4;
+                }
+                params.extend(collect_model_params(&tokens[idx..]));
+                (raw_kind.to_uppercase(), params)
             };
             Ok(ParsedLine::Item(Item::Model(ModelDef {
                 name,

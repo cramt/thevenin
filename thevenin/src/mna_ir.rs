@@ -171,6 +171,7 @@ fn circuit_is_supported_subset(circuit: &Circuit) -> bool {
                 | IrElementKind::Txl
                 | IrElementKind::CoupledLine { .. }
                 | IrElementKind::Xspice { .. }
+                | IrElementKind::Switch { .. }
         )
     })
 }
@@ -1191,6 +1192,19 @@ fn stamp_circuit(
                         internal_node_count += mm.internal_node_count();
                     }
                 }
+            }
+            IrElementKind::Switch { kind, .. } => {
+                let pos = terminal_name(elem, "pos", &net_name)?;
+                let neg = terminal_name(elem, "neg", &net_name)?;
+                node_map.index(pos);
+                node_map.index(neg);
+                if matches!(kind, cirq_ir::SwitchKind::Voltage) {
+                    let cp = terminal_name(elem, "ctrl_pos", &net_name)?;
+                    let cn = terminal_name(elem, "ctrl_neg", &net_name)?;
+                    node_map.index(cp);
+                    node_map.index(cn);
+                }
+                // No new branches: the switch is a pure conductance.
             }
             IrElementKind::Nmos | IrElementKind::Pmos => {
                 let d = terminal_name(elem, "drain", &net_name)?;
@@ -2877,6 +2891,78 @@ fn stamp_circuit(
                     mna.bjt_cap_indices.push(cap_idx);
                 }
                 // BJT/VBIC stamps are applied during NR iteration, not here.
+            }
+            IrElementKind::Switch { kind, control } => {
+                let pos_idx = mna.node_map.get(terminal_name(elem, "pos", &net_name)?);
+                let neg_idx = mna.node_map.get(terminal_name(elem, "neg", &net_name)?);
+
+                // Resolve the model. Fall back to defaults if the element
+                // has no `.model` reference, matching the diode path.
+                let kind_for_default = match kind {
+                    cirq_ir::SwitchKind::Voltage => crate::switch::SwitchKind::Voltage,
+                    cirq_ir::SwitchKind::Current => crate::switch::SwitchKind::Current,
+                };
+                let base = lookup_model(circuit, elem)
+                    .map(|m| crate::switch::SwitchModel::from_model_def(&convert_model(m)))
+                    .unwrap_or_else(|| crate::switch::SwitchModel::new(kind_for_default));
+                let model = base.with_instance_params(&extra_params(elem, &["value", "on"]));
+
+                let latched_state = std::cell::Cell::new({
+                    let on_flag = elem.params.iter().find_map(|(k, v)| {
+                        if k.eq_ignore_ascii_case("on") {
+                            if let Value::Bool(b) = v {
+                                Some(*b)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    });
+                    crate::switch::SwitchState::from_on_flag(on_flag)
+                });
+
+                let (ctrl_nodes, ctrl_branch) = match (kind, control) {
+                    (cirq_ir::SwitchKind::Voltage, cirq_ir::SwitchControl::Nodes { .. }) => {
+                        let cp = mna
+                            .node_map
+                            .get(terminal_name(elem, "ctrl_pos", &net_name)?);
+                        let cn = mna
+                            .node_map
+                            .get(terminal_name(elem, "ctrl_neg", &net_name)?);
+                        (Some((cp, cn)), None)
+                    }
+                    (cirq_ir::SwitchKind::Current, cirq_ir::SwitchControl::Vsense { name }) => {
+                        let offset = vsource_offset_map
+                            .get(&name.to_lowercase())
+                            .copied()
+                            .ok_or_else(|| {
+                                MnaError::UnsupportedElement(format!(
+                                    "current-controlled switch `{}` references unknown sense source `{}`",
+                                    elem.name, name
+                                ))
+                            })?;
+                        (None, Some(n_nodes + offset))
+                    }
+                    _ => {
+                        return Err(MnaError::UnsupportedElement(format!(
+                            "switch `{}` has inconsistent kind/control combination",
+                            elem.name
+                        )));
+                    }
+                };
+
+                mna.switches.push(crate::switch::SwitchInstance {
+                    name: elem.name.clone(),
+                    pos_idx,
+                    neg_idx,
+                    ctrl_nodes,
+                    ctrl_branch,
+                    latched_state,
+                    model,
+                });
+                // The conductance/current stamps are applied during NR
+                // iteration in `device_stamp::switch`, not here.
             }
         }
     }

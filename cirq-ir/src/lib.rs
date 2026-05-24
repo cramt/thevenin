@@ -165,6 +165,17 @@ pub enum ElementKind {
     Xspice {
         connections: Vec<XspiceConnection>,
     },
+    /// Voltage- or current-controlled switch (SPICE `S` / `W` elements).
+    ///
+    /// The switched terminals (`n+`, `n-`) live in `connections` under the
+    /// names `"pos"` and `"neg"`. The control reference is carried inline
+    /// in [`SwitchControl`]: voltage-controlled switches name two more
+    /// connections (`"ctrl_pos"`, `"ctrl_neg"`) and current-controlled
+    /// switches name the sensing voltage-source instance.
+    Switch {
+        kind: SwitchKind,
+        control: SwitchControl,
+    },
 }
 
 /// Behavioral source mode — voltage or current.
@@ -172,6 +183,26 @@ pub enum ElementKind {
 pub enum BehavioralMode {
     Voltage,
     Current,
+}
+
+/// Switch kind — voltage-controlled (`S` element) or current-controlled
+/// (`W` element).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchKind {
+    Voltage,
+    Current,
+}
+
+/// Where a switch reads its control value from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SwitchControl {
+    /// `S` element: voltage difference between two nets carried on the
+    /// element's `"ctrl_pos"` / `"ctrl_neg"` connections. The variants
+    /// store the net ids directly so callers don't have to re-walk the
+    /// connections vec.
+    Nodes { pos: Id, neg: Id },
+    /// `W` element: branch current through the named voltage source.
+    Vsense { name: String },
 }
 
 /// A single XSPICE port connection at the IR level.
@@ -211,6 +242,10 @@ pub enum DeviceType {
     PJfet,
     NMesfet,
     PMesfet,
+    /// Voltage-controlled switch (`.model … SW (…)`).
+    VSwitch,
+    /// Current-controlled switch (`.model … CSW (…)`).
+    ISwitch,
     /// Any model kind that has no typed variant — held as the original SPICE
     /// kind string (e.g. `"TXL"`, `"LTRA"`, `"CPL"`, `"D_RAM"`, `"NHFET"`).
     Other(String),
