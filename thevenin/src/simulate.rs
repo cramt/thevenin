@@ -27,6 +27,14 @@ pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
                         // either spelling.
                         "ITL6" | "SRCSTEPS" => opts.itl6 = *v as usize,
                         "CHGTOL" => opts.chgtol = *v,
+                        "RSHUNT" => opts.rshunt = *v,
+                        "GMINSTEPS" => opts.gminsteps = (*v as i64).max(0) as u32,
+                        // NOOPITER is conventionally a boolean flag in
+                        // ngspice (`.options noopiter`), but the Netlist
+                        // parser drops bare-keyword options. Users must
+                        // therefore spell it `noopiter=1` here; any
+                        // non-zero numeric value enables the option.
+                        "NOOPITER" => opts.noopiter = *v != 0.0,
                         _ => {}
                     }
                 }
@@ -1808,6 +1816,15 @@ R1 1 0 1k
         // ITL6 sentinel: 0 = adaptive (use built-in schedule).
         assert_eq!(opts.itl6, 0);
         assert_abs_diff_eq!(opts.chgtol, 1e-14, epsilon = 0.0);
+        // Round-3 convergence options preserve historical behaviour:
+        // rshunt=0 (disabled), gminsteps=10 (matches ngspice
+        // CKTnumGminSteps), noopiter=false.
+        assert_eq!(opts.rshunt, defaults.rshunt);
+        assert_eq!(opts.gminsteps, defaults.gminsteps);
+        assert_eq!(opts.noopiter, defaults.noopiter);
+        assert_eq!(opts.rshunt, 0.0);
+        assert_eq!(opts.gminsteps, 10);
+        assert!(!opts.noopiter);
     }
 
     /// `.OPTIONS ITL1=200 ITL4=25 CHGTOL=1e-12` lands in the parsed options
@@ -1832,6 +1849,48 @@ R1 1 0 1k
         assert_eq!(opts.itl5, 7000);
         assert_eq!(opts.itl6, 42);
         assert_abs_diff_eq!(opts.chgtol, 1e-12, epsilon = 1e-30);
+    }
+
+    /// Round-3 convergence options (RSHUNT, GMINSTEPS, NOOPITER) parse
+    /// from `.options` into the resolved `NrOptions`. Defaults preserve
+    /// historical behaviour: `rshunt=0` (disabled), `gminsteps=10`
+    /// (matching ngspice CKTnumGminSteps), `noopiter=false`.
+    #[test]
+    fn nr_options_parses_round3_convergence_keys() {
+        let netlist = Netlist::parse_single(
+            "round3 convergence
+V1 1 0 1
+R1 1 0 1k
+.options RSHUNT=1Meg GMINSTEPS=5 NOOPITER=1
+.op
+.end
+",
+        )
+        .unwrap();
+        let opts = nr_options_from_netlist(&netlist);
+        assert_eq!(opts.rshunt, 1.0e6);
+        assert_eq!(opts.gminsteps, 5);
+        assert!(opts.noopiter);
+    }
+
+    /// `.options gminsteps=0 noopiter=0` round-trips the sentinel-zero
+    /// values. GMINSTEPS=0 disables Gmin stepping; NOOPITER=0 keeps the
+    /// historical "try direct NR first" behaviour.
+    #[test]
+    fn nr_options_round3_sentinel_zeros_round_trip() {
+        let netlist = Netlist::parse_single(
+            "round3 zeros
+V1 1 0 1
+R1 1 0 1k
+.options GMINSTEPS=0 NOOPITER=0
+.op
+.end
+",
+        )
+        .unwrap();
+        let opts = nr_options_from_netlist(&netlist);
+        assert_eq!(opts.gminsteps, 0);
+        assert!(!opts.noopiter);
     }
 
     /// SRCSTEPS is ngspice's alias for ITL6 — both must populate the same

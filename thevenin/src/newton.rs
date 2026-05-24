@@ -76,6 +76,25 @@ pub struct NrOptions {
     /// or flux scale used when computing local truncation error during
     /// transient timestep control.
     pub chgtol: f64,
+    /// Node-to-ground shunt resistance (ngspice RSHUNT, default 0 = disabled).
+    /// When non-zero, the NR Jacobian assembly adds `1/rshunt` to every
+    /// non-ground diagonal entry. This is ngspice's safety net for
+    /// ill-conditioned matrices caused by floating nodes or dangling
+    /// subcircuits — see `cktrshun.c` in ngspice. A 0 value preserves the
+    /// current behaviour byte-for-byte; a finite value (e.g. 1MΩ) regularizes
+    /// the matrix without materially affecting the solution.
+    pub rshunt: f64,
+    /// Maximum number of Gmin-stepping iterations (ngspice GMINSTEPS,
+    /// default 10). Sentinel value `0` ⇒ skip Gmin stepping entirely and
+    /// fall straight through to the next convergence fallback. Our Gmin
+    /// stepping is adaptive (no fixed step count) so a non-zero value just
+    /// enables the fallback — it does not cap the iteration count directly.
+    pub gminsteps: u32,
+    /// Skip the initial direct Newton-Raphson attempt (ngspice NOOPITER,
+    /// default false). When true, the OP solver jumps straight to Gmin
+    /// stepping without first trying a direct solve. Useful when the user
+    /// knows the direct attempt will diverge on a difficult circuit.
+    pub noopiter: bool,
 }
 
 impl Default for NrOptions {
@@ -98,6 +117,18 @@ impl Default for NrOptions {
             gmin: 1e-12,
             diag_gmin: 1e-12,
             chgtol: 1e-14,
+            // RSHUNT sentinel: 0 = disabled (no shunt added). A finite
+            // value adds `1/rshunt` to every non-ground diagonal entry of
+            // the NR Jacobian, matching ngspice CKTrshunt.
+            rshunt: 0.0,
+            // GMINSTEPS: default 10 matches ngspice CKTnumGminSteps. The
+            // sentinel 0 disables Gmin stepping (the OP solver skips that
+            // fallback). Our stepping is adaptive, so a positive value
+            // simply enables the existing behaviour.
+            gminsteps: 10,
+            // NOOPITER: default false preserves the current "try direct NR
+            // first" behaviour. When true, the direct attempt is skipped.
+            noopiter: false,
         }
     }
 }
@@ -232,6 +263,17 @@ where
         // Add diagonal Gmin from each node to ground for numerical stability.
         for i in 0..num_nodes {
             system.matrix.add(i, i, attempt.diag_gmin);
+        }
+        // RSHUNT: when enabled (> 0), add `1/rshunt` to every non-ground
+        // diagonal entry. ngspice's safety net for ill-conditioned matrices
+        // caused by floating nodes or dangling subcircuits. With the default
+        // 0 sentinel this loop is a no-op, preserving current behaviour
+        // byte-for-byte. See ngspice `cktrshun.c`.
+        if options.rshunt > 0.0 {
+            let gshunt = 1.0 / options.rshunt;
+            for i in 0..num_nodes {
+                system.matrix.add(i, i, gshunt);
+            }
         }
         crate::sparse::record_stamp_nanos(stamp_t0.elapsed().as_nanos() as u64);
 
@@ -751,30 +793,39 @@ pub fn newton_raphson_solve_with_mode<F>(
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
-    // Try direct NR first.
-    // Use options.diag_gmin for the diagonal Gmin.  For DC OP this is 0
-    // (matching ngspice CKTdiagGmin initial value); for transient timesteps
-    // it may be elevated to options.gmin for regularization.
-    let attempt = NrAttempt {
-        diag_gmin: options.diag_gmin,
-        dev_gmin: options.diag_gmin,
-        source_factor: 1.0,
-        max_iters: options.itl1,
-    };
-    if let Ok(result) = try_nr(
-        options,
-        dim,
-        num_nodes,
-        &load_system,
-        initial_guess,
-        &attempt,
-        first_mode,
-    ) {
-        return Ok(result);
+    // Try direct NR first — unless NOOPITER is set, in which case skip
+    // straight to Gmin stepping. Matches ngspice's NOOPITER option which
+    // suppresses the initial CKTop() direct solve.
+    if !options.noopiter {
+        // Use options.diag_gmin for the diagonal Gmin.  For DC OP this is 0
+        // (matching ngspice CKTdiagGmin initial value); for transient timesteps
+        // it may be elevated to options.gmin for regularization.
+        let attempt = NrAttempt {
+            diag_gmin: options.diag_gmin,
+            dev_gmin: options.diag_gmin,
+            source_factor: 1.0,
+            max_iters: options.itl1,
+        };
+        if let Ok(result) = try_nr(
+            options,
+            dim,
+            num_nodes,
+            &load_system,
+            initial_guess,
+            &attempt,
+            first_mode,
+        ) {
+            return Ok(result);
+        }
     }
 
     // Fallback 1: Dynamic Gmin stepping (diagonal shunt + device gmin elevated).
-    if let Ok(result) = gmin_stepping(options, dim, num_nodes, &load_system, initial_guess) {
+    // GMINSTEPS=0 sentinel: skip both Gmin stepping fallbacks. Matches
+    // ngspice's convention where setting GMINSTEPS=0 disables CKTop's gmin
+    // fallback entirely.
+    if options.gminsteps > 0
+        && let Ok(result) = gmin_stepping(options, dim, num_nodes, &load_system, initial_guess)
+    {
         return Ok(result);
     }
 
@@ -783,7 +834,9 @@ where
     // than through diagonal shunts, which is more effective for circuits with
     // floating internal nodes (SOI body, VBIC thermal) that couple to the
     // circuit only through device model stamps.
-    if let Ok(result) = new_gmin_stepping(options, dim, num_nodes, &load_system, initial_guess) {
+    if options.gminsteps > 0
+        && let Ok(result) = new_gmin_stepping(options, dim, num_nodes, &load_system, initial_guess)
+    {
         return Ok(result);
     }
 
