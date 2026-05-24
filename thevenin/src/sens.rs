@@ -135,7 +135,7 @@ fn parse_sens_output(
     let lower = output.to_lowercase();
     if lower.starts_with("v(") && lower.ends_with(')') {
         let inner = &lower[2..lower.len() - 1];
-        let parts: Vec<&str> = inner.split(',').collect();
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
         let pos = mna.node_map.get(parts[0]);
         let neg = if parts.len() > 1 {
             mna.node_map.get(parts[1])
@@ -144,7 +144,7 @@ fn parse_sens_output(
         };
         Ok((pos, neg, true))
     } else if lower.starts_with("i(") && lower.ends_with(')') {
-        let src_name = &lower[2..lower.len() - 1];
+        let src_name = lower[2..lower.len() - 1].trim();
         let num_nodes = mna.total_num_nodes();
         if let Some(pos) = mna
             .vsource_names
