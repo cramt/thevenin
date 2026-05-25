@@ -111,19 +111,15 @@ pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
             Value::Real(f) => *f,
             Value::Integer(i) => *i as f64,
             Value::Bool(b) => {
-                // Booleans only meaningful for the flag-style options
-                // (NOOPITER, ITERATIVE_REFINEMENT).
-                if name.eq_ignore_ascii_case("NOOPITER") {
-                    opts.noopiter = *b;
-                } else if name.eq_ignore_ascii_case("ITERATIVE_REFINEMENT") {
-                    opts.iterative_refinement = *b;
                 // Booleans are meaningful for the flag-style keys
-                // (NOOPITER / NOOPALTER / GMINPRIORITY). All other keys
-                // are numeric and silently ignore a `Bool` value.
+                // (NOOPITER / NOOPALTER / GMINPRIORITY /
+                // ITERATIVE_REFINEMENT). All other keys are numeric and
+                // silently ignore a `Bool` value.
                 match name.to_uppercase().as_str() {
                     "NOOPITER" => opts.noopiter = *b,
                     "NOOPALTER" => opts.noopalter = *b,
                     "GMINPRIORITY" => opts.gminpriority = *b,
+                    "ITERATIVE_REFINEMENT" => opts.iterative_refinement = *b,
                     _ => {}
                 }
                 continue;
