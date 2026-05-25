@@ -226,6 +226,7 @@ fn jct_initial_guess(
     base_matrix: &crate::SparseMatrix,
     base_rhs: &[f64],
 ) -> Vec<f64> {
+    use crate::bsim1::stamp_bsim1;
     use crate::bsim3soi_dd::{bsim3soi_dd_companion, stamp_bsim3soi_dd};
     use crate::bsim3soi_fd::{bsim3soi_fd_companion, stamp_bsim3soi_fd};
     use crate::bsim3soi_pd::{bsim3soi_pd_companion, stamp_bsim3soi_pd};
@@ -289,6 +290,18 @@ fn jct_initial_guess(
         let l_eff = mos.l_eff();
         let comp = mos.model.companion(vgs, vds, vbs, beta, mos.w, l_eff);
         stamp_mos3(&mut system.matrix, &mut system.rhs, mos, &comp);
+    }
+
+    // Stamp each BSIM1 (LEVEL=4) MOSFET at its threshold voltage (MODEINITJCT).
+    // b1ld.c lines 172-178: when no IC and not MODEUIC, defaults to
+    //   vbs=-1, vgs=type*vt0, vds=0.
+    for mos in &mna.bsim1s {
+        let sign = mos.model.mos_type.sign();
+        let vgs = sign * mos.sized.vt0;
+        let vds = 0.0;
+        let vbs = -1.0;
+        let comp = mos.companion(vgs, vds, vbs);
+        stamp_bsim1(&mut system.matrix, &mut system.rhs, mos, &comp);
     }
 
     // Stamp each VDMOS at its threshold voltage (MODEINITJCT analogue).
@@ -516,6 +529,7 @@ fn solve_nonlinear_op_with_guess(
     } else if !mna.mosfets.is_empty()
         || !mna.mos2s.is_empty()
         || !mna.mos3s.is_empty()
+        || !mna.bsim1s.is_empty()
         || !mna.vdmoses.is_empty()
         || !mna.bjts.is_empty()
         || !mna.vbics.is_empty()

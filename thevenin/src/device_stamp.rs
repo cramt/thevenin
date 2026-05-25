@@ -9,6 +9,7 @@ use std::cell::RefCell;
 
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
+use crate::bsim1::stamp_bsim1;
 use crate::bsim3::{bsim3_companion, bsim3_limit, stamp_bsim3};
 use crate::bsim3soi_dd::{bsim3soi_dd_companion, bsim3soi_dd_limit, stamp_bsim3soi_dd};
 use crate::bsim3soi_fd::{bsim3soi_fd_companion, bsim3soi_fd_limit, stamp_bsim3soi_fd};
@@ -203,6 +204,9 @@ pub(crate) struct DeviceVoltageState {
     prev_mos3: RefCell<Vec<(f64, f64, f64, f64)>>,
     /// Companion from the previous MOS3 (Level 3) evaluation.
     cached_mos3_companion: RefCell<Vec<Option<MosfetCompanion>>>,
+    prev_bsim1: RefCell<Vec<(f64, f64, f64, f64)>>,
+    /// Companion from the previous BSIM1 (LEVEL=4) evaluation.
+    cached_bsim1_companion: RefCell<Vec<Option<MosfetCompanion>>>,
     prev_mos6: RefCell<Vec<(f64, f64, f64, f64)>>,
     /// Companion from the previous MOS6 (Level 6) evaluation.
     cached_mos6_companion: RefCell<Vec<Option<MosfetCompanion>>>,
@@ -248,6 +252,8 @@ impl DeviceVoltageState {
             cached_mos2_companion: RefCell::new(vec![None; mna.mos2s.len()]),
             prev_mos3: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos3s.len()]),
             cached_mos3_companion: RefCell::new(vec![None; mna.mos3s.len()]),
+            prev_bsim1: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.bsim1s.len()]),
+            cached_bsim1_companion: RefCell::new(vec![None; mna.bsim1s.len()]),
             prev_mos6: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos6s.len()]),
             cached_mos6_companion: RefCell::new(vec![None; mna.mos6s.len()]),
             prev_vdmos: RefCell::new(vec![(0.0, 0.0, 0.0); mna.vdmoses.len()]),
@@ -337,6 +343,16 @@ impl DeviceVoltageState {
                     .collect(),
             ),
             cached_mos3_companion: RefCell::new(vec![None; mna.mos3s.len()]),
+            prev_bsim1: RefCell::new(
+                mna.bsim1s
+                    .iter()
+                    .map(|m| {
+                        let (vgs, vds, vbs) = m.terminal_voltages(prev_solution);
+                        (vgs, vds, vbs, 0.0)
+                    })
+                    .collect(),
+            ),
+            cached_bsim1_companion: RefCell::new(vec![None; mna.bsim1s.len()]),
             prev_mos6: RefCell::new(
                 mna.mos6s
                     .iter()
@@ -520,6 +536,17 @@ impl DeviceVoltageState {
                 prev[i] = (vgs, vds, vbs, 0.0);
             }
             for cached in self.cached_mos3_companion.borrow_mut().iter_mut() {
+                *cached = None;
+            }
+        }
+        // Reset BSIM1 prev voltages (von reset to 0.0 for fresh NR sequence).
+        {
+            let mut prev = self.prev_bsim1.borrow_mut();
+            for (i, mos) in mna.bsim1s.iter().enumerate() {
+                let (vgs, vds, vbs) = mos.terminal_voltages(solution);
+                prev[i] = (vgs, vds, vbs, 0.0);
+            }
+            for cached in self.cached_bsim1_companion.borrow_mut().iter_mut() {
                 *cached = None;
             }
         }
@@ -883,6 +910,51 @@ impl DeviceVoltageState {
 
                 prev[mi] = (vgs, vds, vbs, comp.von);
                 stamp_mos3(&mut system.matrix, &mut system.rhs, mos, &comp);
+            }
+        }
+
+        // BSIM1 (level 4)
+        {
+            let mut prev = self.prev_bsim1.borrow_mut();
+            let mut cache = self.cached_bsim1_companion.borrow_mut();
+            let bypass_on = bypass_enabled();
+            for (mi, mos) in mna.bsim1s.iter().enumerate() {
+                let (vgs, vds, vbs) = if init_jct {
+                    // MODEINITJCT (b1ld.c 172-178): vbs=-1, vgs=type*vt0, vds=0.
+                    let sign = mos.model.mos_type.sign();
+                    let vto = sign * mos.sized.vt0;
+                    (vto, 0.0, -1.0)
+                } else {
+                    let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
+                    let von_prev = prev[mi].3;
+                    let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let vbs = if vds >= 0.0 {
+                        bsim_pnjlim(raw_vbs, prev[mi].2)
+                    } else {
+                        bsim_pnjlim(raw_vbs - vds, prev[mi].2 - prev[mi].1) + vds
+                    };
+                    (vgs, vds, vbs)
+                };
+
+                let bypass = bypass_on
+                    && !init_jct
+                    && cache[mi].is_some()
+                    && within_bypass_tol(vgs, prev[mi].0)
+                    && within_bypass_tol(vds, prev[mi].1)
+                    && within_bypass_tol(vbs, prev[mi].2);
+
+                let comp = if bypass {
+                    crate::sparse::record_bypass_hit();
+                    cache[mi].clone().unwrap()
+                } else {
+                    crate::sparse::record_bypass_miss();
+                    let new_comp = mos.companion(vgs, vds, vbs);
+                    cache[mi] = Some(new_comp.clone());
+                    new_comp
+                };
+
+                prev[mi] = (vgs, vds, vbs, comp.von);
+                stamp_bsim1(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }
 

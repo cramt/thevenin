@@ -30,6 +30,7 @@ use thevenin_xspice::{
 };
 
 use crate::bjt::{BjtInstance, BjtModel};
+use crate::bsim1::{Bsim1Instance, Bsim1Model, compute_sized as bsim1_compute_sized};
 use crate::bsim3::{Bsim3Instance, Bsim3Model};
 use crate::bsim3soi_dd::{Bsim3SoiDdInstance, Bsim3SoiDdModel};
 use crate::bsim3soi_fd::{Bsim3SoiFdInstance, Bsim3SoiFdModel};
@@ -70,7 +71,7 @@ use crate::vbic::{VbicInstance, VbicModel};
 pub(crate) fn warn_unhandled_mosfet_level(model_name: Option<&str>, level: i32) {
     // Levels currently dispatched explicitly. Keep in sync with the
     // `if/else if` ladders in this module and `mna.rs`.
-    const HANDLED: &[i32] = &[1, 2, 3, 6, 8, 49, 14, 54, 55, 56, 57];
+    const HANDLED: &[i32] = &[1, 2, 3, 4, 6, 8, 49, 14, 54, 55, 56, 57];
     if HANDLED.contains(&level) {
         return;
     }
@@ -1338,6 +1339,11 @@ fn stamp_circuit(
                         .map(Mos3Model::from_model_def)
                         .unwrap_or_else(|| Mos3Model::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += mm.internal_node_count();
+                } else if level == 4 {
+                    let bm = resolved
+                        .map(Bsim1Model::from_model_def)
+                        .unwrap_or_else(|| Bsim1Model::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else if level == 6 {
                     let mm = resolved
                         .map(Mos6Model::from_model_def)
@@ -2824,6 +2830,74 @@ fn stamp_circuit(
                         mm.mjsw,
                         mm.pb,
                         mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
+                } else if level == 4 {
+                    // BSIM1 (Berkeley short-channel IGFET, LEVEL=4).
+                    let bm = resolved
+                        .map(Bsim1Model::from_model_def)
+                        .unwrap_or_else(|| Bsim1Model::new(crate::mosfet::MosfetType::Nmos));
+                    let drain_prime_idx = if bm.rsh > 0.0 && nrd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if bm.rsh > 0.0 && nrs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    // Geometry-binned per-instance params (b1temp.c).
+                    let sized = bsim1_compute_sized(&bm, w, l, nrd, nrs).map_err(|e| {
+                        MnaError::UnsupportedElement(format!("BSIM1 `{}`: {}", elem.name, e))
+                    })?;
+                    mna.bsim1s.push(Bsim1Instance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: bm.clone(),
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        nrd,
+                        nrs,
+                        m: m_mult,
+                        sized,
+                    });
+                    push_mosfet_caps(
+                        &mut mna.capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        bm.cgso,
+                        bm.cgdo,
+                        bm.cgbo,
+                        0.0,
+                        0.0,
+                        bm.cj,
+                        bm.mj,
+                        bm.cjsw,
+                        bm.mjsw,
+                        bm.pb,
+                        0.5,
                         w,
                         l,
                         ad,
