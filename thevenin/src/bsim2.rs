@@ -807,7 +807,13 @@ impl Bsim2Instance {
 ///
 /// Returns `(Ids, gm, gds, gmbs, von, vdsat)`. All inputs and outputs are in
 /// the normal device frame (caller is responsible for flipping when `mode=-1`).
-fn b2_evaluate(model: &Bsim2Model, p: &Bsim2SizeDependParam, vds: f64, vbs: f64, vgs: f64) -> B2Eval {
+fn b2_evaluate(
+    model: &Bsim2Model,
+    p: &Bsim2SizeDependParam,
+    vds: f64,
+    vbs: f64,
+    vgs: f64,
+) -> B2Eval {
     // Clamp inputs to ngspice's overflow caps (b2eval.c lines 57-59).
     let mut vbs = vbs;
     let mut vgs = vgs;
@@ -886,8 +892,7 @@ fn b2_evaluate(model: &Bsim2Model, p: &Bsim2SizeDependParam, vds: f64, vbs: f64,
             let d_vgeff_d_vd = d_vgeff_d_vg
                 * (n_safe / tmp1 * exp1 - d_vth_d_vd - vgst * p.n_d / n_safe + t0 * p.vof_d);
             let d_vgeff_d_vb = d_vgeff_d_vg
-                * (p.vof_b * t0
-                    - d_vth_d_vb
+                * (p.vof_b * t0 - d_vth_d_vb
                     + p.n_b * vgst / (n_safe * t1s * t1s) * d_t1s_d_vb
                     + t0 * inv_aa * d_aa_d_vb);
             (vgeff, d_vgeff_d_vg, d_vgeff_d_vd, d_vgeff_d_vb)
@@ -911,21 +916,25 @@ fn b2_evaluate(model: &Bsim2Model, p: &Bsim2SizeDependParam, vds: f64, vbs: f64,
             let s_t5 = sqr_vghigh - sqr_vglow;
             let s_t6 = cub_vghigh - cub_vglow;
             let s_t7 = con1 - con3;
-            let denom = (s_t1 - s_t0) * s_t6 + (s_t2 - s_t3) * s_t5 + (s_t0 * s_t3 - s_t1 * s_t2) * s_t4;
-            let delta_s = if denom.abs() > 1e-30 { 1.0 / denom } else { 0.0 };
-            let coeff_b = (s_t1 - con4 * s_t0) * s_t6 + (con4 * s_t2 - s_t3) * s_t5
+            let denom =
+                (s_t1 - s_t0) * s_t6 + (s_t2 - s_t3) * s_t5 + (s_t0 * s_t3 - s_t1 * s_t2) * s_t4;
+            let delta_s = if denom.abs() > 1e-30 {
+                1.0 / denom
+            } else {
+                0.0
+            };
+            let coeff_b = (s_t1 - con4 * s_t0) * s_t6
+                + (con4 * s_t2 - s_t3) * s_t5
                 + (s_t0 * s_t3 - s_t1 * s_t2) * s_t7;
             let coeff_c = (con4 - 1.0) * s_t6 + (s_t2 - s_t3) * s_t7 + (s_t3 - con4 * s_t2) * s_t4;
             let coeff_d = (s_t1 - s_t0) * s_t7 + (1.0 - con4) * s_t5 + (con4 * s_t0 - s_t1) * s_t4;
             let coeff_a = sqr_vghigh * (coeff_c + coeff_d * s_t0);
             let vgeff = (coeff_a + vgst * (coeff_b + vgst * (coeff_c + vgst * coeff_d))) * delta_s;
-            let d_vgeff_d_vg =
-                (coeff_b + vgst * (2.0 * coeff_c + 3.0 * vgst * coeff_d)) * delta_s;
+            let d_vgeff_d_vg = (coeff_b + vgst * (2.0 * coeff_c + 3.0 * vgst * coeff_d)) * delta_s;
             let t7 = con3 * tmp;
             let t8 = d_t1s_d_vb * p.n_b / (t1s * t1s * n_safe).max(1e-30);
             let t9 = n_safe * model.vtm;
-            let d_con3_d_vd = t7
-                * (n_safe * exp1 / tmp1 - vglow * p.n_d / n_safe + t9 * p.vof_d);
+            let d_con3_d_vd = t7 * (n_safe * exp1 / tmp1 - vglow * p.n_d / n_safe + t9 * p.vof_d);
             let d_con3_d_vb = t7 * (t9 * inv_aa * d_aa_d_vb + vglow * t8 + t9 * p.vof_b);
             let d_con4_d_vd = tmp * d_con3_d_vd - t7 * p.n_d / n_safe;
             let d_con4_d_vb = tmp * d_con3_d_vb + t7 * t8;
@@ -1013,8 +1022,7 @@ fn b2_evaluate(model: &Bsim2Model, p: &Bsim2SizeDependParam, vds: f64, vbs: f64,
     let t4 = beta1 * sqr_sech / vdsat;
     let t5 = model.vdd * tanh_term;
     let d_beta_d_vd = beta3 - 2.0 * beta4 * vds + t4 * (beta2 - t0 * d_vdsat_d_vd);
-    let d_beta_d_vg = t4 * (p.beta2_g * vds - t0 * d_vdsat_d_vg)
-        + p.beta3_g * (vds - t5)
+    let d_beta_d_vg = t4 * (p.beta2_g * vds - t0 * d_vdsat_d_vg) + p.beta3_g * (vds - t5)
         - p.beta4_g * (vds * vds - model.vdd * t5);
     let d_beta1_d_vb = p.arg;
     let d_beta_d_vb = p.beta0_b
@@ -1465,7 +1473,11 @@ mod tests {
         // Vgs = 0, well below threshold.
         let comp = bsim2_companion(&inst, 0.0, 0.5, 0.0);
         // Subthreshold may give tiny current but should be very small.
-        assert!(comp.cdrain.abs() < 1e-6, "cdrain too large: {}", comp.cdrain);
+        assert!(
+            comp.cdrain.abs() < 1e-6,
+            "cdrain too large: {}",
+            comp.cdrain
+        );
     }
 
     #[test]

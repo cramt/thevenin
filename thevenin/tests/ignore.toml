@@ -3,7 +3,7 @@
 
 # === Unimplemented models ===
 "bsim1/test.cir" = "BSIM1 model not implemented (US-052)"
-"bsim2/test.cir" = "BSIM2 model not implemented (US-053)"
+"bsim2/test.cir" = "BSIM2 dispatch landed (feat/bsim2-r5), but the harness comparison against ngspice's reference .out has not been verified numerically yet — model implementation is structural (DC + companion-model NR) without a side-by-side spot-check"
 
 # === BSIM3SOI-DD ===
 # RampVg2: TWO clean audits done 2026-05-20.
