@@ -24,7 +24,11 @@ fn make_nmos_model() -> Bsim2Model {
     m.k2_0 = -0.05;
     m.eta0_0 = 0.05;
     m.tox = 0.02;
-    // Recompute derived fields since we tweaked tox.
+    // ngspice's vbb default is +5.0, which clamps any negative Vbs back to
+    // 2·vbb (b2eval.c lines 57-59). Set a sensible negative limit so the
+    // body effect can fire — PDK model cards typically override this.
+    m.vbb = -3.0;
+    // Recompute derived fields since we tweaked tox & vbb.
     m.cox_cm2 = 3.453e-13 / (m.tox * 1.0e-4);
     m.vdd2 = 2.0 * m.vdd;
     m.vgg2 = 2.0 * m.vgg;
