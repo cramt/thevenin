@@ -943,8 +943,7 @@ impl DeviceVoltageState {
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
                     let von_prev = prev[mi].3;
-                    let (vgs, vds) =
-                        mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
                     let vbs = if vds >= 0.0 {
                         bsim_pnjlim(raw_vbs, prev[mi].2)
                     } else {
@@ -988,8 +987,7 @@ impl DeviceVoltageState {
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
                     let von_prev = prev[mi].3;
-                    let (vgs, vds) =
-                        mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
                     let vbs = if vds >= 0.0 {
                         bsim_pnjlim(raw_vbs, prev[mi].2)
                     } else {
