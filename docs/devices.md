@@ -62,6 +62,8 @@ Transient waveforms supported on V and I (all six from
 | BSIM3SOI-PD | 57 | implemented | [bsim3soi_pd.rs](../thevenin/src/bsim3soi_pd.rs) | Partially-depleted SOI; floating body, self-heating disabled (SHMOD=0). |
 | BSIM1 | 4 | implemented | [bsim1.rs](../thevenin/src/bsim1.rs) | Berkeley short-channel IGFET (LEVEL=4). Vds-dependent Vth (DIBL via Eta), mobility degradation (Ugs / Uds), velocity saturation, subthreshold (N0/NB/ND), W/L binning via `_L`/`_W` sensitivities on every process parameter, source-drain series resistance via `RSH × NRD/NRS`. AC charge/noise not modelled in this DC + NR companion port. |
 | BSIM2 | — (ngspice level varies) | not yet — in 1.0 scope | — | ~2500 LOC port from ngspice. |
+| BSIM1 | — (ngspice level varies) | not yet — in 1.0 scope | — | ~3500 LOC port from ngspice. |
+| BSIM2 | 5 | implemented | [bsim2.rs](../thevenin/src/bsim2.rs) | Berkeley Short-Channel IGFET Model v2. Vds-dependent threshold (eta), mobility degradation (Ua/Ub/U1), subthreshold conduction (n0/nb/nd), impact-ionisation Ai/Bi, cubic-spline smoothing between strong and weak inversion. DC + companion-model NR; charge equations deferred. |
 | VDMOS | — (separate model kind, no LEVEL) | implemented | [vdmos.rs](../thevenin/src/vdmos.rs) | Vertical-DMOS power MOSFET. `.model NAME VDMOS (…)` / `VDMOSN` / `VDMOSP` — dispatched off the model kind string in `mna_ir.rs`, not via LEVEL. Built-in body diode, Vgd-dependent Miller cap, smooth triode/saturation blend with `mtr`/`theta`/`lambda`/`ksubthres`. |
 | HiSIM (bulk) | — | not yet — in 1.0 scope | — | Modern compact model. |
 | HiSIMHV | — | not yet — in 1.0 scope | — | High-voltage HiSIM variant. |
@@ -122,7 +124,7 @@ Items the checklist tags as in-scope for the 1.0 cut but where the source
 tree currently has no implementation:
 
 - **URC** transmission line (`U` element).
-- **BSIM1**, **BSIM2** MOSFET levels.
+- **BSIM1** MOSFET level (BSIM2 LEVEL=5 is implemented as of feat/bsim2-r5).
 - **HiSIM** and **HiSIMHV** compact models.
 - Other "weird MOSFET / niche device" variants (HICUM2, NUMOS, …) flagged in
   the checklist for an enumeration pass against
