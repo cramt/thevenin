@@ -927,10 +927,17 @@ pub(crate) fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
     (nrd, nrs)
 }
 
-/// Extract MOSFET L and W from instance parameters (defaults: 1e-4).
-pub(crate) fn get_mosfet_lw(params: &[thevenin_types::Param]) -> (f64, f64) {
-    let mut l = 1e-4;
-    let mut w = 1e-4;
+/// Extract MOSFET L and W from instance parameters, falling back to
+/// `def_l` and `def_w` when the instance omits them. Callers should pass
+/// the `.options DEFL / DEFW` values (defaults 1e-4 / 1e-4, matching
+/// ngspice cktinit.c).
+pub(crate) fn get_mosfet_lw(
+    params: &[thevenin_types::Param],
+    def_l: f64,
+    def_w: f64,
+) -> (f64, f64) {
+    let mut l = def_l;
+    let mut w = def_w;
     for p in params {
         if let Expr::Num(v) = &p.value {
             match p.name.to_uppercase().as_str() {
@@ -1219,6 +1226,16 @@ fn assemble_mna_flat(
         })
         .collect();
 
+    // MOSFET geometry defaults (ngspice DEFAD / DEFAS / DEFL / DEFW).
+    // Resolved up-front so every MOSFET stamp site can fall back to the
+    // same values when an instance omits AD / AS / L / W. Mirrors the
+    // IR-side helper in `mna_ir::stamp_circuit`.
+    let mos_defaults_opts = crate::simulate::nr_options_from_netlist(netlist);
+    let def_w = mos_defaults_opts.defw;
+    let def_l = mos_defaults_opts.defl;
+    let def_ad = mos_defaults_opts.defad;
+    let def_as = mos_defaults_opts.defas;
+
     // Build model bin registry for BSIM4-style binned models (e.g. "nmos_tst.1",
     // "nmos_tst.2"). When a device references "nmos_tst" but only ".1"/".2" bins
     // exist, we select the bin whose LMIN/LMAX/WMIN/WMAX range matches the device's
@@ -1341,7 +1358,7 @@ fn assemble_mna_flat(
                 if let Some(b) = body {
                     node_map.index(b);
                 }
-                let (inst_l, inst_w) = get_mosfet_lw(params);
+                let (inst_l, inst_w) = get_mosfet_lw(params, def_l, def_w);
                 let resolved = resolve_model_with_bins(&models, &model_bins, model, inst_l, inst_w);
                 let level = get_mosfet_level(resolved.as_ref(), params);
                 crate::mna_ir::warn_unhandled_mosfet_level(Some(model.as_str()), level);
@@ -1949,11 +1966,15 @@ fn assemble_mna_flat(
                 let bulk_idx = node_map.get(bulk);
                 let body_idx = body.as_ref().and_then(|b| node_map.get(b));
 
-                // Extract instance params
-                let mut w = 1e-4;
-                let mut l = 1e-4;
-                let mut ad = 0.0;
-                let mut as_ = 0.0;
+                // Extract instance params. W / L / AD / AS pick up the
+                // `.options DEFW / DEFL / DEFAD / DEFAS` defaults when
+                // the instance omits them; ngspice cktinit.c's
+                // historical defaults (1e-4 / 1e-4 / 0 / 0) are baked
+                // into `NrOptions::default()`.
+                let mut w = def_w;
+                let mut l = def_l;
+                let mut ad = def_ad;
+                let mut as_ = def_as;
                 let mut pd = 0.0;
                 let mut ps = 0.0;
                 let mut m_mult = 1.0;

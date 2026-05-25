@@ -119,6 +119,37 @@ pub struct NrOptions {
     /// `|diag| < pivrel * |max_in_row|`.  Same caveat as `pivtol`: parsed
     /// and stored but no-op pending faer pivot-knob support.
     pub pivrel: f64,
+    /// Skip the OP re-solve after `.alter` (ngspice NOOPALTER, default
+    /// false). When true, the post-`alter` analysis re-uses the previous
+    /// operating point as the initial guess rather than re-running CKTop
+    /// from scratch. Currently parsed and stored only — `execute_alter`
+    /// mutates the IR but does not itself trigger a solve, so there is
+    /// no live re-solve path to short-circuit yet. Wire the option into
+    /// the alter-and-re-solve pathway once that pathway exists.
+    pub noopalter: bool,
+    /// Run Gmin stepping before the direct NR attempt (ngspice
+    /// GMINPRIORITY, default false). When true, the OP solver tries
+    /// Gmin stepping first and falls back to the direct NR solve only
+    /// if Gmin stepping fails. The mirror of the default order (direct
+    /// → Gmin → source) — useful for hard circuits where the direct
+    /// solve diverges but you still want it as a fast-path fallback.
+    pub gminpriority: bool,
+    /// Default MOSFET drain area (ngspice DEFAD, default 0). Applied to
+    /// MOSFET instances that omit `AD`. Matches ngspice
+    /// `CKTdefaultMosAD`.
+    pub defad: f64,
+    /// Default MOSFET source area (ngspice DEFAS, default 0). Applied
+    /// to MOSFET instances that omit `AS`. Matches ngspice
+    /// `CKTdefaultMosAS`.
+    pub defas: f64,
+    /// Default MOSFET channel length (ngspice DEFL, default 1e-4).
+    /// Applied to MOSFET instances that omit `L`. Matches ngspice
+    /// `CKTdefaultMosL`.
+    pub defl: f64,
+    /// Default MOSFET channel width (ngspice DEFW, default 1e-4).
+    /// Applied to MOSFET instances that omit `W`. Matches ngspice
+    /// `CKTdefaultMosW`.
+    pub defw: f64,
 }
 
 impl Default for NrOptions {
@@ -164,6 +195,23 @@ impl Default for NrOptions {
             // high-level sparse LU doesn't expose pivot thresholds.
             pivtol: 1e-13,
             pivrel: 1e-3,
+            // NOOPALTER: default false preserves the historical
+            // "always re-solve OP after `.alter`" semantics. Parsed
+            // but currently has no live re-solve path to short-circuit
+            // (see field docstring).
+            noopalter: false,
+            // GMINPRIORITY: default false preserves the current
+            // "direct NR first, Gmin stepping as fallback" ordering.
+            // When true, Gmin stepping runs first and direct NR
+            // becomes the fallback.
+            gminpriority: false,
+            // MOSFET geometry defaults: ngspice cktinit.c sets DEFL =
+            // DEFW = 1e-4 and DEFAD = DEFAS = 0. Mirror those so the
+            // option being absent is identical to ngspice's defaults.
+            defad: 0.0,
+            defas: 0.0,
+            defl: 1e-4,
+            defw: 1e-4,
         }
     }
 }
@@ -829,20 +877,17 @@ pub fn newton_raphson_solve_with_mode<F>(
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64, NrMode),
 {
-    // Try direct NR first — unless NOOPITER is set, in which case skip
-    // straight to Gmin stepping. Matches ngspice's NOOPITER option which
-    // suppresses the initial CKTop() direct solve.
-    if !options.noopiter {
-        // Use options.diag_gmin for the diagonal Gmin.  For DC OP this is 0
-        // (matching ngspice CKTdiagGmin initial value); for transient timesteps
-        // it may be elevated to options.gmin for regularization.
+    // Helper: run a single direct NR attempt with the default diagonal
+    // and device Gmin. Returns the NR result on convergence; the caller
+    // decides what to fall through to on failure.
+    let try_direct = || {
         let attempt = NrAttempt {
             diag_gmin: options.diag_gmin,
             dev_gmin: options.diag_gmin,
             source_factor: 1.0,
             max_iters: options.itl1,
         };
-        if let Ok(result) = try_nr(
+        try_nr(
             options,
             dim,
             num_nodes,
@@ -850,9 +895,42 @@ where
             initial_guess,
             &attempt,
             first_mode,
-        ) {
+        )
+    };
+
+    // GMINPRIORITY (ngspice GMINPRIORITY): when set, try Gmin stepping
+    // first and only fall back to the direct NR solve if it fails.
+    // Mirrors the default ordering. GMINSTEPS=0 disables Gmin stepping
+    // entirely, so GMINPRIORITY with GMINSTEPS=0 effectively falls
+    // straight through to the direct/source paths.
+    if options.gminpriority {
+        if options.gminsteps > 0
+            && let Ok(result) = gmin_stepping(options, dim, num_nodes, &load_system, initial_guess)
+        {
             return Ok(result);
         }
+        if options.gminsteps > 0
+            && let Ok(result) =
+                new_gmin_stepping(options, dim, num_nodes, &load_system, initial_guess)
+        {
+            return Ok(result);
+        }
+        // Fallback: direct NR, unless NOOPITER is set.
+        if !options.noopiter
+            && let Ok(result) = try_direct()
+        {
+            return Ok(result);
+        }
+        return source_stepping(options, dim, num_nodes, &load_system, initial_guess);
+    }
+
+    // Default ordering: try direct NR first — unless NOOPITER is set, in
+    // which case skip straight to Gmin stepping. Matches ngspice's NOOPITER
+    // option which suppresses the initial CKTop() direct solve.
+    if !options.noopiter
+        && let Ok(result) = try_direct()
+    {
+        return Ok(result);
     }
 
     // Fallback 1: Dynamic Gmin stepping (diagonal shunt + device gmin elevated).

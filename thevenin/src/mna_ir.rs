@@ -101,7 +101,9 @@ pub(crate) fn warn_unhandled_mosfet_level(model_name: Option<&str>, level: i32) 
 /// Circuit-side equivalent of `crate::simulate::nr_options_from_netlist`.
 /// Recognises the same `.OPTIONS` keys (GMIN, ABSTOL, RELTOL, VNTOL,
 /// ITL1/ITL2/ITL4/ITL5/ITL6, SRCSTEPS, CHGTOL, RSHUNT, GMINSTEPS,
-/// NOOPITER) and ignores non-numeric values silently.
+/// NOOPITER, NOOPALTER, GMINPRIORITY, DEFAD/DEFAS/DEFL/DEFW) and ignores
+/// non-numeric values silently (except for the boolean flag keys, which
+/// also accept `Value::Bool`).
 pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
     let mut opts = NrOptions::default();
     for (name, value) in &circuit.options {
@@ -115,6 +117,14 @@ pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
                     opts.noopiter = *b;
                 } else if name.eq_ignore_ascii_case("ITERATIVE_REFINEMENT") {
                     opts.iterative_refinement = *b;
+                // Booleans are meaningful for the flag-style keys
+                // (NOOPITER / NOOPALTER / GMINPRIORITY). All other keys
+                // are numeric and silently ignore a `Bool` value.
+                match name.to_uppercase().as_str() {
+                    "NOOPITER" => opts.noopiter = *b,
+                    "NOOPALTER" => opts.noopalter = *b,
+                    "GMINPRIORITY" => opts.gminpriority = *b,
+                    _ => {}
                 }
                 continue;
             }
@@ -153,6 +163,15 @@ pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
                 }
             }
             "ITERATIVE_REFINEMENT" => opts.iterative_refinement = v != 0.0,
+            "NOOPALTER" => opts.noopalter = v != 0.0,
+            "GMINPRIORITY" => opts.gminpriority = v != 0.0,
+            // MOSFET geometry defaults (ngspice DEFAD / DEFAS / DEFL /
+            // DEFW). Applied at MOSFET stamping time when an instance
+            // omits AD / AS / L / W.
+            "DEFAD" => opts.defad = v,
+            "DEFAS" => opts.defas = v,
+            "DEFL" => opts.defl = v,
+            "DEFW" => opts.defw = v,
             _ => {}
         }
     }
@@ -1044,6 +1063,15 @@ fn stamp_circuit(
     let models_map = tables.models_by_name();
     let bins_map = tables.bins_by_base();
 
+    // MOSFET geometry defaults (ngspice DEFAD / DEFAS / DEFL / DEFW).
+    // Resolved once from `.options` so every MOSFET stamp site can fall
+    // back to the same values when an instance omits AD / AS / L / W.
+    let mos_defaults_opts = nr_options_from_circuit(circuit);
+    let def_w = mos_defaults_opts.defw;
+    let def_l = mos_defaults_opts.defl;
+    let def_ad = mos_defaults_opts.defad;
+    let def_as = mos_defaults_opts.defas;
+
     // -----------------------------------------------------------------
     // First pass: index nodes, count vsource branches and internal nodes,
     // build the name → branch-offset map that F/H reference for their
@@ -1324,7 +1352,7 @@ fn stamp_circuit(
                 }
 
                 let params_nl = extra_params(elem, &["value"]);
-                let (inst_l, inst_w) = get_mosfet_lw(&params_nl);
+                let (inst_l, inst_w) = get_mosfet_lw(&params_nl, def_l, def_w);
                 let (nrd, nrs) = get_nrd_nrs(&params_nl);
                 let model_ref = lookup_model(circuit, elem);
                 let model_name = model_ref.map(|m| m.name.clone());
@@ -2409,11 +2437,16 @@ fn stamp_circuit(
                     None
                 };
 
-                // Instance scalars (defaults match `mna::assemble_mna_flat`).
-                let mut w = 1e-4;
-                let mut l = 1e-4;
-                let mut ad = 0.0;
-                let mut as_ = 0.0;
+                // Instance scalars. Defaults pick up the `.options
+                // DEFW / DEFL / DEFAD / DEFAS` values resolved up-front
+                // (which themselves default to ngspice's `cktinit.c`
+                // values: DEFW = DEFL = 1e-4, DEFAD = DEFAS = 0). PS /
+                // PD have no `.options` default — ngspice leaves them
+                // at 0 for instances that omit them.
+                let mut w = def_w;
+                let mut l = def_l;
+                let mut ad = def_ad;
+                let mut as_ = def_as;
                 let mut pd = 0.0;
                 let mut ps = 0.0;
                 let mut m_mult = 1.0;

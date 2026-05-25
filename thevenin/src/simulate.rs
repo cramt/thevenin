@@ -62,6 +62,18 @@ pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
                         // Netlist parser drops bare keyword options, same
                         // as NOOPITER.
                         "ITERATIVE_REFINEMENT" => opts.iterative_refinement = *v != 0.0,
+                        // NOOPALTER / GMINPRIORITY share NOOPITER's
+                        // boolean-as-number convention.
+                        "NOOPALTER" => opts.noopalter = *v != 0.0,
+                        "GMINPRIORITY" => opts.gminpriority = *v != 0.0,
+                        // MOSFET geometry defaults (ngspice DEFAD /
+                        // DEFAS / DEFL / DEFW). Applied at MOSFET
+                        // stamping time when an instance omits AD /
+                        // AS / L / W.
+                        "DEFAD" => opts.defad = *v,
+                        "DEFAS" => opts.defas = *v,
+                        "DEFL" => opts.defl = *v,
+                        "DEFW" => opts.defw = *v,
                         _ => {}
                     }
                 }
