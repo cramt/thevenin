@@ -18,6 +18,7 @@ use crate::bsim3soi_pd::{bsim3soi_pd_companion, bsim3soi_pd_limit, stamp_bsim3so
 use crate::bsim4::{bsim4_companion, bsim4_limit, stamp_bsim4};
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::hfet::hfet_companion_full;
+use crate::hisim::stamp_hisim;
 use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mesa::{mesa_companion, stamp_mesa};
 use crate::mesfet::{mesfet_companion, stamp_mesfet_with_voltages};
@@ -214,6 +215,9 @@ pub(crate) struct DeviceVoltageState {
     prev_mos6: RefCell<Vec<(f64, f64, f64, f64)>>,
     /// Companion from the previous MOS6 (Level 6) evaluation.
     cached_mos6_companion: RefCell<Vec<Option<MosfetCompanion>>>,
+    prev_hisim: RefCell<Vec<(f64, f64, f64, f64)>>,
+    /// Companion from the previous HiSIM2 (LEVEL=68) evaluation.
+    cached_hisim_companion: RefCell<Vec<Option<MosfetCompanion>>>,
     /// Previous (vgs, vds, von) per VDMOS instance for NR limiting.
     prev_vdmos: RefCell<Vec<(f64, f64, f64)>>,
     prev_jfet: RefCell<Vec<(f64, f64)>>,
@@ -262,6 +266,8 @@ impl DeviceVoltageState {
             cached_bsim2_companion: RefCell::new(vec![None; mna.bsim2s.len()]),
             prev_mos6: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.mos6s.len()]),
             cached_mos6_companion: RefCell::new(vec![None; mna.mos6s.len()]),
+            prev_hisim: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.hisims.len()]),
+            cached_hisim_companion: RefCell::new(vec![None; mna.hisims.len()]),
             prev_vdmos: RefCell::new(vec![(0.0, 0.0, 0.0); mna.vdmoses.len()]),
             prev_jfet: RefCell::new(vec![(0.0, 0.0); mna.jfets.len()]),
             jfet_vcrits,
@@ -379,6 +385,16 @@ impl DeviceVoltageState {
                     .collect(),
             ),
             cached_mos6_companion: RefCell::new(vec![None; mna.mos6s.len()]),
+            prev_hisim: RefCell::new(
+                mna.hisims
+                    .iter()
+                    .map(|m| {
+                        let (vgs, vds, vbs) = m.terminal_voltages(prev_solution);
+                        (vgs, vds, vbs, 0.0)
+                    })
+                    .collect(),
+            ),
+            cached_hisim_companion: RefCell::new(vec![None; mna.hisims.len()]),
             prev_vdmos: RefCell::new(
                 mna.vdmoses
                     .iter()
@@ -575,6 +591,18 @@ impl DeviceVoltageState {
                 prev[i] = (vgs, vds, vbs, 0.0);
             }
             for cached in self.cached_mos6_companion.borrow_mut().iter_mut() {
+                *cached = None;
+            }
+        }
+        // Reset HiSIM2 prev voltages (von reset to 0.0 for fresh NR sequence).
+        // Invalidate cached companions for the same reason as MOS1/MOS2.
+        {
+            let mut prev = self.prev_hisim.borrow_mut();
+            for (i, mos) in mna.hisims.iter().enumerate() {
+                let (vgs, vds, vbs) = mos.terminal_voltages(solution);
+                prev[i] = (vgs, vds, vbs, 0.0);
+            }
+            for cached in self.cached_hisim_companion.borrow_mut().iter_mut() {
                 *cached = None;
             }
         }
@@ -1064,6 +1092,58 @@ impl DeviceVoltageState {
 
                 prev[mi] = (vgs, vds, vbs, comp.von);
                 crate::mos6::stamp_mos6(&mut system.matrix, &mut system.rhs, mos, &comp);
+            }
+        }
+
+        // HiSIM2 (LEVEL=68) — surface-potential bulk MOSFET (simplified port).
+        // HiSIMHV2 (LEVEL=73) also lands here; HV-specific extensions live in
+        // a separate code path once the HV port is wired in.
+        {
+            let mut prev = self.prev_hisim.borrow_mut();
+            let mut cache = self.cached_hisim_companion.borrow_mut();
+            let bypass_on = bypass_enabled();
+            for (mi, mos) in mna.hisims.iter().enumerate() {
+                let (vgs, vds, vbs) = if init_jct {
+                    // MODEINITJCT for HiSIM: seed at threshold-ish, Vds=0, Vbs=-1.
+                    // The HiSIM model doesn't expose VTO directly; use phif2/2 +
+                    // Vfb as a rough proxy.
+                    let sign = mos.model.mos_type.sign();
+                    let seed = sign * (mos.model.vfb + mos.model.phif2);
+                    (seed, 0.0, -1.0)
+                } else {
+                    let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
+                    let von_prev = prev[mi].3;
+                    let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let vbs = if vds >= 0.0 {
+                        bsim_pnjlim(raw_vbs, prev[mi].2)
+                    } else {
+                        let vbd = raw_vbs - vds;
+                        let vbd_lim = bsim_pnjlim(vbd, prev[mi].2 - prev[mi].1);
+                        vbd_lim + vds
+                    };
+                    (vgs, vds, vbs)
+                };
+
+                let bypass = bypass_on
+                    && !init_jct
+                    && cache[mi].is_some()
+                    && within_bypass_tol(vgs, prev[mi].0)
+                    && within_bypass_tol(vds, prev[mi].1)
+                    && within_bypass_tol(vbs, prev[mi].2);
+
+                let comp = if bypass {
+                    crate::sparse::record_bypass_hit();
+                    cache[mi].clone().unwrap()
+                } else {
+                    crate::sparse::record_bypass_miss();
+                    let l_eff = mos.l_eff();
+                    let new_comp = mos.model.companion(vgs, vds, vbs, mos.w, l_eff);
+                    cache[mi] = Some(new_comp.clone());
+                    new_comp
+                };
+
+                prev[mi] = (vgs, vds, vbs, comp.von);
+                stamp_hisim(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }
 

@@ -72,6 +72,7 @@ pub mod bsim4;
 pub mod cpl;
 pub mod diode;
 pub mod hfet;
+pub mod hisim;
 pub mod jfet;
 pub mod ltra;
 pub mod mesa;

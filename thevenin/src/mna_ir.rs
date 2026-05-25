@@ -40,6 +40,7 @@ use crate::cpl::{CplInstance, CplModel, setup_cpline};
 use crate::diode::DiodeModel;
 use crate::expr_val_or;
 use crate::hfet::{HfetInstance, HfetModel, HfetPrecomp};
+use crate::hisim::{HisimInstance, HisimModel};
 use crate::jfet::{JfetInstance, JfetModel};
 use crate::ltra::{LtraInstance, LtraModel};
 use crate::mesa::{MesaInstance, MesaModel, MesaPrecomp};
@@ -71,7 +72,7 @@ use crate::vbic::{VbicInstance, VbicModel};
 pub(crate) fn warn_unhandled_mosfet_level(model_name: Option<&str>, level: i32) {
     // Levels currently dispatched explicitly. Keep in sync with the
     // `if/else if` ladders in this module and `mna.rs`.
-    const HANDLED: &[i32] = &[1, 2, 3, 4, 6, 8, 49, 14, 54, 55, 56, 57];
+    const HANDLED: &[i32] = &[1, 2, 3, 4, 5, 6, 8, 49, 14, 54, 55, 56, 57, 68, 73];
     if HANDLED.contains(&level) {
         return;
     }
@@ -1361,6 +1362,11 @@ fn stamp_circuit(
                     let mm = resolved
                         .map(Mos6Model::from_model_def)
                         .unwrap_or_else(|| Mos6Model::new(crate::mosfet::MosfetType::Nmos));
+                    internal_node_count += mm.internal_node_count();
+                } else if level == 68 || level == 73 {
+                    let mm = resolved
+                        .map(HisimModel::from_model_def)
+                        .unwrap_or_else(|| HisimModel::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += mm.internal_node_count();
                 } else {
                     let mm = resolved
@@ -3019,6 +3025,70 @@ fn stamp_circuit(
                         source_idx
                     };
                     mna.mos6s.push(Mos6Instance {
+                        name: elem.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm.clone(),
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
+                    push_mosfet_caps(
+                        &mut mna.capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
+                } else if level == 68 || level == 73 {
+                    // HiSIM2 (LEVEL=68) / HiSIMHV2 (LEVEL=73) — simplified
+                    // surface-potential port.  Both LEVELs currently land
+                    // here; the HV-specific drift / breakdown extensions are
+                    // routed through a separate code path once HiSIMHV2 lands.
+                    let mm = resolved
+                        .map(HisimModel::from_model_def)
+                        .unwrap_or_else(|| HisimModel::new(crate::mosfet::MosfetType::Nmos));
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    mna.hisims.push(HisimInstance {
                         name: elem.name.clone(),
                         drain_idx,
                         gate_idx,

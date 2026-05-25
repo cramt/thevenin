@@ -231,6 +231,7 @@ fn jct_initial_guess(
     use crate::bsim3soi_fd::{bsim3soi_fd_companion, stamp_bsim3soi_fd};
     use crate::bsim3soi_pd::{bsim3soi_pd_companion, stamp_bsim3soi_pd};
     use crate::hfet::{hfet_companion_full, stamp_hfet_with_voltages};
+    use crate::hisim::stamp_hisim;
     use crate::mos2::stamp_mos2;
     use crate::mos3::stamp_mos3;
     use crate::mosfet::stamp_mosfet;
@@ -313,6 +314,17 @@ fn jct_initial_guess(
         let vbs = -1.0;
         let comp = crate::bsim2::bsim2_companion(mos, vgs, vds, vbs);
         crate::bsim2::stamp_bsim2(&mut system.matrix, &mut system.rhs, mos, &comp);
+    }
+
+    // Stamp each HiSIM2 (LEVEL=68) at a near-threshold MODEINITJCT bias.
+    for mos in &mna.hisims {
+        let sign = mos.model.mos_type.sign();
+        let vgs = sign * (mos.model.vfb + mos.model.phif2);
+        let vds = 0.0;
+        let vbs = -1.0;
+        let l_eff = mos.l_eff();
+        let comp = mos.model.companion(vgs, vds, vbs, mos.w, l_eff);
+        stamp_hisim(&mut system.matrix, &mut system.rhs, mos, &comp);
     }
 
     // Stamp each VDMOS at its threshold voltage (MODEINITJCT analogue).
@@ -542,6 +554,7 @@ fn solve_nonlinear_op_with_guess(
         || !mna.mos3s.is_empty()
         || !mna.bsim1s.is_empty()
         || !mna.bsim2s.is_empty()
+        || !mna.hisims.is_empty()
         || !mna.vdmoses.is_empty()
         || !mna.bjts.is_empty()
         || !mna.vbics.is_empty()

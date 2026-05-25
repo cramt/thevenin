@@ -266,6 +266,8 @@ pub struct MnaSystem {
     pub bsim2s: Vec<crate::bsim2::Bsim2Instance>,
     /// Resolved MOS6 MOSFET instances for NR iteration.
     pub mos6s: Vec<crate::mos6::Mos6Instance>,
+    /// Resolved HiSIM2 (LEVEL=68) MOSFET instances for NR iteration.
+    pub hisims: Vec<crate::hisim::HisimInstance>,
     /// Resolved VDMOS power-MOSFET instances for NR iteration.
     pub vdmoses: Vec<crate::vdmos::VdmosInstance>,
     /// Resolved JFET instances for NR iteration.
@@ -340,6 +342,7 @@ impl MnaSystem {
             bsim1s: Vec::new(),
             bsim2s: Vec::new(),
             mos6s: Vec::new(),
+            hisims: Vec::new(),
             vdmoses: Vec::new(),
             jfets: Vec::new(),
             mesas: Vec::new(),
@@ -388,6 +391,7 @@ impl MnaSystem {
             || !self.bsim1s.is_empty()
             || !self.bsim2s.is_empty()
             || !self.mos6s.is_empty()
+            || !self.hisims.is_empty()
             || !self.vdmoses.is_empty()
             || !self.jfets.is_empty()
             || !self.bsim3s.is_empty()
@@ -436,6 +440,11 @@ impl MnaSystem {
                 .sum::<usize>()
             + self
                 .mos6s
+                .iter()
+                .map(|m| m.model.internal_node_count())
+                .sum::<usize>()
+            + self
+                .hisims
                 .iter()
                 .map(|m| m.model.internal_node_count())
                 .sum::<usize>()
@@ -1430,6 +1439,14 @@ fn assemble_mna_flat(
                         crate::mos6::Mos6Model::new(crate::mosfet::MosfetType::Nmos)
                     };
                     internal_node_count += mm.internal_node_count();
+                } else if level == 68 {
+                    // HiSIM2 (bulk surface-potential, simplified port)
+                    let mm = if let Some(mdef) = resolved {
+                        crate::hisim::HisimModel::from_model_def(mdef)
+                    } else {
+                        crate::hisim::HisimModel::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    internal_node_count += mm.internal_node_count();
                 } else {
                     let mm = if let Some(mdef) = resolved {
                         MosfetModel::from_model_def(mdef)
@@ -1655,6 +1672,7 @@ fn assemble_mna_flat(
     let mut bsim1s = Vec::new();
     let mut bsim2s = Vec::new();
     let mut mos6s = Vec::new();
+    let mut hisims = Vec::new();
     let mut jfets = Vec::new();
     let mut mesas = Vec::new();
     let mut mesfets = Vec::new();
@@ -2597,6 +2615,69 @@ fn assemble_mna_flat(
                     });
 
                     // Synthetic capacitors for MOS6 overlap and junction caps.
+                    push_mosfet_caps(
+                        &mut capacitors,
+                        gate_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        bulk_idx,
+                        mm.cgso,
+                        mm.cgdo,
+                        mm.cgbo,
+                        mm.cbd,
+                        mm.cbs,
+                        mm.cj,
+                        mm.mj,
+                        mm.cjsw,
+                        mm.mjsw,
+                        mm.pb,
+                        mm.fc,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m_mult,
+                    );
+                } else if level == 68 {
+                    // HiSIM2 (bulk surface-potential, simplified port)
+                    let mm = if let Some(mdef) = resolved {
+                        crate::hisim::HisimModel::from_model_def(mdef)
+                    } else {
+                        crate::hisim::HisimModel::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    hisims.push(crate::hisim::HisimInstance {
+                        name: element.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm.clone(),
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
                     push_mosfet_caps(
                         &mut capacitors,
                         gate_idx,
@@ -3571,6 +3652,7 @@ fn assemble_mna_flat(
         bsim1s,
         bsim2s,
         mos6s,
+        hisims,
         // VDMOS is dispatched exclusively through the cirq_ir::Circuit IR
         // path; the legacy Netlist-shape assembler doesn't yet recognise
         // VDMOS model kinds. Leave empty so downstream has_nonlinear()
