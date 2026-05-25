@@ -246,10 +246,13 @@ fn solve_surface_potential(
     vfb: f64,
     gamma: f64,
     phif2: f64,
-) -> (f64, f64, f64) {
+) -> (f64, f64, f64, bool) {
     let vt = VT_NOM;
     let max_iter = 30;
-    let tol = 1.0e-9;
+    // Residual tolerance — `f` is in volts, so 1e-12 V is well below any
+    // physically meaningful precision and an order of magnitude inside the
+    // outer NR's vntol/abstol budget.
+    let f_tol = 1.0e-12;
 
     // Initial guess: clamp to the strong-inversion asymptote, fall back to
     // weak-inversion if `Vgb - Vfb` is small.  The HiSIM upstream uses a more
@@ -266,6 +269,7 @@ fn solve_surface_potential(
     // Keep ψs > Vbs to avoid taking sqrt of a negative argument.
     psi = psi.max(vbs + 0.01);
 
+    let mut converged = false;
     for _ in 0..max_iter {
         // Mobile-carrier exponential term.  Saturates above the gate; clamped
         // for numerical health when ψs >> 2φF.
@@ -275,10 +279,21 @@ fn solve_surface_potential(
         let inner = psi_minus_vbs + vt * expt;
         if inner <= 0.0 {
             // Can't happen with the guard above, but defend the sqrt anyway.
+            // Leave `converged` false so the caller can react.
             break;
         }
         let sq = inner.sqrt();
         let f = psi + gamma * sq - (vgb - vfb);
+
+        // Residual-based convergence: if `f` is already a root at the current
+        // ψs, we're done — the step damping below is irrelevant. This avoids
+        // the previous bug where step damping could mask non-convergence by
+        // forcing |dpsi_unclamped| < tol checks to pass at the wrong moment.
+        if f.abs() < f_tol {
+            converged = true;
+            break;
+        }
+
         // d(inner)/dψs = 1 + expt (since d/dψs of psi-vbs is 1 and d/dψs of vt*expt is expt).
         let dinner_dpsi = 1.0 + expt;
         let dsq_dpsi = if sq > 0.0 {
@@ -287,12 +302,11 @@ fn solve_surface_potential(
             0.0
         };
         let df_dpsi = 1.0 + gamma * dsq_dpsi;
-        // Newton step with damping for the early iterations.
+        // Newton step with damping. Damping only affects step size — the
+        // fixed point (where `f → 0`) is unchanged, so the residual check
+        // above remains the source of truth for convergence.
         let dpsi = f / df_dpsi;
         psi -= dpsi.clamp(-0.5, 0.5);
-        if dpsi.abs() < tol {
-            break;
-        }
     }
 
     // Compute final derivatives at the converged ψs.
@@ -309,7 +323,7 @@ fn solve_surface_potential(
     let df_dpsi = 1.0 + gamma * 0.5 * dinner_dpsi / sq;
     let dpsi_dvgs = 1.0 / df_dpsi;
     let dpsi_dvbs = gamma * 0.5 * (1.0 + expt) / sq / df_dpsi;
-    (psi, dpsi_dvgs, dpsi_dvbs)
+    (psi, dpsi_dvgs, dpsi_dvbs, converged)
 }
 
 impl HisimModel {
@@ -334,9 +348,15 @@ impl HisimModel {
         let (gbd_val, cbd_current) = bulk_diode_current(vbd, self.js0, vt);
 
         // ── Inner NR: solve for ψs at the source end ───────────────────
-        // Vgb_eff = Vgs_eff - Vbs_eff is the gate-bulk voltage.
+        // Vgb_eff = Vgs_eff - Vbs_eff is the gate-bulk voltage. The inner
+        // solver returns a `converged` flag; we ignore it here because the
+        // companion is a stateless transform — propagating the flag up
+        // would require widening the `MosfetCompanion` contract for one
+        // model. The outer NR's residual norm catches the resulting drift,
+        // and direct callers of `solve_surface_potential` (e.g. tests)
+        // observe the flag on their own.
         let vgb = vgs_eff - vbs_eff;
-        let (psi_s, dpsi_dvgs, dpsi_dvbs) =
+        let (psi_s, dpsi_dvgs, dpsi_dvbs, _inner_converged) =
             solve_surface_potential(vgb, vbs_eff, self.vfb, self.gamma, self.phif2);
 
         // ── Surface-potential threshold (for von / weak-inversion blend) ─
@@ -712,7 +732,9 @@ mod tests {
     #[test]
     fn surface_potential_converges_strong_inversion() {
         let m = nmos_basic();
-        let (psi, dpsi_vgs, dpsi_vbs) = solve_surface_potential(2.0, 0.0, m.vfb, m.gamma, m.phif2);
+        let (psi, dpsi_vgs, dpsi_vbs, converged) =
+            solve_surface_potential(2.0, 0.0, m.vfb, m.gamma, m.phif2);
+        assert!(converged, "inner NR should converge in strong inversion");
         // In strong inversion ψs should pin near 2φF.
         assert!(psi > m.phif2 - 0.1);
         assert!(psi < m.phif2 + 0.5);
@@ -723,10 +745,20 @@ mod tests {
     }
 
     #[test]
+    fn surface_potential_converged_flag_set_on_happy_path() {
+        // The flag is the only observable signal that the inner NR finished
+        // honestly — guard against a regression that always returns `false`.
+        let m = nmos_basic();
+        let (_, _, _, converged) = solve_surface_potential(1.5, 0.0, m.vfb, m.gamma, m.phif2);
+        assert!(converged);
+    }
+
+    #[test]
     fn surface_potential_subthreshold() {
         let m = nmos_basic();
         // Vgb well below threshold — ψs should be below 2φF.
-        let (psi, _, _) = solve_surface_potential(0.0, 0.0, m.vfb, m.gamma, m.phif2);
+        let (psi, _, _, converged) = solve_surface_potential(0.0, 0.0, m.vfb, m.gamma, m.phif2);
+        assert!(converged);
         assert!(psi < m.phif2);
     }
 
