@@ -572,6 +572,25 @@ pub enum ElementKind {
         on: Option<bool>,
         params: Vec<Param>,
     },
+    /// `Uname n1 n2 ngnd model L=length [N=lumps]` — uniform RC transmission line.
+    ///
+    /// Expanded into N stages of R/C (or R/C/D if the model has `ISPERL > 0`)
+    /// at SPICE-to-IR import time by `cirq-spice-import`; the simulator never
+    /// sees a URC element directly. See [`cirq-spice-import`'s URC expansion]
+    /// for the topology (ngspice's `urcsetup.c`).
+    Urc {
+        pos: String,
+        neg: String,
+        /// Ground reference node for the shunt caps / diodes.
+        gnd: String,
+        /// Model name (`.model NAME URC (...)`).
+        model: String,
+        /// Length in metres (`L=…`).
+        length: Expr,
+        /// Optional explicit number of lumps (`N=…`); when absent, derived
+        /// from the model's `K` and `FMAX` parameters per ngspice.
+        lumps: Option<Expr>,
+    },
     /// Any element type not explicitly handled — stored verbatim after name.
     Raw(String),
 }
@@ -862,6 +881,20 @@ impl fmt::Display for Element {
                     write!(f, " {}", if *state { "ON" } else { "OFF" })?;
                 }
                 write_params(f, params)
+            }
+            ElementKind::Urc {
+                pos,
+                neg,
+                gnd,
+                model,
+                length,
+                lumps,
+            } => {
+                write!(f, "{} {pos} {neg} {gnd} {model} L={length}", self.name)?;
+                if let Some(n) = lumps {
+                    write!(f, " N={n}")?;
+                }
+                Ok(())
             }
             ElementKind::Raw(rest) => {
                 write!(f, "{} {rest}", self.name)

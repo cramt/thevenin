@@ -655,6 +655,21 @@ fn remap_element(
             on: *on,
             params: resolve_params(params, param_map),
         },
+        ElementKind::Urc {
+            pos,
+            neg,
+            gnd,
+            model,
+            length,
+            lumps,
+        } => ElementKind::Urc {
+            pos: remap(pos),
+            neg: remap(neg),
+            gnd: remap(gnd),
+            model: model.clone(),
+            length: length.clone(),
+            lumps: lumps.clone(),
+        },
         ElementKind::Raw(s) => ElementKind::Raw(s.clone()),
     };
 

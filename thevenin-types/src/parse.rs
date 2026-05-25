@@ -1500,6 +1500,38 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                 params,
             }
         }
+        'U' => {
+            // U<name> n1 n2 ngnd model [L=length] [N=lumps]
+            //
+            // Length defaults to 1 m if not given (ngspice falls back when
+            // `URCknlength` is absent). Lumps is optional — when absent the
+            // simulator-side expansion uses the model's K/FMAX to pick.
+            let pos = need!(0, "n1").to_string();
+            let neg = need!(1, "n2").to_string();
+            let gnd = need!(2, "ngnd").to_string();
+            let model = need!(3, "model").to_string();
+            let mut length: Expr = Expr::Num(1.0);
+            let mut lumps: Option<Expr> = None;
+            for tok in &rest[4..] {
+                if let Some(eq) = tok.find('=') {
+                    let key = tok[..eq].to_uppercase();
+                    let val = &tok[eq + 1..];
+                    match key.as_str() {
+                        "L" => length = parse_expr(val),
+                        "N" => lumps = Some(parse_expr(val)),
+                        _ => {}
+                    }
+                }
+            }
+            ElementKind::Urc {
+                pos,
+                neg,
+                gnd,
+                model,
+                length,
+                lumps,
+            }
+        }
         _ => {
             // Unknown element — store everything after the name verbatim
             ElementKind::Raw(rest.join(" "))

@@ -977,6 +977,12 @@ fn resolve_element(
         ElementKind::VSwitch { params, .. } | ElementKind::ISwitch { params, .. } => {
             resolve_params(params, ctx);
         }
+        ElementKind::Urc { length, lumps, .. } => {
+            try_resolve_expr(length, ctx);
+            if let Some(l) = lumps {
+                try_resolve_expr(l, ctx);
+            }
+        }
         ElementKind::Xspice { .. } | ElementKind::BehavioralSource { .. } | ElementKind::Raw(_) => {
         }
     }
