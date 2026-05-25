@@ -333,6 +333,15 @@ fn real_vector<'a>(plot: &'a SimPlot, name: &str) -> Result<&'a [f64], FourierEr
 /// The transient solver picks its own timesteps so the raw signal is
 /// non-uniformly sampled. `.four` and `.fft` both require uniform sampling
 /// before the transform — this is the resampler.
+///
+/// **Resampler precision caveat:** linear interpolation leaks spectral
+/// power into adjacent harmonics — synthetic pure-sine inputs land
+/// roughly 5% off in the second-harmonic bin instead of the floating-point
+/// floor. That is what forces the looser tolerance in the unit tests
+/// (see `tests::pure_sine_*`) and why `.four` cannot reliably resolve
+/// distortion finer than ~5% on real-world circuits. A future
+/// cubic-spline or sinc resampler would tighten this; tracked as a
+/// post-1.0 follow-up.
 pub fn resample_uniform(times: &[f64], values: &[f64], t0: f64, t1: f64, n: usize) -> Vec<f64> {
     assert_eq!(times.len(), values.len(), "time/value length mismatch");
     assert!(times.len() >= 2, "need at least 2 sample points");

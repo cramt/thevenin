@@ -10,19 +10,26 @@
 //!
 //! The model has two well-defined operating points — fully ON (g = 1/Ron)
 //! and fully OFF (g = 1/Roff) — separated by a hysteresis window
-//! `[Vt-Vh, Vt+Vh]` (or `[It-Ih, It+Ih]`). Inside that window the
-//! conductance is interpolated smoothly so the NR Jacobian stays continuous
-//! and well-conditioned. The interpolant is a hermite polynomial blend
-//! `s(x) = x²·(3 - 2·x)` operating on log10(conductance), matching
-//! ngspice's `swhys.c` formulation.
+//! `[Vt-Vh, Vt+Vh]` (or `[It-Ih, It+Ih]`).
+//!
+//! **Implementation note:** the stamping is hard-decisioned, not smoothly
+//! interpolated. Outside the window the conductance snaps to `1/Ron` or
+//! `1/Roff` with `dg/dc = 0`; inside the window the latched previous state
+//! (`SwitchState::On`/`Off`) wins and the conductance also has `dg/dc = 0`.
+//! There is no hermite-blended log10(conductance) curve. Threshold
+//! crossings are therefore discontinuous in `g`, and the NR loop relies on
+//! the surrounding `pnjlim`-style limiting (from neighbouring nonlinear
+//! devices) plus the hysteresis latch to converge across the discontinuity.
+//! For real switching-converter fixtures this has been sufficient; tighter
+//! convergence on borderline circuits would require porting ngspice's
+//! `swhys.c` smooth-blend formulation (out of scope for the 1.0 cut).
 //!
 //! Hysteresis is realised by tracking the previous switch state across NR
 //! iterations: once the control variable has crossed the upper threshold
 //! the switch latches ON until it crosses the lower threshold, and vice
-//! versa. Inside the hysteresis window the previous state determines
-//! whether the smooth interpolation runs from the OFF curve or the ON
-//! curve, so a control trajectory that enters and leaves the window
-//! without crossing the far threshold returns to its starting state.
+//! versa. Inside the hysteresis window the latched value is preserved, so a
+//! control trajectory that enters and leaves the window without crossing
+//! the far threshold returns to its starting state.
 
 use thevenin_types::{Expr, ModelDef, Param};
 
