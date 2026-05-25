@@ -29,7 +29,10 @@ use thevenin_types::{
 // ---------------------------------------------------------------------------
 
 /// Errors that can occur during SPICE-to-Cirq import.
+///
+/// `#[non_exhaustive]` — new failure modes may land in any 1.x release.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ImportError {
     /// The underlying SPICE parser failed.
     #[error("SPICE parse error: {0}")]

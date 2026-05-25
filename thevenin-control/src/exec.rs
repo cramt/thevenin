@@ -322,6 +322,9 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
         cirq_ir::Analysis::Fft(fft) => {
             thevenin::circuit::simulate_fft(&circuit, fft).map_err(|e| format!("FFT: {e}"))
         }
+        // `Analysis` is `#[non_exhaustive]` — unknown analysis kinds
+        // are surfaced as an error rather than panic.
+        _ => Err("unknown analysis variant".to_string()),
     };
 
     // Capture post-TEMPER model params for @model[param] queries.

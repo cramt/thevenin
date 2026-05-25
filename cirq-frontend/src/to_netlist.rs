@@ -287,6 +287,10 @@ pub fn value_to_expr(val: &Value) -> Expr {
                 Expr::Param(s.clone())
             }
         }
+        // `Value` is `#[non_exhaustive]`. New variants must be lowered to
+        // `Expr` explicitly before they ship; until then, fall back to a
+        // zero so the Netlist round-trip doesn't panic.
+        _ => Expr::Num(0.0),
     }
 }
 
@@ -302,6 +306,8 @@ fn value_to_f64(val: &Value) -> f64 {
             }
         }
         Value::String(_) => 0.0,
+        // `Value` is `#[non_exhaustive]` — fall back to 0.0 for now.
+        _ => 0.0,
     }
 }
 
@@ -469,6 +475,10 @@ pub fn convert_waveform(w: &IrWaveform) -> Waveform {
             fs: Expr::Num(*fs),
             td: td.map(Expr::Num),
         },
+        // `Waveform` is `#[non_exhaustive]`. New waveform shapes land in
+        // cirq-ir before the Netlist-shape conversion catches up. Until
+        // then, fall back to a zero PWL so callers don't panic.
+        _ => Waveform::Pwl(vec![]),
     }
 }
 
@@ -1061,6 +1071,10 @@ fn convert_element(
                 _ => Err(ConvertError::MissingValue(elem.name.clone())),
             }
         }
+        // `ElementKind` is `#[non_exhaustive]` — new device kinds must
+        // grow an explicit conversion arm before they can round-trip
+        // through Netlist shape.
+        _ => Err(ConvertError::MissingValue(elem.name.clone())),
     }
 }
 
@@ -1103,6 +1117,12 @@ pub fn convert_model(model: &cirq_ir::Model) -> ModelDef {
         DeviceType::VSwitch => "SW".into(),
         DeviceType::ISwitch => "CSW".into(),
         DeviceType::Other(s) => s.clone(),
+        // `DeviceType` is `#[non_exhaustive]`; new variants land in cirq-ir
+        // and need a Netlist-kind string here. Fall back to the Debug name
+        // so round-tripping keeps working (the resulting kind won't be the
+        // canonical SPICE letter, but the simulator's `Other` fallback
+        // accepts it).
+        other => format!("{other:?}").to_uppercase(),
     };
 
     let params = model
@@ -1313,6 +1333,11 @@ fn convert_analysis(
                 format: Some(format.to_string()),
             }
         }
+        // `Analysis` is `#[non_exhaustive]` — new analyses (e.g. `.disto`)
+        // land in cirq-ir before they get a Netlist-shape lowering. Fall
+        // back to `.op` so the round-trip doesn't panic; the new variant
+        // should grow an explicit arm before it ships.
+        _ => Analysis::Op,
     }
 }
 

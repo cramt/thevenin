@@ -278,6 +278,14 @@ fn simulate_single(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
             cirq_ir::Analysis::Tf(_) => simulate_tf(circuit)?,
             cirq_ir::Analysis::Four(four) => simulate_four(circuit, four)?,
             cirq_ir::Analysis::Fft(fft) => simulate_fft(circuit, fft)?,
+            // `Analysis` is `#[non_exhaustive]` — new analyses (`.disto`,
+            // etc.) must grow an explicit arm before they can be
+            // simulated. Until then return an error rather than panic.
+            _ => {
+                return Err(CircuitSimError::Mna(MnaError::UnsupportedElement(
+                    "unknown analysis variant — extend thevenin::circuit::simulate".to_string(),
+                )));
+            }
         };
         plots.extend(result.plots);
     }

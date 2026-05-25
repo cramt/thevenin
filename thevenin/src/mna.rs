@@ -21,6 +21,7 @@ use crate::vbic::{VbicInstance, VbicModel};
 const GROUND: &str = "0";
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum MnaError {
     #[error("unsupported element for MNA assembly: {0}")]
     UnsupportedElement(String),

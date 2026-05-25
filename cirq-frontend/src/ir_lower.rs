@@ -126,6 +126,10 @@ fn standard_pins(kind: &ElementKind) -> &'static [&'static str] {
         // rather than via positional Cirq syntax (B1 spec hasn't shipped
         // switch syntax yet), so positional lowering isn't used here.
         ElementKind::Switch { .. } => &[],
+        // `ElementKind` is `#[non_exhaustive]` — new device kinds must
+        // declare their pin order here. Until then no positional
+        // lowering is available; named connections in the IR still work.
+        _ => &[],
     }
 }
 
@@ -2357,6 +2361,7 @@ fn value_as_f64(val: &Value) -> Result<f64, String> {
         Value::Integer(v) => Ok(*v as f64),
         Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
         Value::String(_) => Err("cannot use string in arithmetic".to_string()),
+        _ => Err("unsupported Value variant in arithmetic".to_string()),
     }
 }
 

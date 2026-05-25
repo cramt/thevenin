@@ -1050,6 +1050,8 @@ pub(crate) fn value_as_real(value: &cirq_ir::Value) -> Option<f64> {
         cirq_ir::Value::Real(v) => Some(*v),
         cirq_ir::Value::Integer(v) => Some(*v as f64),
         cirq_ir::Value::Bool(_) | cirq_ir::Value::String(_) => None,
+        // `Value` is `#[non_exhaustive]` — unknown variants aren't numeric.
+        _ => None,
     }
 }
 

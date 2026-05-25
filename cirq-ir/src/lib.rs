@@ -121,7 +121,12 @@ pub struct Connection {
 }
 
 /// Resolved element kinds (after model resolution).
+///
+/// `#[non_exhaustive]` so new device kinds (e.g. URC, HICUM) can land in
+/// 1.x without a major bump. External callers must include a catch-all
+/// arm; see `docs/api-stability.md`.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ElementKind {
     Resistor,
     Capacitor,
@@ -242,7 +247,10 @@ pub struct Model {
 /// preserved verbatim in [`DeviceType::Other`] so the simulator's string-keyed
 /// dispatch in `mna.rs` keeps working when the SPICE importer rebuilds a
 /// model that has no first-class IR representation.
+///
+/// `#[non_exhaustive]` — new model kinds may be added in any 1.x release.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DeviceType {
     Diode,
     Npn,
@@ -267,7 +275,11 @@ pub enum DeviceType {
 }
 
 /// A resolved parameter value.
+///
+/// `#[non_exhaustive]` — new typed variants (e.g. `Complex`, `Net`) may
+/// be added in any 1.x release.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Value {
     Real(f64),
     Integer(i64),
@@ -288,7 +300,10 @@ pub struct AcSpec {
 }
 
 /// Transient waveform for voltage/current sources.
+///
+/// `#[non_exhaustive]` — new waveform shapes may be added in any 1.x.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Waveform {
     /// `PULSE(v1 v2 [td [tr [tf [pw [per]]]]])`
     Pulse {
@@ -411,7 +426,11 @@ impl MeasureSpec {
 ///
 /// Parsed by [`parse_measure_expr`] from the verbatim spec string. Each
 /// variant maps to one of the supported `.meas` keywords.
+///
+/// `#[non_exhaustive]` — new clauses (ERROR, IF, file-PARAM) may land in
+/// any 1.x.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum MeasureExpr {
     /// `MAX | MIN | AVG | RMS | PP` over a vector, optionally bounded.
     Aggregate {
@@ -1092,7 +1111,12 @@ mod measure_parse {
 }
 
 /// A resolved analysis command.
+///
+/// `#[non_exhaustive]` — new analyses (e.g. `.disto`) may land in any
+/// 1.x release without a major bump. External callers must include a
+/// catch-all arm.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Analysis {
     Op,
     Dc(DcAnalysis),

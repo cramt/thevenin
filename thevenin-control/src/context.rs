@@ -321,6 +321,8 @@ fn value_to_string(value: &cirq_ir::Value) -> String {
         cirq_ir::Value::Integer(v) => v.to_string(),
         cirq_ir::Value::Bool(v) => v.to_string(),
         cirq_ir::Value::String(v) => v.clone(),
+        // `Value` is `#[non_exhaustive]` — fall back to Debug for unknown variants.
+        other => format!("{other:?}"),
     }
 }
 

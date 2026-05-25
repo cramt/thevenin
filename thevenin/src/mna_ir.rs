@@ -282,6 +282,9 @@ fn numeric_param(elem: &IrElement, names: &[&str]) -> Option<f64> {
                     Value::Integer(i) => Some(*i as f64),
                     Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
                     Value::String(_) => None,
+                    // `Value` is `#[non_exhaustive]`; unknown variants are
+                    // treated as non-numeric for now.
+                    _ => None,
                 };
             }
         }
@@ -892,6 +895,8 @@ fn numeric_value(v: &Value) -> Option<f64> {
         Value::Integer(i) => Some(*i as f64),
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
         Value::String(_) => None,
+        // `Value` is `#[non_exhaustive]`.
+        _ => None,
     }
 }
 
@@ -1375,6 +1380,10 @@ fn stamp_circuit(
                     internal_node_count += mm.internal_node_count();
                 }
             }
+            // `ElementKind` is `#[non_exhaustive]`; new device kinds must
+            // grow their own pass-1 sizing here. Unknown kinds contribute
+            // no extra nodes for now.
+            _ => {}
         }
     }
 
@@ -3439,6 +3448,11 @@ fn stamp_circuit(
                 // The conductance/current stamps are applied during NR
                 // iteration in `device_stamp::switch`, not here.
             }
+            // `ElementKind` is `#[non_exhaustive]`; new variants land in
+            // cirq-ir and need a stamping arm here before they can be
+            // simulated. Unknown kinds are silently skipped — caller
+            // responsibility to grow this match for new kinds.
+            _ => {}
         }
     }
 

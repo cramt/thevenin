@@ -116,6 +116,9 @@ fn evaluate_typed(expr: &MeasureExpr, plot: &SimPlot) -> Option<f64> {
         MeasureExpr::TrigTarg { trig, targ } => eval_trig_targ(trig, targ, plot),
         MeasureExpr::Deriv { vec, at } => eval_deriv(vec, at, plot),
         MeasureExpr::Param(_) => None,
+        // `MeasureExpr` is `#[non_exhaustive]` — new clauses (ERROR, IF,
+        // file-PARAM) must grow their own arm before being usable.
+        _ => None,
     }
 }
 
