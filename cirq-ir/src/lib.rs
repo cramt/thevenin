@@ -399,6 +399,17 @@ pub struct MeasureSpec {
     /// downstream evaluator will then skip the measurement and report
     /// the original spec string in diagnostics.
     pub expr: Option<MeasureExpr>,
+    /// Optional conditional clause (`IF '<expr>'`). When set, the
+    /// measurement is only recorded if the arithmetic expression
+    /// (resolved against earlier measurement results) evaluates to a
+    /// nonzero, finite value. Used to skip dependent measurements
+    /// whose predecessor failed.
+    pub condition: Option<MeasArith>,
+    /// Optional output file (`FILE=<path>`). When set, the measurement
+    /// result is appended to the named file as a single line in
+    /// `name = value` format, in addition to landing in the
+    /// `measurements` plot. Created lazily on first write.
+    pub file: Option<String>,
 }
 
 impl MeasureSpec {
@@ -412,14 +423,111 @@ impl MeasureSpec {
         spec: impl Into<String>,
     ) -> Self {
         let spec = spec.into();
-        let expr = parse_measure_expr(&spec).ok();
+        // Strip optional IF '<cond>' and FILE=<path> clauses before
+        // delegating the rest to `parse_measure_expr`. Both clauses are
+        // independent of the measurement kind so they live on the wrapper.
+        let (core_spec, condition, file) = strip_meas_clauses(&spec);
+        let expr = parse_measure_expr(&core_spec).ok();
         Self {
             name: name.into(),
             analysis_type: analysis_type.into(),
             spec,
             expr,
+            condition,
+            file,
         }
     }
+}
+
+/// Extract optional `IF '<arith>'` and `FILE=<path>` clauses from a
+/// `.meas` spec string. Returns the stripped core spec and the parsed
+/// clauses. Anything unrecognised is left in the core.
+fn strip_meas_clauses(spec: &str) -> (String, Option<MeasArith>, Option<String>) {
+    let mut core = spec.to_string();
+    let mut condition: Option<MeasArith> = None;
+    let mut file: Option<String> = None;
+
+    // FILE=<path> — single token, no quoting in ngspice form.
+    if let Some(idx) = find_keyword(&core, "FILE=") {
+        let (head, rest) = core.split_at(idx);
+        let after_eq = &rest[5..]; // skip "FILE="
+        let (path, tail) = match after_eq.find(char::is_whitespace) {
+            Some(end) => (&after_eq[..end], &after_eq[end..]),
+            None => (after_eq, ""),
+        };
+        file = Some(path.trim_matches(|c| c == '\'' || c == '"').to_string());
+        core = format!("{}{}", head.trim_end(), tail);
+    }
+
+    // IF '<arith>' or IF=<arith>. The quoted form is the canonical HSPICE
+    // shape; we also accept IF=<arith> for symmetry with PARAM=.
+    if let Some(idx) = find_keyword_word(&core, "IF") {
+        let (head, rest) = core.split_at(idx);
+        let after_if = &rest[2..]; // skip "IF"
+        let mut s = after_if.trim_start();
+        // Optional '=' between IF and the expression.
+        if let Some(stripped) = s.strip_prefix('=') {
+            s = stripped.trim_start();
+        }
+        // Quoted form '...' — pluck the inside.
+        let (expr_str, tail) = if let Some(stripped) = s.strip_prefix('\'') {
+            match stripped.find('\'') {
+                Some(end) => (&stripped[..end], &stripped[end + 1..]),
+                None => (stripped, ""), // unterminated — take rest
+            }
+        } else if let Some(stripped) = s.strip_prefix('"') {
+            match stripped.find('"') {
+                Some(end) => (&stripped[..end], &stripped[end + 1..]),
+                None => (stripped, ""),
+            }
+        } else {
+            // Unquoted — take to end of line.
+            (s, "")
+        };
+        condition = measure_parse::parse_arith(expr_str).ok();
+        core = format!("{}{}", head.trim_end(), tail);
+    }
+
+    (core.trim().to_string(), condition, file)
+}
+
+/// Find a case-insensitive substring at a word boundary (preceded by start
+/// or whitespace). Used for `FILE=` etc.
+fn find_keyword(s: &str, key: &str) -> Option<usize> {
+    let upper = s.to_uppercase();
+    let mut from = 0usize;
+    while let Some(rel) = upper[from..].find(key) {
+        let idx = from + rel;
+        let prev_ok = idx == 0 || s.as_bytes()[idx - 1].is_ascii_whitespace();
+        if prev_ok {
+            return Some(idx);
+        }
+        from = idx + 1;
+    }
+    None
+}
+
+/// Find a standalone keyword (whitespace on both sides or at start/end).
+/// Used for `IF` so we don't match `MID-IFx` style identifiers.
+fn find_keyword_word(s: &str, key: &str) -> Option<usize> {
+    let upper = s.to_uppercase();
+    let bytes = s.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = upper[from..].find(key) {
+        let idx = from + rel;
+        let end = idx + key.len();
+        let prev_ok = idx == 0 || bytes[idx - 1].is_ascii_whitespace();
+        let next_ok = end >= bytes.len()
+            || bytes[end].is_ascii_whitespace()
+            || bytes[end] == b'='
+            || bytes[end] == b'\''
+            || bytes[end] == b'"';
+        if prev_ok && next_ok {
+            return Some(idx);
+        }
+        from = idx + 1;
+    }
+    None
 }
 
 /// Typed form of a `.meas` expression.
@@ -461,6 +569,49 @@ pub enum MeasureExpr {
     /// resolution is deferred to evaluation time, where the surrounding
     /// `measurements` plot is available for lookup.
     Param(MeasArith),
+    /// `ERR{1|2|3} expected_value calc_value [MINVAL=...] [IGNORE=...]`
+    /// — compares two signals over the sweep and returns an error
+    /// metric. ERR1 = max relative error, ERR2 = max absolute error,
+    /// ERR3 = RMS relative error.
+    ///
+    /// `expected` may be either a constant (e.g. `1.5`) or another
+    /// vector (e.g. `v(ref)`). `actual` is always a vector name. The
+    /// per-sample relative error uses `max(|expected|, minval)` as the
+    /// denominator to avoid blowing up near zero.
+    Error {
+        kind: ErrorKind,
+        expected: ErrorReference,
+        actual: String,
+        /// Floor for the denominator in relative-error modes (ngspice
+        /// `MINVAL=`). Defaults to `1.0e-6` when omitted, matching
+        /// ngspice's default.
+        minval: Option<f64>,
+        /// Samples below this threshold are excluded from the
+        /// comparison (ngspice `IGNORE=`/`IGNOR=`).
+        ignore: Option<f64>,
+    },
+}
+
+/// Which error metric `ERR{1|2|3}` computes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// `ERR` / `ERR1`: max over samples of `|actual - expected| /
+    /// max(|expected|, MINVAL)`.
+    Relative,
+    /// `ERR2`: max over samples of `|actual - expected|`.
+    Absolute,
+    /// `ERR3`: RMS of `|actual - expected| / max(|expected|, MINVAL)`.
+    Rms,
+}
+
+/// The "expected" side of an `ERR` measurement — either a literal
+/// constant or another vector to compare against.
+#[derive(Debug, Clone)]
+pub enum ErrorReference {
+    /// Literal numeric value (e.g. `1.5`).
+    Constant(f64),
+    /// Vector name resolved at evaluation time (e.g. `v(ref)`).
+    Vector(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -612,8 +763,43 @@ mod measure_parse {
             "WHEN" => Ok(MeasureExpr::When(parse_crossing_spec(rest)?)),
             "TRIG" => trig_targ(rest),
             "DERIV" => deriv(rest),
+            "ERR" | "ERR1" => err(ErrorKind::Relative, rest),
+            "ERR2" => err(ErrorKind::Absolute, rest),
+            "ERR3" => err(ErrorKind::Rms, rest),
             other => Err(MeasParseError::UnknownKeyword(other.to_string())),
         }
+    }
+
+    fn err(kind: ErrorKind, tokens: &[String]) -> Result<MeasureExpr, MeasParseError> {
+        if tokens.len() < 2 {
+            return Err(MeasParseError::InvalidClause(
+                "ERR needs <expected> <actual>".into(),
+            ));
+        }
+        // `expected` may be a literal number or a vector name.
+        let expected_tok = &tokens[0];
+        let expected = match parse_si_value(expected_tok) {
+            Some(v) => ErrorReference::Constant(v),
+            None => ErrorReference::Vector(expected_tok.clone()),
+        };
+        let actual = tokens[1].clone();
+        let mut minval: Option<f64> = None;
+        let mut ignore: Option<f64> = None;
+        for t in &tokens[2..] {
+            let up = t.to_uppercase();
+            if let Some(v) = up.strip_prefix("MINVAL=") {
+                minval = parse_si_value(v);
+            } else if let Some(v) = up.strip_prefix("IGNORE=").or(up.strip_prefix("IGNOR=")) {
+                ignore = parse_si_value(v);
+            }
+        }
+        Ok(MeasureExpr::Error {
+            kind,
+            expected,
+            actual,
+            minval,
+            ignore,
+        })
     }
 
     /// Match `<KEY>` followed by `=` (any whitespace allowed), case-insensitive.
@@ -929,7 +1115,7 @@ mod measure_parse {
     //   factor ::= ('-' | '+') factor | primary
     //   primary ::= number | identifier | '(' expr ')'
 
-    fn parse_arith(input: &str) -> Result<MeasArith, MeasParseError> {
+    pub(super) fn parse_arith(input: &str) -> Result<MeasArith, MeasParseError> {
         let mut p = ArithParser::new(input);
         let e = p.parse_expr()?;
         p.skip_ws();

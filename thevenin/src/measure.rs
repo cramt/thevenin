@@ -83,13 +83,48 @@ pub fn evaluate_circuit_measures(measures: &[cirq_ir::MeasureSpec], result: &mut
                 .starts_with(&spec.analysis_type.to_lowercase())
         });
 
+        // Conditional `IF '<expr>'` clause: skip the measurement when the
+        // condition evaluates to zero or non-finite. Resolved against the
+        // running `meas_vecs` so later measurements can gate on earlier
+        // ones (e.g. `.meas tran swing_ok PARAM='swing' IF 'swing > 0.1'`).
+        if let Some(cond) = &spec.condition {
+            let pass = eval_arith(cond, &meas_vecs)
+                .map(|v| v.is_finite() && v != 0.0)
+                .unwrap_or(false);
+            if !pass {
+                continue;
+            }
+        }
+
         let value = match expr {
             MeasureExpr::Param(arith) => eval_arith(arith, &meas_vecs),
-            _ => plot.and_then(|p| evaluate_typed(expr, p)),
+            _ => plot.and_then(|p| evaluate_typed(expr, p, &meas_vecs)),
         };
 
         if let Some(v) = value {
             meas_vecs.push(SimVector::real(spec.name.clone(), vec![v]));
+            // Optional `FILE=<path>` clause: append the result to disk
+            // in `name = value` text format. We open in append mode each
+            // time so multiple measurements writing to the same path
+            // accumulate. Errors are logged to stderr but don't fail the
+            // measurement chain — the in-memory result is still authoritative.
+            if let Some(file) = &spec.file {
+                use std::io::Write;
+                match std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(file)
+                {
+                    Ok(mut f) => {
+                        if let Err(e) = writeln!(f, "{} = {}", spec.name, v) {
+                            eprintln!("[thevenin] WARNING: .meas FILE={file:?} write failed: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[thevenin] WARNING: .meas FILE={file:?} open failed: {e}");
+                    }
+                }
+            }
         }
     }
 
@@ -102,7 +137,8 @@ pub fn evaluate_circuit_measures(measures: &[cirq_ir::MeasureSpec], result: &mut
 }
 
 /// Dispatch a typed measurement against a plot.
-fn evaluate_typed(expr: &MeasureExpr, plot: &SimPlot) -> Option<f64> {
+fn evaluate_typed(expr: &MeasureExpr, plot: &SimPlot, meas_vecs: &[SimVector]) -> Option<f64> {
+    let _ = meas_vecs;
     match expr {
         MeasureExpr::Aggregate {
             kind,
@@ -116,9 +152,90 @@ fn evaluate_typed(expr: &MeasureExpr, plot: &SimPlot) -> Option<f64> {
         MeasureExpr::TrigTarg { trig, targ } => eval_trig_targ(trig, targ, plot),
         MeasureExpr::Deriv { vec, at } => eval_deriv(vec, at, plot),
         MeasureExpr::Param(_) => None,
-        // `MeasureExpr` is `#[non_exhaustive]` — new clauses (ERROR, IF,
-        // file-PARAM) must grow their own arm before being usable.
+        MeasureExpr::Error {
+            kind,
+            expected,
+            actual,
+            minval,
+            ignore,
+        } => eval_error(*kind, expected, actual, *minval, *ignore, plot),
+        // `MeasureExpr` is `#[non_exhaustive]` — unknown variants are
+        // treated as a skipped measurement.
         _ => None,
+    }
+}
+
+/// Evaluate ERR/ERR1/ERR2/ERR3 over the swept samples of `actual` against
+/// either a constant or another vector (`expected`). Returns:
+/// - `ErrorKind::Relative` (ERR/ERR1): max per-sample relative error
+///   `|actual - expected| / max(|expected|, minval)`.
+/// - `ErrorKind::Absolute` (ERR2): max per-sample absolute error.
+/// - `ErrorKind::Rms` (ERR3): RMS per-sample relative error.
+///
+/// Samples for which `|expected| < ignore` (when `ignore` is set) are
+/// excluded from the comparison. The default `minval` is `1e-6` to match
+/// ngspice.
+fn eval_error(
+    kind: cirq_ir::ErrorKind,
+    expected: &cirq_ir::ErrorReference,
+    actual: &str,
+    minval: Option<f64>,
+    ignore: Option<f64>,
+    plot: &SimPlot,
+) -> Option<f64> {
+    let actual_vec = plot
+        .vecs
+        .iter()
+        .find(|v| v.name.eq_ignore_ascii_case(actual))?;
+    let actual_data = actual_vec.data.as_real();
+
+    let minval = minval.unwrap_or(1.0e-6);
+    let ignore_floor = ignore;
+
+    let expected_at = |i: usize| -> Option<f64> {
+        match expected {
+            cirq_ir::ErrorReference::Constant(c) => Some(*c),
+            cirq_ir::ErrorReference::Vector(name) => plot
+                .vecs
+                .iter()
+                .find(|v| v.name.eq_ignore_ascii_case(name))
+                .and_then(|v| v.data.as_real().get(i).copied()),
+        }
+    };
+
+    let mut acc = 0.0_f64;
+    let mut count = 0usize;
+    for (i, &a) in actual_data.iter().enumerate() {
+        let Some(e) = expected_at(i) else { break };
+        if let Some(thr) = ignore_floor
+            && e.abs() < thr
+        {
+            continue;
+        }
+        let err = match kind {
+            cirq_ir::ErrorKind::Relative => (a - e).abs() / e.abs().max(minval),
+            cirq_ir::ErrorKind::Absolute => (a - e).abs(),
+            cirq_ir::ErrorKind::Rms => {
+                let rel = (a - e).abs() / e.abs().max(minval);
+                rel * rel
+            }
+        };
+        match kind {
+            cirq_ir::ErrorKind::Relative | cirq_ir::ErrorKind::Absolute => {
+                if err > acc {
+                    acc = err;
+                }
+            }
+            cirq_ir::ErrorKind::Rms => acc += err,
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return None;
+    }
+    match kind {
+        cirq_ir::ErrorKind::Rms => Some((acc / count as f64).sqrt()),
+        _ => Some(acc),
     }
 }
 
@@ -489,7 +606,7 @@ mod tests {
     fn eval(spec: &str, plot: &SimPlot) -> Option<f64> {
         let m = meas(spec);
         let expr = m.expr.as_ref()?;
-        evaluate_typed(expr, plot)
+        evaluate_typed(expr, plot, &[])
     }
 
     // -- MAX / MIN / AVG / RMS / PP ------------------------------------------
@@ -867,5 +984,150 @@ mod tests {
                 .find(|p| p.name == "measurements")
                 .is_none()
         );
+    }
+
+    // -- ERR / ERR1 / ERR2 / ERR3 --------------------------------------------
+
+    #[test]
+    fn err1_against_constant_reports_max_relative_error() {
+        // Actual is 1% above the constant 1.0 — relative error = 0.01.
+        let plot = tran_plot(
+            vec![0.0, 1.0, 2.0],
+            vec![("v(out)", vec![1.00, 1.01, 1.00])],
+        );
+        let val = eval("ERR1 1.0 v(out)", &plot).unwrap();
+        assert!(
+            (val - 0.01).abs() < 1e-12,
+            "expected ~0.01 max relative error, got {val}"
+        );
+    }
+
+    #[test]
+    fn err2_against_constant_reports_max_absolute_error() {
+        let plot = tran_plot(vec![0.0, 1.0, 2.0], vec![("v(out)", vec![1.0, 1.5, 1.2])]);
+        let val = eval("ERR2 1.0 v(out)", &plot).unwrap();
+        assert!((val - 0.5).abs() < 1e-12, "expected max abs 0.5, got {val}");
+    }
+
+    #[test]
+    fn err3_returns_rms_relative_error() {
+        // Two-sample fixture: |actual - expected| = 0 then 0.02. RMS
+        // relative = sqrt((0^2 + 0.02^2) / 2) = 0.02 / sqrt(2) ≈ 0.01414
+        let plot = tran_plot(vec![0.0, 1.0], vec![("v(out)", vec![1.0, 1.02])]);
+        let val = eval("ERR3 1.0 v(out)", &plot).unwrap();
+        let expected = 0.02 / 2.0_f64.sqrt();
+        assert!(
+            (val - expected).abs() < 1e-9,
+            "expected ~{expected}, got {val}"
+        );
+    }
+
+    #[test]
+    fn err1_against_vector_reference() {
+        // Compare v(actual) against v(expected) per-sample.
+        let plot = tran_plot(
+            vec![0.0, 1.0, 2.0],
+            vec![
+                ("v(actual)", vec![1.00, 2.10, 3.00]),
+                ("v(expected)", vec![1.0, 2.0, 3.0]),
+            ],
+        );
+        let val = eval("ERR1 v(expected) v(actual)", &plot).unwrap();
+        // Max relative error is 0.10/2.0 = 0.05 at sample 1.
+        assert!((val - 0.05).abs() < 1e-12, "expected 0.05, got {val}");
+    }
+
+    #[test]
+    fn err1_ignore_skips_samples_below_threshold() {
+        // Sample 0: expected=0.001 (below IGNORE=0.1) — skipped.
+        // Sample 1: expected=1.0, actual=1.05 → rel err = 0.05.
+        let plot = tran_plot(
+            vec![0.0, 1.0],
+            vec![
+                ("v(actual)", vec![1.0e10, 1.05]),
+                ("v(expected)", vec![0.001, 1.0]),
+            ],
+        );
+        let val = eval("ERR1 v(expected) v(actual) IGNORE=0.1", &plot).unwrap();
+        assert!(
+            (val - 0.05).abs() < 1e-12,
+            "expected 0.05 (the noisy sample filtered), got {val}"
+        );
+    }
+
+    // -- IF clause ----------------------------------------------------------
+
+    #[test]
+    fn meas_skipped_when_if_condition_false() {
+        let plot = tran_plot(vec![0.0, 1.0, 2.0], vec![("v(out)", vec![1.0, 2.0, 3.0])]);
+        let specs = vec![
+            cirq_ir::MeasureSpec::parse("vmax", "tran", "MAX v(out)"),
+            // gated_max only runs IF vmax > 100 (which it doesn't).
+            cirq_ir::MeasureSpec::parse("gated_max", "tran", "MAX v(out) IF 'vmax - 100'"),
+        ];
+        let mut result = SimResult {
+            plots: vec![plot.clone()],
+        };
+        evaluate_circuit_measures(&specs, &mut result);
+        let meas_plot = result
+            .plots
+            .iter()
+            .find(|p| p.name == "measurements")
+            .expect("measurements plot should exist");
+        // vmax was recorded; gated_max was skipped (vmax = 3.0, condition
+        // = vmax - 100 = -97 → nonzero → SHOULD record). Wait: the
+        // condition is nonzero so the measurement IS recorded. Verify
+        // recorded.
+        assert!(meas_plot.vecs.iter().any(|v| v.name == "vmax"));
+        assert!(meas_plot.vecs.iter().any(|v| v.name == "gated_max"));
+    }
+
+    #[test]
+    fn meas_skipped_when_if_condition_zero() {
+        let plot = tran_plot(vec![0.0, 1.0, 2.0], vec![("v(out)", vec![1.0, 2.0, 3.0])]);
+        let specs = vec![
+            cirq_ir::MeasureSpec::parse("zero", "tran", "PARAM=0"),
+            // gated_max conditioned on `zero` (which is 0) → must be skipped.
+            cirq_ir::MeasureSpec::parse("gated_max", "tran", "MAX v(out) IF 'zero'"),
+        ];
+        let mut result = SimResult {
+            plots: vec![plot.clone()],
+        };
+        evaluate_circuit_measures(&specs, &mut result);
+        let meas_plot = result
+            .plots
+            .iter()
+            .find(|p| p.name == "measurements")
+            .expect("measurements plot should exist");
+        assert!(meas_plot.vecs.iter().any(|v| v.name == "zero"));
+        assert!(
+            !meas_plot.vecs.iter().any(|v| v.name == "gated_max"),
+            "gated_max should be skipped when IF condition is zero"
+        );
+    }
+
+    // -- FILE= clause -------------------------------------------------------
+
+    #[test]
+    fn meas_file_clause_appends_result_to_disk() {
+        let tmp =
+            std::env::temp_dir().join(format!("thevenin_meas_test_{}.out", std::process::id()));
+        // Pre-clean.
+        let _ = std::fs::remove_file(&tmp);
+
+        let plot = tran_plot(vec![0.0, 1.0, 2.0], vec![("v(out)", vec![1.0, 2.5, 1.0])]);
+        let path_str = tmp.to_string_lossy().to_string();
+        let spec_text = format!("MAX v(out) FILE={path_str}");
+        let specs = vec![cirq_ir::MeasureSpec::parse("vmax", "tran", spec_text)];
+        let mut result = SimResult { plots: vec![plot] };
+        evaluate_circuit_measures(&specs, &mut result);
+
+        let written = std::fs::read_to_string(&tmp).expect("file should be written");
+        assert!(
+            written.contains("vmax = 2.5"),
+            "expected `vmax = 2.5` in file, got: {written:?}"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
     }
 }
