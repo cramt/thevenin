@@ -2170,3 +2170,88 @@ fn cirq_native_measure_malformed_emits_diagnostic() {
         "span should cover the spec string literal, got: {slice:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// B2 — language extensions: ternary + sim-context constants
+// ---------------------------------------------------------------------------
+
+/// End-to-end: a Cirq ternary expression survives lowering → netlist → simulate.
+#[test]
+fn cirq_ternary_param_simulates() {
+    let source = r#"
+        circuit ternary_param {
+            param hot = 1
+            param r = hot > 0 ? 1000 : 10000
+            V1: vsource(in -> gnd, dc: 5)
+            R1: resistor(in -> out, r)
+            R2: resistor(out -> gnd, r)
+            analysis op {}
+        }
+    "#;
+
+    let netlists = cirq_frontend::compile_to_netlist(source)
+        .expect("compile_to_netlist should succeed for a ternary param");
+    assert_eq!(netlists.len(), 1);
+    let result = simulate(&netlists[0]);
+
+    // With both resistors equal, v(out) = vdd/2 = 2.5 V regardless of which
+    // branch of the ternary was selected. The point is the lowering didn't
+    // panic and the netlist solved.
+    let plot = result.plot().expect("should have op plot");
+    let vout = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(out)")
+        .expect("v(out) vector");
+    let val = vout.data.as_real()[0];
+    assert!((val - 2.5).abs() < 1e-6, "expected v(out) ≈ 2.5, got {val}");
+}
+
+/// `temper` inside a parameter expression resolves to the circuit's static
+/// temperature at IR-lower time. Setting `temp 100` shifts the resolved value.
+#[test]
+fn cirq_temper_in_param_picks_up_temp_directive() {
+    let source_27 = r#"
+        circuit temper27 {
+            param vth = 0.025 * temper / 300
+            V1: vsource(in -> gnd, dc: vth)
+            R1: resistor(in -> gnd, 1000)
+            analysis op {}
+        }
+    "#;
+    let source_100 = r#"
+        circuit temper100 {
+            temp 100
+            param vth = 0.025 * temper / 300
+            V1: vsource(in -> gnd, dc: vth)
+            R1: resistor(in -> gnd, 1000)
+            analysis op {}
+        }
+    "#;
+
+    let nl_27 = &cirq_frontend::compile_to_netlist(source_27).expect("compile 27")[0];
+    let nl_100 = &cirq_frontend::compile_to_netlist(source_100).expect("compile 100")[0];
+
+    let r_27 = simulate(nl_27);
+    let r_100 = simulate(nl_100);
+
+    // v(in) at the source. vth(27) = 0.025*27/300 = 0.00225; vth(100) = 0.025*100/300 ≈ 0.00833.
+    let v_of = |r: &thevenin_types::SimResult| {
+        let plot = r.plot().expect("plot");
+        let v = plot.vecs.iter().find(|v| v.name == "v(in)").expect("v(in)");
+        v.data.as_real()[0]
+    };
+
+    let v27 = v_of(&r_27);
+    let v100 = v_of(&r_100);
+    let expected_27 = 0.025 * 27.0 / 300.0;
+    let expected_100 = 0.025 * 100.0 / 300.0;
+    assert!(
+        (v27 - expected_27).abs() < 1e-6,
+        "27 °C: expected {expected_27}, got {v27}"
+    );
+    assert!(
+        (v100 - expected_100).abs() < 1e-6,
+        "100 °C: expected {expected_100}, got {v100}"
+    );
+}

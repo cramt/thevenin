@@ -1007,6 +1007,7 @@ impl Ctx<'_> {
                 span: span_of(node),
             }),
             "binary_expression" => self.lower_binary_expr(node),
+            "ternary_expression" => self.lower_ternary_expr(node),
             "unary_expression" => self.lower_unary_expr(node),
             "call_expression" => self.lower_call_expr(node),
             "paren_expression" => self.lower_paren_expr(node),
@@ -1097,6 +1098,23 @@ impl Ctx<'_> {
             op,
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
+            span: span_of(node),
+        })
+    }
+
+    fn lower_ternary_expr(&mut self, node: tree_sitter::Node) -> Option<Expr> {
+        let cond_node = self.required_field(node, "condition")?;
+        let then_node = self.required_field(node, "then")?;
+        let else_node = self.required_field(node, "else")?;
+
+        let cond = self.lower_expr(cond_node)?;
+        let then_expr = self.lower_expr(then_node)?;
+        let else_expr = self.lower_expr(else_node)?;
+
+        Some(Expr::Ternary {
+            cond: Box::new(cond),
+            then_expr: Box::new(then_expr),
+            else_expr: Box::new(else_expr),
             span: span_of(node),
         })
     }

@@ -85,6 +85,7 @@ pub fn simulate_noise_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimR
             nr_opts,
             nodeset,
             excitations,
+            temperature_c: crate::netlist_temp(netlist),
         },
     )
 }
@@ -102,6 +103,9 @@ pub struct NoiseRunParams {
     pub nr_opts: crate::newton::NrOptions,
     pub nodeset: Vec<(usize, f64)>,
     pub excitations: Vec<crate::ac::AcExcitation>,
+    /// Circuit temperature in °C; bound as `temper` inside behavioural-source
+    /// expressions during noise sweep.
+    pub temperature_c: f64,
 }
 
 /// Execute `.noise` analysis with pre-resolved params.
@@ -117,6 +121,7 @@ pub fn run_noise(mna: MnaSystem, params: NoiseRunParams) -> Result<SimResult, Mn
         nr_opts,
         nodeset,
         excitations,
+        temperature_c,
     } = params;
 
     // Parse output node specification: "v(node)" or "v(node1,node2)".
@@ -164,6 +169,7 @@ pub fn run_noise(mna: MnaSystem, params: NoiseRunParams) -> Result<SimResult, Mn
             &excitations,
             num_nodes,
             nr_opts.gmin,
+            temperature_c,
         );
 
         // Solve adjoint system with unit current at output node.

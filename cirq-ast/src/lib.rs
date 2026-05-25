@@ -387,6 +387,17 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// Ternary conditional: `cond ? then_expr : else_expr`.
+    ///
+    /// Lowered to the same IR shape as the `if(cond, then, else)` builtin so
+    /// downstream consumers don't need a separate branch. Right-associative so
+    /// `a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`.
+    Ternary {
+        cond: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+        span: Span,
+    },
     /// Range expression: `0..5` (used in sweep specs)
     Range {
         start: Box<Expr>,

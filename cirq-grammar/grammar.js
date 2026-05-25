@@ -382,6 +382,7 @@ module.exports = grammar({
 
     _expression: ($) =>
       choice(
+        $.ternary_expression,
         $.binary_expression,
         $.unary_expression,
         $.call_expression,
@@ -394,6 +395,20 @@ module.exports = grammar({
         $.list_literal,
         $.block_literal,
         $.gnd
+      ),
+
+    // Ternary `cond ? then : else`. Right-associative and lower precedence
+    // than `||` / `&&` so `a || b ? x : y` parses as `(a || b) ? x : y`.
+    ternary_expression: ($) =>
+      prec.right(
+        0,
+        seq(
+          field("condition", $._expression),
+          "?",
+          field("then", $._expression),
+          ":",
+          field("else", $._expression)
+        )
       ),
 
     binary_expression: ($) =>

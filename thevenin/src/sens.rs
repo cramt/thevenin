@@ -322,9 +322,10 @@ pub fn run_sens(mna: MnaSystem, params: SensRunParams) -> Result<SimResult, MnaE
         excitations,
         ckt_temp_k,
     } = params;
+    let temperature_c = ckt_temp_k - 273.15;
 
     if let Some(ac_spec) = ac {
-        return run_ac_sens(mna, &output, ac_spec, nr_opts, excitations);
+        return run_ac_sens(mna, &output, ac_spec, nr_opts, excitations, temperature_c);
     }
 
     // ---------- DC sensitivity path ----------
@@ -810,6 +811,7 @@ fn run_ac_sens(
     ac_spec: SensAcSpec,
     nr_opts: NrOptions,
     excitations: Vec<AcExcitation>,
+    temperature_c: f64,
 ) -> Result<SimResult, MnaError> {
     let SensAcSpec {
         variation,
@@ -843,7 +845,7 @@ fn run_ac_sens(
 
         // Build complex AC system.
         let mut sys = ComplexLinearSystem::new(dim);
-        stamp_ac_devices(&mna, &op_solution, omega, &mut sys, gmin);
+        stamp_ac_devices(&mna, &op_solution, omega, &mut sys, gmin, temperature_c);
         crate::ac::apply_ac_excitation(&mut sys, &excitations);
 
         // Build dense complex matrix and factor it.

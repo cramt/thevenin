@@ -534,6 +534,7 @@ pub fn ac_sweep_params_from_circuit(
         nr_opts,
         nodeset,
         excitations,
+        temperature_c: circuit_temp(circuit),
     })
 }
 
@@ -594,6 +595,7 @@ pub fn tran_params_from_circuit(
         t_start: tran.start,
         t_max: tran.tmax,
         uic: tran.uic,
+        temperature_c: circuit_temp(circuit),
         nr_opts: nr_options_from_circuit(circuit),
         nodeset: resolve_nodeset_from_circuit(circuit, mna),
         ic_overrides,
@@ -773,6 +775,7 @@ pub fn noise_params_from_circuit(
         nr_opts: nr_options_from_circuit(circuit),
         nodeset: resolve_nodeset_from_circuit(circuit, mna),
         excitations,
+        temperature_c: circuit_temp(circuit),
     })
 }
 

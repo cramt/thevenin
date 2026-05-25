@@ -60,6 +60,7 @@ pub fn simulate_ac_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResu
             nr_opts,
             nodeset,
             excitations,
+            temperature_c: crate::netlist_temp(netlist),
         },
     )
 }
@@ -74,6 +75,10 @@ pub struct AcSweepRunParams {
     pub nr_opts: crate::newton::NrOptions,
     pub nodeset: Vec<(usize, f64)>,
     pub excitations: Vec<AcExcitation>,
+    /// Circuit temperature in °C, bound as the `temper` simulation-context
+    /// constant inside behavioural-source expressions. Defaults to the
+    /// netlist's `.option temp=` (or 27 °C / TNOM when unset).
+    pub temperature_c: f64,
 }
 
 /// Execute a `.ac` sweep on an assembled [`MnaSystem`] with already-
@@ -89,6 +94,7 @@ pub fn run_ac_sweep(mna: MnaSystem, params: AcSweepRunParams) -> Result<SimResul
         nr_opts,
         nodeset,
         excitations,
+        temperature_c,
     } = params;
 
     // Solve DC operating point directly to get the full solution vector
@@ -153,7 +159,14 @@ pub fn run_ac_sweep(mna: MnaSystem, params: AcSweepRunParams) -> Result<SimResul
     // On native targets, frequency points are solved in parallel using rayon
     // since each point is completely independent (same linearized circuit).
     let gmin = nr_opts.gmin;
-    let ac_results = solve_ac_frequencies(&frequencies, &mna, &op_solution, &excitations, gmin)?;
+    let ac_results = solve_ac_frequencies(
+        &frequencies,
+        &mna,
+        &op_solution,
+        &excitations,
+        gmin,
+        temperature_c,
+    )?;
 
     let num_nodes = mna.total_num_nodes();
     for (freq, solution) in ac_results {
@@ -217,6 +230,7 @@ fn build_ac_stamp_cache(
     op_solution: &[f64],
     excitations: &[AcExcitation],
     gmin: f64,
+    temperature_c: f64,
 ) -> AcStampCache {
     let num_nodes = mna.total_num_nodes();
     let dim = num_nodes + mna.vsource_names.len();
@@ -225,7 +239,7 @@ fn build_ac_stamp_cache(
     // coefficients. The real part doesn't depend on ω, so it's captured
     // as-is.
     let mut sys = ComplexLinearSystem::new(dim);
-    stamp_ac_devices(mna, op_solution, 1.0, &mut sys, gmin);
+    stamp_ac_devices(mna, op_solution, 1.0, &mut sys, gmin, temperature_c);
     apply_ac_excitation(&mut sys, excitations);
 
     AcStampCache {
@@ -248,6 +262,7 @@ fn solve_ac_frequencies(
     op_solution: &[f64],
     excitations: &[AcExcitation],
     gmin: f64,
+    temperature_c: f64,
 ) -> Result<Vec<AcFreqResult>, MnaError> {
     // The `AcStampCache` fast path assumes every imaginary contribution is
     // linear in ω (caps, inductors, transit-time × g, etc.). The ideal
@@ -262,7 +277,15 @@ fn solve_ac_frequencies(
             .iter()
             .map(|&freq| {
                 let omega = 2.0 * PI * freq;
-                let sys = build_ac_system(mna, op_solution, omega, excitations, num_nodes, gmin);
+                let sys = build_ac_system(
+                    mna,
+                    op_solution,
+                    omega,
+                    excitations,
+                    num_nodes,
+                    gmin,
+                    temperature_c,
+                );
                 sys.solve()
                     .map_err(MnaError::SolveError)
                     .map(|sol| (freq, sol))
@@ -270,7 +293,7 @@ fn solve_ac_frequencies(
             .collect();
     }
 
-    let cache = build_ac_stamp_cache(mna, op_solution, excitations, gmin);
+    let cache = build_ac_stamp_cache(mna, op_solution, excitations, gmin, temperature_c);
 
     #[cfg(not(target_family = "wasm"))]
     {
@@ -340,11 +363,12 @@ pub fn build_ac_system(
     excitations: &[AcExcitation],
     num_nodes: usize,
     gmin: f64,
+    temperature_c: f64,
 ) -> ComplexLinearSystem {
     let dim = num_nodes + mna.vsource_names.len();
     let mut sys = ComplexLinearSystem::new(dim);
 
-    stamp_ac_devices(mna, op_solution, omega, &mut sys, gmin);
+    stamp_ac_devices(mna, op_solution, omega, &mut sys, gmin, temperature_c);
     apply_ac_excitation(&mut sys, excitations);
 
     sys
@@ -362,6 +386,7 @@ pub fn stamp_ac_devices(
     omega: f64,
     sys: &mut ComplexLinearSystem,
     gmin: f64,
+    temperature_c: f64,
 ) {
     // 1. Stamp DC conductance matrix (real part) from base MNA stamps.
     for triplet in mna.system.matrix.triplets() {
@@ -1617,6 +1642,15 @@ pub fn stamp_ac_devices(
     }
 
     // 5k. Stamp behavioral current source (I=) small-signal conductances.
+    //
+    // Sim-context binding: `freq` / `hertz` and `temper` are bound from
+    // `omega` and the cached temperature so B-source expressions referencing
+    // these constants pick up the per-point value. The small-signal
+    // contribution is still just the Jacobian dI/dV (the operating-point
+    // value isn't restamped as an excitation), so a constant like
+    // `freq*1e-9` linearises to zero — that's the documented ngspice
+    // behaviour for AC B-sources.
+    let sim_ctx = crate::expr::SimContext::at_freq(omega / (2.0 * PI), temperature_c);
     for bsrc in &mna.behavioral_sources {
         let mut node_voltages: std::collections::BTreeMap<String, f64> =
             std::collections::BTreeMap::new();
@@ -1624,7 +1658,8 @@ pub fn stamp_ac_devices(
         for (name, idx) in mna.node_map.iter() {
             node_voltages.insert(name.to_string(), op_solution[idx]);
         }
-        let i0 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &node_voltages).unwrap_or(0.0)
+        let i0 = crate::expr::evaluate_bsrc_expr_with_ctx(&bsrc.expr, &node_voltages, sim_ctx)
+            .unwrap_or(0.0)
             * bsrc.tc_factor;
 
         for (name, idx) in mna.node_map.iter() {
@@ -1635,7 +1670,8 @@ pub fn stamp_ac_devices(
             let dv = f64::EPSILON.cbrt() * v_old.abs().max(1.0);
             let mut perturbed = node_voltages.clone();
             *perturbed.get_mut(name).unwrap() = v_old + dv;
-            let i1 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &perturbed).unwrap_or(0.0)
+            let i1 = crate::expr::evaluate_bsrc_expr_with_ctx(&bsrc.expr, &perturbed, sim_ctx)
+                .unwrap_or(0.0)
                 * bsrc.tc_factor;
             let g = (i1 - i0) / dv;
             if g.abs() > 1e-30 {
@@ -1657,7 +1693,8 @@ pub fn stamp_ac_devices(
         for (name, idx) in mna.node_map.iter() {
             node_voltages.insert(name.to_string(), op_solution[idx]);
         }
-        let f0 = crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &node_voltages).unwrap_or(0.0)
+        let f0 = crate::expr::evaluate_bsrc_expr_with_ctx(&bvsrc.expr, &node_voltages, sim_ctx)
+            .unwrap_or(0.0)
             * bvsrc.tc_factor;
 
         let branch = bvsrc.branch_idx;
@@ -1668,7 +1705,8 @@ pub fn stamp_ac_devices(
             let dv = f64::EPSILON.cbrt() * v_old.abs().max(1.0);
             let mut perturbed = node_voltages.clone();
             *perturbed.get_mut(name).unwrap() = v_old + dv;
-            let f1_raw = crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &perturbed).unwrap_or(0.0);
+            let f1_raw = crate::expr::evaluate_bsrc_expr_with_ctx(&bvsrc.expr, &perturbed, sim_ctx)
+                .unwrap_or(0.0);
             let f1 = if f1_raw.is_finite() {
                 f1_raw * bvsrc.tc_factor
             } else {

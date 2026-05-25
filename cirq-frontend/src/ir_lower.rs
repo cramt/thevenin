@@ -229,6 +229,14 @@ struct IrCtx {
     // Verbatim embedded code blocks (language + lines).
     code_blocks: Vec<cirq_ir::CodeBlock>,
 
+    /// Static circuit temperature in °C used to bind the `temper`
+    /// simulation-context constant during parameter evaluation. Seeded
+    /// from the first `temp` directive in the circuit body (or 27 °C /
+    /// TNOM when none is set). Note this is the *parameter-evaluation*
+    /// temper; behavioural-source expressions still see the simulator-
+    /// bound `temper` at runtime via [`crate::expr_to_spice_string`].
+    circuit_temp_c: f64,
+
     // Simulation options, temperature, and save targets.
     options: Vec<(String, Value)>,
     temps: Vec<f64>,
@@ -266,6 +274,7 @@ impl IrCtx {
             initial_conditions: Vec::new(),
             param_overrides: HashMap::new(),
             measures: Vec::new(),
+            circuit_temp_c: 27.0,
         };
         // `gnd` always gets Id(0).
         ctx.intern_net("gnd", true);
@@ -313,6 +322,27 @@ impl IrCtx {
     // -------------------------------------------------------------------
 
     fn lower_circuit_body(&mut self, items: &[CircuitItem]) {
+        // Pass 0: pre-resolve the static temperature so `temper` is
+        // available to param-evaluation in pass 1. We only look for a
+        // bare numeric literal in `temp` to avoid a chicken-and-egg
+        // problem with `temp` expressions referencing params that
+        // themselves depend on `temper`. Expressions are still lowered
+        // normally in pass 2.
+        for item in items {
+            if let CircuitItem::Temp(t) = item {
+                match &t.value {
+                    Expr::Number { value, .. } => {
+                        self.circuit_temp_c = *value;
+                        break;
+                    }
+                    Expr::Integer { value, .. } => {
+                        self.circuit_temp_c = *value as f64;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
         self.lower_circuit_body_prefixed(items, "");
     }
 
@@ -2204,7 +2234,56 @@ impl IrCtx {
                     _ => {}
                 }
 
+                // Simulation-context constants.
+                //
+                // `temper` resolves at parameter-evaluation time to the
+                // circuit's static temperature (first `temp` directive, or
+                // 27 °C / TNOM if none). This lets `param vth = 0.025 *
+                // temper / 300` style declarations evaluate immediately,
+                // matching ngspice's behaviour where `.param TEMPER=...`
+                // seeds the param table.
+                //
+                // `time`, `freq`, and `hertz` are only meaningful inside
+                // behavioural-source expressions (V= / I=) — those go
+                // through `expr_to_spice_string` which preserves the
+                // identifier as a string for the simulator to bind. If
+                // they appear in a `param` / `let` instead, error: there's
+                // no sensible compile-time value.
+                if name.eq_ignore_ascii_case("temper") {
+                    return Ok(Value::Real(self.circuit_temp_c));
+                }
+                if is_sim_context_constant(name) {
+                    return Err(format!(
+                        "simulation-context constant `{name}` is bound at runtime, \
+                         not at parameter-evaluation time"
+                    ));
+                }
+
                 Err(format!("undefined identifier: `{name}`"))
+            }
+            Expr::Ternary {
+                cond,
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let c = self.eval_expr(cond)?;
+                let truthy = match &c {
+                    Value::Bool(b) => *b,
+                    Value::Real(v) => *v != 0.0,
+                    Value::Integer(v) => *v != 0,
+                    Value::String(_) => {
+                        return Err("ternary condition cannot be a string".to_string());
+                    }
+                    // `Value` is `#[non_exhaustive]` — unknown variants
+                    // can't be coerced to a truth value.
+                    _ => return Err("ternary condition has unsupported type".to_string()),
+                };
+                if truthy {
+                    self.eval_expr(then_expr)
+                } else {
+                    self.eval_expr(else_expr)
+                }
             }
             Expr::BinOp {
                 op, lhs, rhs, span, ..
@@ -2273,6 +2352,22 @@ fn is_waveform_param(name: &str) -> bool {
     matches!(
         name,
         "pulse" | "sin" | "sine" | "exp" | "pwl" | "sffm" | "am"
+    )
+}
+
+/// Reserved identifiers that the simulator binds at evaluation time.
+///
+/// - `temper` — current circuit temperature in °C
+/// - `time` — current simulation time (transient only)
+/// - `freq` / `hertz` — current frequency in Hz (AC only)
+///
+/// These match the corresponding ngspice "magic" identifiers in behavioural
+/// source expressions and `.param`-evaluation contexts. Case-insensitive so
+/// `TEMPER`, `Temper`, `temper`, and `TIME` / `time` are all reserved.
+pub(crate) fn is_sim_context_constant(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "temper" | "time" | "freq" | "hertz"
     )
 }
 
@@ -2564,6 +2659,21 @@ fn expr_to_spice_string(expr: &Expr) -> String {
         Expr::Call { func, args, .. } => {
             let arg_strs: Vec<String> = args.iter().map(expr_to_spice_string).collect();
             format!("{}({})", func.name, arg_strs.join(","))
+        }
+        Expr::Ternary {
+            cond,
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            // Emit as a SPICE-style ternary that the brace evaluator already
+            // recognises (see `thevenin/src/expr.rs::parse_ternary`). Wrapping
+            // each sub-expression in parens preserves precedence even when
+            // sub-expressions are themselves binary or ternary.
+            let c = expr_to_spice_string(cond);
+            let t = expr_to_spice_string(then_expr);
+            let e = expr_to_spice_string(else_expr);
+            format!("({c})?({t}):({e})")
         }
         Expr::Gnd { .. } => "0".to_string(),
         // Fallback for other expression types — produce a reasonable string.
@@ -4238,5 +4348,182 @@ mod tests {
 
         assert_eq!(real_val(find_param(&circuit, "w1.inner.r")), 500.0);
         assert_eq!(real_val(find_param(&circuit, "w2.inner.r")), 2200.0);
+    }
+
+    // ── Ternary operator ────────────────────────────────────────────────
+
+    #[test]
+    fn ternary_evaluates_then_branch() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param a = 5
+                param b = 3
+                param x = a > b ? 100 : 200
+            }
+            "#,
+        );
+        assert_eq!(real_val(find_param(&circuit, "x")), 100.0);
+    }
+
+    #[test]
+    fn ternary_evaluates_else_branch() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param a = 2
+                param b = 3
+                param x = a > b ? 100 : 200
+            }
+            "#,
+        );
+        assert_eq!(real_val(find_param(&circuit, "x")), 200.0);
+    }
+
+    #[test]
+    fn ternary_right_associative() {
+        // a ? b : c ? d : e  parses as  a ? b : (c ? d : e)
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param x = 0 ? 1 : 0 ? 2 : 3
+            }
+            "#,
+        );
+        assert_eq!(real_val(find_param(&circuit, "x")), 3.0);
+    }
+
+    #[test]
+    fn ternary_lower_precedence_than_logical_or() {
+        // Without ternary having low precedence this would mis-parse.
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param flag = 1
+                param other = 0
+                param x = flag || other ? 7 : 8
+            }
+            "#,
+        );
+        assert_eq!(real_val(find_param(&circuit, "x")), 7.0);
+    }
+
+    #[test]
+    fn ternary_in_behavioral_source_emits_spice_string() {
+        // Behavioural source specs go through `expr_to_spice_string`. The
+        // emitted form must use the SPICE-evaluator's `?:` syntax so the
+        // brace evaluator can parse it at simulation time.
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                V1: vsource(in -> gnd, dc: 5)
+                B1: behavioral(out -> gnd, v: 0 > 1 ? 1 : 2)
+            }
+            "#,
+        );
+        let b1 = circuit.elements.iter().find(|e| e.name == "B1").unwrap();
+        match &b1.kind {
+            ElementKind::BehavioralSource { spec, .. } => {
+                assert!(spec.contains("?"), "spec missing ternary: `{spec}`");
+                assert!(spec.contains(":"), "spec missing ternary: `{spec}`");
+            }
+            other => panic!("expected behavioral source, got {other:?}"),
+        }
+    }
+
+    // ── Simulation-context constants ────────────────────────────────────
+
+    #[test]
+    fn temper_resolves_to_default_27_at_lowering() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param vth = 0.025 * temper / 300
+            }
+            "#,
+        );
+        let expected = 0.025 * 27.0 / 300.0;
+        let actual = real_val(find_param(&circuit, "vth"));
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "got {actual}, want {expected}"
+        );
+    }
+
+    #[test]
+    fn temper_picks_up_temp_directive() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                temp 100
+                param vth = 0.025 * temper / 300
+            }
+            "#,
+        );
+        let expected = 0.025 * 100.0 / 300.0;
+        let actual = real_val(find_param(&circuit, "vth"));
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "got {actual}, want {expected}"
+        );
+    }
+
+    #[test]
+    fn time_in_param_is_an_error() {
+        // `time` is bound at simulation time only — referencing it at
+        // parameter-evaluation time must be diagnosed.
+        let result = compile(
+            r#"
+            circuit t {
+                param bad = 1 + time
+            }
+            "#,
+        );
+        let diags = result.expect_err("compilation should fail");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("time") && d.message.contains("simulation-context")),
+            "diagnostics: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn time_in_behavioral_source_emits_spice_string() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                V1: vsource(in -> gnd, dc: 5)
+                B1: behavioral(out -> gnd, v: sin(2 * pi * 1000 * time))
+            }
+            "#,
+        );
+        let b1 = circuit.elements.iter().find(|e| e.name == "B1").unwrap();
+        match &b1.kind {
+            ElementKind::BehavioralSource { spec, .. } => {
+                assert!(spec.contains("time"), "spec missing `time`: `{spec}`");
+            }
+            other => panic!("expected behavioral source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn freq_in_behavioral_source_emits_spice_string() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                V1: vsource(in -> gnd, dc: 5)
+                B1: behavioral(out -> gnd, v: freq * 1e-9)
+            }
+            "#,
+        );
+        let b1 = circuit.elements.iter().find(|e| e.name == "B1").unwrap();
+        match &b1.kind {
+            ElementKind::BehavioralSource { spec, .. } => {
+                assert!(spec.contains("freq"), "spec missing `freq`: `{spec}`");
+            }
+            other => panic!("expected behavioral source, got {other:?}"),
+        }
     }
 }

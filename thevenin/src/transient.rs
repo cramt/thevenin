@@ -707,6 +707,7 @@ pub fn tran_run_params_from_netlist(
         t_start,
         t_max,
         uic,
+        temperature_c: crate::netlist_temp(netlist),
         nr_opts: circuit_nr_opts,
         nodeset,
         ic_overrides,
@@ -764,6 +765,10 @@ pub struct TranRunParams {
     pub t_start: f64,
     pub t_max: Option<f64>,
     pub uic: bool,
+    /// Circuit temperature in °C used to bind the `temper` simulation-context
+    /// constant inside behavioural-source expressions. Defaults to 27 °C
+    /// (ngspice TNOM) when the caller leaves it unset.
+    pub temperature_c: f64,
     pub nr_opts: crate::newton::NrOptions,
     pub nodeset: Vec<(usize, f64)>,
     /// `(matrix_index, voltage)` pairs resolved from `.ic` directives.
@@ -874,6 +879,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
         t_start,
         t_max,
         uic,
+        temperature_c,
         nr_opts: circuit_nr_opts,
         nodeset,
         ic_overrides,
@@ -1634,6 +1640,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             &solution,
             step_h,
             t + step_h,
+            temperature_c,
             &tran_params,
             method,
             &cap_histories,
@@ -2507,6 +2514,7 @@ fn solve_timestep(
     prev_solution: &[f64],
     h: f64,
     t: f64,
+    temperature_c: f64,
     tran_params: &TranParams,
     method: IntegrationMethod,
     cap_histories: &[CapHistory],
@@ -2536,6 +2544,10 @@ fn solve_timestep(
     let inductors = &mna.inductors;
 
     let dev_state = DeviceVoltageState::from_solution(mna, prev_solution);
+    // Bind `time` and `temper` for any behavioural-source expressions
+    // evaluated inside `stamp_devices`. AC analysis stamps separately and
+    // sets its own sim context with `freq` instead.
+    dev_state.set_sim_context(crate::expr::SimContext::at_time(t, temperature_c));
 
     // Build a skip-set for BJT CJE/CJC cap indices.  These depletion caps
     // are stamped dynamically (voltage-dependent) in step 5 of the load

@@ -5,7 +5,7 @@
 //! (`transient.rs`). Each device type follows the same pattern: extract terminal
 //! voltages → apply voltage limiting → compute companion model → stamp MNA.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
@@ -17,6 +17,7 @@ use crate::bsim3soi_fd::{bsim3soi_fd_companion, bsim3soi_fd_limit, stamp_bsim3so
 use crate::bsim3soi_pd::{bsim3soi_pd_companion, bsim3soi_pd_limit, stamp_bsim3soi_pd};
 use crate::bsim4::{bsim4_companion, bsim4_limit, stamp_bsim4};
 use crate::diode::{VT_NOM, pnjlim, vcrit};
+use crate::expr::SimContext;
 use crate::hfet::hfet_companion_full;
 use crate::hisim::stamp_hisim;
 use crate::jfet::{jfet_limit, stamp_jfet};
@@ -234,6 +235,11 @@ pub(crate) struct DeviceVoltageState {
     prev_mesfet: RefCell<Vec<(f64, f64)>>,
     mesfet_vcrits: Vec<f64>,
     prev_hfet: RefCell<Vec<(f64, f64)>>,
+    /// Simulation-context bindings (`time`, `freq`, `temper`) consumed by
+    /// behavioural-source expression evaluation. Updated by the analysis
+    /// driver (`transient.rs`, `ac.rs`) before each NR iteration so B-source
+    /// expressions like `sin(2*pi*freq*time)` see the current sweep point.
+    sim_context: Cell<SimContext>,
 }
 
 impl DeviceVoltageState {
@@ -283,6 +289,7 @@ impl DeviceVoltageState {
             prev_mesfet: RefCell::new(vec![(0.0, 0.0); mna.mesfets.len()]),
             mesfet_vcrits: mna.mesfets.iter().map(|m| m.model.vcrit).collect(),
             prev_hfet: RefCell::new(vec![(0.0, 0.0); mna.hfets.len()]),
+            sim_context: Cell::new(SimContext::default()),
         }
     }
 
@@ -472,7 +479,16 @@ impl DeviceVoltageState {
                     .map(|h| h.junction_voltages(prev_solution))
                     .collect(),
             ),
+            sim_context: Cell::new(SimContext::default()),
         }
+    }
+
+    /// Set the simulation-context bindings consumed by behavioural-source
+    /// expression evaluation. Call this before [`Self::stamp_devices`] when
+    /// the analysis driver knows the current `time` (transient), `freq` /
+    /// `hertz` (AC), and `temper` (any analysis) values.
+    pub fn set_sim_context(&self, ctx: SimContext) {
+        self.sim_context.set(ctx);
     }
 
     /// Reset previous voltage states from a solution vector.
@@ -1849,6 +1865,7 @@ impl DeviceVoltageState {
         }
 
         // Behavioral current sources (B-elements with I=...)
+        let sim_ctx = self.sim_context.get();
         for bsrc in &mna.behavioral_sources {
             // Build node voltage map from current solution
             let mut node_voltages: std::collections::BTreeMap<String, f64> =
@@ -1858,7 +1875,9 @@ impl DeviceVoltageState {
                 node_voltages.insert(name.to_string(), solution[idx]);
             }
 
-            let i0_raw = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &node_voltages).unwrap_or(0.0);
+            let i0_raw =
+                crate::expr::evaluate_bsrc_expr_with_ctx(&bsrc.expr, &node_voltages, sim_ctx)
+                    .unwrap_or(0.0);
             // Apply temperature coefficient scaling
             let i0 = i0_raw * bsrc.tc_factor;
 
@@ -1870,7 +1889,9 @@ impl DeviceVoltageState {
                 let v_old = node_voltages[name];
                 let mut perturbed = node_voltages.clone();
                 *perturbed.get_mut(name).unwrap() = v_old + DV;
-                let i1_raw = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &perturbed).unwrap_or(0.0);
+                let i1_raw =
+                    crate::expr::evaluate_bsrc_expr_with_ctx(&bsrc.expr, &perturbed, sim_ctx)
+                        .unwrap_or(0.0);
                 let g = (i1_raw * bsrc.tc_factor - i0) / DV;
 
                 if g.abs() > 1e-30 {
@@ -1898,7 +1919,8 @@ impl DeviceVoltageState {
             }
 
             let f0_raw =
-                crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &node_voltages).unwrap_or(0.0);
+                crate::expr::evaluate_bsrc_expr_with_ctx(&bvsrc.expr, &node_voltages, sim_ctx)
+                    .unwrap_or(0.0);
             // Guard against NaN/Inf from expressions like ln(0) at initial guess,
             // then apply temperature coefficient scaling
             let f0 = if f0_raw.is_finite() {
@@ -1917,7 +1939,8 @@ impl DeviceVoltageState {
                 let mut perturbed = node_voltages.clone();
                 *perturbed.get_mut(name).unwrap() = v_old + DV;
                 let f1_raw =
-                    crate::expr::evaluate_bsrc_expr(&bvsrc.expr, &perturbed).unwrap_or(0.0);
+                    crate::expr::evaluate_bsrc_expr_with_ctx(&bvsrc.expr, &perturbed, sim_ctx)
+                        .unwrap_or(0.0);
                 let f1 = if f1_raw.is_finite() {
                     f1_raw * bvsrc.tc_factor
                 } else {

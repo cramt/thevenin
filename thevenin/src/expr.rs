@@ -1220,8 +1220,75 @@ pub fn evaluate_bsrc_expr(
     expr: &str,
     node_voltages: &std::collections::BTreeMap<String, f64>,
 ) -> Result<f64, ExprError> {
+    evaluate_bsrc_expr_with_ctx(expr, node_voltages, SimContext::default())
+}
+
+/// Simulation-context bindings for behavioural and parameter expressions.
+///
+/// These are the ngspice "magic" identifiers that get bound at evaluation
+/// time rather than at parse / parameter-resolution time. Callers from the
+/// simulator (transient, AC, DC) populate the relevant fields; unused fields
+/// stay `None` and the corresponding identifier is undefined.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SimContext {
+    /// Current simulation time in seconds (transient only).
+    pub time: Option<f64>,
+    /// Current frequency in Hz (AC and noise analyses).
+    pub freq: Option<f64>,
+    /// Current circuit temperature in degrees Celsius.
+    pub temper: Option<f64>,
+}
+
+impl SimContext {
+    pub fn at_time(time: f64, temper: f64) -> Self {
+        Self {
+            time: Some(time),
+            freq: None,
+            temper: Some(temper),
+        }
+    }
+
+    pub fn at_freq(freq: f64, temper: f64) -> Self {
+        Self {
+            time: None,
+            freq: Some(freq),
+            temper: Some(temper),
+        }
+    }
+
+    pub fn at_temper(temper: f64) -> Self {
+        Self {
+            time: None,
+            freq: None,
+            temper: Some(temper),
+        }
+    }
+}
+
+/// Evaluate a B-source expression with node voltages and simulation-context
+/// constants (`time`, `freq` / `hertz`, `temper`) bound for lookup.
+///
+/// The sim-context constants are stored in the `EvalContext.params` table
+/// keyed by their uppercase form, since `parse_primary` looks up identifiers
+/// case-insensitively via `to_uppercase()`. `freq` and `hertz` are aliases
+/// of the same Hz value, matching ngspice's behaviour.
+pub fn evaluate_bsrc_expr_with_ctx(
+    expr: &str,
+    node_voltages: &std::collections::BTreeMap<String, f64>,
+    sim: SimContext,
+) -> Result<f64, ExprError> {
     let substituted = substitute_v_refs(expr, node_voltages);
-    let ctx = EvalContext::default();
+    let mut ctx = EvalContext::default();
+    if let Some(t) = sim.time {
+        ctx.params.insert("TIME".to_string(), t);
+    }
+    if let Some(f) = sim.freq {
+        ctx.params.insert("FREQ".to_string(), f);
+        ctx.params.insert("HERTZ".to_string(), f);
+    }
+    if let Some(tc) = sim.temper {
+        ctx.params.insert("TEMPER".to_string(), tc);
+    }
     ctx.eval_str(&substituted)
 }
 
