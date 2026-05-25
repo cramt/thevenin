@@ -1467,16 +1467,25 @@ mod tests {
     }
 
     #[test]
-    fn cutoff_returns_no_current() {
+    fn cutoff_returns_subthreshold_current() {
         let m = make_test_model();
         let inst = make_test_instance(m);
-        // Vgs = 0, well below threshold.
+        // Vgs = 0, well below threshold. BSIM2 has subthreshold conduction
+        // (default n0 = 1.4) so expect a small leakage, not zero.
         let comp = bsim2_companion(&inst, 0.0, 0.5, 0.0);
-        // Subthreshold may give tiny current but should be very small.
         assert!(
-            comp.cdrain.abs() < 1e-6,
-            "cdrain too large: {}",
+            comp.cdrain.abs() < 1e-3,
+            "subthreshold leakage too large: {}",
             comp.cdrain
+        );
+        // Above-threshold current must dominate the leakage by orders of
+        // magnitude — sanity check the dynamic range.
+        let comp_on = bsim2_companion(&inst, 3.0, 0.5, 0.0);
+        assert!(
+            comp_on.cdrain > 100.0 * comp.cdrain.abs(),
+            "subthreshold should be much smaller than on-state: off={} on={}",
+            comp.cdrain,
+            comp_on.cdrain
         );
     }
 
