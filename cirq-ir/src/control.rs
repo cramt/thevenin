@@ -104,6 +104,26 @@ pub enum Statement {
     StopWhen(StopCondition),
     /// `resume` — resume a previously paused transient simulation.
     Resume,
+    /// `source <filename>` — execute the named file as a sub-script.
+    ///
+    /// The path is resolved relative to the current working directory at
+    /// execution time. The executor parses the file's contents as a
+    /// `.control` block and runs the statements in the current context
+    /// (same variables, same circuit). A recursion guard prevents `a.cs`
+    /// from sourcing itself directly or transitively.
+    Source { path: String },
+    /// `measure <kind> <name> <spec>` — evaluate a measurement against the
+    /// current plot at the time the command runs (vs the `.meas`
+    /// directive, which runs once at end-of-simulation).
+    ///
+    /// Maps to the same typed [`crate::MeasureSpec`] / [`crate::MeasureExpr`]
+    /// surface as `.meas`. The result is appended to the `measurements`
+    /// plot and bound as a control variable named after the measurement.
+    Measure {
+        name: String,
+        analysis_type: String,
+        spec: String,
+    },
     /// Comment line (starts with * or $)
     Comment,
 }
@@ -244,6 +264,8 @@ fn parse_statement(
         )),
         "stop" => parse_stop(rest),
         "resume" => Ok(Statement::Resume),
+        "source" => parse_source(rest),
+        "measure" | "meas" => parse_measure(rest),
         "op" | "dc" | "ac" | "tran" | "sens" | "noise" | "pz" | "tf" | "run" => {
             Ok(Statement::RunAnalysis(trimmed.to_string()))
         }
@@ -637,6 +659,48 @@ fn parse_stop(rest: &str) -> Result<Statement, String> {
     Err(format!(
         "stop when: only `time = <value>` is supported, got: {body}"
     ))
+}
+
+/// Parse `source <filename>`. Strips surrounding double-quotes, errors if no
+/// filename is given. The executor performs the actual file lookup, parse,
+/// and recursion-guard check at run time.
+fn parse_source(rest: &str) -> Result<Statement, String> {
+    let path = rest.trim();
+    if path.is_empty() {
+        return Err("source: missing filename".to_string());
+    }
+    let path = path.trim_matches('"').to_string();
+    if path.is_empty() {
+        return Err("source: empty filename after stripping quotes".to_string());
+    }
+    Ok(Statement::Source { path })
+}
+
+/// Parse `measure <kind> <name> <spec...>`.
+///
+/// `<kind>` is the analysis type (`tran`, `dc`, `ac`); `<name>` is the
+/// measurement's result name; the remaining tokens form the spec body, which
+/// is delegated to [`crate::MeasureSpec::parse`] at execution time. The
+/// executor evaluates the resulting `MeasureExpr` against the current plot.
+fn parse_measure(rest: &str) -> Result<Statement, String> {
+    let mut iter = rest.split_whitespace();
+    let analysis_type = iter
+        .next()
+        .ok_or_else(|| "measure: missing analysis type (tran/dc/ac)".to_string())?
+        .to_string();
+    let name = iter
+        .next()
+        .ok_or_else(|| "measure: missing result name".to_string())?
+        .to_string();
+    let spec: String = iter.collect::<Vec<&str>>().join(" ");
+    if spec.is_empty() {
+        return Err(format!("measure {name}: missing spec body"));
+    }
+    Ok(Statement::Measure {
+        name,
+        analysis_type,
+        spec,
+    })
 }
 
 /// Parse a SPICE number with optional SI suffix.
@@ -1296,6 +1360,59 @@ mod tests {
             }
             other => panic!("expected Save, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_source_basic() {
+        let lines = vec!["source sub.cs".to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::Source { path } => assert_eq!(path, "sub.cs"),
+            other => panic!("expected Source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_source_quoted_filename() {
+        let lines = vec![r#"source "my script.cs""#.to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        match &stmts[0] {
+            Statement::Source { path } => assert_eq!(path, "my script.cs"),
+            other => panic!("expected Source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_source_missing_filename_errors() {
+        let result = parse_source("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing filename"));
+    }
+
+    #[test]
+    fn parse_measure_basic() {
+        let lines = vec!["measure tran vmax MAX v(out)".to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        match &stmts[0] {
+            Statement::Measure {
+                name,
+                analysis_type,
+                spec,
+            } => {
+                assert_eq!(analysis_type, "tran");
+                assert_eq!(name, "vmax");
+                assert_eq!(spec, "MAX v(out)");
+            }
+            other => panic!("expected Measure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_measure_missing_spec_errors() {
+        let result = parse_measure("tran vmax");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing spec body"));
     }
 
     #[test]

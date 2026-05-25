@@ -128,6 +128,7 @@ pub use transient::{
 };
 
 // Utilities
+pub use measure::evaluate_circuit_measures;
 pub use mna::MnaError;
 pub use subckt::flatten_netlist;
 

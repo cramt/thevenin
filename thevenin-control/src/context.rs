@@ -3,7 +3,8 @@
 //! Holds the driving IR circuit, simulation results (plots), variables, and
 //! output. Public entry through [`SimContext::from_circuit`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use cirq_ir::Circuit;
 use thevenin::TranPauseSnapshot;
@@ -50,6 +51,12 @@ pub struct SimContext {
     /// Snapshot of a transient run that paused at its stop condition,
     /// awaiting a `resume` command. None when no run is paused.
     pub paused_tran: Option<TranPauseSnapshot>,
+    /// Stack of canonicalised file paths currently being sourced. Used by
+    /// the `source` command to refuse re-entering a script that is already
+    /// open higher up the call chain. Cleared after each `Source` statement
+    /// returns; a `source a.cs` from inside `a.cs` errors before reading
+    /// the file again.
+    pub sourcing: HashSet<PathBuf>,
 }
 
 impl SimContext {
@@ -71,6 +78,7 @@ impl SimContext {
             resolved_models: HashMap::new(),
             stop_when: None,
             paused_tran: None,
+            sourcing: HashSet::new(),
         }
     }
 
@@ -102,6 +110,7 @@ impl SimContext {
             resolved_models: HashMap::new(),
             stop_when: None,
             paused_tran: None,
+            sourcing: HashSet::new(),
         })
     }
 

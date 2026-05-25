@@ -244,6 +244,14 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
         }
 
         Statement::Resume => execute_resume(ctx),
+
+        Statement::Source { path } => execute_source(path, ctx),
+
+        Statement::Measure {
+            name,
+            analysis_type,
+            spec,
+        } => execute_measure(name, analysis_type, spec, ctx),
     }
 }
 
@@ -470,6 +478,101 @@ fn execute_resume(ctx: &mut SimContext) -> Result<(), String> {
         });
     }
     Ok(())
+}
+
+/// Execute the `source <path>` control command.
+///
+/// Reads the file relative to the current working directory, parses it as
+/// a `.control` block, and executes the statements in the *same* context
+/// (variables, plots, and circuit are shared with the caller). Errors at
+/// file I/O, parse, or sub-execution level all propagate up.
+///
+/// Recursion guard: the canonicalised path is pushed onto `ctx.sourcing`
+/// before parsing the sub-script and popped afterward. Re-entering a
+/// script that is already higher up the stack errors cleanly instead of
+/// recursing until the OS stack overflows.
+fn execute_source(path: &str, ctx: &mut SimContext) -> Result<(), String> {
+    use std::path::PathBuf;
+
+    let resolved = std::path::Path::new(path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(path));
+
+    if ctx.sourcing.contains(&resolved) {
+        return Err(format!(
+            "source: recursive include of {} (already sourcing)",
+            resolved.display()
+        ));
+    }
+
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| format!("source: cannot read '{path}': {e}"))?;
+    let lines: Vec<String> = contents.lines().map(|l| l.to_string()).collect();
+    let stmts = cirq_ir::control::parse_control_block(&lines)
+        .map_err(|e| format!("source '{path}': parse error: {e}"))?;
+
+    ctx.sourcing.insert(resolved.clone());
+    let result = execute(&stmts, ctx);
+    ctx.sourcing.remove(&resolved);
+    result
+}
+
+/// Execute the `measure <kind> <name> <spec>` control command.
+///
+/// Parses the spec into a typed [`cirq_ir::MeasureSpec`] and evaluates it
+/// against the simulation results so far. The result is appended to the
+/// `measurements` plot (created if absent) and bound as a control variable
+/// named after the measurement so subsequent expressions can reference it.
+///
+/// Unlike the `.meas` directive — which runs once at end-of-simulation —
+/// this command operates on whatever plots have been produced up to the
+/// point it is called, matching ngspice's interactive `measure` command.
+fn execute_measure(
+    name: &str,
+    analysis_type: &str,
+    spec: &str,
+    ctx: &mut SimContext,
+) -> Result<(), String> {
+    let parsed = cirq_ir::MeasureSpec::parse(name, analysis_type, spec);
+    if parsed.expr.is_none() {
+        return Err(format!("measure '{name}': cannot parse spec '{spec}'"));
+    }
+
+    // Run the evaluator over a freshly-built SimResult that shares our
+    // current plots. The evaluator appends a `measurements` plot on
+    // success, leaving the underlying plots untouched.
+    let mut tmp = SimResult {
+        plots: std::mem::take(&mut ctx.plots),
+    };
+    let saved_current = ctx.current_plot;
+    thevenin::evaluate_circuit_measures(std::slice::from_ref(&parsed), &mut tmp);
+    // Restore plots (evaluate may have pushed a fresh `measurements` plot).
+    ctx.plots = tmp.plots;
+    ctx.current_plot = saved_current;
+
+    // Locate the measurement we just produced and bind it as a control
+    // variable + named user vector so `$<name>` / `print <name>` work.
+    let value = ctx
+        .plots
+        .iter()
+        .find(|p| p.name == "measurements")
+        .and_then(|p| {
+            p.vecs
+                .iter()
+                .find(|v| v.name.eq_ignore_ascii_case(name))
+                .and_then(|v| v.data.as_real().first().copied())
+        });
+
+    if let Some(v) = value {
+        ctx.variables.insert(name.to_string(), v.to_string());
+        // Stash as a named vector too so `let x = <name>` resolves.
+        ctx.store_vector(SimVector::real(name.to_string(), vec![v]));
+        Ok(())
+    } else {
+        Err(format!(
+            "measure '{name}': evaluation produced no result (no matching {analysis_type} plot?)"
+        ))
+    }
 }
 
 /// Execute the `write` control command. Mirrors ngspice's behaviour:

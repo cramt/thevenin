@@ -691,6 +691,224 @@ quit 0
         let _ = std::fs::remove_file(&path);
     }
 
+    // -----------------------------------------------------------------------
+    // source / measure / vector-arithmetic (A4 polish, R6)
+    // -----------------------------------------------------------------------
+
+    /// `source <path>` opens the named file, parses it as a `.control` block,
+    /// and runs its statements in the current context. State produced by the
+    /// sub-script (variables, vectors) is visible to the calling script
+    /// after `source` returns.
+    #[test]
+    fn source_command_executes_sub_script() {
+        use std::io::Write;
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("thevenin_source_basic_{}.cs", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "let nested = 7").unwrap();
+        writeln!(f, "echo nested-was-here").unwrap();
+        drop(f);
+
+        let path_str = path.to_string_lossy().into_owned();
+        let circuit = divider_with_control(vec![format!("source {path_str}"), "quit 0".into()]);
+        let result = execute_control_block_ir(&circuit).expect("source runs");
+        assert_eq!(result.exit_code, 0);
+        assert!(
+            result.output.contains("nested-was-here"),
+            "echo from sourced script must appear in output, got: {:?}",
+            result.output
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// `source` on a nonexistent file surfaces a clear error rather than
+    /// being silently swallowed.
+    #[test]
+    fn source_command_missing_file_errors() {
+        let circuit = divider_with_control(vec![
+            "source /nonexistent/path/that/does/not/exist.cs".into(),
+            "quit 0".into(),
+        ]);
+        let err = execute_control_block_ir(&circuit).err().unwrap_or_default();
+        assert!(
+            err.contains("cannot read") || err.contains("source"),
+            "expected missing-file error, got: {err}"
+        );
+    }
+
+    /// A sub-script that sources itself is rejected by the recursion guard
+    /// before the OS stack overflows.
+    #[test]
+    fn source_command_recursion_guard() {
+        use std::io::Write;
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "thevenin_source_recursive_{}.cs",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "source {}", path.display()).unwrap();
+        drop(f);
+
+        let path_str = path.to_string_lossy().into_owned();
+        let circuit = divider_with_control(vec![format!("source {path_str}"), "quit 0".into()]);
+        let err = execute_control_block_ir(&circuit).err().unwrap_or_default();
+        assert!(
+            err.contains("recursive"),
+            "expected recursion guard error, got: {err}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// `measure tran vmax MAX v(out)` evaluates the measurement against the
+    /// current plot and records the result. We use a divider OP and a custom
+    /// "tran" plot since op is the only ready-to-run analysis on the fixture.
+    #[test]
+    fn measure_command_records_result_in_measurements_plot() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+        use thevenin_types::{SimPlot, SimVector, VectorData};
+
+        let mut ctx = SimContext::new();
+        // Synthesise a tran plot so the measure command has something to bind to.
+        ctx.add_plot(SimPlot {
+            name: "tran1".to_string(),
+            vecs: vec![
+                SimVector {
+                    name: "time".to_string(),
+                    data: VectorData::Real(vec![0.0, 1.0, 2.0, 3.0]),
+                },
+                SimVector {
+                    name: "v(out)".to_string(),
+                    data: VectorData::Real(vec![0.0, 1.5, 3.0, 1.0]),
+                },
+            ],
+        });
+
+        let lines = vec![
+            "measure tran vmax MAX v(out)".to_string(),
+            "echo vmax=$vmax".to_string(),
+        ];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        exec::execute(&stmts, &mut ctx).expect("measure runs");
+
+        let meas_plot = ctx
+            .plots
+            .iter()
+            .find(|p| p.name == "measurements")
+            .expect("measurements plot created");
+        let vmax = meas_plot
+            .vecs
+            .iter()
+            .find(|v| v.name == "vmax")
+            .expect("vmax recorded");
+        let real = vmax.data.as_real();
+        assert_eq!(real.len(), 1, "vmax is scalar");
+        assert!(
+            (real[0] - 3.0).abs() < 1e-12,
+            "expected MAX v(out) = 3.0, got {}",
+            real[0]
+        );
+        assert!(
+            ctx.output.contains("vmax=3"),
+            "echo $vmax should reflect the recorded measurement, got: {:?}",
+            ctx.output
+        );
+    }
+
+    /// `print v(out)*2` produces a vector with each element doubled.
+    #[test]
+    fn print_supports_scalar_broadcast_vector_arithmetic() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+        use thevenin_types::{SimPlot, SimVector, VectorData};
+
+        let mut ctx = SimContext::new();
+        ctx.add_plot(SimPlot {
+            name: "tran1".to_string(),
+            vecs: vec![SimVector {
+                name: "v(out)".to_string(),
+                data: VectorData::Real(vec![1.0, 2.0, 3.0]),
+            }],
+        });
+
+        let lines = vec!["print v(out)*2".to_string()];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        exec::execute(&stmts, &mut ctx).expect("print runs");
+        // Each formatted entry should be twice the original: 2, 4, 6.
+        // The exec formatter uses "[i] = <value>" per element; just check
+        // for "2.000000e0", "4.000000e0", "6.000000e0".
+        assert!(
+            ctx.output.contains("2.000000e0"),
+            "doubled v(out)[0]=2 missing: {:?}",
+            ctx.output
+        );
+        assert!(
+            ctx.output.contains("4.000000e0"),
+            "doubled v(out)[1]=4 missing: {:?}",
+            ctx.output
+        );
+        assert!(
+            ctx.output.contains("6.000000e0"),
+            "doubled v(out)[2]=6 missing: {:?}",
+            ctx.output
+        );
+    }
+
+    /// `print v(out) .* v(out)` uses the dotted element-wise form and is
+    /// equivalent to the bare `*` in this evaluator. Squaring [1, 2, 3]
+    /// gives [1, 4, 9].
+    #[test]
+    fn print_supports_dotted_elementwise_operators() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+        use thevenin_types::{SimPlot, SimVector, VectorData};
+
+        let mut ctx = SimContext::new();
+        ctx.add_plot(SimPlot {
+            name: "tran1".to_string(),
+            vecs: vec![SimVector {
+                name: "v(out)".to_string(),
+                data: VectorData::Real(vec![1.0, 2.0, 3.0]),
+            }],
+        });
+
+        let lines = vec!["let sq = v(out) .* v(out)".to_string()];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        exec::execute(&stmts, &mut ctx).expect("let with dotted op runs");
+
+        let sq = ctx.find_vector("sq").expect("sq stored");
+        let real = sq.data.as_real();
+        assert_eq!(real, &[1.0, 4.0, 9.0], "got {real:?}");
+    }
+
+    /// Range indexing `v[1:3]` selects the half-open slice [1, 3).
+    #[test]
+    fn print_supports_range_indexing() {
+        use crate::context::SimContext;
+        use crate::{exec, parse};
+        use thevenin_types::{SimPlot, SimVector, VectorData};
+
+        let mut ctx = SimContext::new();
+        ctx.add_plot(SimPlot {
+            name: "tran1".to_string(),
+            vecs: vec![SimVector {
+                name: "v(out)".to_string(),
+                data: VectorData::Real(vec![10.0, 20.0, 30.0, 40.0, 50.0]),
+            }],
+        });
+
+        let lines = vec!["let slice = v(out)[1:3]".to_string()];
+        let stmts = parse::parse_control_block(&lines).unwrap();
+        exec::execute(&stmts, &mut ctx).expect("range index runs");
+
+        let slice = ctx.find_vector("slice").expect("slice stored");
+        let real = slice.data.as_real();
+        assert_eq!(real, &[20.0, 30.0], "got {real:?}");
+    }
+
     /// `.csv` extension switches the writer to CSV regardless of `filetype`.
     #[test]
     fn write_command_csv_extension() {

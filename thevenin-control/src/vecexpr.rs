@@ -140,6 +140,8 @@ enum Token {
     LBracket,
     RBracket,
     Comma,
+    /// `:` — separates range bounds in `v[i:j]`.
+    Colon,
 }
 
 fn tokenize(s: &str) -> Result<Vec<Token>, String> {
@@ -235,6 +237,10 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
                 chars.next();
                 tokens.push(Token::RBracket);
             }
+            ':' => {
+                chars.next();
+                tokens.push(Token::Colon);
+            }
             '{' => {
                 // {plotname}.vecname — plot-qualified vector reference
                 chars.next();
@@ -306,6 +312,34 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
                 tokens.push(Token::DeviceParam(s));
             }
             c if c.is_ascii_digit() || c == '.' => {
+                // Dotted ngspice operators: `.+ .- .* ./` are element-wise
+                // forms equivalent to the bare versions in this evaluator.
+                // Disambiguate them from a leading-dot number (`.5`) by
+                // peeking at the second character.
+                if c == '.' {
+                    let mut probe = chars.clone();
+                    probe.next();
+                    if let Some(&next) = probe.peek()
+                        && matches!(next, '+' | '-' | '*' | '/')
+                    {
+                        chars.next(); // consume '.'
+                        chars.next(); // consume operator
+                        let op_token = match next {
+                            '+' => Token::Plus,
+                            '-' => {
+                                // Use the same binary/unary disambiguation
+                                // path as a bare '-' would by inspecting the
+                                // tail of the token stream.
+                                Token::Minus
+                            }
+                            '*' => Token::Star,
+                            '/' => Token::Slash,
+                            _ => unreachable!(),
+                        };
+                        tokens.push(op_token);
+                        continue;
+                    }
+                }
                 let mut num_str = String::new();
                 while let Some(&c) = chars.peek() {
                     if c.is_ascii_alphanumeric()
@@ -605,19 +639,38 @@ fn parse_unary(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<Ve
 
 fn parse_primary(tokens: &[Token], pos: &mut usize, ctx: &SimContext) -> Result<VecVal, String> {
     let mut val = parse_primary_base(tokens, pos, ctx)?;
-    // Apply postfix indexing: vec[idx] — extract a single element from a vector
+    // Postfix indexing: `vec[idx]` extracts a single element; `vec[i:j]`
+    // extracts the half-open slice `[i, j)`. An out-of-range bound is
+    // clamped to the vector length to mirror ngspice's permissive behaviour.
     while *pos < tokens.len() && tokens[*pos] == Token::LBracket {
         *pos += 1;
-        let index = parse_or(tokens, pos, ctx)?;
-        if *pos < tokens.len() && tokens[*pos] == Token::RBracket {
+        let start = parse_or(tokens, pos, ctx)?;
+        if *pos < tokens.len() && tokens[*pos] == Token::Colon {
             *pos += 1;
-        }
-        let idx = index.as_scalar() as usize;
-        val = if idx < val.data.len() {
-            VecVal::scalar(val.data[idx])
+            let end = parse_or(tokens, pos, ctx)?;
+            if *pos < tokens.len() && tokens[*pos] == Token::RBracket {
+                *pos += 1;
+            }
+            let lo = start.as_scalar().max(0.0) as usize;
+            let hi_raw = end.as_scalar();
+            let hi = if hi_raw < 0.0 {
+                0
+            } else {
+                (hi_raw as usize).min(val.data.len())
+            };
+            let lo = lo.min(val.data.len()).min(hi);
+            val = VecVal::real(val.data[lo..hi].to_vec());
         } else {
-            VecVal::scalar(0.0)
-        };
+            if *pos < tokens.len() && tokens[*pos] == Token::RBracket {
+                *pos += 1;
+            }
+            let idx = start.as_scalar() as usize;
+            val = if idx < val.data.len() {
+                VecVal::scalar(val.data[idx])
+            } else {
+                VecVal::scalar(0.0)
+            };
+        }
     }
     Ok(val)
 }
