@@ -1,0 +1,154 @@
+================================================================================
+Code block with JavaScript
+================================================================================
+
+circuit demo {
+    code "js" {
+        const ratio = 0.5;
+        console.log(ratio);
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))))
+
+================================================================================
+Code block with Python
+================================================================================
+
+circuit demo {
+    code "py" {
+        def gain(x):
+            return x * 2
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))))
+
+================================================================================
+Empty code block
+================================================================================
+
+circuit demo {
+    code "rust" {}
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal))))
+
+================================================================================
+Code block with canonical language name
+================================================================================
+
+circuit demo {
+    code "javascript" {
+        let x = 1;
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))))
+
+================================================================================
+Code block with nested braces
+================================================================================
+
+circuit demo {
+    code "js" {
+        if (x) { return 1; }
+        const obj = { a: 1, b: { c: 2 } };
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))
+
+================================================================================
+Code block with string containing braces
+================================================================================
+
+circuit demo {
+    code "js" {
+        const s = "} fake brace {";
+        const t = '} also fake {';
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))
+
+================================================================================
+Code block with escaped quote in string
+================================================================================
+
+circuit demo {
+    code "js" {
+        const s = "he said \"hello }\" loudly";
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))

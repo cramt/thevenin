@@ -2764,7 +2764,12 @@
   ],
   "conflicts": [],
   "precedences": [],
-  "externals": [],
+  "externals": [
+    {
+      "type": "SYMBOL",
+      "name": "code_body"
+    }
+  ],
   "inline": [],
   "supertypes": [],
   "reserved": {}

@@ -16,7 +16,17 @@
   "global"
   "sweep"
   "step"
+  "code"
 ] @keyword
+
+; ── Code blocks ──────────────────────────────────────────────
+; The language tag is conceptually a type-like marker rather than
+; a string literal, so highlight it distinctly. The body is left
+; unhighlighted here — injections.scm hands it off to the embedded
+; language's own highlight queries.
+
+(code_decl
+  language: (string_literal) @string.special)
 
 ; Port directions
 (port_direction) @keyword

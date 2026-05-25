@@ -15,6 +15,12 @@ module.exports = grammar({
 
   word: ($) => $.identifier,
 
+  // Externally-tokenized symbols. The body of `code "lang" { ... }` is
+  // consumed by a hand-written scanner (src/scanner.c) that counts nested
+  // braces and skips over string literals, so that braces appearing inside
+  // the embedded language don't terminate the block prematurely.
+  externals: ($) => [$.code_body],
+
   rules: {
     source_file: ($) => repeat($._top_level),
 
@@ -208,9 +214,12 @@ module.exports = grammar({
     code_decl: ($) =>
       seq("code", field("language", $.string_literal), "{", optional(field("body", $.code_body)), "}"),
 
-    // Raw content between { and } — a single atomic token so that
-    // extras (whitespace, semicolons, comments) don't interfere with
-    // the embedded language lines inside.
+    // Raw content between { and } for a `code "lang" { ... }` block.
+    // The real token is produced by the external scanner; this rule
+    // exists only so the generator knows the symbol and so error
+    // recovery has something to fall back on. The external scanner
+    // tracks brace depth and skips over string literals so embedded
+    // braces (e.g. JS object literals) don't terminate the block.
     code_body: (_$) => token(prec(-1, /[^}]+/)),
 
     // ── Measure block ───────────────────────────────────────────────

@@ -12,7 +12,7 @@
 #define SYMBOL_COUNT 134
 #define ALIAS_COUNT 0
 #define TOKEN_COUNT 64
-#define EXTERNAL_TOKEN_COUNT 0
+#define EXTERNAL_TOKEN_COUNT 1
 #define FIELD_COUNT 29
 #define MAX_ALIAS_SEQUENCE_LENGTH 8
 #define MAX_RESERVED_WORD_SET_SIZE 0
@@ -2817,7 +2817,7 @@ static const TSLexerMode ts_lex_modes[STATE_COUNT] = {
   [316] = {.lex_state = 0},
   [317] = {.lex_state = 0},
   [318] = {.lex_state = 0},
-  [319] = {.lex_state = 7},
+  [319] = {.lex_state = 7, .external_lex_state = 1},
   [320] = {.lex_state = 0},
   [321] = {.lex_state = 0},
   [322] = {.lex_state = 0},
@@ -14065,9 +14065,29 @@ static const TSParseActionEntry ts_parse_actions[] = {
   [1453] = {.entry = {.count = 1, .reusable = true}}, SHIFT(161),
 };
 
+enum ts_external_scanner_symbol_identifiers {
+  ts_external_token_code_body = 0,
+};
+
+static const TSSymbol ts_external_scanner_symbol_map[EXTERNAL_TOKEN_COUNT] = {
+  [ts_external_token_code_body] = sym_code_body,
+};
+
+static const bool ts_external_scanner_states[2][EXTERNAL_TOKEN_COUNT] = {
+  [1] = {
+    [ts_external_token_code_body] = true,
+  },
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+void *tree_sitter_cirq_external_scanner_create(void);
+void tree_sitter_cirq_external_scanner_destroy(void *);
+bool tree_sitter_cirq_external_scanner_scan(void *, TSLexer *, const bool *);
+unsigned tree_sitter_cirq_external_scanner_serialize(void *, char *);
+void tree_sitter_cirq_external_scanner_deserialize(void *, const char *, unsigned);
+
 #ifdef TREE_SITTER_HIDE_SYMBOLS
 #define TS_PUBLIC
 #elif defined(_WIN32)
@@ -14105,6 +14125,15 @@ TS_PUBLIC const TSLanguage *tree_sitter_cirq(void) {
     .lex_fn = ts_lex,
     .keyword_lex_fn = ts_lex_keywords,
     .keyword_capture_token = sym_identifier,
+    .external_scanner = {
+      &ts_external_scanner_states[0][0],
+      ts_external_scanner_symbol_map,
+      tree_sitter_cirq_external_scanner_create,
+      tree_sitter_cirq_external_scanner_destroy,
+      tree_sitter_cirq_external_scanner_scan,
+      tree_sitter_cirq_external_scanner_serialize,
+      tree_sitter_cirq_external_scanner_deserialize,
+    },
     .primary_state_ids = ts_primary_state_ids,
     .name = "cirq",
     .max_reserved_word_set_size = 0,

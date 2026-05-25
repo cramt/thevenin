@@ -111,6 +111,18 @@ From lowest to highest:
 - **`queries/highlights.scm`** — Syntax highlighting for keywords, literals, declaration names, operators, comments, and attributes.
 - **`queries/locals.scm`** — Local scope analysis: circuits/modules as scopes; params, lets, ports, instances as definitions.
 - **`queries/tags.scm`** — Symbol tagging for navigation: circuits, modules, models, params, lets, ports, instances.
+- **`queries/injections.scm`** — Language injection for `code "lang" { ... }` blocks. Maps short names (`js`, `ts`, `py`, `rs`, `sh`, `md`) to canonical grammars and falls through to the literal string otherwise (so `code "rust" {}`, `code "python" {}`, etc. work as well).
+
+### Embedded code block limitations
+
+The body of a `code "lang" { ... }` block is consumed by a hand-written external scanner (`src/scanner.c`) that counts nested braces and skips over simple `"..."` / `'...'` string literals. The following lexical features are **not** understood, and a `}` appearing inside one of them will close the block early:
+
+- Line comments (`// }`, `# }`, `-- }`, `; }`)
+- Block comments (`/* } */`, `(* } *)`, `<!-- } -->`)
+- Multiline string forms: Python triple-quoted strings, JS template literals (including `${...}` interpolation), Rust/C++ raw strings, shell here-docs, Lua long brackets
+- JS regex literals containing braces in character classes (`/[}]/`)
+
+In practice, object literals, function bodies, and ordinary `"..."` strings work correctly. The limitations are real for users of the affected languages and should be addressed before claiming full embedded-language support. Line-comment handling is the highest-payoff next step.
 
 ## Tests
 
