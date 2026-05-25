@@ -63,6 +63,7 @@ pub(crate) mod transient;
 // ── Device models (pub for ongoing development) ─────────────────────────────
 pub mod bjt;
 pub mod bsim1;
+pub mod bsim2;
 pub mod bsim3;
 pub mod bsim3soi_dd;
 pub mod bsim3soi_fd;

@@ -302,6 +302,15 @@ fn jct_initial_guess(
         let vbs = -1.0;
         let comp = mos.companion(vgs, vds, vbs);
         stamp_bsim1(&mut system.matrix, &mut system.rhs, mos, &comp);
+    // Stamp each BSIM2 (Level 5) at its initial bias (MODEINITJCT analogue).
+    // Matches b2ld.c lines 169-180: vgs=type*vt0, vds=0, vbs=-1.
+    for mos in &mna.bsim2s {
+        let sign = mos.model.mos_type.sign();
+        let vgs = sign * mos.size_params.vt0;
+        let vds = 0.0;
+        let vbs = -1.0;
+        let comp = crate::bsim2::bsim2_companion(mos, vgs, vds, vbs);
+        crate::bsim2::stamp_bsim2(&mut system.matrix, &mut system.rhs, mos, &comp);
     }
 
     // Stamp each VDMOS at its threshold voltage (MODEINITJCT analogue).
@@ -530,6 +539,7 @@ fn solve_nonlinear_op_with_guess(
         || !mna.mos2s.is_empty()
         || !mna.mos3s.is_empty()
         || !mna.bsim1s.is_empty()
+        || !mna.bsim2s.is_empty()
         || !mna.vdmoses.is_empty()
         || !mna.bjts.is_empty()
         || !mna.vbics.is_empty()

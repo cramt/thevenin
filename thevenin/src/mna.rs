@@ -262,6 +262,8 @@ pub struct MnaSystem {
     pub mos3s: Vec<crate::mos3::Mos3Instance>,
     /// Resolved BSIM1 (MOSFET LEVEL=4) instances for NR iteration.
     pub bsim1s: Vec<crate::bsim1::Bsim1Instance>,
+    /// Resolved BSIM2 (level 5) instances for NR iteration.
+    pub bsim2s: Vec<crate::bsim2::Bsim2Instance>,
     /// Resolved MOS6 MOSFET instances for NR iteration.
     pub mos6s: Vec<crate::mos6::Mos6Instance>,
     /// Resolved VDMOS power-MOSFET instances for NR iteration.
@@ -336,6 +338,7 @@ impl MnaSystem {
             mos2s: Vec::new(),
             mos3s: Vec::new(),
             bsim1s: Vec::new(),
+            bsim2s: Vec::new(),
             mos6s: Vec::new(),
             vdmoses: Vec::new(),
             jfets: Vec::new(),
@@ -383,6 +386,7 @@ impl MnaSystem {
             || !self.mos2s.is_empty()
             || !self.mos3s.is_empty()
             || !self.bsim1s.is_empty()
+            || !self.bsim2s.is_empty()
             || !self.mos6s.is_empty()
             || !self.vdmoses.is_empty()
             || !self.jfets.is_empty()
@@ -1402,6 +1406,22 @@ fn assemble_mna_flat(
                     };
                     let (nrd, nrs) = get_nrd_nrs(params);
                     internal_node_count += bm.internal_node_count(nrd, nrs);
+                } else if level == 5 {
+                    // BSIM2 (Berkeley Short-Channel IGFET Model v2). Adds two
+                    // internal nodes when RSH·NRD or RSH·NRS are nonzero (same
+                    // shape as bsim3/bsim4 series-resistance handling).
+                    let mm = if let Some(mdef) = resolved {
+                        crate::bsim2::Bsim2Model::from_model_def(mdef)
+                    } else {
+                        crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    let (nrd, nrs) = get_nrd_nrs(params);
+                    if mm.sheet_resistance > 0.0 && nrd > 0.0 {
+                        internal_node_count += 1;
+                    }
+                    if mm.sheet_resistance > 0.0 && nrs > 0.0 {
+                        internal_node_count += 1;
+                    }
                 } else if level == 6 {
                     // MOS6
                     let mm = if let Some(mdef) = resolved {
@@ -1633,6 +1653,7 @@ fn assemble_mna_flat(
     let mut mos2s = Vec::new();
     let mut mos3s = Vec::new();
     let mut bsim1s = Vec::new();
+    let mut bsim2s = Vec::new();
     let mut mos6s = Vec::new();
     let mut jfets = Vec::new();
     let mut mesas = Vec::new();
@@ -2390,6 +2411,24 @@ fn assemble_mna_flat(
                     };
 
                     let drain_prime_idx = if bm.rsh > 0.0 && nrd > 0.0 {
+                } else if level == 5 {
+                    // BSIM2 (LEVEL=5)
+                    let mm = if let Some(mdef) = resolved {
+                        crate::bsim2::Bsim2Model::from_model_def(mdef)
+                    } else {
+                        crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    let drain_conductance = if mm.sheet_resistance > 0.0 && nrd > 0.0 {
+                        1.0 / (mm.sheet_resistance * nrd)
+                    } else {
+                        0.0
+                    };
+                    let source_conductance = if mm.sheet_resistance > 0.0 && nrs > 0.0 {
+                        1.0 / (mm.sheet_resistance * nrs)
+                    } else {
+                        0.0
+                    };
+                    let drain_prime_idx = if drain_conductance > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
@@ -2397,6 +2436,7 @@ fn assemble_mna_flat(
                         drain_idx
                     };
                     let source_prime_idx = if bm.rsh > 0.0 && nrs > 0.0 {
+                    let source_prime_idx = if source_conductance > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
@@ -2454,6 +2494,55 @@ fn assemble_mna_flat(
                         ps,
                         m_mult,
                     );
+                    if let Some(sp) = crate::bsim2::Bsim2SizeDependParam::build(&mm, w, l) {
+                        bsim2s.push(crate::bsim2::Bsim2Instance {
+                            name: element.name.clone(),
+                            drain_idx,
+                            gate_idx,
+                            source_idx,
+                            bulk_idx,
+                            drain_prime_idx,
+                            source_prime_idx,
+                            model: mm.clone(),
+                            size_params: sp,
+                            w,
+                            l,
+                            ad,
+                            as_,
+                            pd,
+                            ps,
+                            nrd,
+                            nrs,
+                            m: m_mult,
+                            drain_conductance,
+                            source_conductance,
+                        });
+                        push_mosfet_caps(
+                            &mut capacitors,
+                            gate_idx,
+                            drain_prime_idx,
+                            source_prime_idx,
+                            bulk_idx,
+                            mm.gate_source_overlap_cap,
+                            mm.gate_drain_overlap_cap,
+                            mm.gate_bulk_overlap_cap,
+                            mm.cbd,
+                            mm.cbs,
+                            mm.unit_area_jct_cap,
+                            mm.bulk_jct_bot_grading_coeff,
+                            mm.unit_length_sidewall_jct_cap,
+                            mm.bulk_jct_side_grading_coeff,
+                            mm.bulk_jct_potential,
+                            mm.fc,
+                            w,
+                            l,
+                            ad,
+                            as_,
+                            pd,
+                            ps,
+                            m_mult,
+                        );
+                    }
                 } else if level == 6 {
                     // MOS6
                     let mm = if let Some(mdef) = resolved {
@@ -3468,6 +3557,7 @@ fn assemble_mna_flat(
         mos2s,
         mos3s,
         bsim1s,
+        bsim2s,
         mos6s,
         // VDMOS is dispatched exclusively through the cirq_ir::Circuit IR
         // path; the legacy Netlist-shape assembler doesn't yet recognise

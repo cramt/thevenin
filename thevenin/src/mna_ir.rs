@@ -1344,6 +1344,19 @@ fn stamp_circuit(
                         .map(Bsim1Model::from_model_def)
                         .unwrap_or_else(|| Bsim1Model::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += bm.internal_node_count(nrd, nrs);
+                } else if level == 5 {
+                    // BSIM2 series resistance via rsh*NRD/NRS.
+                    let mm = resolved
+                        .map(crate::bsim2::Bsim2Model::from_model_def)
+                        .unwrap_or_else(|| {
+                            crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
+                        });
+                    if mm.sheet_resistance > 0.0 && nrd > 0.0 {
+                        internal_node_count += 1;
+                    }
+                    if mm.sheet_resistance > 0.0 && nrs > 0.0 {
+                        internal_node_count += 1;
+                    }
                 } else if level == 6 {
                     let mm = resolved
                         .map(Mos6Model::from_model_def)
@@ -2844,6 +2857,24 @@ fn stamp_circuit(
                         .map(Bsim1Model::from_model_def)
                         .unwrap_or_else(|| Bsim1Model::new(crate::mosfet::MosfetType::Nmos));
                     let drain_prime_idx = if bm.rsh > 0.0 && nrd > 0.0 {
+                } else if level == 5 {
+                    // BSIM2 (LEVEL=5).
+                    let mm = resolved
+                        .map(crate::bsim2::Bsim2Model::from_model_def)
+                        .unwrap_or_else(|| {
+                            crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
+                        });
+                    let drain_conductance = if mm.sheet_resistance > 0.0 && nrd > 0.0 {
+                        1.0 / (mm.sheet_resistance * nrd)
+                    } else {
+                        0.0
+                    };
+                    let source_conductance = if mm.sheet_resistance > 0.0 && nrs > 0.0 {
+                        1.0 / (mm.sheet_resistance * nrs)
+                    } else {
+                        0.0
+                    };
+                    let drain_prime_idx = if drain_conductance > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
@@ -2851,6 +2882,7 @@ fn stamp_circuit(
                         drain_idx
                     };
                     let source_prime_idx = if bm.rsh > 0.0 && nrs > 0.0 {
+                    let source_prime_idx = if source_conductance > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
@@ -2906,6 +2938,55 @@ fn stamp_circuit(
                         ps,
                         m_mult,
                     );
+                    if let Some(sp) = crate::bsim2::Bsim2SizeDependParam::build(&mm, w, l) {
+                        mna.bsim2s.push(crate::bsim2::Bsim2Instance {
+                            name: elem.name.clone(),
+                            drain_idx,
+                            gate_idx,
+                            source_idx,
+                            bulk_idx,
+                            drain_prime_idx,
+                            source_prime_idx,
+                            model: mm.clone(),
+                            size_params: sp,
+                            w,
+                            l,
+                            ad,
+                            as_,
+                            pd,
+                            ps,
+                            nrd,
+                            nrs,
+                            m: m_mult,
+                            drain_conductance,
+                            source_conductance,
+                        });
+                        push_mosfet_caps(
+                            &mut mna.capacitors,
+                            gate_idx,
+                            drain_prime_idx,
+                            source_prime_idx,
+                            bulk_idx,
+                            mm.gate_source_overlap_cap,
+                            mm.gate_drain_overlap_cap,
+                            mm.gate_bulk_overlap_cap,
+                            mm.cbd,
+                            mm.cbs,
+                            mm.unit_area_jct_cap,
+                            mm.bulk_jct_bot_grading_coeff,
+                            mm.unit_length_sidewall_jct_cap,
+                            mm.bulk_jct_side_grading_coeff,
+                            mm.bulk_jct_potential,
+                            mm.fc,
+                            w,
+                            l,
+                            ad,
+                            as_,
+                            pd,
+                            ps,
+                            m_mult,
+                        );
+                    }
                 } else if level == 6 {
                     // MOS6.
                     let mm = resolved
