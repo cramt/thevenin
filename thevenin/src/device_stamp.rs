@@ -351,6 +351,14 @@ impl DeviceVoltageState {
             cached_mos3_companion: RefCell::new(vec![None; mna.mos3s.len()]),
             prev_bsim1: RefCell::new(
                 mna.bsim1s
+                    .iter()
+                    .map(|m| {
+                        let (vgs, vds, vbs) = m.terminal_voltages(prev_solution);
+                        (vgs, vds, vbs, 0.0)
+                    })
+                    .collect(),
+            ),
+            cached_bsim1_companion: RefCell::new(vec![None; mna.bsim1s.len()]),
             prev_bsim2: RefCell::new(
                 mna.bsim2s
                     .iter()
@@ -360,7 +368,6 @@ impl DeviceVoltageState {
                     })
                     .collect(),
             ),
-            cached_bsim1_companion: RefCell::new(vec![None; mna.bsim1s.len()]),
             cached_bsim2_companion: RefCell::new(vec![None; mna.bsim2s.len()]),
             prev_mos6: RefCell::new(
                 mna.mos6s
@@ -932,6 +939,42 @@ impl DeviceVoltageState {
                     // MODEINITJCT (b1ld.c 172-178): vbs=-1, vgs=type*vt0, vds=0.
                     let sign = mos.model.mos_type.sign();
                     let vto = sign * mos.sized.vt0;
+                    (vto, 0.0, -1.0)
+                } else {
+                    let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
+                    let von_prev = prev[mi].3;
+                    let (vgs, vds) =
+                        mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
+                    let vbs = if vds >= 0.0 {
+                        bsim_pnjlim(raw_vbs, prev[mi].2)
+                    } else {
+                        bsim_pnjlim(raw_vbs - vds, prev[mi].2 - prev[mi].1) + vds
+                    };
+                    (vgs, vds, vbs)
+                };
+
+                let bypass = bypass_on
+                    && !init_jct
+                    && cache[mi].is_some()
+                    && within_bypass_tol(vgs, prev[mi].0)
+                    && within_bypass_tol(vds, prev[mi].1)
+                    && within_bypass_tol(vbs, prev[mi].2);
+
+                let comp = if bypass {
+                    crate::sparse::record_bypass_hit();
+                    cache[mi].clone().unwrap()
+                } else {
+                    crate::sparse::record_bypass_miss();
+                    let new_comp = mos.companion(vgs, vds, vbs);
+                    cache[mi] = Some(new_comp.clone());
+                    new_comp
+                };
+
+                prev[mi] = (vgs, vds, vbs, comp.von);
+                stamp_bsim1(&mut system.matrix, &mut system.rhs, mos, &comp);
+            }
+        }
+
         // BSIM2 (level 5) — Berkeley Short-Channel IGFET Model v2
         {
             let mut prev = self.prev_bsim2.borrow_mut();
@@ -945,11 +988,6 @@ impl DeviceVoltageState {
                 } else {
                     let (raw_vgs, raw_vds, raw_vbs) = mos.terminal_voltages(solution);
                     let von_prev = prev[mi].3;
-                    let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
-                    let vbs = if vds >= 0.0 {
-                        bsim_pnjlim(raw_vbs, prev[mi].2)
-                    } else {
-                        bsim_pnjlim(raw_vbs - vds, prev[mi].2 - prev[mi].1) + vds
                     let (vgs, vds) =
                         mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, von_prev);
                     let vbs = if vds >= 0.0 {
@@ -973,14 +1011,12 @@ impl DeviceVoltageState {
                     cache[mi].clone().unwrap()
                 } else {
                     crate::sparse::record_bypass_miss();
-                    let new_comp = mos.companion(vgs, vds, vbs);
                     let new_comp = bsim2_companion(mos, vgs, vds, vbs);
                     cache[mi] = Some(new_comp.clone());
                     new_comp
                 };
 
                 prev[mi] = (vgs, vds, vbs, comp.von);
-                stamp_bsim1(&mut system.matrix, &mut system.rhs, mos, &comp);
                 stamp_bsim2(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }

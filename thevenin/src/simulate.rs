@@ -302,6 +302,8 @@ fn jct_initial_guess(
         let vbs = -1.0;
         let comp = mos.companion(vgs, vds, vbs);
         stamp_bsim1(&mut system.matrix, &mut system.rhs, mos, &comp);
+    }
+
     // Stamp each BSIM2 (Level 5) at its initial bias (MODEINITJCT analogue).
     // Matches b2ld.c lines 169-180: vgs=type*vt0, vds=0, vbs=-1.
     for mos in &mna.bsim2s {

@@ -2857,24 +2857,6 @@ fn stamp_circuit(
                         .map(Bsim1Model::from_model_def)
                         .unwrap_or_else(|| Bsim1Model::new(crate::mosfet::MosfetType::Nmos));
                     let drain_prime_idx = if bm.rsh > 0.0 && nrd > 0.0 {
-                } else if level == 5 {
-                    // BSIM2 (LEVEL=5).
-                    let mm = resolved
-                        .map(crate::bsim2::Bsim2Model::from_model_def)
-                        .unwrap_or_else(|| {
-                            crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
-                        });
-                    let drain_conductance = if mm.sheet_resistance > 0.0 && nrd > 0.0 {
-                        1.0 / (mm.sheet_resistance * nrd)
-                    } else {
-                        0.0
-                    };
-                    let source_conductance = if mm.sheet_resistance > 0.0 && nrs > 0.0 {
-                        1.0 / (mm.sheet_resistance * nrs)
-                    } else {
-                        0.0
-                    };
-                    let drain_prime_idx = if drain_conductance > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
@@ -2882,7 +2864,6 @@ fn stamp_circuit(
                         drain_idx
                     };
                     let source_prime_idx = if bm.rsh > 0.0 && nrs > 0.0 {
-                    let source_prime_idx = if source_conductance > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
@@ -2938,6 +2919,37 @@ fn stamp_circuit(
                         ps,
                         m_mult,
                     );
+                } else if level == 5 {
+                    // BSIM2 (LEVEL=5).
+                    let mm = resolved
+                        .map(crate::bsim2::Bsim2Model::from_model_def)
+                        .unwrap_or_else(|| {
+                            crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
+                        });
+                    let drain_conductance = if mm.sheet_resistance > 0.0 && nrd > 0.0 {
+                        1.0 / (mm.sheet_resistance * nrd)
+                    } else {
+                        0.0
+                    };
+                    let source_conductance = if mm.sheet_resistance > 0.0 && nrs > 0.0 {
+                        1.0 / (mm.sheet_resistance * nrs)
+                    } else {
+                        0.0
+                    };
+                    let drain_prime_idx = if drain_conductance > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if source_conductance > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
                     if let Some(sp) = crate::bsim2::Bsim2SizeDependParam::build(&mm, w, l) {
                         mna.bsim2s.push(crate::bsim2::Bsim2Instance {
                             name: elem.name.clone(),
