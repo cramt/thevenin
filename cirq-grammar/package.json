@@ -2,17 +2,52 @@
   "name": "tree-sitter-cirq",
   "version": "0.1.0",
   "description": "Tree-sitter grammar for the Cirq circuit description language",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cramt/thevenin.git",
+    "directory": "cirq-grammar"
+  },
   "license": "BSD-3-Clause",
   "main": "bindings/node",
+  "types": "bindings/node",
+  "keywords": [
+    "incremental",
+    "parsing",
+    "tree-sitter",
+    "cirq",
+    "spice",
+    "circuit"
+  ],
+  "files": [
+    "grammar.js",
+    "binding.gyp",
+    "prebuilds/**",
+    "bindings/node/*",
+    "queries/*",
+    "src/**",
+    "*.wasm"
+  ],
+  "dependencies": {
+    "node-addon-api": "^8.0.0",
+    "node-gyp-build": "^4.8.0"
+  },
+  "devDependencies": {
+    "prebuildify": "^6.0.1",
+    "tree-sitter-cli": "^0.25.0"
+  },
+  "peerDependencies": {
+    "tree-sitter": "^0.25.0"
+  },
+  "peerDependenciesMeta": {
+    "tree-sitter": {
+      "optional": true
+    }
+  },
   "scripts": {
+    "install": "node-gyp-build",
+    "prebuildify": "prebuildify --napi --strip",
     "build": "tree-sitter generate",
     "test": "tree-sitter test",
     "parse": "tree-sitter parse"
-  },
-  "dependencies": {
-    "nan": "^2.18.0"
-  },
-  "devDependencies": {
-    "tree-sitter-cli": "^0.25.0"
   }
 }
