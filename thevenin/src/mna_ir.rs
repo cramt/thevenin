@@ -564,7 +564,23 @@ pub fn tran_params_from_circuit(
         device_param_queries,
         t_pause: None,
         start_state: None,
+        method: integration_method_from_circuit(circuit),
     })
+}
+
+/// Pick the user's preferred integration method from `circuit.options
+/// METHOD=`, defaulting to `Trapezoidal`. Recognised: `trap`, `gear`,
+/// `euler`. Mirrors [`crate::transient::integration_method_from_netlist`]
+/// for the Circuit input path.
+pub fn integration_method_from_circuit(circuit: &Circuit) -> crate::transient::IntegrationMethod {
+    for (k, v) in &circuit.options {
+        if k.eq_ignore_ascii_case("METHOD")
+            && let cirq_ir::Value::String(s) = v
+        {
+            return crate::transient::parse_integration_method(s);
+        }
+    }
+    crate::transient::IntegrationMethod::Trapezoidal
 }
 
 /// Extract `(output, input)` for `.tf` analysis from a Circuit.

@@ -24,10 +24,18 @@ use crate::waveform::{self, TranParams};
 /// Integration method for transient analysis.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IntegrationMethod {
-    /// Backward Euler — first-order, unconditionally stable.
+    /// Backward Euler — first-order, unconditionally stable. Damps every
+    /// frequency component including ones we'd want to keep; useful for
+    /// debugging and the bootstrap step before Trap/Gear takes over.
     BackwardEuler,
-    /// Trapezoidal — second-order, A-stable.
+    /// Trapezoidal — second-order, A-stable. The default. Can ring on
+    /// stiff circuits because it preserves high-frequency content.
     Trapezoidal,
+    /// Gear (BDF2) — second-order, L-stable. Damps numerical oscillations
+    /// from the trapezoidal rule, at the cost of slight numerical damping
+    /// of physical signals. Preferred for stiff circuits (switching power,
+    /// long time-constant chains, anything where Trap rings).
+    Gear,
 }
 
 /// History state for a capacitor at the previous timestep.
@@ -41,6 +49,8 @@ struct CapHistory {
     charge: f64,
     /// Charge at two timesteps ago (needed for divided-difference LTE).
     charge_prev: f64,
+    /// Voltage two timesteps ago (needed for Gear BDF2).
+    voltage_prev: f64,
 }
 
 /// History state for an inductor at the previous timestep.
@@ -50,6 +60,8 @@ struct IndHistory {
     current: f64,
     /// Voltage across inductor at previous timestep (needed for Trap).
     voltage: f64,
+    /// Current two timesteps ago (needed for Gear BDF2).
+    current_prev: f64,
 }
 
 /// History state for a BJT junction charge at the previous timestep.
@@ -216,6 +228,15 @@ fn capacitor_companion(
             let ieq = -(geq * history.voltage + history.current);
             (geq, ieq)
         }
+        IntegrationMethod::Gear => {
+            // BDF2: i(n+1) = 3C/(2h)*v(n+1) - 2C/h*v(n) + C/(2h)*v(n-1)
+            // Stamps as a companion conductance 3C/(2h) with the constant
+            // terms moving to the equivalent current source.
+            let geq = 1.5 * capacitance / h;
+            let ieq = -(2.0 * capacitance / h * history.voltage
+                - 0.5 * capacitance / h * history.voltage_prev);
+            (geq, ieq)
+        }
     }
 }
 
@@ -245,6 +266,13 @@ fn inductor_companion(
         IntegrationMethod::Trapezoidal => {
             let req = 2.0 * inductance / h;
             let veq = -(req * history.current + history.voltage);
+            (req, veq)
+        }
+        IntegrationMethod::Gear => {
+            // BDF2 dual: v(n+1) = 3L/(2h)*i(n+1) - 2L/h*i(n) + L/(2h)*i(n-1)
+            let req = 1.5 * inductance / h;
+            let veq = -(2.0 * inductance / h * history.current
+                - 0.5 * inductance / h * history.current_prev);
             (req, veq)
         }
     }
@@ -669,6 +697,8 @@ pub fn tran_run_params_from_netlist(
 
     let device_param_queries = collect_device_param_queries(netlist.source.lines(), mna);
 
+    let method = integration_method_from_netlist(netlist);
+
     Ok(TranRunParams {
         t_step: h_print,
         t_stop,
@@ -681,7 +711,47 @@ pub fn tran_run_params_from_netlist(
         device_param_queries,
         t_pause: None,
         start_state: None,
+        method,
     })
+}
+
+/// Pick the user's preferred integration method from `.options METHOD=`,
+/// defaulting to `Trapezoidal` when the option is absent or invalid.
+/// Recognised: `trap`/`trapezoidal`, `gear`, `euler`/`be`/`backward`.
+pub fn integration_method_from_netlist(netlist: &Netlist) -> IntegrationMethod {
+    use thevenin_types::Expr;
+    for item in &netlist.items {
+        if let Item::Options(params) = item {
+            for p in params {
+                if p.name.eq_ignore_ascii_case("METHOD") {
+                    // The SPICE netlist parser stores non-numeric option
+                    // values as `Expr::Param` (the unquoted identifier).
+                    if let Expr::Param(s) = &p.value {
+                        return parse_integration_method(s);
+                    }
+                }
+            }
+        }
+    }
+    IntegrationMethod::Trapezoidal
+}
+
+/// Parse a `METHOD=` string into an [`IntegrationMethod`]. Unknown values
+/// fall back to `Trapezoidal` with a stderr warning so users notice typos
+/// rather than silently getting the default.
+pub fn parse_integration_method(s: &str) -> IntegrationMethod {
+    match s.to_ascii_lowercase().as_str() {
+        "trap" | "trapezoidal" => IntegrationMethod::Trapezoidal,
+        "gear" | "bdf2" => IntegrationMethod::Gear,
+        "euler" | "be" | "backward" | "backwardeuler" => IntegrationMethod::BackwardEuler,
+        other => {
+            eprintln!(
+                "[thevenin] WARNING: unknown .options METHOD={other:?}, \
+                 falling back to trapezoidal (recognised: trap, gear, euler)"
+            );
+            IntegrationMethod::Trapezoidal
+        }
+    }
 }
 
 /// Fully-resolved `.tran` analysis parameters, shared between Netlist and
@@ -714,6 +784,13 @@ pub struct TranRunParams {
     /// for circuits with reactive nonlinear devices — resume-1 is purely
     /// linear so it's exact there.
     pub start_state: Option<TranStartState>,
+    /// Preferred integration method for non-bootstrap timesteps. Mirrors
+    /// the ngspice `.options METHOD=` knob. Defaults to `Trapezoidal`;
+    /// `BackwardEuler` forces BE everywhere (debug / coarse); `Gear` uses
+    /// BDF2 after the first two BE-bootstrapped steps. The bootstrap
+    /// step, breakpoints, and the LTE-driven downgrade always force BE
+    /// regardless of this preference.
+    pub method: IntegrationMethod,
 }
 
 /// Snapshot captured at a `stop when` pause point, returned by `run_tran` and
@@ -801,6 +878,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
         device_param_queries,
         t_pause,
         start_state,
+        method: prefer_method,
     } = params;
 
     if h_print <= 0.0 || t_stop <= 0.0 {
@@ -886,6 +964,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                 current: 0.0, // At DC steady state, capacitor current is 0.
                 charge,
                 charge_prev: charge, // No previous history at DC init.
+                voltage_prev: v,     // Same — bootstrap voltage_prev = voltage.
             }
         })
         .collect();
@@ -897,7 +976,8 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let current = solution[ind.branch_idx];
             IndHistory {
                 current,
-                voltage: 0.0, // At DC steady state, inductor voltage is 0.
+                voltage: 0.0,          // At DC steady state, inductor voltage is 0.
+                current_prev: current, // bootstrap previous = current
             }
         })
         .collect();
@@ -1423,6 +1503,10 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
     let mut h_prev = h; // No previous step yet; use h as initial estimate.
     let mut is_first_step = true;
     let mut force_be = false; // Order upgrade check: stay at BE until Trap LTE allows upgrade.
+    // Gear (BDF2) needs two prior timesteps of history to be accurate; the
+    // first two steps after init use BE to seed `voltage_prev` /
+    // `current_prev` before the second-order formula kicks in.
+    let mut gear_bootstrap_steps_remaining: u32 = 2;
 
     // Total NR iteration counter across the whole run (ngspice ITL5 sentinel).
     // Only enforced when nr_options.itl5 > 0 — the default 0 means "no cap".
@@ -1456,10 +1540,15 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
         // Use Backward Euler for the first step, at breakpoints, and when the
         // order upgrade check says Trap would need a similar step (ngspice
         // dctran.c lines 820-831: stay at BE until Trap LTE allows upgrade).
-        let method = if is_first_step || at_breakpoint || force_be {
+        // For Gear (BDF2) we also need a 2-step BE bootstrap to seed the
+        // `voltage_prev` / `current_prev` history; without it BDF2 starts
+        // with v(n-1) == v(n) which gives a junk first integration.
+        let gear_bootstrap =
+            prefer_method == IntegrationMethod::Gear && gear_bootstrap_steps_remaining > 0;
+        let method = if is_first_step || at_breakpoint || force_be || gear_bootstrap {
             IntegrationMethod::BackwardEuler
         } else {
-            IntegrationMethod::Trapezoidal
+            prefer_method
         };
 
         // Recompute LTRA convolution coefficients for the new timepoint.
@@ -1692,6 +1781,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
         t += step_h;
         solution = new_solution;
         is_first_step = false;
+        gear_bootstrap_steps_remaining = gear_bootstrap_steps_remaining.saturating_sub(1);
 
         // Update capacitor histories.
         for (ci, cap) in mna.capacitors.iter().enumerate() {
@@ -1708,15 +1798,23 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                     let geq = 2.0 * cap.capacitance / step_h;
                     geq * (v_new - cap_histories[ci].voltage) - cap_histories[ci].current
                 }
+                IntegrationMethod::Gear => {
+                    // BDF2 backward derivative: i = C/(2h) * (3v_new - 4v(n) + v(n-1)).
+                    cap.capacitance / (2.0 * step_h)
+                        * (3.0 * v_new - 4.0 * cap_histories[ci].voltage
+                            + cap_histories[ci].voltage_prev)
+                }
             };
 
             let charge_prev = cap_histories[ci].charge;
+            let voltage_prev = cap_histories[ci].voltage;
             let charge = cap.capacitance * v_new;
             cap_histories[ci] = CapHistory {
                 voltage: v_new,
                 current,
                 charge,
                 charge_prev,
+                voltage_prev,
             };
         }
 
@@ -1730,6 +1828,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             ind_histories[li] = IndHistory {
                 current: i_new,
                 voltage: v_new,
+                current_prev: ind_histories[li].current,
             };
         }
 
@@ -1747,14 +1846,18 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let qbc = bjt_charge_histories[bi].qbc + capbc * (vbc - bjt_charge_histories[bi].vbc);
 
             let cqbe = match method {
-                IntegrationMethod::BackwardEuler => (qbe - bjt_charge_histories[bi].qbe) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qbe - bjt_charge_histories[bi].qbe) / step_h
+                }
                 IntegrationMethod::Trapezoidal => {
                     2.0 * (qbe - bjt_charge_histories[bi].qbe) / step_h
                         - bjt_charge_histories[bi].cqbe
                 }
             };
             let cqbc = match method {
-                IntegrationMethod::BackwardEuler => (qbc - bjt_charge_histories[bi].qbc) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qbc - bjt_charge_histories[bi].qbc) / step_h
+                }
                 IntegrationMethod::Trapezoidal => {
                     2.0 * (qbc - bjt_charge_histories[bi].qbc) / step_h
                         - bjt_charge_histories[bi].cqbc
@@ -1799,11 +1902,15 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let qgd = hist.qgd + comp.capgd * (vgdpp - hist.vgdpp);
 
             let cqgs = match method {
-                IntegrationMethod::BackwardEuler => (qgs - hist.qgs) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgs - hist.qgs) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgs - hist.qgs) / step_h - hist.cqgs,
             };
             let cqgd = match method {
-                IntegrationMethod::BackwardEuler => (qgd - hist.qgd) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgd - hist.qgd) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgd - hist.qgd) / step_h - hist.cqgd,
             };
 
@@ -1853,11 +1960,15 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let qgd = hist.qgd + comp.capgd * (vgdpp - hist.vgdpp);
 
             let cqgs = match method {
-                IntegrationMethod::BackwardEuler => (qgs - hist.qgs) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgs - hist.qgs) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgs - hist.qgs) / step_h - hist.cqgs,
             };
             let cqgd = match method {
-                IntegrationMethod::BackwardEuler => (qgd - hist.qgd) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgd - hist.qgd) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgd - hist.qgd) / step_h - hist.cqgd,
             };
 
@@ -1911,15 +2022,21 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let qgb = hist.qgb + capgb * (vgb_signed - hist.vgb);
 
             let cqgs = match method {
-                IntegrationMethod::BackwardEuler => (qgs - hist.qgs) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgs - hist.qgs) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgs - hist.qgs) / step_h - hist.cqgs,
             };
             let cqgd = match method {
-                IntegrationMethod::BackwardEuler => (qgd - hist.qgd) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgd - hist.qgd) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgd - hist.qgd) / step_h - hist.cqgd,
             };
             let cqgb = match method {
-                IntegrationMethod::BackwardEuler => (qgb - hist.qgb) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgb - hist.qgb) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgb - hist.qgb) / step_h - hist.cqgb,
             };
 
@@ -1975,15 +2092,21 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let qgb = hist.qgb + capgb * (vgb_signed - hist.vgb);
 
             let cqgs = match method {
-                IntegrationMethod::BackwardEuler => (qgs - hist.qgs) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgs - hist.qgs) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgs - hist.qgs) / step_h - hist.cqgs,
             };
             let cqgd = match method {
-                IntegrationMethod::BackwardEuler => (qgd - hist.qgd) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgd - hist.qgd) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgd - hist.qgd) / step_h - hist.cqgd,
             };
             let cqgb = match method {
-                IntegrationMethod::BackwardEuler => (qgb - hist.qgb) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgb - hist.qgb) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgb - hist.qgb) / step_h - hist.cqgb,
             };
 
@@ -2013,7 +2136,9 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let hist = &soidd_charge_histories[di];
             let qbe = hist.qbe_cbox + cbox_wl * (vbe - hist.vbe_cbox);
             let cqbe = match method {
-                IntegrationMethod::BackwardEuler => (qbe - hist.qbe_cbox) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qbe - hist.qbe_cbox) / step_h
+                }
                 IntegrationMethod::Trapezoidal => {
                     2.0 * (qbe - hist.qbe_cbox) / step_h - hist.cqbe_cbox
                 }
@@ -2033,19 +2158,27 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let qdrn = comp.qdrn;
             let qsub = comp.qsub;
             let cqgate = match method {
-                IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qgate - hist.qgate) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qgate - hist.qgate) / step_h - hist.cqgate,
             };
             let cqbody = match method {
-                IntegrationMethod::BackwardEuler => (qbody - hist.qbody) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qbody - hist.qbody) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qbody - hist.qbody) / step_h - hist.cqbody,
             };
             let cqdrn = match method {
-                IntegrationMethod::BackwardEuler => (qdrn - hist.qdrn) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qdrn - hist.qdrn) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qdrn - hist.qdrn) / step_h - hist.cqdrn,
             };
             let cqsub = match method {
-                IntegrationMethod::BackwardEuler => (qsub - hist.qsub) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qsub - hist.qsub) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qsub - hist.qsub) / step_h - hist.cqsub,
             };
             let qgate_prev = soidd_charge_histories[di].qgate;
@@ -2099,19 +2232,27 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let qbcp = hist.qbcp + cap_bcp * (vbcp - hist.vbcp);
 
             let cqbe = match method {
-                IntegrationMethod::BackwardEuler => (qbe - hist.qbe) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qbe - hist.qbe) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qbe - hist.qbe) / step_h - hist.cqbe,
             };
             let cqbc = match method {
-                IntegrationMethod::BackwardEuler => (qbc - hist.qbc) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qbc - hist.qbc) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qbc - hist.qbc) / step_h - hist.cqbc,
             };
             let cqbep = match method {
-                IntegrationMethod::BackwardEuler => (qbep - hist.qbep) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qbep - hist.qbep) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qbep - hist.qbep) / step_h - hist.cqbep,
             };
             let cqbcp = match method {
-                IntegrationMethod::BackwardEuler => (qbcp - hist.qbcp) / step_h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qbcp - hist.qbcp) / step_h
+                }
                 IntegrationMethod::Trapezoidal => 2.0 * (qbcp - hist.qbcp) / step_h - hist.cqbcp,
             };
 
@@ -2512,7 +2653,7 @@ fn solve_timestep(
         //   rhs:    -(2L1/h*i1_prev + v1_prev) (self) + (-2M/h * i2_prev) (mutual)
         {
             let coeff = match method {
-                IntegrationMethod::BackwardEuler => 1.0 / h,
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => 1.0 / h,
                 IntegrationMethod::Trapezoidal => 2.0 / h,
             };
             for mc in &mna.mutual_couplings {
@@ -2587,13 +2728,13 @@ fn solve_timestep(
 
                 // Integration coefficient: ag[0] = 1/h (BE) or 2/h (trap).
                 let ag0 = match method {
-                    IntegrationMethod::BackwardEuler => 1.0 / h,
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => 1.0 / h,
                     IntegrationMethod::Trapezoidal => 2.0 / h,
                 };
 
                 // Integrate B-E charge.
                 let (geq_be, cqbe) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = capbe / h;
                         let cq = (qbe - hist.qbe) / h;
                         (geq, cq)
@@ -2607,7 +2748,7 @@ fn solve_timestep(
 
                 // Integrate B-C charge.
                 let (geq_bc, cqbc) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = capbc / h;
                         let cq = (qbc - hist.qbc) / h;
                         (geq, cq)
@@ -2708,7 +2849,7 @@ fn solve_timestep(
 
                 // Integrate G-S charge.
                 let (ggspp, cqgs) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = capgs / h;
                         let cq = (qgs - hist.qgs) / h;
                         (geq, cq)
@@ -2722,7 +2863,7 @@ fn solve_timestep(
 
                 // Integrate G-D charge.
                 let (ggdpp, cqgd) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = capgd / h;
                         let cq = (qgd - hist.qgd) / h;
                         (geq, cq)
@@ -2792,7 +2933,7 @@ fn solve_timestep(
 
                 // Integrate G-S charge.
                 let (ggspp, cqgs) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = capgs / h;
                         let cq = (qgs - hist.qgs) / h;
                         (geq, cq)
@@ -2806,7 +2947,7 @@ fn solve_timestep(
 
                 // Integrate G-D charge.
                 let (ggdpp, cqgd) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = capgd / h;
                         let cq = (qgd - hist.qgd) / h;
                         (geq, cq)
@@ -2895,7 +3036,7 @@ fn solve_timestep(
 
                 // Integrate G-S charge.
                 let (geq_gs, cqgs) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = capgs / h;
                         let cq = (qgs - hist.qgs) / h;
                         (geq, cq)
@@ -2909,7 +3050,7 @@ fn solve_timestep(
 
                 // Integrate G-D charge.
                 let (geq_gd, cqgd) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = capgd / h;
                         let cq = (qgd - hist.qgd) / h;
                         (geq, cq)
@@ -2923,7 +3064,7 @@ fn solve_timestep(
 
                 // Integrate G-B charge.
                 let (geq_gb, cqgb) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = capgb / h;
                         let cq = (qgb - hist.qgb) / h;
                         (geq, cq)
@@ -3004,19 +3145,25 @@ fn solve_timestep(
                 let qgb = hist.qgb + capgb * (vgb_signed - hist.vgb);
 
                 let (geq_gs, cqgs) = match method {
-                    IntegrationMethod::BackwardEuler => (capgs / h, (qgs - hist.qgs) / h),
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                        (capgs / h, (qgs - hist.qgs) / h)
+                    }
                     IntegrationMethod::Trapezoidal => {
                         (2.0 * capgs / h, 2.0 * (qgs - hist.qgs) / h - hist.cqgs)
                     }
                 };
                 let (geq_gd, cqgd) = match method {
-                    IntegrationMethod::BackwardEuler => (capgd / h, (qgd - hist.qgd) / h),
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                        (capgd / h, (qgd - hist.qgd) / h)
+                    }
                     IntegrationMethod::Trapezoidal => {
                         (2.0 * capgd / h, 2.0 * (qgd - hist.qgd) / h - hist.cqgd)
                     }
                 };
                 let (geq_gb, cqgb) = match method {
-                    IntegrationMethod::BackwardEuler => (capgb / h, (qgb - hist.qgb) / h),
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                        (capgb / h, (qgb - hist.qgb) / h)
+                    }
                     IntegrationMethod::Trapezoidal => {
                         (2.0 * capgb / h, 2.0 * (qgb - hist.qgb) / h - hist.cqgb)
                     }
@@ -3070,7 +3217,7 @@ fn solve_timestep(
                 // Integrate 4 terminal charges using incremental approach.
                 // Q_new = Q_old + C(V) * delta_V (matching MOSFET Meyer cap pattern).
                 let ag0 = match method {
-                    IntegrationMethod::BackwardEuler => 1.0 / h,
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => 1.0 / h,
                     IntegrationMethod::Trapezoidal => 2.0 / h,
                 };
 
@@ -3111,19 +3258,27 @@ fn solve_timestep(
                 let qsub = comp.qsub;
 
                 let cqgate = match method {
-                    IntegrationMethod::BackwardEuler => (qgate - hist.qgate) / h,
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                        (qgate - hist.qgate) / h
+                    }
                     IntegrationMethod::Trapezoidal => 2.0 * (qgate - hist.qgate) / h - hist.cqgate,
                 };
                 let cqbody = match method {
-                    IntegrationMethod::BackwardEuler => (qbody - hist.qbody) / h,
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                        (qbody - hist.qbody) / h
+                    }
                     IntegrationMethod::Trapezoidal => 2.0 * (qbody - hist.qbody) / h - hist.cqbody,
                 };
                 let cqdrn = match method {
-                    IntegrationMethod::BackwardEuler => (qdrn - hist.qdrn) / h,
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                        (qdrn - hist.qdrn) / h
+                    }
                     IntegrationMethod::Trapezoidal => 2.0 * (qdrn - hist.qdrn) / h - hist.cqdrn,
                 };
                 let cqsub = match method {
-                    IntegrationMethod::BackwardEuler => (qsub - hist.qsub) / h,
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                        (qsub - hist.qsub) / h
+                    }
                     IntegrationMethod::Trapezoidal => 2.0 * (qsub - hist.qsub) / h - hist.cqsub,
                 };
 
@@ -3308,7 +3463,7 @@ fn solve_timestep(
 
                 // Integrate B-E charge.
                 let (geq_be, cqbe) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = cap_be / h;
                         let cq = (qbe - hist.qbe) / h;
                         (geq, cq)
@@ -3322,7 +3477,7 @@ fn solve_timestep(
 
                 // Integrate B-C charge.
                 let (geq_bc, cqbc) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = cap_bc / h;
                         let cq = (qbc - hist.qbc) / h;
                         (geq, cq)
@@ -3336,7 +3491,7 @@ fn solve_timestep(
 
                 // Integrate parasitic B-E charge.
                 let (geq_bep, cqbep) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = cap_bep / h;
                         let cq = (qbep - hist.qbep) / h;
                         (geq, cq)
@@ -3350,7 +3505,7 @@ fn solve_timestep(
 
                 // Integrate parasitic B-C (substrate) charge.
                 let (geq_bcp, cqbcp) = match method {
-                    IntegrationMethod::BackwardEuler => {
+                    IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
                         let geq = cap_bcp / h;
                         let cq = (qbcp - hist.qbcp) / h;
                         (geq, cq)

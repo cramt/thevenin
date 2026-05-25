@@ -122,7 +122,10 @@ pub(crate) use sens::simulate_sens;
 pub(crate) use simulate::{simulate_dc, simulate_op};
 pub(crate) use tf::simulate_tf;
 pub(crate) use transient::simulate_tran;
-pub use transient::{TranOutcome, TranPauseSnapshot, TranRunParams, TranStartState, run_tran};
+pub use transient::{
+    IntegrationMethod, TranOutcome, TranPauseSnapshot, TranRunParams, TranStartState,
+    integration_method_from_netlist, parse_integration_method, run_tran,
+};
 
 // Utilities
 pub use mna::MnaError;
