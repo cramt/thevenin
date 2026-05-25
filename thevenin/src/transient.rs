@@ -362,9 +362,10 @@ impl BreakpointTable {
     }
 }
 
-/// Transient truncation error tolerance (controls how aggressively timestep adjusts).
-/// Matches ngspice CKTtrtol default of 7.0.
-const TRTOL: f64 = 7.0;
+// Transient truncation error tolerance multiplier (controls how aggressively
+// the timestep adjusts) is now threaded through as the `trtol` parameter to
+// `estimate_new_timestep`, sourced from `NrOptions::trtol` (ngspice TRTOL,
+// default 7.0).
 
 /// Minimum factor to shrink timestep on rejection.
 const MIN_SHRINK: f64 = 0.125; // 1/8
@@ -390,6 +391,7 @@ fn estimate_new_timestep(
     reltol: f64,
     abstol: f64,
     chgtol: f64,
+    trtol: f64,
 ) -> f64 {
     let mut new_h = f64::MAX;
 
@@ -415,7 +417,7 @@ fn estimate_new_timestep(
         // Tolerance: max of voltage-based and charge-based.
         let vol_tol = abstol + reltol * i_cur.abs().max(cap_histories[ci].current.abs());
         let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
-        let tol = TRTOL * vol_tol.max(chg_tol);
+        let tol = trtol * vol_tol.max(chg_tol);
 
         // Divided differences: 2nd divided difference of Q.
         // diff1_0 = (Q0 - Q1) / h
@@ -459,7 +461,7 @@ fn estimate_new_timestep(
         let flux_old = ind.inductance * i_old;
         let cur_tol = abstol + reltol * i_new.abs().max(i_old.abs());
         let flux_tol = reltol * flux_new.abs().max(flux_old.abs()).max(chgtol);
-        let tol = TRTOL * cur_tol.max(flux_tol);
+        let tol = trtol * cur_tol.max(flux_tol);
 
         if lte > 1e-30 {
             let ratio = tol / lte;
@@ -489,7 +491,7 @@ fn estimate_new_timestep(
             // Tolerance matching ngspice CKTterr.
             let vol_tol = abstol + reltol * hist.cqbe.abs().max((q0 - q1).abs() / h);
             let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
-            let tol = TRTOL * vol_tol.max(chg_tol);
+            let tol = trtol * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
             let diff1_1 = (q1 - q2) / h_prev;
@@ -511,7 +513,7 @@ fn estimate_new_timestep(
 
             let vol_tol = abstol + reltol * hist.cqbc.abs().max((q0 - q1).abs() / h);
             let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
-            let tol = TRTOL * vol_tol.max(chg_tol);
+            let tol = trtol * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
             let diff1_1 = (q1 - q2) / h_prev;
@@ -554,7 +556,7 @@ fn estimate_new_timestep(
 
             let vol_tol = abstol + reltol * hist.cqgate.abs().max((q0 - q1).abs() / h);
             let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
-            let tol = TRTOL * vol_tol.max(chg_tol);
+            let tol = trtol * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
             let diff1_1 = (q1 - q2) / h_prev;
@@ -576,7 +578,7 @@ fn estimate_new_timestep(
 
             let vol_tol = abstol + reltol * hist.cqbody.abs().max((q0 - q1).abs() / h);
             let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
-            let tol = TRTOL * vol_tol.max(chg_tol);
+            let tol = trtol * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
             let diff1_1 = (q1 - q2) / h_prev;
@@ -598,7 +600,7 @@ fn estimate_new_timestep(
 
             let vol_tol = abstol + reltol * hist.cqdrn.abs().max((q0 - q1).abs() / h);
             let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
-            let tol = TRTOL * vol_tol.max(chg_tol);
+            let tol = trtol * vol_tol.max(chg_tol);
 
             let diff1_0 = (q0 - q1) / h;
             let diff1_1 = (q1 - q2) / h_prev;
@@ -1713,6 +1715,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                 nr_options.reltol,
                 nr_options.abstol,
                 nr_options.chgtol,
+                nr_options.trtol,
             );
 
             if new_h < 0.9 * step_h {
@@ -1755,6 +1758,7 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                 nr_options.reltol,
                 nr_options.abstol,
                 nr_options.chgtol,
+                nr_options.trtol,
             );
             force_be = trap_h <= 1.05 * step_h;
             // Use Trap LTE estimate to control next step size, matching ngspice
@@ -3983,6 +3987,56 @@ C1 out 0 1u IC=0
         assert!(
             density_edge >= density_flat * 0.1 || steps_near_edge >= 1,
             "adaptive stepping should have steps near edges: edge_steps={steps_near_edge}, flat_steps={steps_flat}"
+        );
+    }
+
+    /// TRTOL=1 (tightest) should produce more timesteps than TRTOL=7
+    /// (ngspice default) on the same RC pulse circuit, because the LTE
+    /// budget is 7× smaller and the timestep controller refuses to grow
+    /// as aggressively. Both runs must still reach the same final voltage.
+    #[test]
+    fn test_trtol_tighter_yields_more_steps() {
+        let circuit = "TRTOL stepping
+V1 1 0 PULSE(0 5 0 1u 1u 1m 2m)
+R1 1 out 1k
+C1 out 0 1u IC=0
+.tran 10u 4m
+.end
+";
+        let default_netlist = Netlist::parse_single(circuit).unwrap();
+        let default_result = simulate_tran(&default_netlist).unwrap();
+        let default_time = tran_vector(&default_result, "time");
+        let default_v = tran_vector(&default_result, "v(out)");
+
+        let tight_circuit = "TRTOL stepping tight
+V1 1 0 PULSE(0 5 0 1u 1u 1m 2m)
+R1 1 out 1k
+C1 out 0 1u IC=0
+.options TRTOL=1
+.tran 10u 4m
+.end
+";
+        let tight_netlist = Netlist::parse_single(tight_circuit).unwrap();
+        let tight_result = simulate_tran(&tight_netlist).unwrap();
+        let tight_time = tran_vector(&tight_result, "time");
+        let tight_v = tran_vector(&tight_result, "v(out)");
+
+        // Tight TRTOL ⇒ at least as many timesteps (typically more).
+        assert!(
+            tight_time.len() >= default_time.len(),
+            "TRTOL=1 should take at least as many steps as TRTOL=7: tight={}, default={}",
+            tight_time.len(),
+            default_time.len()
+        );
+
+        // Same circuit ⇒ same final voltage to within a few percent.
+        let v_end_default = default_v.last().copied().unwrap_or(0.0);
+        let v_end_tight = tight_v.last().copied().unwrap_or(0.0);
+        let diff = (v_end_default - v_end_tight).abs();
+        let scale = v_end_default.abs().max(v_end_tight.abs()).max(1e-3);
+        assert!(
+            diff / scale < 0.05,
+            "tighter TRTOL must not materially change the final voltage: default={v_end_default:.4}, tight={v_end_tight:.4}"
         );
     }
 

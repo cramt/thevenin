@@ -35,6 +35,33 @@ pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
                         // therefore spell it `noopiter=1` here; any
                         // non-zero numeric value enables the option.
                         "NOOPITER" => opts.noopiter = *v != 0.0,
+                        "TRTOL" => opts.trtol = *v,
+                        // PIVTOL / PIVREL are accepted for ngspice
+                        // compatibility but applied as a no-op (faer's
+                        // sparse LU doesn't expose pivot thresholds yet).
+                        // A stderr warning fires when the user changes
+                        // them from the ngspice defaults.
+                        "PIVTOL" => {
+                            opts.pivtol = *v;
+                            if (*v - 1e-13).abs() > 1e-30 {
+                                eprintln!(
+                                    "warning: .options PIVTOL={v} accepted but applied as no-op (faer sparse LU does not expose pivot thresholds)"
+                                );
+                            }
+                        }
+                        "PIVREL" => {
+                            opts.pivrel = *v;
+                            if (*v - 1e-3).abs() > 1e-30 {
+                                eprintln!(
+                                    "warning: .options PIVREL={v} accepted but applied as no-op (faer sparse LU does not expose pivot thresholds)"
+                                );
+                            }
+                        }
+                        // Iterative refinement: numeric form for the
+                        // `.options iterative_refinement=1` spelling. The
+                        // Netlist parser drops bare keyword options, same
+                        // as NOOPITER.
+                        "ITERATIVE_REFINEMENT" => opts.iterative_refinement = *v != 0.0,
                         _ => {}
                     }
                 }
@@ -1920,6 +1947,42 @@ R1 1 0 1k
         assert_eq!(opts.itl5, 7000);
         assert_eq!(opts.itl6, 42);
         assert_abs_diff_eq!(opts.chgtol, 1e-12, epsilon = 1e-30);
+    }
+
+    /// `.options TRTOL`, `PIVTOL`, `PIVREL`, `iterative_refinement` parse
+    /// into the resolved `NrOptions`. The pivot knobs are accepted for
+    /// ngspice compatibility but applied as no-ops (faer's sparse LU does
+    /// not currently expose pivot thresholds); the values must still land
+    /// in the struct so a future faer upgrade can wire them through.
+    #[test]
+    fn nr_options_parses_refinement_and_pivot_keys() {
+        let netlist = Netlist::parse_single(
+            "refinement and pivot parsing
+V1 1 0 1
+R1 1 0 1k
+.options TRTOL=3.5 PIVTOL=1e-15 PIVREL=5e-4 iterative_refinement=1
+.op
+.end
+",
+        )
+        .unwrap();
+        let opts = nr_options_from_netlist(&netlist);
+        assert_abs_diff_eq!(opts.trtol, 3.5, epsilon = 1e-30);
+        assert_abs_diff_eq!(opts.pivtol, 1e-15, epsilon = 1e-30);
+        assert_abs_diff_eq!(opts.pivrel, 5e-4, epsilon = 1e-30);
+        assert!(opts.iterative_refinement);
+    }
+
+    /// Defaults preserve the ngspice TRTOL=7.0 / PIVTOL=1e-13 / PIVREL=1e-3
+    /// convention and leave iterative refinement off (so behaviour is
+    /// byte-for-byte unchanged until the user opts in).
+    #[test]
+    fn nr_options_refinement_and_pivot_defaults() {
+        let opts = NrOptions::default();
+        assert_abs_diff_eq!(opts.trtol, 7.0, epsilon = 0.0);
+        assert_abs_diff_eq!(opts.pivtol, 1e-13, epsilon = 0.0);
+        assert_abs_diff_eq!(opts.pivrel, 1e-3, epsilon = 0.0);
+        assert!(!opts.iterative_refinement);
     }
 
     /// Round-3 convergence options (RSHUNT, GMINSTEPS, NOOPITER) parse

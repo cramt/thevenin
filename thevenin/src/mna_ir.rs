@@ -109,9 +109,12 @@ pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
             Value::Real(f) => *f,
             Value::Integer(i) => *i as f64,
             Value::Bool(b) => {
-                // Booleans only meaningful for the flag-style NOOPITER key.
+                // Booleans only meaningful for the flag-style options
+                // (NOOPITER, ITERATIVE_REFINEMENT).
                 if name.eq_ignore_ascii_case("NOOPITER") {
                     opts.noopiter = *b;
+                } else if name.eq_ignore_ascii_case("ITERATIVE_REFINEMENT") {
+                    opts.iterative_refinement = *b;
                 }
                 continue;
             }
@@ -132,6 +135,24 @@ pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
             "RSHUNT" => opts.rshunt = v,
             "GMINSTEPS" => opts.gminsteps = (v as i64).max(0) as u32,
             "NOOPITER" => opts.noopiter = v != 0.0,
+            "TRTOL" => opts.trtol = v,
+            "PIVTOL" => {
+                opts.pivtol = v;
+                if (v - 1e-13).abs() > 1e-30 {
+                    eprintln!(
+                        "warning: .options PIVTOL={v} accepted but applied as no-op (faer sparse LU does not expose pivot thresholds)"
+                    );
+                }
+            }
+            "PIVREL" => {
+                opts.pivrel = v;
+                if (v - 1e-3).abs() > 1e-30 {
+                    eprintln!(
+                        "warning: .options PIVREL={v} accepted but applied as no-op (faer sparse LU does not expose pivot thresholds)"
+                    );
+                }
+            }
+            "ITERATIVE_REFINEMENT" => opts.iterative_refinement = v != 0.0,
             _ => {}
         }
     }
@@ -3801,5 +3822,23 @@ mod tests {
         c.options.push(("NOOPITER".into(), Value::Bool(true)));
         let opts = nr_options_from_circuit(&c);
         assert!(opts.noopiter);
+    }
+
+    /// IR-side mirror of `nr_options_parses_refinement_and_pivot_keys`:
+    /// `.options TRTOL=… PIVTOL=… PIVREL=… iterative_refinement=…` lands
+    /// on the matching fields when sourced from a Circuit.
+    #[test]
+    fn nr_options_from_circuit_parses_refinement_and_pivot_keys() {
+        let mut c = divider();
+        c.options.push(("TRTOL".into(), Value::Real(3.5)));
+        c.options.push(("PIVTOL".into(), Value::Real(1e-15)));
+        c.options.push(("PIVREL".into(), Value::Real(5e-4)));
+        c.options
+            .push(("iterative_refinement".into(), Value::Bool(true)));
+        let opts = nr_options_from_circuit(&c);
+        assert!((opts.trtol - 3.5).abs() < 1e-30);
+        assert!((opts.pivtol - 1e-15).abs() < 1e-30);
+        assert!((opts.pivrel - 5e-4).abs() < 1e-30);
+        assert!(opts.iterative_refinement);
     }
 }

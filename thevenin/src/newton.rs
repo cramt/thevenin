@@ -95,6 +95,30 @@ pub struct NrOptions {
     /// stepping without first trying a direct solve. Useful when the user
     /// knows the direct attempt will diverge on a difficult circuit.
     pub noopiter: bool,
+    /// Transient truncation error multiplier (ngspice TRTOL, default 7.0).
+    /// Scales the LTE tolerance budget used by transient timestep control —
+    /// larger values let the timestep grow more aggressively, smaller values
+    /// force tighter (more conservative) stepping. Surfaced as a `.options`
+    /// knob; the LTE budget is `trtol * max(vol_tol, chg_tol)`.
+    pub trtol: f64,
+    /// Apply one pass of iterative refinement after each sparse LU solve
+    /// (ngspice convention; not directly named in ngspice's `.options` set).
+    /// Computes `r = b - A*x` and adds the correction `dx = A^{-1} r` to `x`.
+    /// Cheap insurance against ill-conditioning. Default `false` to preserve
+    /// existing behaviour byte-for-byte.
+    pub iterative_refinement: bool,
+    /// Absolute minimum pivot magnitude during sparse LU
+    /// (ngspice PIVTOL, default 1e-13). Pivots whose magnitude falls below
+    /// this floor would be considered unusable, forcing an off-diagonal
+    /// pivot search.  faer's high-level sparse LU does not currently expose
+    /// pivot thresholding, so this value is parsed and stored but treated
+    /// as a no-op; a stderr warning fires when the user sets it.
+    pub pivtol: f64,
+    /// Relative-to-row pivot ratio during sparse LU
+    /// (ngspice PIVREL, default 1e-3). Selects an off-diagonal pivot when
+    /// `|diag| < pivrel * |max_in_row|`.  Same caveat as `pivtol`: parsed
+    /// and stored but no-op pending faer pivot-knob support.
+    pub pivrel: f64,
 }
 
 impl Default for NrOptions {
@@ -129,6 +153,17 @@ impl Default for NrOptions {
             // NOOPITER: default false preserves the current "try direct NR
             // first" behaviour. When true, the direct attempt is skipped.
             noopiter: false,
+            // TRTOL: ngspice default 7.0 — the LTE budget multiplier used in
+            // transient timestep control.
+            trtol: 7.0,
+            // Iterative refinement: off by default to preserve byte-for-byte
+            // behaviour; one refinement pass is performed per solve when on.
+            iterative_refinement: false,
+            // PIVTOL / PIVREL: ngspice defaults (1e-13 / 1e-3). Currently
+            // accepted from `.options` but applied as a no-op because faer's
+            // high-level sparse LU doesn't expose pivot thresholds.
+            pivtol: 1e-13,
+            pivrel: 1e-3,
         }
     }
 }
@@ -277,12 +312,13 @@ where
         }
         crate::sparse::record_stamp_nanos(stamp_t0.elapsed().as_nanos() as u64);
 
-        let new_solution = match system.solve_with_cache(lu_cache) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(NrError::SolveError(e));
-            }
-        };
+        let new_solution =
+            match system.solve_with_cache_refined(lu_cache, options.iterative_refinement) {
+                Ok(s) => s,
+                Err(e) => {
+                    return Err(NrError::SolveError(e));
+                }
+            };
 
         if new_solution.iter().any(|v| v.is_nan() || v.is_infinite()) {
             return Err(NrError::NoConvergence {

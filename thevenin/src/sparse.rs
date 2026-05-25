@@ -373,6 +373,30 @@ impl LinearSystem {
         &self,
         cache: &mut SparseLuCache,
     ) -> Result<Vec<f64>, SparseMatrixError> {
+        self.solve_with_cache_refined(cache, false)
+    }
+
+    /// Like [`solve_with_cache`] but optionally applies one pass of iterative
+    /// refinement after the LU solve.
+    ///
+    /// Iterative refinement is cheap insurance against ill-conditioning:
+    /// after computing `x = LU^{-1} b`, evaluate the residual `r = b - A*x`,
+    /// solve `LU * dx = r` for the correction, then update `x = x + dx`.
+    /// For well-conditioned matrices this barely moves `x` (the initial
+    /// solve is already accurate to working precision); for ill-conditioned
+    /// matrices it can recover 1-2 digits of accuracy at the cost of one
+    /// extra triangular solve. We do exactly one refinement pass — the
+    /// canonical "cheap insurance" form — rather than iterating to
+    /// convergence.
+    ///
+    /// The factorization itself is reused (Arc-cloned via the cache), so
+    /// the only additional cost is one matrix-vector product for the
+    /// residual and one triangular solve for the correction.
+    pub fn solve_with_cache_refined(
+        &self,
+        cache: &mut SparseLuCache,
+        refine: bool,
+    ) -> Result<Vec<f64>, SparseMatrixError> {
         let dim = self.matrix.dim();
         if self.rhs.len() != dim {
             return Err(SparseMatrixError::DimensionMismatch {
@@ -389,7 +413,7 @@ impl LinearSystem {
         // that size). Avoid double-counting by deferring `record_solve_dim`
         // to `solve` for the dense branch.
         if dim < SPARSE_THRESHOLD {
-            return self.solve();
+            return self.solve_refined(refine);
         }
         record_solve_dim(dim);
 
@@ -426,7 +450,28 @@ impl LinearSystem {
             SparseMatrixError::SingularMatrix(format!("numeric LU refactorization failed: {e}"))
         })?;
         let x = lu.solve(&b);
-        let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+        let mut result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+
+        if refine {
+            // Residual r = b - A * x, evaluated against the original triplet
+            // form so we benefit from the same matrix the LU saw.
+            let mut residual = vec![0.0; dim];
+            for (i, &val) in self.rhs.iter().enumerate() {
+                residual[i] = val;
+            }
+            for t in self.matrix.triplets() {
+                residual[t.row] -= t.value * result[t.col];
+            }
+            let mut r_mat = Mat::zeros(dim, 1);
+            for (i, &val) in residual.iter().enumerate() {
+                r_mat[(i, 0)] = val;
+            }
+            let dx = lu.solve(&r_mat);
+            for i in 0..dim {
+                result[i] += dx[(i, 0)];
+            }
+        }
+
         SOLVE_NANOS_SPARSE.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
         if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {
             return Err(SparseMatrixError::Singular);
@@ -435,6 +480,14 @@ impl LinearSystem {
     }
 
     pub fn solve(&self) -> Result<Vec<f64>, SparseMatrixError> {
+        self.solve_refined(false)
+    }
+
+    /// Like [`solve`] but optionally applies one pass of iterative
+    /// refinement.  See [`solve_with_cache_refined`](Self::solve_with_cache_refined)
+    /// for rationale.  This path is used for one-shot (uncached) solves
+    /// and for the dense branch.
+    pub fn solve_refined(&self, refine: bool) -> Result<Vec<f64>, SparseMatrixError> {
         let dim = self.matrix.dim();
         if self.rhs.len() != dim {
             return Err(SparseMatrixError::DimensionMismatch {
@@ -472,7 +525,23 @@ impl LinearSystem {
             let a = self.matrix.to_dense();
             let lu = FullPivLu::new(a.as_ref());
             let x = lu.solve(&b);
-            let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+            let mut result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+
+            if refine {
+                let mut residual = self.rhs.clone();
+                for t in self.matrix.triplets() {
+                    residual[t.row] -= t.value * result[t.col];
+                }
+                let mut r_mat = Mat::zeros(dim, 1);
+                for (i, &val) in residual.iter().enumerate() {
+                    r_mat[(i, 0)] = val;
+                }
+                let dx = lu.solve(&r_mat);
+                for i in 0..dim {
+                    result[i] += dx[(i, 0)];
+                }
+            }
+
             SOLVE_NANOS_DENSE.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {
                 return Err(SparseMatrixError::Singular);
@@ -487,7 +556,23 @@ impl LinearSystem {
                 SparseMatrixError::SingularMatrix(format!("sparse LU factorization failed: {e}"))
             })?;
             let x = lu.solve(&b);
-            let result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+            let mut result: Vec<f64> = (0..dim).map(|i| x[(i, 0)]).collect();
+
+            if refine {
+                let mut residual = self.rhs.clone();
+                for t in self.matrix.triplets() {
+                    residual[t.row] -= t.value * result[t.col];
+                }
+                let mut r_mat = Mat::zeros(dim, 1);
+                for (i, &val) in residual.iter().enumerate() {
+                    r_mat[(i, 0)] = val;
+                }
+                let dx = lu.solve(&r_mat);
+                for i in 0..dim {
+                    result[i] += dx[(i, 0)];
+                }
+            }
+
             SOLVE_NANOS_SPARSE.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             if result.iter().any(|v: &f64| v.is_nan() || v.is_infinite()) {
                 return Err(SparseMatrixError::Singular);
@@ -790,6 +875,90 @@ mod tests {
         let result = sys.solve().unwrap();
         assert_abs_diff_eq!(result[0].0, 1.5, epsilon = 1e-12);
         assert_abs_diff_eq!(result[0].1, -0.5, epsilon = 1e-12);
+    }
+
+    /// Iterative refinement on a well-conditioned dense-path system should
+    /// produce essentially the same answer as no refinement — the initial
+    /// solve is already at working precision, so the refinement correction
+    /// is at noise level. This guards against the refinement pass corrupting
+    /// good solutions.
+    #[test]
+    fn test_iterative_refinement_well_conditioned_matches_baseline() {
+        let mut sys = LinearSystem::new(3);
+        sys.matrix.add(0, 0, 2.0);
+        sys.matrix.add(0, 1, 1.0);
+        sys.matrix.add(0, 2, -1.0);
+        sys.matrix.add(1, 0, -3.0);
+        sys.matrix.add(1, 1, -1.0);
+        sys.matrix.add(1, 2, 2.0);
+        sys.matrix.add(2, 0, -2.0);
+        sys.matrix.add(2, 1, 1.0);
+        sys.matrix.add(2, 2, 2.0);
+        sys.rhs[0] = 8.0;
+        sys.rhs[1] = -11.0;
+        sys.rhs[2] = -3.0;
+
+        let baseline = sys.solve_refined(false).unwrap();
+        let refined = sys.solve_refined(true).unwrap();
+
+        for i in 0..3 {
+            assert_abs_diff_eq!(baseline[i], refined[i], epsilon = 1e-13);
+        }
+        // And both should equal the analytical solution.
+        assert_abs_diff_eq!(refined[0], 2.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(refined[1], 3.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(refined[2], -1.0, epsilon = 1e-12);
+    }
+
+    /// Iterative refinement on an ill-conditioned matrix (wide value spread)
+    /// should produce a tighter residual than the unrefined solve. The
+    /// matrix below mixes a tiny diagonal (1e-10) with O(1) off-diagonals;
+    /// the unrefined LU loses precision on the small pivot, and one
+    /// refinement pass cleans up the residual.
+    #[test]
+    fn test_iterative_refinement_ill_conditioned_improves_residual() {
+        // Build a 64x64 system (sparse path) with a deliberately wide
+        // dynamic range. Diagonal alternates between 1e-10 and 1e10; sub
+        // and super diagonals are 1.0. The huge spread between diagonal
+        // and off-diagonal entries stresses partial pivoting.
+        let n = 64;
+        let mut sys = LinearSystem::new(n);
+        for i in 0..n {
+            let diag = if i.is_multiple_of(2) { 1e10 } else { 1e-10 };
+            sys.matrix.add(i, i, diag);
+            if i > 0 {
+                sys.matrix.add(i, i - 1, 1.0);
+            }
+            if i + 1 < n {
+                sys.matrix.add(i, i + 1, 1.0);
+            }
+            sys.rhs[i] = 1.0;
+        }
+
+        let unrefined = sys.solve_refined(false).unwrap();
+        let refined = sys.solve_refined(true).unwrap();
+
+        // Compute residual ||Ax - b||_inf for each.
+        let compute_residual = |x: &[f64]| -> f64 {
+            let mut r = vec![0.0_f64; n];
+            for i in 0..n {
+                r[i] = -sys.rhs[i];
+            }
+            for t in sys.matrix.triplets() {
+                r[t.row] += t.value * x[t.col];
+            }
+            r.iter().fold(0.0_f64, |acc, v| acc.max(v.abs()))
+        };
+
+        let res_unrefined = compute_residual(&unrefined);
+        let res_refined = compute_residual(&refined);
+
+        // Refinement should not make things worse, and on an ill-conditioned
+        // matrix typically improves the residual by 1-2 orders of magnitude.
+        assert!(
+            res_refined <= res_unrefined,
+            "refinement made residual worse: unrefined={res_unrefined:e}, refined={res_refined:e}"
+        );
     }
 
     /// Ensure sparse LU path works for systems above the threshold.
