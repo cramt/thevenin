@@ -1551,9 +1551,19 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
         // For Gear (BDF2) we also need a 2-step BE bootstrap to seed the
         // `voltage_prev` / `current_prev` history; without it BDF2 starts
         // with v(n-1) == v(n) which gives a junk first integration.
-        let gear_bootstrap =
-            prefer_method == IntegrationMethod::Gear && gear_bootstrap_steps_remaining > 0;
-        let method = if is_first_step || at_breakpoint || force_be || gear_bootstrap {
+        //
+        // The counter is decremented only when the BE step was driven *by*
+        // the bootstrap, not when BE was already forced by `is_first_step`,
+        // `at_breakpoint`, or `force_be`. Otherwise breakpoints clustered
+        // near t=0 could exhaust the bootstrap budget without the
+        // bootstrap-specific BE steps ever running, and BDF2 would engage
+        // before the history has the seeded structure it expects.
+        let gear_bootstrap_only = prefer_method == IntegrationMethod::Gear
+            && gear_bootstrap_steps_remaining > 0
+            && !is_first_step
+            && !at_breakpoint
+            && !force_be;
+        let method = if is_first_step || at_breakpoint || force_be || gear_bootstrap_only {
             IntegrationMethod::BackwardEuler
         } else {
             prefer_method
@@ -1792,7 +1802,12 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
         t += step_h;
         solution = new_solution;
         is_first_step = false;
-        gear_bootstrap_steps_remaining = gear_bootstrap_steps_remaining.saturating_sub(1);
+        // Only the bootstrap-driven BE steps count toward the bootstrap budget.
+        // See `gear_bootstrap_only` above for why `is_first_step` / breakpoints
+        // / force_be steps are excluded.
+        if gear_bootstrap_only {
+            gear_bootstrap_steps_remaining = gear_bootstrap_steps_remaining.saturating_sub(1);
+        }
 
         // Update capacitor histories.
         for (ci, cap) in mna.capacitors.iter().enumerate() {
