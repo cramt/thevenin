@@ -660,12 +660,11 @@ impl Bsim1Instance {
         let von = vfb + phi + k1 * sqrt_vpb - k2 * vpb - eta * vds;
         let vth = von;
         let dvth_dvds = -eta - deta_dvds * vds;
-        let dvth_dvbs = if vbs < 0.0 {
-            k2 - 0.5 * k1 / sqrt_vpb - deta_dvbs * vds
-        } else {
-            // Vpb constant in Vbs when Vbs >= 0 → derivative is just the eta term.
-            -deta_dvbs * vds
-        };
+        // Match ngspice b1eval.c:196 — unconditional formula across the Vbs=0 seam.
+        // ngspice intentionally keeps the K2 / K1·SqrtVpb terms in the Vbs ≥ 0 region
+        // (where chain-rule would give 0 because Vpb is held at Phi) for Jacobian
+        // continuity through Newton-Raphson.
+        let dvth_dvbs = k2 - 0.5 * k1 / sqrt_vpb - deta_dvbs * vds;
         let vgs_vth = vgs - vth;
 
         // Bulk-charge factor G, A (b1eval.c 199-204).
