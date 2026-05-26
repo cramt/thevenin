@@ -444,10 +444,16 @@ impl HisimModel {
         let onsat = (1.0 - 0.5 * vds_star / vdsat).max(0.0);
         let id_intrinsic = (w / l_eff) * mu_eff * qi_src * vds_star * onsat;
 
-        // Channel-length modulation in saturation (CLM1 · ln(1 + (Vds-Vdsat)/something)).
-        // Simple multiplicative gain for vds_eff > vdsat.
+        // Channel-length modulation in saturation. The real HiSIM2 (hsm2eval.c
+        // line 4513) uses CLM1 as a 0..1 blending coefficient between drain-end
+        // surface potential Psl and (Vds + Ps0); this partial port substitutes
+        // a Level-1-style multiplicative slope `1 + CLM1·(Vds-Vdsat)` with
+        // CLM1 treated as 1/V. Earlier revisions divided by L_eff and then
+        // multiplied by 1e-6 in an attempt to express µm scaling — the two
+        // factors only cancelled for L = 1 µm and were dimensionally
+        // inconsistent for any other channel length.
         let clm_factor = if vds_eff > vdsat && self.clm1 > 0.0 {
-            1.0 + self.clm1 * (vds_eff - vdsat) / l_eff.max(1e-9) * 1e-6
+            1.0 + self.clm1 * (vds_eff - vdsat)
         } else {
             1.0
         };
@@ -463,8 +469,9 @@ impl HisimModel {
             // Linear region: dG/dVds = 1 - Vds/Vdsat.
             (1.0 - vds_star / vdsat).max(0.0)
         } else {
-            // Saturation: nearly flat in Vds (CLM gives a small slope).
-            self.clm1 / l_eff.max(1e-9) * 1e-6 * vdsat * onsat
+            // Saturation: nearly flat in Vds (CLM gives a small slope). See
+            // clm_factor above for the matching scaling rationale.
+            self.clm1 * vdsat * onsat
         };
         // F = (W/L)·μ·Qi·fgate (mobility degradation absorbed into μ_eff)
         let f_factor = (w / l_eff) * mu0_m2 * fgate * qi_src;
