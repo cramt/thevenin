@@ -25,11 +25,11 @@ Rload out 0 1k
     let circuit = &circuits[0];
 
     // Count resistors and capacitors that came from the URC expansion
-    // (names start with `U1:`).
+    // (names start with `__urc__U1__`).
     let mut urc_resistors = 0usize;
     let mut urc_capacitors = 0usize;
     for elem in &circuit.elements {
-        if elem.name.starts_with("U1:") {
+        if elem.name.starts_with("__urc__U1__") {
             match elem.kind {
                 cirq_ir::ElementKind::Resistor => urc_resistors += 1,
                 cirq_ir::ElementKind::Capacitor => urc_capacitors += 1,
@@ -60,7 +60,9 @@ Rload out 0 1k
     let urc_resistors = circuit
         .elements
         .iter()
-        .filter(|e| e.name.starts_with("U1:") && matches!(e.kind, cirq_ir::ElementKind::Resistor))
+        .filter(|e| {
+            e.name.starts_with("__urc__U1__") && matches!(e.kind, cirq_ir::ElementKind::Resistor)
+        })
         .count();
     assert_eq!(urc_resistors, 6);
 
@@ -69,14 +71,16 @@ Rload out 0 1k
     let urc_caps = circuit
         .elements
         .iter()
-        .filter(|e| e.name.starts_with("U1:") && matches!(e.kind, cirq_ir::ElementKind::Capacitor))
+        .filter(|e| {
+            e.name.starts_with("__urc__U1__") && matches!(e.kind, cirq_ir::ElementKind::Capacitor)
+        })
         .count();
     assert_eq!(urc_caps, 0);
 
     let synthesised_model = circuit
         .models
         .iter()
-        .find(|m| m.name == "U1:diomod")
+        .find(|m| m.name == "__urc__U1__dio")
         .expect("URC should synthesise a diode model when ISPERL > 0");
     assert!(matches!(
         synthesised_model.device_type,
@@ -100,7 +104,9 @@ Rload out 0 1k
     let urc_resistors = circuit
         .elements
         .iter()
-        .filter(|e| e.name.starts_with("U1:") && matches!(e.kind, cirq_ir::ElementKind::Resistor))
+        .filter(|e| {
+            e.name.starts_with("__urc__U1__") && matches!(e.kind, cirq_ir::ElementKind::Resistor)
+        })
         .count();
     // 2 R per lump, minimum 3 lumps → ≥ 6 R.
     assert!(

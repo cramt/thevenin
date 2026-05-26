@@ -1038,7 +1038,16 @@ fn expand_urc(
 
     // Diode model — synthesised once if needed. Captured by reference into
     // each diode element's `model` field.
-    let diode_model_name = format!("{name}:diomod");
+    //
+    // URC expansion synthesises internal nodes (the per-lump `lo`/`hi`
+    // taps) and a diode model name. Earlier revisions used `{name}:lo{i}`
+    // — a colon-separated form that can legally appear in user-supplied
+    // netlists, so a user node literally named `u1:lo1` would silently
+    // merge with the URC-synthesised one inside `NetTable::intern`. The
+    // `__urc__` double-underscore prefix and segment marker is reserved
+    // for URC-internal use and is exceedingly unlikely to clash with a
+    // hand-written node name.
+    let diode_model_name = format!("__urc__{name}__dio");
     let has_diodes = is_per_l > 0.0;
 
     let mut out: Vec<thevenin_types::Element> = Vec::with_capacity(4 * lumps + 1);
@@ -1047,7 +1056,7 @@ fn expand_urc(
     // importer's later model-table pass picks it up.
     if has_diodes {
         out.push(thevenin_types::Element {
-            name: format!("{name}:dummy_for_model"),
+            name: format!("__urc__{name}__dummy_for_model"),
             kind: SpiceElementKind::Raw(format!(
                 "0 0 0 ; URC synthesised diode model `{}` follows separately as .model {} D (IS={} CJO={} RS={})",
                 diode_model_name, diode_model_name, i1, c1, rd,
@@ -1058,8 +1067,8 @@ fn expand_urc(
     let mut lowl = pos.to_string();
     let mut hir = neg.to_string();
     for i in 1..=lumps {
-        let lowr = format!("{name}:lo{i}");
-        let hil = format!("{name}:hi{i}");
+        let lowr = format!("__urc__{name}__lo{i}");
+        let hil = format!("__urc__{name}__hi{i}");
         // At the last lump the two paths meet — lowr collapses to hil.
         let (lowr_node, hil_node) = if i == lumps {
             (hil.clone(), hil.clone())
@@ -1069,7 +1078,7 @@ fn expand_urc(
 
         // Left-path resistor: lowl -> lowr_node
         out.push(thevenin_types::Element {
-            name: format!("{name}:rlo{i}"),
+            name: format!("__urc__{name}__rlo{i}"),
             kind: SpiceElementKind::Resistor {
                 pos: lowl.clone(),
                 neg: lowr_node.clone(),
@@ -1079,7 +1088,7 @@ fn expand_urc(
         });
         // Right-path resistor: hil_node -> hir
         out.push(thevenin_types::Element {
-            name: format!("{name}:rhi{i}"),
+            name: format!("__urc__{name}__rhi{i}"),
             kind: SpiceElementKind::Resistor {
                 pos: hil_node.clone(),
                 neg: hir.clone(),
@@ -1092,12 +1101,12 @@ fn expand_urc(
         // diode (with cjo + rs + is from the model's RC/IS per length).
         if has_diodes {
             out.push(thevenin_types::Element {
-                name: format!("{name}:dlo{i}"),
+                name: format!("__urc__{name}__dlo{i}"),
                 kind: SpiceElementKind::Raw(format!("{lowr_node} {gnd} {diode_model_name} 1.0")),
             });
         } else {
             out.push(thevenin_types::Element {
-                name: format!("{name}:clo{i}"),
+                name: format!("__urc__{name}__clo{i}"),
                 kind: SpiceElementKind::Capacitor {
                     pos: lowr_node.clone(),
                     neg: gnd.to_string(),
@@ -1112,12 +1121,12 @@ fn expand_urc(
         if i != lumps {
             if has_diodes {
                 out.push(thevenin_types::Element {
-                    name: format!("{name}:dhi{i}"),
+                    name: format!("__urc__{name}__dhi{i}"),
                     kind: SpiceElementKind::Raw(format!("{hil_node} {gnd} {diode_model_name} 1.0")),
                 });
             } else {
                 out.push(thevenin_types::Element {
-                    name: format!("{name}:chi{i}"),
+                    name: format!("__urc__{name}__chi{i}"),
                     kind: SpiceElementKind::Capacitor {
                         pos: hil_node.clone(),
                         neg: gnd.to_string(),
@@ -1226,7 +1235,7 @@ fn expand_urc_in_netlist(netlist: &Netlist) -> Netlist {
                             / (k.powf(n_f - 1.0) * (k + 1.0) - 2.0);
                         let rd = length_v * n_f * rs_per_l;
                         let _ = i1; // shadow
-                        let dio_name = format!("{}:diomod", e.name);
+                        let dio_name = format!("__urc__{}__dio", e.name);
                         synth_diode_models.push(Item::Model(thevenin_types::ModelDef {
                             name: dio_name,
                             kind: "D".to_string(),
@@ -1251,7 +1260,7 @@ fn expand_urc_in_netlist(netlist: &Netlist) -> Netlist {
                         // — its sole purpose is to carry the diode-model
                         // hint, and we've already emitted a real .model
                         // item for it above.
-                        if el.name.ends_with(":dummy_for_model") {
+                        if el.name.ends_with("__dummy_for_model") {
                             continue;
                         }
                         new_items.push(Item::Element(el));
