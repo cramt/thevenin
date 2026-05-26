@@ -196,7 +196,10 @@ fn plotname_for(plot_name: &str) -> &'static str {
         "pz" => "Pole-Zero Analysis",
         "tf" => "Transfer Function",
         "sens" => "Sensitivity Analysis",
-        _ => "Operating Point",
+        "four" => "Fourier Analysis",
+        "fft" => "FFT Analysis",
+        "disto" => "Distortion Analysis",
+        _ => "Unknown Analysis",
     }
 }
 
@@ -380,6 +383,10 @@ mod tests {
         assert_eq!(plotname_for("pz1"), "Pole-Zero Analysis");
         assert_eq!(plotname_for("tf1"), "Transfer Function");
         assert_eq!(plotname_for("sens1"), "Sensitivity Analysis");
+        assert_eq!(plotname_for("four1"), "Fourier Analysis");
+        assert_eq!(plotname_for("fft1"), "FFT Analysis");
+        assert_eq!(plotname_for("disto1"), "Distortion Analysis");
+        assert_eq!(plotname_for("xyzzy7"), "Unknown Analysis");
     }
 
     #[test]
