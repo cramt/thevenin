@@ -172,7 +172,51 @@ pub const MAX_LOOP_ITERS: usize = 10_000;
 // ---------------------------------------------------------------------------
 
 /// Parse raw `.control` lines into a list of statements.
+///
+/// The canonical implementation drives `cirq-control-grammar`'s tree-sitter
+/// parser and lowers the resulting CST via [`crate::control_lower`]. Per-
+/// statement body parsing (numbers, SI suffixes, alter vector syntax, set
+/// `key=value` pairs, …) is delegated to the helpers in this module so the
+/// CST path and the legacy line-based path stay byte-identical on the
+/// shapes the executor consumes. The legacy line-based parser is retained
+/// below as [`parse_control_block_line_based`] for fallback when block
+/// terminators are missing (the tree-sitter parser tolerates that, but
+/// existing tests assert specific error messages from the line walker).
 pub fn parse_control_block(lines: &[String]) -> Result<Vec<Statement>, String> {
+    let source = join_lines_for_grammar(lines);
+    let tree = cirq_control_grammar::parse(&source)
+        .ok_or_else(|| "tree-sitter failed to parse .control block".to_string())?;
+
+    // The line-based parser surfaces specific "unterminated <block>" /
+    // "<block> without <thing>" errors that callers (and tests) depend on.
+    // Tree-sitter recovers from these silently, so re-run the line walker
+    // when the CST contains an ERROR or missing-end marker to preserve the
+    // existing diagnostic surface.
+    if tree.root_node().has_error() {
+        return parse_control_block_line_based(lines);
+    }
+
+    crate::control_lower::lower_tree(&tree, &source)
+}
+
+fn join_lines_for_grammar(lines: &[String]) -> String {
+    // Use `\n` so the tree-sitter line-oriented grammar sees real line
+    // breaks. Each input element is one logical line; trailing newlines
+    // inside an element (rare but legal) are preserved.
+    let mut out = String::with_capacity(lines.iter().map(|s| s.len() + 1).sum());
+    for (i, l) in lines.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(l);
+    }
+    out
+}
+
+/// Legacy line-walker used as a fallback for inputs the tree-sitter parser
+/// recovers over (unterminated blocks, etc.) where existing tests assert
+/// specific error messages.
+fn parse_control_block_line_based(lines: &[String]) -> Result<Vec<Statement>, String> {
     let mut stmts = Vec::new();
     let mut iter = lines.iter().enumerate().peekable();
     parse_block(&mut iter, &mut stmts, None)?;
@@ -309,7 +353,7 @@ fn strip_inline_comment(line: &str) -> String {
     result
 }
 
-fn parse_let(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_let(rest: &str) -> Result<Statement, String> {
     // `name = expr`
     if let Some(eq_pos) = rest.find('=') {
         let name = rest[..eq_pos].trim().to_string();
@@ -320,7 +364,7 @@ fn parse_let(rest: &str) -> Result<Statement, String> {
     }
 }
 
-fn parse_echo(rest: &str) -> Vec<EchoFragment> {
+pub(crate) fn parse_echo(rest: &str) -> Vec<EchoFragment> {
     let mut fragments = Vec::new();
     let mut current = String::new();
     let mut chars = rest.chars().peekable();
@@ -428,12 +472,12 @@ fn parse_repeat(rest: &str, iter: &mut LineIter<'_>) -> Result<Statement, String
 /// Whitespace splits the spec list; empty `save` is a no-op (matches
 /// ngspice). Specs are not validated here — downstream consumers parse them
 /// via the existing output-vector parser.
-fn parse_save(rest: &str) -> Statement {
+pub(crate) fn parse_save(rest: &str) -> Statement {
     let specs: Vec<String> = rest.split_whitespace().map(|s| s.to_string()).collect();
     Statement::Save { specs }
 }
 
-fn parse_quit(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_quit(rest: &str) -> Result<Statement, String> {
     if rest.is_empty() {
         Ok(Statement::Quit(Some(0)))
     } else {
@@ -445,7 +489,7 @@ fn parse_quit(rest: &str) -> Result<Statement, String> {
     }
 }
 
-fn parse_set(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_set(rest: &str) -> Result<Statement, String> {
     let mut pairs = Vec::new();
     // Simple parsing: split on whitespace, look for key=value or just key
     let mut remaining = rest;
@@ -486,7 +530,7 @@ fn parse_set(rest: &str) -> Result<Statement, String> {
     Ok(Statement::Set(pairs))
 }
 
-fn parse_define(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_define(rest: &str) -> Result<Statement, String> {
     // `name(arg1,arg2,...) body`
     if let Some(paren_start) = rest.find('(') {
         if let Some(paren_end) = rest.find(')') {
@@ -507,7 +551,7 @@ fn parse_define(rest: &str) -> Result<Statement, String> {
     }
 }
 
-fn parse_compose(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_compose(rest: &str) -> Result<Statement, String> {
     // `name values expr1 expr2 ...`
     // Expressions may contain parentheses (e.g. v(n1), ln(2.7), i(vm2)/i(vm1))
     let parts: Vec<&str> = rest.split_whitespace().collect();
@@ -543,7 +587,7 @@ fn parse_compose(rest: &str) -> Result<Statement, String> {
     Ok(Statement::Compose { name, value_exprs })
 }
 
-fn parse_alter(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_alter(rest: &str) -> Result<Statement, String> {
     // `@device[param] = value` or `@device[param] = [ v1 v2 ... ]`
     if let Some(eq_pos) = rest.find('=') {
         let spec = rest[..eq_pos].trim().to_string();
@@ -562,7 +606,7 @@ fn parse_alter(rest: &str) -> Result<Statement, String> {
     }
 }
 
-fn parse_strcmp(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_strcmp(rest: &str) -> Result<Statement, String> {
     let parts: Vec<&str> = rest.split_whitespace().collect();
     if parts.len() < 3 {
         return Err(format!("strcmp: need result, a, b: {rest}"));
@@ -574,7 +618,7 @@ fn parse_strcmp(rest: &str) -> Result<Statement, String> {
     })
 }
 
-fn parse_print(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_print(rest: &str) -> Result<Statement, String> {
     // Check for `> file` redirect
     let (exprs_str, file) = if let Some(redir_pos) = rest.find('>') {
         let file = rest[redir_pos + 1..].trim().to_string();
@@ -595,7 +639,7 @@ fn parse_print(rest: &str) -> Result<Statement, String> {
 /// treated as the filename when it looks like one (contains `.` or `/`,
 /// or has no parens / no `$`); otherwise it's part of the vector list and
 /// the default filename `thevenin.raw` is used.
-fn parse_write(rest: &str) -> Statement {
+pub(crate) fn parse_write(rest: &str) -> Statement {
     let parts: Vec<&str> = rest.split_whitespace().collect();
     if parts.is_empty() {
         return Statement::Write {
@@ -622,7 +666,7 @@ fn parse_write(rest: &str) -> Statement {
 /// Parse `stop when <condition>`. Only `stop when time = <value>` is supported
 /// today (the form `regression/misc/resume-1.cir` uses); other conditions
 /// return an error so the failure is loud rather than silently ignored.
-fn parse_stop(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_stop(rest: &str) -> Result<Statement, String> {
     let rest = rest.trim();
     let lower = rest.to_lowercase();
     let after_when = lower
@@ -664,7 +708,7 @@ fn parse_stop(rest: &str) -> Result<Statement, String> {
 /// Parse `source <filename>`. Strips surrounding double-quotes, errors if no
 /// filename is given. The executor performs the actual file lookup, parse,
 /// and recursion-guard check at run time.
-fn parse_source(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_source(rest: &str) -> Result<Statement, String> {
     let path = rest.trim();
     if path.is_empty() {
         return Err("source: missing filename".to_string());
@@ -682,7 +726,7 @@ fn parse_source(rest: &str) -> Result<Statement, String> {
 /// measurement's result name; the remaining tokens form the spec body, which
 /// is delegated to [`crate::MeasureSpec::parse`] at execution time. The
 /// executor evaluates the resulting `MeasureExpr` against the current plot.
-fn parse_measure(rest: &str) -> Result<Statement, String> {
+pub(crate) fn parse_measure(rest: &str) -> Result<Statement, String> {
     let mut iter = rest.split_whitespace();
     let analysis_type = iter
         .next()

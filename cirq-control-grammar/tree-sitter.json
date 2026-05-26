@@ -1,0 +1,15 @@
+{
+  "grammars": [
+    {
+      "name": "control",
+      "camelcase": "Control",
+      "scope": "source.control",
+      "path": ".",
+      "file-types": ["control", "cs"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "BSD-3-Clause"
+  }
+}

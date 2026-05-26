@@ -8,4 +8,6 @@ repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
 cirq-ast = { path = "../cirq-ast", version = "0.1.0" }
+cirq-control-grammar = { path = "../cirq-control-grammar", version = "0.1.0" }
 thiserror.workspace = true
+tree-sitter = "0.25"

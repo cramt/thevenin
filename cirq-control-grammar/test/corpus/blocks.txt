@@ -1,0 +1,139 @@
+================================================================================
+while with decrement
+================================================================================
+
+let k = 5
+while k > 0
+  let k = k - 1
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt name: (identifier) value: (number_literal))
+  (while_stmt
+    condition: (binary_expression
+      left: (identifier)
+      right: (number_literal))
+    body: (block
+      (let_stmt
+        name: (identifier)
+        value: (binary_expression
+          left: (identifier)
+          right: (number_literal))))))
+
+================================================================================
+repeat fixed count
+================================================================================
+
+let count = 0
+repeat 3
+  let count = count + 1
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt name: (identifier) value: (number_literal))
+  (repeat_stmt
+    count: (number_literal)
+    body: (block
+      (let_stmt
+        name: (identifier)
+        value: (binary_expression
+          left: (identifier)
+          right: (number_literal))))))
+
+================================================================================
+if with else
+================================================================================
+
+if x > 0
+  echo positive
+else
+  echo non-positive
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (if_stmt
+    condition: (binary_expression
+      left: (identifier)
+      right: (number_literal))
+    body: (block
+      (echo_stmt
+        (echo_word)))
+    else_body: (block
+      (echo_stmt
+        (echo_word)))))
+
+================================================================================
+if without else
+================================================================================
+
+if k
+  let count = count + 1
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (if_stmt
+    condition: (identifier)
+    body: (block
+      (let_stmt
+        name: (identifier)
+        value: (binary_expression
+          left: (identifier)
+          right: (number_literal))))))
+
+================================================================================
+foreach over numbers
+================================================================================
+
+foreach v 1 2 3 4
+  echo $v
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (foreach_stmt
+    var: (identifier)
+    values: (number_literal)
+    values: (number_literal)
+    values: (number_literal)
+    values: (number_literal)
+    body: (block
+      (echo_stmt
+        (var_ref name: (var_name))))))
+
+================================================================================
+nested while inside if
+================================================================================
+
+if k > 0
+  while k > 0
+    let k = k - 1
+  end
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (if_stmt
+    condition: (binary_expression
+      left: (identifier)
+      right: (number_literal))
+    body: (block
+      (while_stmt
+        condition: (binary_expression
+          left: (identifier)
+          right: (number_literal))
+        body: (block
+          (let_stmt
+            name: (identifier)
+            value: (binary_expression
+              left: (identifier)
+              right: (number_literal))))))))

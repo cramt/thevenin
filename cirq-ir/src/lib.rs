@@ -5,6 +5,7 @@
 //! (simulator adapter, linting, formatting) should work from this representation.
 
 pub mod control;
+mod control_lower;
 
 /// Unique identifier for IR nodes (nets, elements, modules, etc.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

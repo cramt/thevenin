@@ -1,0 +1,55 @@
+================================================================================
+star comment lines
+================================================================================
+
+* this is a comment
+op
+* another comment
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_comment)
+  (run_analysis)
+  (line_comment))
+
+================================================================================
+inline dollar comment
+================================================================================
+
+let x = 1 $ inline comment
+echo $x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt
+    name: (identifier)
+    value: (number_literal)
+    (inline_comment))
+  (echo_stmt
+    (var_ref name: (var_name))))
+
+================================================================================
+indented star is comment
+================================================================================
+
+while k > 0
+  * inner } comment with junk
+  let k = k - 1
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (while_stmt
+    condition: (binary_expression
+      left: (identifier)
+      right: (number_literal))
+    (line_comment)
+    body: (block
+      (let_stmt
+        name: (identifier)
+        value: (binary_expression
+          left: (identifier)
+          right: (number_literal))))))

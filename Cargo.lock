@@ -158,6 +158,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cirq-control-grammar"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "tree-sitter",
+]
+
+[[package]]
 name = "cirq-frontend"
 version = "0.1.0"
 dependencies = [
@@ -186,7 +194,9 @@ name = "cirq-ir"
 version = "0.1.0"
 dependencies = [
  "cirq-ast",
+ "cirq-control-grammar",
  "thiserror 2.0.18",
+ "tree-sitter",
 ]
 
 [[package]]

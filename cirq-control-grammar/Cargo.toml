@@ -1,0 +1,13 @@
+[package]
+name = "cirq-control-grammar"
+version = "0.1.0"
+edition = "2024"
+description = "Tree-sitter grammar for the ngspice .control scripting language"
+license = "BSD-3-Clause"
+repository = "https://github.com/cramt/thevenin"
+
+[dependencies]
+tree-sitter = "0.25"
+
+[build-dependencies]
+cc = "1"

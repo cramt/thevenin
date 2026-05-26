@@ -52,6 +52,13 @@
 ((code_decl
   language: (string_literal) @_lang
   body: (code_body) @injection.content)
+ (#eq? @_lang "\"control\"")
+ (#set! injection.language "control")
+ (#set! injection.combined))
+
+((code_decl
+  language: (string_literal) @_lang
+  body: (code_body) @injection.content)
  (#eq? @_lang "\"md\"")
  (#set! injection.language "markdown")
  (#set! injection.combined))
@@ -66,6 +73,6 @@
   body: (code_body) @injection.content)
  (#not-any-of? @injection.language
    "\"js\"" "\"jsx\"" "\"ts\"" "\"tsx\""
-   "\"py\"" "\"rs\"" "\"sh\"" "\"md\"")
+   "\"py\"" "\"rs\"" "\"sh\"" "\"md\"" "\"control\"")
  (#offset! @injection.language 0 1 0 -1)
  (#set! injection.combined))

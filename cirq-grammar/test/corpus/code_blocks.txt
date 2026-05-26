@@ -152,3 +152,235 @@ circuit demo {
       (argument_list
         (argument (connection from: (identifier) to: (identifier)))
         (argument (number_literal))))))
+
+================================================================================
+JS line comment hides a closing brace
+================================================================================
+
+circuit demo {
+    code "js" {
+        // this } is not a brace
+        const x = 1;
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))
+
+================================================================================
+JS block comment hides braces and slashes
+================================================================================
+
+circuit demo {
+    code "js" {
+        /* a } b /* still not closing */ const x = 1;
+        /*
+         * multi-line }
+         * with stars and } braces
+         */
+        const y = 2;
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))
+
+================================================================================
+JS template literal with interpolation and braces
+================================================================================
+
+circuit demo {
+    code "js" {
+        const tpl = `hello ${name} and ${{ a: 1, b: 2 }} world`;
+        const nested = `outer ${`inner ${x}`} end`;
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))
+
+================================================================================
+JS private fields are not line comments
+================================================================================
+
+circuit demo {
+    code "js" {
+        class Counter {
+            #count = 0;
+            #step;
+            inc() { this.#count++; }
+        }
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))
+
+================================================================================
+Bash hash line comment hides a closing brace
+================================================================================
+
+circuit demo {
+    code "bash" {
+        # this } is not a brace either
+        echo hi
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))
+
+================================================================================
+Bash shebang and indented hash comment
+================================================================================
+
+circuit demo {
+    code "bash" {
+        #!/usr/bin/env bash
+        set -e
+            # indented } comment
+        echo "actual} string"
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))
+
+================================================================================
+Control star line comment hides a closing brace
+================================================================================
+
+circuit demo {
+    code "control" {
+        * this } is a control-language comment
+        op
+        let gain = v(out) / v(in)
+        echo "gain = $&gain"
+        quit 0
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))
+
+================================================================================
+Control with indented star and while loop
+================================================================================
+
+circuit demo {
+    code "control" {
+        let k = 5
+        while k > 0
+          * inner } comment
+          let k = k - 1
+        end
+        quit 0
+    }
+    R1: resistor(a -> b, 1k)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (code_decl
+      language: (string_literal)
+      body: (code_body))
+    (element_inst
+      name: (identifier)
+      type: (identifier)
+      (argument_list
+        (argument (connection from: (identifier) to: (identifier)))
+        (argument (number_literal))))))

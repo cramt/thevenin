@@ -1,0 +1,124 @@
+================================================================================
+operator precedence — mul before add
+================================================================================
+
+let x = 1 + 2 * 3
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt
+    name: (identifier)
+    value: (binary_expression
+      left: (number_literal)
+      right: (binary_expression
+        left: (number_literal)
+        right: (number_literal)))))
+
+================================================================================
+exponentiation right-associative
+================================================================================
+
+let x = 2 ^ 3 ^ 4
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt
+    name: (identifier)
+    value: (binary_expression
+      left: (number_literal)
+      right: (binary_expression
+        left: (number_literal)
+        right: (number_literal)))))
+
+================================================================================
+dotted element-wise multiplication
+================================================================================
+
+let sq = v(out) .* v(out)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt
+    name: (identifier)
+    value: (binary_expression
+      left: (vector_ref node: (identifier))
+      right: (vector_ref node: (identifier)))))
+
+================================================================================
+range indexing
+================================================================================
+
+let slice = vout[1:3]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt
+    name: (identifier)
+    value: (range_expression
+      value: (identifier)
+      start: (number_literal)
+      end: (number_literal))))
+
+================================================================================
+single-index expression
+================================================================================
+
+let last = vout[7]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt
+    name: (identifier)
+    value: (indexed_expression
+      value: (identifier)
+      index: (number_literal))))
+
+================================================================================
+function call
+================================================================================
+
+let y = sqrt(2)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt
+    name: (identifier)
+    value: (call_expression
+      function: (identifier)
+      (number_literal))))
+
+================================================================================
+SPICE numbers with SI suffixes
+================================================================================
+
+let r = 4k
+let c = 100u
+let l = 5n
+let big = 1Meg
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt name: (identifier) value: (number_literal))
+  (let_stmt name: (identifier) value: (number_literal))
+  (let_stmt name: (identifier) value: (number_literal))
+  (let_stmt name: (identifier) value: (number_literal)))
+
+================================================================================
+device-param query
+================================================================================
+
+let val = @r1[value]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_stmt
+    name: (identifier)
+    value: (device_param)))

@@ -8,6 +8,7 @@ members = [
     "cirq-ast",
     "cirq-ir",
     "cirq-grammar",
+    "cirq-control-grammar",
     "cirq-frontend",
     "cirq-spice-import",
     "thevenin-cirq",

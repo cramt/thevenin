@@ -1,0 +1,43 @@
+{
+  "name": "tree-sitter-control",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the ngspice .control scripting language",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cramt/thevenin.git",
+    "directory": "cirq-control-grammar"
+  },
+  "license": "BSD-3-Clause",
+  "main": "bindings/node",
+  "types": "bindings/node",
+  "keywords": [
+    "incremental",
+    "parsing",
+    "tree-sitter",
+    "ngspice",
+    "control",
+    "spice"
+  ],
+  "files": [
+    "grammar.js",
+    "queries/*",
+    "src/**",
+    "*.wasm"
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.0"
+  },
+  "peerDependencies": {
+    "tree-sitter": "^0.25.0"
+  },
+  "peerDependenciesMeta": {
+    "tree-sitter": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "tree-sitter generate",
+    "test": "tree-sitter test",
+    "parse": "tree-sitter parse"
+  }
+}
