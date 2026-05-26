@@ -104,10 +104,12 @@ pub fn four_analysis(
         return Err(FourierError::TooShortForFundamental { fundamental });
     }
 
-    // ngspice samples 10 points per harmonic. Match that heuristic so the
-    // DFT has comfortable resolution for high-order harmonics.
+    // ngspice (`fourier.c`) uses a fixed grid of 200 points per period for
+    // the DFT regardless of harmonic count. Match the reference so spectral
+    // leakage from linear interpolation stays at the same level (≈0.1%) and
+    // the `format_four_table` "Gridsize" line is honest.
     let samples_per_harmonic = 10usize;
-    let min_samples = 100usize;
+    let min_samples = 200usize;
     let n = (num_harmonics * samples_per_harmonic).max(min_samples);
 
     let mut results = Vec::with_capacity(vector_names.len());
@@ -254,6 +256,8 @@ pub fn fft_analysis(plot: &SimPlot, opts: &FftOptions) -> Result<Vec<FftResult>,
     }
     let n = opts.npoints.next_power_of_two();
 
+    let gain = window_coherent_gain(opts.window);
+    let inv_gain = if gain > 0.0 { 1.0 / gain } else { 1.0 };
     let mut results = Vec::with_capacity(opts.vectors.len());
     for name in &opts.vectors {
         let signal = real_vector(plot, name)?;
@@ -264,7 +268,13 @@ pub fn fft_analysis(plot: &SimPlot, opts: &FftOptions) -> Result<Vec<FftResult>,
         let dt = (t1 - t0) / (n as f64 - 1.0);
         let df = 1.0 / (dt * n as f64);
         let frequencies = (0..half).map(|k| k as f64 * df).collect();
-        let values = spectrum[..half].to_vec();
+        // Compensate for the window's coherent gain so a full-scale sine reads
+        // a window-independent peak. Matches ngspice fft.c, which divides the
+        // raw DFT bins by the sum of the window coefficients before display.
+        let values: Vec<Complex> = spectrum[..half]
+            .iter()
+            .map(|c| Complex::new(c.re * inv_gain, c.im * inv_gain))
+            .collect();
         results.push(FftResult {
             vector: name.clone(),
             frequencies,
@@ -275,6 +285,19 @@ pub fn fft_analysis(plot: &SimPlot, opts: &FftOptions) -> Result<Vec<FftResult>,
         });
     }
     Ok(results)
+}
+
+/// Coherent gain (mean value) of an `n`→∞ window. Matches the per-window
+/// `sum(w)/N` limit and is used by `fft_analysis` to compensate the spectrum
+/// so the reported peak does not depend on the window choice.
+fn window_coherent_gain(window: FftWindow) -> f64 {
+    match window {
+        FftWindow::Rectangular => 1.0,
+        FftWindow::Hann => 0.5,
+        FftWindow::Hamming => 0.54,
+        FftWindow::Blackman => 0.42,
+        FftWindow::Bartlett => 0.5,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -342,10 +365,19 @@ fn real_vector<'a>(plot: &'a SimPlot, name: &str) -> Result<&'a [f64], FourierEr
 /// distortion finer than ~5% on real-world circuits. A future
 /// cubic-spline or sinc resampler would tighten this; tracked as a
 /// post-1.0 follow-up.
-pub fn resample_uniform(times: &[f64], values: &[f64], t0: f64, t1: f64, n: usize) -> Vec<f64> {
-    assert_eq!(times.len(), values.len(), "time/value length mismatch");
-    assert!(times.len() >= 2, "need at least 2 sample points");
-    assert!(n >= 1, "need at least 1 output point");
+pub(crate) fn resample_uniform(
+    times: &[f64],
+    values: &[f64],
+    t0: f64,
+    t1: f64,
+    n: usize,
+) -> Vec<f64> {
+    debug_assert_eq!(times.len(), values.len(), "time/value length mismatch");
+    debug_assert!(times.len() >= 2, "need at least 2 sample points");
+    debug_assert!(n >= 1, "need at least 1 output point");
+    if times.len() < 2 || times.len() != values.len() || n == 0 {
+        return Vec::new();
+    }
 
     let mut out = Vec::with_capacity(n);
     let step = if n == 1 {
@@ -384,9 +416,12 @@ pub fn resample_uniform(times: &[f64], values: &[f64], t0: f64, t1: f64, n: usiz
 /// Returns a complex vector of the same length (full spectrum). For
 /// real-valued inputs the output is conjugate-symmetric; callers can
 /// safely keep only the first `n/2 + 1` bins.
-pub fn fft_radix2(samples: &[f64]) -> Vec<Complex> {
+pub(crate) fn fft_radix2(samples: &[f64]) -> Vec<Complex> {
     let n = samples.len();
-    assert!(n.is_power_of_two(), "FFT requires power-of-two length");
+    debug_assert!(n.is_power_of_two(), "FFT requires power-of-two length");
+    if !n.is_power_of_two() {
+        return Vec::new();
+    }
     let mut buf: Vec<Complex> = samples.iter().map(|&x| Complex::new(x, 0.0)).collect();
     fft_in_place(&mut buf, /* inverse */ false);
     buf
@@ -517,21 +552,23 @@ mod tests {
         let results = four_analysis(&plot, freq, &["v(out)"], 9).unwrap();
         assert_eq!(results.len(), 1);
         let r = &results[0];
+        // With min_samples=200 (ngspice-matching grid), interpolation leakage
+        // for a pure sine is well under 1%.
         assert!((r.dc).abs() < 1e-2, "dc = {}", r.dc);
         assert!(
-            (r.harmonics[0].magnitude - 1.0).abs() < 5e-2,
+            (r.harmonics[0].magnitude - 1.0).abs() < 1e-2,
             "fundamental mag = {}",
             r.harmonics[0].magnitude
         );
         for h in &r.harmonics[1..] {
             assert!(
-                h.magnitude < 5e-2,
+                h.magnitude < 1e-2,
                 "harmonic {} mag = {}",
                 h.index,
                 h.magnitude
             );
         }
-        assert!(r.thd_percent < 5.0, "thd = {}", r.thd_percent);
+        assert!(r.thd_percent < 1.0, "thd = {}", r.thd_percent);
     }
 
     #[test]
@@ -610,10 +647,11 @@ mod tests {
             .unwrap();
         assert_eq!(peak_idx as i64, bin as i64);
 
-        // Hann reduces amplitude by 0.5 for a coherent cosine.
-        // |X[k]| at the bin ≈ 0.5 * N * 0.5 (half-amplitude) = N/4.
+        // After coherent-gain compensation, |X[k]| at the bin matches the
+        // rectangular-window expectation: 0.5·N·A for a cosine of amplitude A.
+        // With A=1 and N=256 → N/2 = 128.
         let peak_mag = r.values[peak_idx].magnitude();
-        let expected = (n as f64) * 0.25;
+        let expected = (n as f64) * 0.5;
         assert!(
             (peak_mag / expected - 1.0).abs() < 0.1,
             "peak {peak_mag} vs expected {expected}"
