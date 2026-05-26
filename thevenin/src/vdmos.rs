@@ -295,7 +295,11 @@ impl VdmosModel {
 
         // mtr scales Vds in the triode boundary check (vdmosload.c:364).
         let vdss = vds_eff * self.mtr;
-        let t0 = 1.0 + self.lambda * vds_eff;
+        // ngspice vdmosload.c:365 uses the raw signed `vds` here (not the
+        // magnitude `vds_eff`). In reversed-mode body-diode conduction with
+        // a non-zero LAMBDA, ngspice's t0 < 1 (CLM factor reduced); using
+        // `vds_eff` would make it > 1 with the opposite sign.
+        let t0 = 1.0 + self.lambda * vds;
         let t1 = 1.0 + self.theta * vdsat;
         let beta = self.kp;
         let betap = beta * t0 / t1;
