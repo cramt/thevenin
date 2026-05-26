@@ -32,6 +32,7 @@ use crate::mna_ir;
 
 /// Errors that can occur when simulating a [`Circuit`] directly.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CircuitSimError {
     #[error("failed to lower Cirq IR to Netlist: {0}")]
     Convert(#[from] ConvertError),
