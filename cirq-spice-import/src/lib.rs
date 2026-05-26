@@ -356,25 +356,74 @@ fn parse_ternary(
     params: &HashMap<String, f64>,
 ) -> Result<f64, ImportError> {
     let cond = parse_comparison(tokens, pos, params)?;
-    if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::Question) {
-        *pos += 1;
-        // Both branches are still ternary-level so we get right-associativity
-        // (`a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`).
+    if !(*pos < tokens.len() && matches!(&tokens[*pos], ExprToken::Question)) {
+        return Ok(cond);
+    }
+    *pos += 1;
+    // Both branches are still ternary-level so we get right-associativity
+    // (`a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`).
+    //
+    // Short-circuit: evaluate exactly the selected branch and token-skip
+    // the other. ngspice does the same; without this, unresolved-parameter
+    // and unknown-function errors in the dead branch propagate even though
+    // the user never wanted that branch.
+    let cond_truthy = cond != 0.0;
+    let value = if cond_truthy {
         let then_branch = parse_ternary(tokens, pos, params)?;
-        if *pos >= tokens.len() || !matches!(&tokens[*pos], ExprToken::Colon) {
-            return Err(ImportError::UnevaluableExpr(
-                "ternary expression: missing `:`".to_owned(),
-            ));
+        expect_ternary_colon(tokens, pos)?;
+        skip_ternary_expr(tokens, pos);
+        then_branch
+    } else {
+        skip_ternary_expr(tokens, pos);
+        expect_ternary_colon(tokens, pos)?;
+        parse_ternary(tokens, pos, params)?
+    };
+    Ok(value)
+}
+
+fn expect_ternary_colon(tokens: &[ExprToken], pos: &mut usize) -> Result<(), ImportError> {
+    if *pos >= tokens.len() || !matches!(&tokens[*pos], ExprToken::Colon) {
+        return Err(ImportError::UnevaluableExpr(
+            "ternary expression: missing `:`".to_owned(),
+        ));
+    }
+    *pos += 1;
+    Ok(())
+}
+
+/// Advance `pos` past a single ternary-precedence expression *without*
+/// evaluating it. Stops at the first top-level `:`, `,`, or `)`. `(` and
+/// `?` open matched nesting that must close with `)` and `:` before the
+/// outer expression can terminate.
+fn skip_ternary_expr(tokens: &[ExprToken], pos: &mut usize) {
+    let mut paren_depth: i32 = 0;
+    let mut ternary_depth: i32 = 0;
+    while *pos < tokens.len() {
+        match &tokens[*pos] {
+            ExprToken::LParen => paren_depth += 1,
+            ExprToken::RParen => {
+                if paren_depth == 0 {
+                    return;
+                }
+                paren_depth -= 1;
+            }
+            ExprToken::Comma => {
+                if paren_depth == 0 {
+                    return;
+                }
+            }
+            ExprToken::Question => ternary_depth += 1,
+            ExprToken::Colon => {
+                if paren_depth == 0 && ternary_depth == 0 {
+                    return;
+                }
+                if ternary_depth > 0 {
+                    ternary_depth -= 1;
+                }
+            }
+            _ => {}
         }
         *pos += 1;
-        let else_branch = parse_ternary(tokens, pos, params)?;
-        Ok(if cond != 0.0 {
-            then_branch
-        } else {
-            else_branch
-        })
-    } else {
-        Ok(cond)
     }
 }
 
@@ -3984,6 +4033,161 @@ V1 a 0 DC 1
         let params = HashMap::new();
         let result = eval_brace_expr("1 < 0 ? 5 : 10", &params).unwrap();
         assert!((result - 10.0).abs() < 1e-12, "1<0 ? 5 : 10 should be 10");
+    }
+
+    // ----- ternary short-circuit + grammar tests -------------------------
+    //
+    // These pin down the laziness contract for `cond ? then : else` in
+    // SPICE brace expressions: exactly the selected branch is evaluated.
+    // Errors in the dead branch — unresolved parameters, unknown functions,
+    // function arity mismatches — never reach the caller. This mirrors
+    // ngspice and matches the corresponding `thevenin::expr` tests.
+
+    fn params(pairs: &[(&str, f64)]) -> HashMap<String, f64> {
+        let mut p = HashMap::new();
+        for (k, v) in pairs {
+            p.insert(k.to_uppercase(), *v);
+        }
+        p
+    }
+
+    #[test]
+    fn brace_ternary_skips_unresolved_in_else_branch() {
+        // legacy_mode is 0 → else-branch is taken, the then-branch
+        // `legacy_value` parameter doesn't even need to exist.
+        let p = params(&[("LEGACY_MODE", 0.0), ("MODERN_VALUE", 42.0)]);
+        let v = eval_brace_expr("legacy_mode ? legacy_value : modern_value", &p)
+            .expect("dead then-branch param must not be looked up");
+        assert_eq!(v, 42.0);
+    }
+
+    #[test]
+    fn brace_ternary_skips_unresolved_in_then_branch() {
+        let p = params(&[("USE_LEGACY", 1.0), ("LEGACY_ONLY", 99.0)]);
+        let v = eval_brace_expr("use_legacy ? legacy_only : unresolved_else", &p)
+            .expect("dead else-branch unresolved param must not be looked up");
+        assert_eq!(v, 99.0);
+    }
+
+    #[test]
+    fn brace_ternary_skips_unknown_function_in_dead_branch() {
+        let p = params(&[]);
+        let v = eval_brace_expr("1 ? 42 : nonexistent_func(1, 2)", &p)
+            .expect("dead-branch unknown function must not propagate");
+        assert_eq!(v, 42.0);
+    }
+
+    #[test]
+    fn brace_ternary_propagates_error_in_selected_branch() {
+        // Sanity check: a real error in the selected branch must still
+        // surface — otherwise the "skip" logic could be silently swallowing
+        // user mistakes.
+        let p = params(&[]);
+        let err = eval_brace_expr("1 ? unresolved_param : 0", &p).unwrap_err();
+        assert!(
+            matches!(err, ImportError::UnevaluableExpr(ref msg) if msg.contains("unresolved_param")),
+            "selected-branch error must surface, got: {err:?}"
+        );
+
+        let err = eval_brace_expr("0 ? 0 : also_unresolved", &p).unwrap_err();
+        assert!(
+            matches!(err, ImportError::UnevaluableExpr(ref msg) if msg.contains("also_unresolved")),
+            "selected-branch error must surface, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn brace_ternary_safe_sqrt_guard() {
+        // Canonical short-circuit motivation: keep `sqrt` away from
+        // negative inputs through a guard expression.
+        let p = params(&[("X", 4.0)]);
+        let v = eval_brace_expr("x > 0 ? sqrt(x) : 0", &p).unwrap();
+        assert!((v - 2.0).abs() < 1e-12);
+
+        let p = params(&[("X", -1.0)]);
+        let v = eval_brace_expr("x > 0 ? sqrt(x) : 0", &p).unwrap();
+        assert_eq!(v, 0.0, "negative x → guard branch wins, sqrt never called");
+    }
+
+    #[test]
+    fn brace_ternary_right_associative_chain() {
+        // `a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`. The chain
+        // pattern is the SPICE idiom for piecewise constants.
+        let p = params(&[]);
+        assert_eq!(eval_brace_expr("0 ? 10 : 1 ? 20 : 30", &p).unwrap(), 20.0);
+        assert_eq!(eval_brace_expr("0 ? 10 : 0 ? 20 : 30", &p).unwrap(), 30.0);
+        assert_eq!(eval_brace_expr("1 ? 10 : 0 ? 20 : 30", &p).unwrap(), 10.0);
+        // Right-associativity must also short-circuit past unresolved
+        // names anywhere except the eventually-taken branch.
+        let v = eval_brace_expr("0 ? 10 : 0 ? unresolved : 30", &p)
+            .expect("right-associative chain must skip past dead unresolved branch");
+        assert_eq!(v, 30.0);
+    }
+
+    #[test]
+    fn brace_ternary_nested_in_then() {
+        let p = params(&[]);
+        assert_eq!(eval_brace_expr("1 ? (1 ? 10 : 20) : 30", &p).unwrap(), 10.0);
+        assert_eq!(eval_brace_expr("1 ? (0 ? 10 : 20) : 30", &p).unwrap(), 20.0);
+        assert_eq!(eval_brace_expr("0 ? (1 ? 10 : 20) : 30", &p).unwrap(), 30.0);
+        // Outer else skips the entire inner ternary, including unresolved
+        // refs deep inside.
+        let v = eval_brace_expr("0 ? (1 ? 10 : unresolved) : 30", &p)
+            .expect("outer-else must skip nested inner-ternary unresolved refs");
+        assert_eq!(v, 30.0);
+    }
+
+    #[test]
+    fn brace_ternary_inside_arithmetic() {
+        let p = params(&[]);
+        assert_eq!(eval_brace_expr("1 + (1 ? 10 : 20)", &p).unwrap(), 11.0);
+        assert_eq!(eval_brace_expr("(0 ? 10 : 20) * 3", &p).unwrap(), 60.0);
+        // Dead branch inside parenthesised ternary must still be skipped.
+        let v = eval_brace_expr("(0 ? unresolved : 5) + 1", &p)
+            .expect("ternary skip inside parens must work");
+        assert_eq!(v, 6.0);
+    }
+
+    #[test]
+    fn brace_ternary_inside_function_args() {
+        let p = params(&[]);
+        assert_eq!(eval_brace_expr("min(1 ? 3 : 7, 5)", &p).unwrap(), 3.0);
+        assert_eq!(eval_brace_expr("min(0 ? 3 : 7, 5)", &p).unwrap(), 5.0);
+        assert_eq!(eval_brace_expr("max(1 ? 3 : 7, 5)", &p).unwrap(), 5.0);
+        // Comma must remain a function-arg separator while skipping.
+        let v = eval_brace_expr("min(0 ? unresolved : 4, 9)", &p)
+            .expect("ternary skip must respect function-arg commas");
+        assert_eq!(v, 4.0);
+    }
+
+    #[test]
+    fn brace_ternary_with_chained_clamp() {
+        // The canonical 3-way clamp idiom.
+        let p = params(&[("X", -5.0)]);
+        assert_eq!(
+            eval_brace_expr("x < 0 ? 0 : x > 10 ? 10 : x", &p).unwrap(),
+            0.0
+        );
+        let p = params(&[("X", 5.0)]);
+        assert_eq!(
+            eval_brace_expr("x < 0 ? 0 : x > 10 ? 10 : x", &p).unwrap(),
+            5.0
+        );
+        let p = params(&[("X", 99.0)]);
+        assert_eq!(
+            eval_brace_expr("x < 0 ? 0 : x > 10 ? 10 : x", &p).unwrap(),
+            10.0
+        );
+    }
+
+    #[test]
+    fn brace_ternary_missing_colon_is_an_error() {
+        let p = params(&[]);
+        let err = eval_brace_expr("1 ? 10", &p).unwrap_err();
+        assert!(
+            matches!(err, ImportError::UnevaluableExpr(ref msg) if msg.contains(":")),
+            "missing colon must surface a clear error, got: {err:?}"
+        );
     }
 
     #[test]

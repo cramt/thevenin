@@ -320,21 +320,84 @@ fn is_unary_context(tokens: &[Token], pos: usize) -> bool {
 }
 
 // Precedence 1 (lowest): ternary ? :
+//
+// ngspice's expression engine evaluates `cond ? then : else` lazily — only
+// the selected branch is evaluated. We do the same: evaluate `cond`, then
+// evaluate exactly one of `then` / `else` while token-skipping the other.
+//
+// This matters in practice for guard patterns like
+//   `vpb > 0 ? sqrt(vpb) : 0`
+//   `legacy_mode ? legacy_param : modern_value`
+// where the unselected branch would otherwise produce NaN, an error from
+// an unresolved parameter, or a wrong-arity function call.
 fn parse_ternary(tokens: &[Token], pos: &mut usize, ctx: &EvalContext) -> Result<f64, ExprError> {
     let cond = parse_or(tokens, pos, ctx)?;
-    if matches!(peek(tokens, *pos), Some(Token::Question)) {
-        *pos += 1;
+    if !matches!(peek(tokens, *pos), Some(Token::Question)) {
+        return Ok(cond);
+    }
+    *pos += 1;
+    let cond_truthy = cond != 0.0;
+    let value = if cond_truthy {
         let then_val = parse_ternary(tokens, pos, ctx)?;
-        if !matches!(peek(tokens, *pos), Some(Token::Colon)) {
-            return Err(ExprError::ParseError(
-                "expected ':' in ternary expression".into(),
-            ));
+        expect_colon(tokens, pos)?;
+        skip_ternary(tokens, pos);
+        then_val
+    } else {
+        skip_ternary(tokens, pos);
+        expect_colon(tokens, pos)?;
+        parse_ternary(tokens, pos, ctx)?
+    };
+    Ok(value)
+}
+
+fn expect_colon(tokens: &[Token], pos: &mut usize) -> Result<(), ExprError> {
+    if !matches!(peek(tokens, *pos), Some(Token::Colon)) {
+        return Err(ExprError::ParseError(
+            "expected ':' in ternary expression".into(),
+        ));
+    }
+    *pos += 1;
+    Ok(())
+}
+
+/// Advance `pos` past a single ternary-precedence expression *without*
+/// evaluating it. Used to skip the unselected branch of a ternary so
+/// unresolved parameters, unknown functions, and other evaluation errors
+/// in the dead branch never reach the caller.
+///
+/// Stops at the first top-level `:`, `,`, or `)` — i.e. tokens that can
+/// only legally terminate an expression at this level. `(` and `?` open
+/// matched nesting; the corresponding `)` / `:` close that nesting before
+/// they would terminate the outer expression.
+fn skip_ternary(tokens: &[Token], pos: &mut usize) {
+    let mut paren_depth: i32 = 0;
+    let mut ternary_depth: i32 = 0;
+    while *pos < tokens.len() {
+        match &tokens[*pos] {
+            Token::Lparen => paren_depth += 1,
+            Token::Rparen => {
+                if paren_depth == 0 {
+                    return;
+                }
+                paren_depth -= 1;
+            }
+            Token::Comma => {
+                if paren_depth == 0 {
+                    return;
+                }
+            }
+            Token::Question => ternary_depth += 1,
+            Token::Colon => {
+                if paren_depth == 0 && ternary_depth == 0 {
+                    return;
+                }
+                if ternary_depth > 0 {
+                    ternary_depth -= 1;
+                }
+            }
+            _ => {}
         }
         *pos += 1;
-        let else_val = parse_ternary(tokens, pos, ctx)?;
-        Ok(if cond != 0.0 { then_val } else { else_val })
-    } else {
-        Ok(cond)
     }
 }
 
@@ -1365,6 +1428,195 @@ mod tests {
     fn ternary() {
         assert_eq!(eval("1 ? 10 : 20"), 10.0);
         assert_eq!(eval("0 ? 10 : 20"), 20.0);
+    }
+
+    // ----- ternary short-circuit + grammar tests -------------------------
+    //
+    // These pin down the behaviour the SPICE expression engine promises to
+    // users writing `cond ? then : else` guards. Two things matter:
+    //
+    //   1. *Selection* — exactly one branch is evaluated; its value flows
+    //      out, the other's value never does.
+    //   2. *Short-circuit* — errors / NaNs / Infs in the unselected branch
+    //      never reach the caller, just like in ngspice.
+    //
+    // Each test names the property it pins down; together they cover the
+    // patterns the agent reviewer (and ngspice docs) call out as the real
+    // motivation for short-circuit ternary.
+
+    fn try_eval_ctx(s: &str, params: &[(&str, f64)]) -> Result<f64, ExprError> {
+        let mut ctx = EvalContext::default();
+        for &(k, v) in params {
+            ctx.params.insert(k.to_uppercase(), v);
+        }
+        ctx.eval_str(s)
+    }
+
+    #[test]
+    fn ternary_skips_unresolved_param_in_else_branch() {
+        // `legacy_mode ? legacy_value : modern_value` — only modern is
+        // resolved, legacy_value isn't even defined. Because the condition
+        // is false, the else-branch is evaluated and `legacy_value` is
+        // never touched.
+        let v = try_eval_ctx(
+            "legacy_mode ? legacy_value : modern_value",
+            &[("legacy_mode", 0.0), ("modern_value", 42.0)],
+        )
+        .expect("else-branch selected, then-branch reference must not error");
+        assert_eq!(v, 42.0);
+    }
+
+    #[test]
+    fn ternary_skips_unresolved_param_in_then_branch() {
+        let v = try_eval_ctx(
+            "use_legacy ? legacy_only : 7",
+            &[("use_legacy", 1.0), ("legacy_only", 99.0)],
+        )
+        .expect("then-branch resolves cleanly");
+        assert_eq!(v, 99.0);
+        // Symmetric: the else can hold an unresolved name when then is selected.
+        let v = try_eval_ctx("use_legacy ? 11 : unresolved_else", &[("use_legacy", 1.0)])
+            .expect("else-branch with unresolved name is skipped");
+        assert_eq!(v, 11.0);
+    }
+
+    #[test]
+    fn ternary_skips_unknown_function_in_dead_branch() {
+        // `nonexistent_func` would be an UnknownFunction error on eval.
+        // Since the then-branch is taken, the dead else is never run.
+        let v = try_eval_ctx("1 ? 42 : nonexistent_func(1, 2)", &[])
+            .expect("dead-branch unknown function must not propagate");
+        assert_eq!(v, 42.0);
+    }
+
+    #[test]
+    fn ternary_skips_wrong_arity_in_dead_branch() {
+        // `sin(1, 2)` is a real function called with the wrong number of
+        // args — would be a WrongArgCount error on eval. Skipped here.
+        let v = try_eval_ctx("0 ? sin(1, 2) : 5", &[])
+            .expect("dead-branch arity mismatch must not propagate");
+        assert_eq!(v, 5.0);
+    }
+
+    #[test]
+    fn ternary_does_propagate_error_in_selected_branch() {
+        // Sanity check the symmetric case: errors in the *selected* branch
+        // must still propagate. Without this, the "skip" logic could be
+        // hiding real user mistakes.
+        let err = try_eval_ctx("1 ? unresolved : 0", &[]).unwrap_err();
+        assert!(matches!(err, ExprError::UnknownVariable(ref n) if n == "unresolved"));
+
+        let err = try_eval_ctx("0 ? 0 : unresolved", &[]).unwrap_err();
+        assert!(matches!(err, ExprError::UnknownVariable(ref n) if n == "unresolved"));
+    }
+
+    #[test]
+    fn ternary_classic_safe_sqrt_guard() {
+        // The canonical motivation for short-circuit: a guard that keeps
+        // `sqrt` away from negative inputs. With eager evaluation, the
+        // dead `sqrt(x)` call would produce a NaN that *should* never
+        // matter — but does, if a future Rust `sqrt` ever returns Err on
+        // negatives (or if the guard expression sits inside arithmetic
+        // that propagates NaN downstream).
+        assert_eq!(
+            eval_ctx("x > 0 ? sqrt(x) : 0", &[("x", 4.0)]),
+            2.0,
+            "positive x → sqrt branch taken"
+        );
+        assert_eq!(
+            eval_ctx("x > 0 ? sqrt(x) : 0", &[("x", -1.0)]),
+            0.0,
+            "negative x → guard branch taken, sqrt(-1) never reached"
+        );
+    }
+
+    #[test]
+    fn ternary_right_associative() {
+        // `a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`.
+        assert_eq!(eval("0 ? 10 : 1 ? 20 : 30"), 20.0);
+        assert_eq!(eval("0 ? 10 : 0 ? 20 : 30"), 30.0);
+        assert_eq!(eval("1 ? 10 : 0 ? 20 : 30"), 10.0);
+        // Right-associativity means the chain *also* short-circuits past
+        // unresolved names deeper in the chain.
+        let v = try_eval_ctx("0 ? 10 : 0 ? unresolved : 30", &[])
+            .expect("right-associative chain must skip the unresolved middle branch");
+        assert_eq!(v, 30.0);
+    }
+
+    #[test]
+    fn ternary_nested_in_then_branch() {
+        // `a ? (b ? c : d) : e` — the inner ternary lives entirely inside
+        // the outer then-branch.
+        assert_eq!(eval("1 ? (1 ? 10 : 20) : 30"), 10.0);
+        assert_eq!(eval("1 ? (0 ? 10 : 20) : 30"), 20.0);
+        assert_eq!(eval("0 ? (1 ? 10 : 20) : 30"), 30.0);
+        // And the inner else of the inner ternary can be unresolved when
+        // the outer takes its else.
+        let v = try_eval_ctx("0 ? (1 ? 10 : unresolved) : 30", &[])
+            .expect("outer else skips the entire inner ternary");
+        assert_eq!(v, 30.0);
+    }
+
+    #[test]
+    fn ternary_inside_arithmetic() {
+        // Ternary's precedence is below arithmetic, so `1 + 0 ? a : b`
+        // is `(1 + 0) ? a : b` = `1 ? a : b`. Parens are needed to nest
+        // it inside an arithmetic expression.
+        assert_eq!(eval("1 + (1 ? 10 : 20)"), 11.0);
+        assert_eq!(eval("(0 ? 10 : 20) * 3"), 60.0);
+        // And the dead branch is still skipped when wrapped in arithmetic.
+        let v = try_eval_ctx("(0 ? unresolved : 5) + 1", &[])
+            .expect("dead branch inside parenthesised ternary is skipped");
+        assert_eq!(v, 6.0);
+    }
+
+    #[test]
+    fn ternary_inside_function_args() {
+        // `min(a ? b : c, d)` — ternary fills one function argument; the
+        // comma terminates the ternary's else-branch.
+        assert_eq!(eval("min(1 ? 3 : 7, 5)"), 3.0);
+        assert_eq!(eval("min(0 ? 3 : 7, 5)"), 5.0);
+        assert_eq!(eval("max(1 ? 3 : 7, 5)"), 5.0);
+        // Skipping a dead branch must not eat the comma that separates
+        // function arguments.
+        let v = try_eval_ctx("min(0 ? unresolved : 4, 9)", &[])
+            .expect("ternary skip inside function args must respect commas");
+        assert_eq!(v, 4.0);
+    }
+
+    #[test]
+    fn ternary_precedence_below_or() {
+        // `a || b ? c : d` parses as `(a || b) ? c : d`, not
+        // `a || (b ? c : d)`. Comparison ladder runs first.
+        assert_eq!(eval("0 || 1 ? 10 : 20"), 10.0);
+        assert_eq!(eval("0 || 0 ? 10 : 20"), 20.0);
+        // Same for &&.
+        assert_eq!(eval("1 && 1 ? 10 : 20"), 10.0);
+        assert_eq!(eval("1 && 0 ? 10 : 20"), 20.0);
+    }
+
+    #[test]
+    fn ternary_with_comparison_condition() {
+        assert_eq!(eval_ctx("x < 0 ? -x : x", &[("x", -3.5)]), 3.5);
+        assert_eq!(eval_ctx("x < 0 ? -x : x", &[("x", 4.0)]), 4.0);
+        // Chained: clamp x to [0, 10].
+        assert_eq!(eval_ctx("x < 0 ? 0 : x > 10 ? 10 : x", &[("x", -5.0)]), 0.0);
+        assert_eq!(eval_ctx("x < 0 ? 0 : x > 10 ? 10 : x", &[("x", 5.0)]), 5.0);
+        assert_eq!(
+            eval_ctx("x < 0 ? 0 : x > 10 ? 10 : x", &[("x", 99.0)]),
+            10.0
+        );
+    }
+
+    #[test]
+    fn ternary_missing_colon_is_a_parse_error() {
+        // Eager parsing of the then-branch then expects a `:`. Without it
+        // we must give a clear ParseError rather than evaluating wrongly.
+        let err = try_eval_ctx("1 ? 10", &[]).unwrap_err();
+        assert!(
+            matches!(err, ExprError::ParseError(msg) if msg.contains(':')),
+            "missing colon should be a ParseError mentioning ':'"
+        );
     }
 
     #[test]
