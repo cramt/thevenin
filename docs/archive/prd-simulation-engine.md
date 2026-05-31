@@ -1,5 +1,12 @@
 # PRD: Thevenin Simulation Engine
 
+> **Historical reference.** This is the original founding PRD from the start of
+> the project, when scope was "pass the ngspice base test suite" and the parser
+> was `thevenin-types`. The project has since grown the Cirq language + IR and
+> made `cirq_ir::Circuit` the canonical simulator input. Live 1.0 scope is in
+> [`docs/1.0-checklist.md`](../1.0-checklist.md); this doc is kept only for the
+> original intent.
+
 ## Introduction
 
 Build a SPICE circuit simulation engine in Rust as a library crate (`thevenin`). This is a ground-up rewrite of ngspice's simulation core, using the existing `thevenin-types` crate for parsing. The engine must produce identical numerical results to ngspice for all supported analyses.

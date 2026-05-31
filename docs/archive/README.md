@@ -12,6 +12,8 @@ scope.
 - `migration/` — the Stage-by-Stage migration to a Circuit-input simulator:
   the Cirq adoption plan, MNA-on-IR pivot plan, harness status, and the
   old-path retirement checklist.
+- `prd-simulation-engine.md` — the original founding PRD (pre-Cirq), kept for
+  the original design intent. Superseded by `docs/1.0-checklist.md`.
 
 Internal cross-links inside these directories use the old (pre-archive) paths;
 they have not been rewritten. Treat the contents as a snapshot of the work

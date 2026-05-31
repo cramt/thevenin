@@ -1,6 +1,6 @@
 # Plan: 100% ngspice Test Coverage
 
-Current state: **101 harness tests passing, 6 skipped** (1020 total tests passing across
+Current state: **101 harness tests passing, 6 skipped** (1416 total tests passing across
 all test binaries). Goal: eliminate as many skips as possible.
 
 ## Phase 1: RampVg2 Charge Coupling (bsim3soidd/RampVg2.cir)

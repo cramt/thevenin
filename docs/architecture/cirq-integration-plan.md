@@ -13,7 +13,7 @@
 |-------|---------------|----------------|
 | `thevenin-types` | SPICE netlist types (`Netlist`, `Item`, `Expr`, `Source`, etc.) and parser | **Internal compatibility layer.** Cirq IR is the canonical simulator input; the Netlist is the SPICE-shaped adapter the parser produces. |
 | `thevenin` | Core simulation engine: MNA assembly, Newton solver, device models, analysis drivers (DC, AC, transient, noise, PZ, SENS, TF) | Consumes `cirq_ir::Circuit` directly via `thevenin::circuit::*`. The `&Netlist`-shaped wrappers remain for internal tests. |
-| `thevenin-control` | `.control` block interpreter | Routes through `execute_control_block_ir(&Circuit)`. Internally still uses a cached Netlist for TEMPER + `@device[param]` lookups. |
+| `thevenin-control` | `.control` block interpreter | Routes through `execute_control_block_ir(&Circuit)`. Fully IR-native on the input side: TEMPER eval, `@device[param]` alters, and analysis-command parsing all operate on `cirq_ir::Circuit` (only simulator *result* types come from `thevenin-types`). |
 | `thevenin-xspice` | XSPICE code model framework | Orthogonal; Cirq's `xspice(...)` element binds to models in this registry. |
 | `thevenin-test-macro` | Proc-macro for test harness | Unchanged. |
 | `thevenin-cli` (root) | CLI binary | `thevenin run <file>` handles both `.cir` (SPICE) and `.cirq` (Cirq) input, routing through the IR pipeline in both cases. |
