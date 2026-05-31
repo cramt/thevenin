@@ -562,6 +562,8 @@ fn eval_arith(arith: &MeasArith, prior: &[SimVector]) -> Option<f64> {
             .find(|v| v.name.eq_ignore_ascii_case(name))
             .and_then(|v| v.data.as_real().first().copied()),
         MeasArith::Neg(inner) => eval_arith(inner, prior).map(|v| -v),
+        // Logical negation. Booleans are numeric: non-zero is true.
+        MeasArith::Not(inner) => eval_arith(inner, prior).map(|v| bool_to_f64(v == 0.0)),
         MeasArith::BinOp(lhs, op, rhs) => {
             let l = eval_arith(lhs, prior)?;
             let r = eval_arith(rhs, prior)?;
@@ -575,9 +577,30 @@ fn eval_arith(arith: &MeasArith, prior: &[SimVector]) -> Option<f64> {
                     }
                     l / r
                 }
+                ArithOp::Lt => bool_to_f64(l < r),
+                ArithOp::Gt => bool_to_f64(l > r),
+                ArithOp::Le => bool_to_f64(l <= r),
+                ArithOp::Ge => bool_to_f64(l >= r),
+                ArithOp::Eq => bool_to_f64(l == r),
+                ArithOp::Ne => bool_to_f64(l != r),
+                ArithOp::And => bool_to_f64(l != 0.0 && r != 0.0),
+                ArithOp::Or => bool_to_f64(l != 0.0 || r != 0.0),
             })
         }
+        MeasArith::Cond { cond, then, els } => {
+            if eval_arith(cond, prior)? != 0.0 {
+                eval_arith(then, prior)
+            } else {
+                eval_arith(els, prior)
+            }
+        }
     }
+}
+
+/// Map a boolean to the numeric truth values used throughout measurement
+/// expressions: `1.0` for true, `0.0` for false.
+fn bool_to_f64(b: bool) -> f64 {
+    if b { 1.0 } else { 0.0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +630,69 @@ mod tests {
         let m = meas(spec);
         let expr = m.expr.as_ref()?;
         evaluate_typed(expr, plot, &[])
+    }
+
+    /// Evaluate a `PARAM=` expression against named prior measurements.
+    fn eval_param(spec: &str, prior: &[(&str, f64)]) -> Option<f64> {
+        let m = meas(spec);
+        let prior: Vec<SimVector> = prior
+            .iter()
+            .map(|(n, v)| SimVector::real(n.to_string(), vec![*v]))
+            .collect();
+        match m.expr.as_ref()? {
+            MeasureExpr::Param(arith) => eval_arith(arith, &prior),
+            other => panic!("expected Param, got {other:?}"),
+        }
+    }
+
+    // -- PARAM= comparison / logical / ternary -------------------------------
+
+    #[test]
+    fn param_comparison_true_is_one() {
+        let v = eval_param("PARAM=vout_swing > 100m", &[("vout_swing", 0.2)]).unwrap();
+        assert_eq!(v, 1.0);
+    }
+
+    #[test]
+    fn param_comparison_false_is_zero() {
+        let v = eval_param("PARAM=vout_swing > 100m", &[("vout_swing", 0.05)]).unwrap();
+        assert_eq!(v, 0.0);
+    }
+
+    #[test]
+    fn param_logical_and() {
+        let prior = [("td", 50e-12), ("swing", 0.2)];
+        let v = eval_param("PARAM=td < 80p && swing > 100m", &prior).unwrap();
+        assert_eq!(v, 1.0);
+        let prior_fail = [("td", 90e-12), ("swing", 0.2)];
+        let v = eval_param("PARAM=td < 80p && swing > 100m", &prior_fail).unwrap();
+        assert_eq!(v, 0.0);
+    }
+
+    #[test]
+    fn param_ternary_pass_fail() {
+        // The headline feature working end to end through parse + eval.
+        let pass = eval_param("PARAM=(vout_diff < 100k) ? 1 : 0", &[("vout_diff", 50e3)]).unwrap();
+        assert_eq!(pass, 1.0);
+        let fail = eval_param("PARAM=(vout_diff < 100k) ? 1 : 0", &[("vout_diff", 200e3)]).unwrap();
+        assert_eq!(fail, 0.0);
+    }
+
+    #[test]
+    fn param_logical_not() {
+        let v = eval_param("PARAM=!(swing > 100m)", &[("swing", 0.05)]).unwrap();
+        assert_eq!(v, 1.0);
+    }
+
+    #[test]
+    fn param_ternary_selects_expression_branches() {
+        // Branches can themselves be arithmetic over measurements.
+        let prior = [("a", 3.0), ("b", 10.0), ("flag", 1.0)];
+        let v = eval_param("PARAM=flag ? a + b : a - b", &prior).unwrap();
+        assert_eq!(v, 13.0);
+        let prior2 = [("a", 3.0), ("b", 10.0), ("flag", 0.0)];
+        let v = eval_param("PARAM=flag ? a + b : a - b", &prior2).unwrap();
+        assert_eq!(v, -7.0);
     }
 
     // -- MAX / MIN / AVG / RMS / PP ------------------------------------------

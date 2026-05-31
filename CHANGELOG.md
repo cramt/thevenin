@@ -82,8 +82,20 @@ the URC element and HiSIMHV high-voltage extensions.
 
 ### Added — Cirq language
 
-- **Native `measure` block** — `measure <kind> "name" { spec: "..." }` round-trips
-  with SPICE `.meas` imports through the same typed `MeasureExpr`.
+- **Native `measure` expression syntax** — `measure <kind> <name> = <expr>`
+  where the body is a first-class Cirq expression. Probe functions
+  (`max`/`min`/`avg`/`rms`/`pp`, `integ`, `find`, `when`, `deriv`, `delay` with
+  `cross(...)` events) take named windowing/edge arguments; any other
+  expression is derived/conditional arithmetic over earlier measurements. The
+  legacy `measure <kind> "name" { spec: "..." }` block form is retained as an
+  escape hatch. Both lower to the same typed `MeasureExpr`, and the expression
+  form synthesizes a canonical clause string so it round-trips with SPICE
+  `.meas` imports.
+- **Comparisons, logical operators, and the ternary `cond ? t : e`** in
+  measurement expressions — the SPICE pass/fail idiom
+  `(vout_diff < 100k) ? 1 : 0` now parses and evaluates, in both the SPICE
+  clause parser and native Cirq. Named call arguments (`f(x, key: value)`) were
+  added to the grammar for the probe functions.
 - Built-in functions: `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`,
   `tanh`, `sgn`, `floor`, `ceil`, `int`, `db`, `db20`, `limit(x, lo, hi)`.
 - `.control` commands: `while`, `repeat N`, `save`.

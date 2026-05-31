@@ -143,6 +143,58 @@ circuit test {
         value: (string_literal)))))
 
 ================================================================================
+Measure expression form with named arguments
+================================================================================
+
+circuit test {
+    measure tran vout_max = max(v(out), from: 10n, to: 50n)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (measure_decl
+      analysis_kind: (identifier)
+      name: (identifier)
+      value: (call_expression
+        function: (identifier)
+        (call_expression
+          function: (identifier)
+          (identifier))
+        (named_argument
+          name: (identifier)
+          value: (number_literal))
+        (named_argument
+          name: (identifier)
+          value: (number_literal))))))
+
+================================================================================
+Measure conditional (ternary) form
+================================================================================
+
+circuit test {
+    measure tran bw_ok = (swing > 100m) ? 1 : 0
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (measure_decl
+      analysis_kind: (identifier)
+      name: (identifier)
+      value: (ternary_expression
+        condition: (paren_expression
+          (binary_expression
+            left: (identifier)
+            right: (number_literal)))
+        then: (number_literal)
+        else: (number_literal)))))
+
+================================================================================
 Multiple analyses
 ================================================================================
 

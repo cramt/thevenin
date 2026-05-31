@@ -4,9 +4,9 @@
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CodeDecl,
     CoupledLineDecl, CoupledLineField, ElementInst, ExportDecl, Expr, FuncDecl, GlobalDecl, IcDecl,
-    IcEntry, Ident, Import, LetDecl, MeasureDecl, ModelDef, ModelParam, ModuleDef, ModuleInst,
-    OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName, SaveDecl,
-    SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
+    IcEntry, Ident, Import, LetDecl, MeasureBody, MeasureDecl, ModelDef, ModelParam, ModuleDef,
+    ModuleInst, OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName,
+    SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -695,6 +695,28 @@ impl Ctx<'_> {
         let name = strip_quotes(self.text(name_node)).to_owned();
         let name_span = span_of(name_node);
 
+        // Expression form: `measure <kind> <ident> = <expr>` — the grammar
+        // exposes the body as a `value` field. The block form has no such
+        // field; it carries `measure_field` children instead.
+        let body = if let Some(value_node) = node.child_by_field_name("value") {
+            MeasureBody::Expr(self.lower_expr(value_node)?)
+        } else {
+            self.lower_measure_block_body(node)?
+        };
+
+        Some(MeasureDecl {
+            analysis_kind,
+            name,
+            name_span,
+            body,
+            span: span_of(node),
+        })
+    }
+
+    /// Lower the legacy block body `{ spec: "<SPICE clause>" }` into a
+    /// [`MeasureBody::Spec`]. Emits diagnostics for missing/duplicate/unknown
+    /// fields.
+    fn lower_measure_block_body(&mut self, node: tree_sitter::Node) -> Option<MeasureBody> {
         let mut spec_value: Option<String> = None;
         let mut spec_span: Option<Span> = None;
         let mut cursor = node.walk();
@@ -734,15 +756,7 @@ impl Ctx<'_> {
         // `spec_span` is set whenever `spec_value` is — match keeps that
         // invariant explicit.
         let spec_span = spec_span.unwrap_or_else(span_of_dummy);
-
-        Some(MeasureDecl {
-            analysis_kind,
-            name,
-            name_span,
-            spec,
-            spec_span,
-            span: span_of(node),
-        })
+        Some(MeasureBody::Spec { spec, spec_span })
     }
 }
 
@@ -1147,11 +1161,17 @@ impl Ctx<'_> {
         let func = self.ident(func_node);
 
         let mut args = Vec::new();
+        let mut named_args = Vec::new();
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            if child.id() != func_id
-                && let Some(e) = self.lower_expr(child)
-            {
+            if child.id() == func_id {
+                continue;
+            }
+            if child.kind() == "named_argument" {
+                if let Some((name, value)) = self.lower_named_argument(child) {
+                    named_args.push((name, value));
+                }
+            } else if let Some(e) = self.lower_expr(child) {
                 args.push(e);
             }
         }
@@ -1159,8 +1179,17 @@ impl Ctx<'_> {
         Some(Expr::Call {
             func,
             args,
+            named_args,
             span: span_of(node),
         })
+    }
+
+    fn lower_named_argument(&mut self, node: tree_sitter::Node) -> Option<(Ident, Expr)> {
+        let name_node = self.required_field(node, "name")?;
+        let name = self.ident(name_node);
+        let value_node = self.required_field(node, "value")?;
+        let value = self.lower_expr(value_node)?;
+        Some((name, value))
     }
 
     fn lower_paren_expr(&mut self, node: tree_sitter::Node) -> Option<Expr> {

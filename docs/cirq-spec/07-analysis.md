@@ -157,9 +157,21 @@ analysis tf {
 
 ## Measurements
 
-A `measure` block records a post-simulation measurement on the results of a
-preceding analysis. It is the native Cirq counterpart of SPICE's `.meas`
-directive:
+A `measure` declaration records a post-simulation measurement on the results
+of a preceding analysis. It is the native Cirq counterpart of SPICE's `.meas`
+directive. The header has three pieces:
+
+1. The literal keyword `measure`.
+2. An analysis-kind identifier (`tran`, `ac`, `dc`, ...). The measurement is
+   evaluated against the results of that analysis when the simulator runs.
+3. A name. The measured value appears as a vector of this name in the
+   `measurements` result plot.
+
+### Expression form (preferred)
+
+A measurement is an expression: `measure <kind> <name> = <expr>`. The
+expression layer is the same one used by `let` and `param`, so derived and
+conditional measurements need no special syntax.
 
 ```cirq
 analysis tran {
@@ -167,45 +179,66 @@ analysis tran {
     stop: 100n
 }
 
+// Waveform probes — functions that reduce a result vector to a scalar.
+measure tran vout_max = max(v(out), from: 10n, to: 50n)
+measure tran settle   = when(v(out) == 4.95, rise: 1)
+measure tran td       = delay(from: cross(v(in),  0.5, rise: 1),
+                              to:   cross(v(out), 0.5, fall: 1))
+measure tran q_inj     = integ(i(vd), from: 0, to: 20n)
+
+// Derived — plain arithmetic over earlier measurements.
+measure tran swing = vout_max - vout_min
+
+// Conditional / pass-fail — comparison + ternary.
+measure tran bw_ok = (swing > 100m) ? 1 : 0
+measure tran spec_pass = (td < 80p && swing > 100m) ? 1 : 0
+```
+
+**Probe functions.** Each reduces a result vector to a scalar and maps 1:1
+onto a SPICE `.meas` keyword:
+
+| Function | Meaning | SPICE keyword |
+|----------|---------|---------------|
+| `max(v, from:, to:)` (also `min`, `avg`, `rms`, `pp`) | aggregate over an optional window | `MAX`/`MIN`/`AVG`/`RMS`/`PP` |
+| `integ(v, from:, to:)` | trapezoidal integral | `INTEG` |
+| `find(v, at: t)` / `find(v, when: cross(...))` | value at a point or crossing | `FIND` |
+| `when(v == level, rise: n)` | sweep value at a crossing | `WHEN` |
+| `deriv(v, at: t)` | numerical derivative | `DERIV` |
+| `delay(from: cross(...), to: cross(...))` | time between two events | `TRIG`/`TARG` |
+
+Signals are referenced with `v(node)` and `i(element)`. A crossing event is
+`cross(signal, threshold, rise:|fall:|cross: n)`, where the occurrence `n` is
+a 1-based index or the keyword `last`. The optional `from:`/`to:` arguments
+bound the search window.
+
+**Derived & conditional.** Any expression that is not a probe call is a
+scalar expression over earlier measurements (referenced by name). It supports
+arithmetic (`+ - * /`), comparisons (`< > <= >= == !=`), logical combinators
+(`&& || !`), and the ternary `cond ? then : else`. Booleans are numeric — true
+is `1.0`, false is `0.0`, and any non-zero value is treated as true — so the
+classic SPICE pass/fail idiom `param='(vout_diff < 100k) ? 1 : 0'` is written
+directly as `(vout_diff < 100k) ? 1 : 0`.
+
+### Block form (legacy)
+
+The original block form remains as an escape hatch. The name is a string
+literal and the body wraps a verbatim SPICE `.meas` clause string in a `spec:`
+field:
+
+```cirq
+measure tran "vout_max" { spec: "MAX v(out)" }
 measure tran "rise" {
     spec: "TRIG v(out) VAL=0.5 RISE=1 TARG v(out) VAL=4.5 RISE=1"
 }
-
-measure tran "vout_max" {
-    spec: "MAX v(out)"
-}
-
-measure tran "settle" {
-    spec: "WHEN v(out)=4.95 RISE=1"
-}
-
-measure tran "vout_swing" {
-    spec: "PARAM=vout_max - vout_min"
-}
 ```
 
-The header has three pieces:
+Both forms lower to the same typed IR (`MeasureExpr`), and the expression form
+synthesizes a canonical clause string, so native and SPICE-imported
+measurements stay identical in the IR and round-trip losslessly. A measurement
+that cannot be lowered surfaces an error diagnostic at its source span.
 
-1. The literal keyword `measure`.
-2. An analysis-kind identifier (`tran`, `ac`, `dc`, ...). The measurement is
-   evaluated against the results of that analysis when the simulator runs.
-3. A string literal naming the measurement. The value appears as a vector of
-   this name in the `measurements` result plot.
-
-The body holds a single required field:
-
-- `spec`: a string literal carrying the measurement clauses. The contents
-  use the same syntax as the right-hand side of a SPICE `.meas` directive
-  (everything after `.meas <type> <name>`). All keywords supported by the
-  importer (`MAX`/`MIN`/`AVG`/`RMS`/`PP`, `INTEG`, `FIND`, `WHEN`,
-  `TRIG`/`TARG`, `DERIV`, `PARAM=`) work here unchanged.
-
-Reusing the SPICE clause syntax keeps native Cirq `measure` blocks and
-SPICE-imported `.meas` directives identical in the IR, and makes
-round-tripping between the two source forms lossless. A measure block whose
-`spec` cannot be parsed surfaces an error diagnostic pointing at the spec
-string. Status of advanced `.meas` features (`ERROR` mode, conditional
-`IF`, file-referenced `PARAM`): planned.
+Status of advanced `.meas` features (`ERROR` mode, file-referenced `PARAM`):
+planned.
 
 ## Multiple Analyses
 

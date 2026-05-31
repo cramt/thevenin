@@ -291,13 +291,22 @@ pub struct MeasureDecl {
     pub analysis_kind: Ident,
     /// The measurement name (the value SPICE attaches to the result vector).
     pub name: String,
-    /// Span of the string-literal token carrying the name.
+    /// Span of the token carrying the name (string literal or identifier).
     pub name_span: Span,
-    /// The verbatim measurement clauses (no surrounding quotes).
-    pub spec: String,
-    /// Span of the string-literal token carrying the spec body.
-    pub spec_span: Span,
+    /// What the measurement computes — a native Cirq expression or a verbatim
+    /// SPICE clause string (the legacy block form).
+    pub body: MeasureBody,
     pub span: Span,
+}
+
+/// The body of a [`MeasureDecl`].
+#[derive(Debug, Clone)]
+pub enum MeasureBody {
+    /// Native expression form: `measure tran vout_max = max(v(out))`.
+    Expr(Expr),
+    /// Legacy block form: `measure tran "vout_max" { spec: "MAX v(out)" }`.
+    /// `spec` holds the verbatim measurement clauses (no surrounding quotes).
+    Spec { spec: String, spec_span: Span },
 }
 
 // ---------------------------------------------------------------------------
@@ -381,10 +390,13 @@ pub enum Expr {
         operand: Box<Expr>,
         span: Span,
     },
-    /// Function call: `sqrt(x)`
+    /// Function call: `sqrt(x)`, `max(v(out), from: 10n, to: 50n)`.
+    /// Positional arguments live in `args`; named arguments (`key: value`,
+    /// used by measurement probe functions) live in `named_args`.
     Call {
         func: Ident,
         args: Vec<Expr>,
+        named_args: Vec<(Ident, Expr)>,
         span: Span,
     },
     /// Ternary conditional: `cond ? then_expr : else_expr`.

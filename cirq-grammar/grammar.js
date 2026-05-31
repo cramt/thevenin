@@ -224,14 +224,31 @@ module.exports = grammar({
 
     // ── Measure block ───────────────────────────────────────────────
 
+    // Two forms:
+    //   1. Expression form (native, preferred):
+    //        measure tran vout_max = max(v(out), from: 10n, to: 50n)
+    //      The name is an identifier and the body is a single expression.
+    //   2. Block form (legacy / escape hatch):
+    //        measure tran "vout_max" { spec: "MAX v(out)" }
+    //      The name is a string literal and the body wraps a verbatim SPICE
+    //      `.meas` clause string in a `spec:` field.
     measure_decl: ($) =>
-      seq(
-        "measure",
-        field("analysis_kind", $.identifier),
-        field("name", $.string_literal),
-        "{",
-        repeat($.measure_field),
-        "}"
+      choice(
+        seq(
+          "measure",
+          field("analysis_kind", $.identifier),
+          field("name", $.identifier),
+          "=",
+          field("value", $._expression)
+        ),
+        seq(
+          "measure",
+          field("analysis_kind", $.identifier),
+          field("name", $.string_literal),
+          "{",
+          repeat($.measure_field),
+          "}"
+        )
       ),
 
     measure_field: ($) =>
@@ -465,11 +482,17 @@ module.exports = grammar({
           field("function", $.identifier),
           "(",
           optional(
-            seq($._expression, repeat(seq(",", $._expression)), optional(","))
+            seq($._argument, repeat(seq(",", $._argument)), optional(","))
           ),
           ")"
         )
       ),
+
+    // A call argument is either positional (a bare expression) or named
+    // (`key: value`). Named arguments carry the windowing/qualifier options
+    // of measurement probe functions, e.g. `max(v(out), from: 10n, to: 50n)`.
+    // Reuses the shared `named_argument` rule defined above for element args.
+    _argument: ($) => choice($.named_argument, $._expression),
 
     paren_expression: ($) =>
       seq("(", $._expression, repeat(seq(",", $._expression)), optional(","), ")"),

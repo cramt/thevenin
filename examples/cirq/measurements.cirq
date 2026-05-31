@@ -1,0 +1,31 @@
+// Native Cirq measurement syntax.
+//
+// A measurement is just an expression: `measure <kind> <name> = <expr>`.
+// Probe functions reduce a result vector to a scalar; everything else is
+// derived/conditional arithmetic over earlier measurements. The same
+// expression layer used by `let`/`param` powers comparisons and the ternary,
+// so pass/fail checks need no special syntax.
+
+circuit rc_step {
+    // 1 V step into an RC low-pass (tau = R*C = 100 us).
+    V1: vsource(in -> gnd, pulse: { v1: 0, v2: 1, td: 0, tr: 1n, tf: 1n, pw: 1m, per: 2m })
+    R1: resistor(in -> out, 1k)
+    C1: capacitor(out -> gnd, 100n)
+
+    analysis tran {
+        step: 1u
+        stop: 500u
+    }
+
+    // Waveform probes — functions over a result vector, with optional
+    // windowing (`from:`/`to:`) and edge (`rise:`/`fall:`/`cross:`) arguments.
+    measure tran vout_max = max(v(out))
+    measure tran vout_min = min(v(out))
+    measure tran settle   = when(v(out) == 0.63, rise: 1)
+
+    // Derived — plain arithmetic over earlier measurements.
+    measure tran swing = vout_max - vout_min
+
+    // Conditional / pass-fail — comparison + ternary, no escape hatch needed.
+    measure tran ok = (swing > 100m) ? 1 : 0
+}

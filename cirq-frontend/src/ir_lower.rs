@@ -5,13 +5,14 @@ use std::collections::HashMap;
 
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, BinOp, CircuitItem, CoupledLineDecl, ElementInst, Expr,
-    FuncDecl, IcDecl, LetDecl, MeasureDecl, ModelDef, ModuleDef, ModuleInst, OptionsDecl,
-    ParamDecl, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp,
+    FuncDecl, IcDecl, Ident, LetDecl, MeasureBody, MeasureDecl, ModelDef, ModuleDef, ModuleInst,
+    OptionsDecl, ParamDecl, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp,
 };
 use cirq_ir::{
-    AcAnalysis, AcSpec, Analysis, BehavioralMode, Circuit, Connection, DcAnalysis, DcSweep,
-    Element, ElementKind, FrequencyScale, FuncDef, Id, MeasureSpec, Model, Net, ResolvedParam,
-    SourceSpec, TranAnalysis, Value, Waveform,
+    AcAnalysis, AcSpec, AggregateKind, Analysis, ArithOp, BehavioralMode, Circuit, Connection,
+    CrossingKind, CrossingPick, CrossingSpec, DcAnalysis, DcSweep, Element, ElementKind, FindAt,
+    FrequencyScale, FuncDef, Id, MeasArith, MeasureExpr, MeasureSpec, Model, Net, ResolvedParam,
+    SourceSpec, Threshold, TranAnalysis, TrigTargClause, Value, Waveform,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -1541,25 +1542,372 @@ impl IrCtx {
     // Measure (.meas) lowering
     // -------------------------------------------------------------------
 
-    fn lower_measure_decl(&mut self, m: &MeasureDecl) {
-        // Build the IR's typed MeasureSpec by funnelling the spec string
-        // through the same parser the SPICE importer uses. That keeps native
-        // Cirq measure blocks and `.meas`-imported entries semantically
-        // identical and round-trippable.
-        let spec = MeasureSpec::parse(m.name.clone(), m.analysis_kind.name.clone(), m.spec.clone());
+    /// Push an error diagnostic anchored at an expression's source span.
+    fn error_expr(&mut self, expr: &Expr, msg: impl Into<String>) {
+        self.diags
+            .push(Diagnostic::error(msg.into()).with_span(expr_span(expr)));
+    }
 
-        // Surface a diagnostic when the spec string is well-formed at the
-        // grammar level but the body fails to parse into a typed expr — the
-        // evaluator would otherwise silently skip the measurement.
-        if spec.expr.is_none() {
-            self.diags.push(
-                Diagnostic::error(format!("could not parse measurement spec for `{}`", m.name))
-                    .with_span(m.spec_span)
-                    .with_note(format!("spec text: `{}`", m.spec)),
-            );
-        }
+    fn lower_measure_decl(&mut self, m: &MeasureDecl) {
+        let name = m.name.clone();
+        let analysis = m.analysis_kind.name.clone();
+
+        let spec = match &m.body {
+            // Legacy block form: funnel the verbatim clause string through the
+            // same parser the SPICE importer uses, keeping native and imported
+            // measurements identical and round-trippable.
+            MeasureBody::Spec { spec, spec_span } => {
+                let parsed = MeasureSpec::parse(name.clone(), analysis.clone(), spec.clone());
+                if parsed.expr.is_none() {
+                    self.diags.push(
+                        Diagnostic::error(format!("could not parse measurement spec for `{name}`"))
+                            .with_span(*spec_span)
+                            .with_note(format!("spec text: `{spec}`")),
+                    );
+                }
+                parsed
+            }
+            // Native expression form: convert the AST expression into the same
+            // typed `MeasureExpr`, then render a canonical clause string so the
+            // `spec` field stays a faithful, re-parsable mirror of `expr`.
+            MeasureBody::Expr(expr) => match self.measure_expr_from_ast(expr) {
+                Some(mexpr) => MeasureSpec {
+                    name,
+                    analysis_type: analysis,
+                    spec: mexpr.to_spec_string(),
+                    expr: Some(mexpr),
+                    condition: None,
+                    file: None,
+                },
+                None => {
+                    // measure_expr_from_ast already pushed a diagnostic.
+                    MeasureSpec {
+                        name,
+                        analysis_type: analysis,
+                        spec: String::new(),
+                        expr: None,
+                        condition: None,
+                        file: None,
+                    }
+                }
+            },
+        };
 
         self.measures.push(spec);
+    }
+
+    /// Convert a native-form measurement expression into a typed
+    /// [`MeasureExpr`]. Probe functions (`max`, `when`, `delay`, ...) map onto
+    /// the structured variants; anything else is a derived/conditional
+    /// expression and lowers to [`MeasureExpr::Param`].
+    fn measure_expr_from_ast(&mut self, expr: &Expr) -> Option<MeasureExpr> {
+        if let Expr::Call {
+            func,
+            args,
+            named_args,
+            ..
+        } = expr
+        {
+            let fname = func.name.to_ascii_lowercase();
+            let agg = match fname.as_str() {
+                "max" => Some(AggregateKind::Max),
+                "min" => Some(AggregateKind::Min),
+                "avg" => Some(AggregateKind::Avg),
+                "rms" => Some(AggregateKind::Rms),
+                "pp" => Some(AggregateKind::Pp),
+                _ => None,
+            };
+            if let Some(kind) = agg {
+                let vec = self.measure_vec_ref(args.first()?)?;
+                return Some(MeasureExpr::Aggregate {
+                    kind,
+                    vec,
+                    from: self.named_f64(named_args, "from"),
+                    to: self.named_f64(named_args, "to"),
+                });
+            }
+            match fname.as_str() {
+                "integ" | "integral" => {
+                    let vec = self.measure_vec_ref(args.first()?)?;
+                    return Some(MeasureExpr::Integ {
+                        vec,
+                        from: self.named_f64(named_args, "from"),
+                        to: self.named_f64(named_args, "to"),
+                    });
+                }
+                "find" => {
+                    let vec = self.measure_vec_ref(args.first()?)?;
+                    let at = self.measure_find_at(expr, named_args)?;
+                    return Some(MeasureExpr::Find { vec, at });
+                }
+                "deriv" => {
+                    let vec = self.measure_vec_ref(args.first()?)?;
+                    let at = self.measure_find_at(expr, named_args)?;
+                    return Some(MeasureExpr::Deriv { vec, at });
+                }
+                "when" => {
+                    let cross = self.measure_when_crossing(expr, args, named_args)?;
+                    return Some(MeasureExpr::When(cross));
+                }
+                "delay" | "trig_targ" => {
+                    let trig = self.measure_trig_targ_clause(expr, named_args, "from")?;
+                    let targ = self.measure_trig_targ_clause(expr, named_args, "to")?;
+                    return Some(MeasureExpr::TrigTarg { trig, targ });
+                }
+                _ => {}
+            }
+        }
+        // Derived / conditional expression.
+        Some(MeasureExpr::Param(self.measure_arith_from_ast(expr)?))
+    }
+
+    /// Render a signal reference (`v(out)`, `i(vd)`, or a bare measurement
+    /// name) into the canonical vector string the evaluator looks up.
+    fn measure_vec_ref(&mut self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Call {
+                func,
+                args,
+                named_args,
+                ..
+            } if named_args.is_empty()
+                && (func.name.eq_ignore_ascii_case("v") || func.name.eq_ignore_ascii_case("i")) =>
+            {
+                let nodes: Option<Vec<String>> = args.iter().map(expr_as_net_name).collect();
+                let nodes = nodes.or_else(|| {
+                    self.error_expr(expr, "v()/i() expects node name arguments");
+                    None
+                })?;
+                Some(format!(
+                    "{}({})",
+                    func.name.to_ascii_lowercase(),
+                    nodes.join(",")
+                ))
+            }
+            Expr::Ident(id) => Some(id.name.clone()),
+            _ => {
+                self.error_expr(expr, "expected a signal reference like `v(out)` or `i(vd)`");
+                None
+            }
+        }
+    }
+
+    /// A threshold is either a constant level or a tracking vector.
+    fn measure_threshold(&mut self, expr: &Expr) -> Option<Threshold> {
+        if let Some(v) = self.eval_to_f64(expr) {
+            Some(Threshold::Constant(v))
+        } else {
+            Some(Threshold::Vector(self.measure_vec_ref(expr)?))
+        }
+    }
+
+    /// Look up a named argument's value as a constant `f64`, or `None` if the
+    /// argument is absent.
+    fn named_f64(&mut self, named: &[(Ident, Expr)], key: &str) -> Option<f64> {
+        let expr = named_arg(named, key)?;
+        self.eval_to_f64(expr)
+    }
+
+    /// Read the crossing edge (`rise:`/`fall:`/`cross:` occurrence) from a
+    /// named-argument list. Defaults to the first crossing in either direction.
+    fn measure_crossing_kind(&mut self, named: &[(Ident, Expr)]) -> CrossingKind {
+        if let Some(e) = named_arg(named, "rise") {
+            CrossingKind::Rise(self.measure_pick(e))
+        } else if let Some(e) = named_arg(named, "fall") {
+            CrossingKind::Fall(self.measure_pick(e))
+        } else if let Some(e) = named_arg(named, "cross") {
+            CrossingKind::Cross(self.measure_pick(e))
+        } else {
+            CrossingKind::Cross(CrossingPick::Nth(1))
+        }
+    }
+
+    /// An occurrence selector: a 1-based number or the `last` keyword.
+    fn measure_pick(&mut self, expr: &Expr) -> CrossingPick {
+        if let Expr::Ident(id) = expr
+            && id.name.eq_ignore_ascii_case("last")
+        {
+            return CrossingPick::Last;
+        }
+        match self.eval_to_f64(expr) {
+            Some(v) if v >= 1.0 => CrossingPick::Nth(v as u32),
+            _ => CrossingPick::Nth(1),
+        }
+    }
+
+    /// Build a [`CrossingSpec`] from a `cross(signal, threshold, rise: n)`
+    /// call expression.
+    fn measure_cross_call(&mut self, expr: &Expr) -> Option<CrossingSpec> {
+        if let Expr::Call {
+            func,
+            args,
+            named_args,
+            ..
+        } = expr
+            && func.name.eq_ignore_ascii_case("cross")
+        {
+            let signal = self.measure_vec_ref(args.first()?)?;
+            let threshold = self.measure_threshold(args.get(1)?)?;
+            return Some(CrossingSpec {
+                signal,
+                threshold,
+                crossing: self.measure_crossing_kind(named_args),
+                from: self.named_f64(named_args, "from"),
+                to: self.named_f64(named_args, "to"),
+            });
+        }
+        self.error_expr(expr, "expected a `cross(signal, threshold, ...)` event");
+        None
+    }
+
+    /// `when(signal == threshold, rise: n)` — the first positional argument is
+    /// an equality comparison giving the signal and its level.
+    fn measure_when_crossing(
+        &mut self,
+        whole: &Expr,
+        args: &[Expr],
+        named: &[(Ident, Expr)],
+    ) -> Option<CrossingSpec> {
+        let Some(Expr::BinOp {
+            op: BinOp::Eq,
+            lhs,
+            rhs,
+            ..
+        }) = args.first()
+        else {
+            self.error_expr(
+                whole,
+                "when(...) expects `signal == threshold` as its first argument",
+            );
+            return None;
+        };
+        let signal = self.measure_vec_ref(lhs)?;
+        let threshold = self.measure_threshold(rhs)?;
+        Some(CrossingSpec {
+            signal,
+            threshold,
+            crossing: self.measure_crossing_kind(named),
+            from: self.named_f64(named, "from"),
+            to: self.named_f64(named, "to"),
+        })
+    }
+
+    /// Resolve the `at:`/`when:` qualifier shared by `find` and `deriv`.
+    fn measure_find_at(&mut self, whole: &Expr, named: &[(Ident, Expr)]) -> Option<FindAt> {
+        if let Some(e) = named_arg(named, "at") {
+            if let Expr::Ident(id) = e
+                && id.name.eq_ignore_ascii_case("last")
+            {
+                return Some(FindAt::SweepLast);
+            }
+            return Some(FindAt::Sweep(self.eval_to_f64(e)?));
+        }
+        if let Some(e) = named_arg(named, "when") {
+            return Some(FindAt::Crossing(self.measure_cross_call(e)?));
+        }
+        self.error_expr(whole, "expected `at:` or `when:` qualifier");
+        None
+    }
+
+    /// A TRIG/TARG clause for `delay(from: ..., to: ...)`: either a fixed
+    /// sweep point (a constant) or a signal crossing (`cross(...)`).
+    fn measure_trig_targ_clause(
+        &mut self,
+        whole: &Expr,
+        named: &[(Ident, Expr)],
+        key: &str,
+    ) -> Option<TrigTargClause> {
+        let Some(e) = named_arg(named, key) else {
+            self.error_expr(whole, format!("delay(...) requires a `{key}:` clause"));
+            return None;
+        };
+        if let Some(v) = self.eval_to_f64(e) {
+            return Some(TrigTargClause::At(v));
+        }
+        let spec = self.measure_cross_call(e)?;
+        let val = match spec.threshold {
+            Threshold::Constant(v) => v,
+            Threshold::Vector(_) => {
+                self.error_expr(e, "delay(...) crossing threshold must be a constant");
+                return None;
+            }
+        };
+        let td = if let Expr::Call { named_args, .. } = e {
+            self.named_f64(named_args, "td")
+        } else {
+            None
+        };
+        Some(TrigTargClause::Signal {
+            signal: spec.signal,
+            val,
+            crossing: spec.crossing,
+            td,
+        })
+    }
+
+    /// Convert an arithmetic/comparison/conditional expression into a
+    /// [`MeasArith`] tree (the body of [`MeasureExpr::Param`]).
+    fn measure_arith_from_ast(&mut self, expr: &Expr) -> Option<MeasArith> {
+        match expr {
+            Expr::Number { value, .. } => Some(MeasArith::Const(*value)),
+            Expr::Integer { value, .. } => Some(MeasArith::Const(*value as f64)),
+            Expr::Bool { value, .. } => Some(MeasArith::Const(if *value { 1.0 } else { 0.0 })),
+            Expr::Ident(id) => Some(MeasArith::Ref(id.name.clone())),
+            // A signal reference such as `v(out)` used inside an arithmetic
+            // expression resolves to the same vector string the evaluator
+            // looks up by name.
+            Expr::Call {
+                func, named_args, ..
+            } if named_args.is_empty()
+                && (func.name.eq_ignore_ascii_case("v") || func.name.eq_ignore_ascii_case("i")) =>
+            {
+                Some(MeasArith::Ref(self.measure_vec_ref(expr)?))
+            }
+            Expr::UnaryOp { op, operand, .. } => {
+                let inner = Box::new(self.measure_arith_from_ast(operand)?);
+                match op {
+                    UnaryOp::Neg => Some(MeasArith::Neg(inner)),
+                    UnaryOp::Not => Some(MeasArith::Not(inner)),
+                }
+            }
+            Expr::BinOp { op, lhs, rhs, .. } => {
+                let aop = match op {
+                    BinOp::Add => ArithOp::Add,
+                    BinOp::Sub => ArithOp::Sub,
+                    BinOp::Mul => ArithOp::Mul,
+                    BinOp::Div => ArithOp::Div,
+                    BinOp::Lt => ArithOp::Lt,
+                    BinOp::Gt => ArithOp::Gt,
+                    BinOp::Le => ArithOp::Le,
+                    BinOp::Ge => ArithOp::Ge,
+                    BinOp::Eq => ArithOp::Eq,
+                    BinOp::Ne => ArithOp::Ne,
+                    BinOp::And => ArithOp::And,
+                    BinOp::Or => ArithOp::Or,
+                    BinOp::Pow | BinOp::Mod => {
+                        self.error_expr(expr, "operator not supported in measurement expressions");
+                        return None;
+                    }
+                };
+                let l = Box::new(self.measure_arith_from_ast(lhs)?);
+                let r = Box::new(self.measure_arith_from_ast(rhs)?);
+                Some(MeasArith::BinOp(l, aop, r))
+            }
+            Expr::Ternary {
+                cond,
+                then_expr,
+                else_expr,
+                ..
+            } => Some(MeasArith::Cond {
+                cond: Box::new(self.measure_arith_from_ast(cond)?),
+                then: Box::new(self.measure_arith_from_ast(then_expr)?),
+                els: Box::new(self.measure_arith_from_ast(else_expr)?),
+            }),
+            _ => {
+                self.error_expr(expr, "unsupported expression in measurement");
+                None
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -2336,6 +2684,35 @@ fn expr_as_ident(expr: &Expr) -> Option<&str> {
         Expr::Ident(id) => Some(&id.name),
         _ => None,
     }
+}
+
+/// The source span of any expression node.
+fn expr_span(expr: &Expr) -> cirq_ast::span::Span {
+    match expr {
+        Expr::Number { span, .. }
+        | Expr::Integer { span, .. }
+        | Expr::StringLit { span, .. }
+        | Expr::Bool { span, .. }
+        | Expr::BinOp { span, .. }
+        | Expr::UnaryOp { span, .. }
+        | Expr::Call { span, .. }
+        | Expr::Ternary { span, .. }
+        | Expr::Range { span, .. }
+        | Expr::List { span, .. }
+        | Expr::Tuple { span, .. }
+        | Expr::Block { span, .. }
+        | Expr::Gnd { span } => *span,
+        Expr::Ident(id) => id.span,
+        Expr::QualifiedName(qn) => qn.span,
+    }
+}
+
+/// Find a named call argument by key (case-insensitive).
+fn named_arg<'a>(named: &'a [(Ident, Expr)], key: &str) -> Option<&'a Expr> {
+    named
+        .iter()
+        .find(|(name, _)| name.name.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value)
 }
 
 /// Extract a net name from an expression. Handles Ident and Gnd.
@@ -4525,5 +4902,208 @@ mod tests {
             }
             other => panic!("expected behavioral source, got {other:?}"),
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Native measurement expression lowering
+    // -------------------------------------------------------------------
+
+    fn measure<'a>(circuit: &'a Circuit, name: &str) -> &'a MeasureSpec {
+        circuit
+            .measures
+            .iter()
+            .find(|m| m.name == name)
+            .unwrap_or_else(|| panic!("no measurement named `{name}`"))
+    }
+
+    #[test]
+    fn measure_aggregate_with_window() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                measure tran vout_max = max(v(out), from: 10n, to: 50n)
+            }
+            "#,
+        );
+        match measure(&circuit, "vout_max").expr.as_ref().unwrap() {
+            MeasureExpr::Aggregate {
+                kind,
+                vec,
+                from,
+                to,
+            } => {
+                assert_eq!(*kind, AggregateKind::Max);
+                assert_eq!(vec, "v(out)");
+                assert!((from.unwrap() - 10e-9).abs() < 1e-18);
+                assert!((to.unwrap() - 50e-9).abs() < 1e-18);
+            }
+            other => panic!("expected Aggregate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn measure_when_equality_crossing() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                measure tran settle = when(v(out) == 4.95, rise: 1)
+            }
+            "#,
+        );
+        match measure(&circuit, "settle").expr.as_ref().unwrap() {
+            MeasureExpr::When(spec) => {
+                assert_eq!(spec.signal, "v(out)");
+                assert!(
+                    matches!(spec.threshold, Threshold::Constant(v) if (v - 4.95).abs() < 1e-12)
+                );
+                assert_eq!(spec.crossing, CrossingKind::Rise(CrossingPick::Nth(1)));
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn measure_delay_from_cross_to_cross() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                measure tran td = delay(from: cross(v(in), 0.5, rise: 1),
+                                        to:   cross(v(out), 0.5, fall: 1))
+            }
+            "#,
+        );
+        match measure(&circuit, "td").expr.as_ref().unwrap() {
+            MeasureExpr::TrigTarg { trig, targ } => {
+                match trig {
+                    TrigTargClause::Signal {
+                        signal,
+                        val,
+                        crossing,
+                        ..
+                    } => {
+                        assert_eq!(signal, "v(in)");
+                        assert!((val - 0.5).abs() < 1e-12);
+                        assert_eq!(*crossing, CrossingKind::Rise(CrossingPick::Nth(1)));
+                    }
+                    other => panic!("expected Signal trig, got {other:?}"),
+                }
+                match targ {
+                    TrigTargClause::Signal {
+                        signal, crossing, ..
+                    } => {
+                        assert_eq!(signal, "v(out)");
+                        assert_eq!(*crossing, CrossingKind::Fall(CrossingPick::Nth(1)));
+                    }
+                    other => panic!("expected Signal targ, got {other:?}"),
+                }
+            }
+            other => panic!("expected TrigTarg, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn measure_integ_current() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                measure tran q_inj = integ(i(vd), from: 0, to: 20n)
+            }
+            "#,
+        );
+        match measure(&circuit, "q_inj").expr.as_ref().unwrap() {
+            MeasureExpr::Integ { vec, from, to } => {
+                assert_eq!(vec, "i(vd)");
+                assert_eq!(*from, Some(0.0));
+                assert!((to.unwrap() - 20e-9).abs() < 1e-18);
+            }
+            other => panic!("expected Integ, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn measure_derived_arithmetic() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                measure tran swing = vout_max - vout_min
+            }
+            "#,
+        );
+        match measure(&circuit, "swing").expr.as_ref().unwrap() {
+            MeasureExpr::Param(MeasArith::BinOp(lhs, ArithOp::Sub, rhs)) => {
+                assert!(matches!(lhs.as_ref(), MeasArith::Ref(n) if n == "vout_max"));
+                assert!(matches!(rhs.as_ref(), MeasArith::Ref(n) if n == "vout_min"));
+            }
+            other => panic!("expected Param(Sub), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn measure_conditional_pass_fail() {
+        // The headline feature: a ternary pass/fail over comparisons.
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                measure tran spec_pass = (td < 80p && swing > 100m) ? 1 : 0
+            }
+            "#,
+        );
+        match measure(&circuit, "spec_pass").expr.as_ref().unwrap() {
+            MeasureExpr::Param(MeasArith::Cond { cond, then, els }) => {
+                assert!(matches!(
+                    cond.as_ref(),
+                    MeasArith::BinOp(_, ArithOp::And, _)
+                ));
+                assert!(matches!(then.as_ref(), MeasArith::Const(v) if *v == 1.0));
+                assert!(matches!(els.as_ref(), MeasArith::Const(v) if *v == 0.0));
+            }
+            other => panic!("expected Param(Cond), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn measure_expr_synthesizes_reparsable_spec() {
+        // The synthesized `spec` string must round-trip back through the
+        // SPICE clause parser to the same MeasureExpr family.
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                measure tran vmax = max(v(out), from: 10n, to: 50n)
+            }
+            "#,
+        );
+        let m = measure(&circuit, "vmax");
+        let reparsed = MeasureSpec::parse("vmax", "tran", m.spec.clone());
+        assert!(
+            matches!(reparsed.expr, Some(MeasureExpr::Aggregate { .. })),
+            "spec `{}` should re-parse to an Aggregate",
+            m.spec
+        );
+    }
+
+    #[test]
+    fn measure_legacy_block_form_still_works() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                measure tran "vmax" { spec: "MAX v(out)" }
+            }
+            "#,
+        );
+        assert!(matches!(
+            measure(&circuit, "vmax").expr.as_ref().unwrap(),
+            MeasureExpr::Aggregate {
+                kind: AggregateKind::Max,
+                ..
+            }
+        ));
     }
 }

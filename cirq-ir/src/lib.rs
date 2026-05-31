@@ -615,6 +615,181 @@ pub enum ErrorReference {
     Vector(String),
 }
 
+impl MeasureExpr {
+    /// Render this measurement back into a SPICE `.meas` clause string —
+    /// the inverse of [`parse_measure_expr`]. Used when lowering native
+    /// Cirq `measure <kind> <name> = <expr>` declarations so the
+    /// [`MeasureSpec::spec`] field stays a faithful, re-parsable mirror of
+    /// `expr` (preserving the lossless Netlist round-trip).
+    pub fn to_spec_string(&self) -> String {
+        match self {
+            MeasureExpr::Aggregate {
+                kind,
+                vec,
+                from,
+                to,
+            } => {
+                let kw = match kind {
+                    AggregateKind::Max => "MAX",
+                    AggregateKind::Min => "MIN",
+                    AggregateKind::Avg => "AVG",
+                    AggregateKind::Rms => "RMS",
+                    AggregateKind::Pp => "PP",
+                };
+                format!("{kw} {vec}{}", render_range(*from, *to))
+            }
+            MeasureExpr::Integ { vec, from, to } => {
+                format!("INTEG {vec}{}", render_range(*from, *to))
+            }
+            MeasureExpr::Find { vec, at } => format!("FIND {vec} {}", render_find_at(at)),
+            MeasureExpr::When(spec) => format!("WHEN {}", render_crossing(spec)),
+            MeasureExpr::TrigTarg { trig, targ } => {
+                format!(
+                    "TRIG {} TARG {}",
+                    render_trig_targ(trig),
+                    render_trig_targ(targ)
+                )
+            }
+            MeasureExpr::Deriv { vec, at } => format!("DERIV {vec} {}", render_find_at(at)),
+            MeasureExpr::Param(arith) => format!("PARAM={}", render_arith(arith)),
+            MeasureExpr::Error {
+                kind,
+                expected,
+                actual,
+                minval,
+                ignore,
+            } => {
+                let kw = match kind {
+                    ErrorKind::Relative => "ERR1",
+                    ErrorKind::Absolute => "ERR2",
+                    ErrorKind::Rms => "ERR3",
+                };
+                let expected = match expected {
+                    ErrorReference::Constant(v) => render_num(*v),
+                    ErrorReference::Vector(s) => s.clone(),
+                };
+                let mut s = format!("{kw} {expected} {actual}");
+                if let Some(m) = minval {
+                    s.push_str(&format!(" MINVAL={}", render_num(*m)));
+                }
+                if let Some(i) = ignore {
+                    s.push_str(&format!(" IGNORE={}", render_num(*i)));
+                }
+                s
+            }
+        }
+    }
+}
+
+/// Format an `f64` so that [`parse_si_value`]/`f64::from_str` round-trips it.
+/// Rust's `Display` for `f64` never uses scientific notation, so the result
+/// is always a plain decimal the measure parser accepts.
+fn render_num(v: f64) -> String {
+    v.to_string()
+}
+
+fn render_range(from: Option<f64>, to: Option<f64>) -> String {
+    let mut s = String::new();
+    if let Some(f) = from {
+        s.push_str(&format!(" FROM={}", render_num(f)));
+    }
+    if let Some(t) = to {
+        s.push_str(&format!(" TO={}", render_num(t)));
+    }
+    s
+}
+
+fn render_pick(pick: CrossingPick) -> String {
+    match pick {
+        CrossingPick::Nth(n) => n.to_string(),
+        CrossingPick::Last => "LAST".to_string(),
+    }
+}
+
+fn render_crossing(spec: &CrossingSpec) -> String {
+    let threshold = match &spec.threshold {
+        Threshold::Constant(v) => render_num(*v),
+        Threshold::Vector(s) => s.clone(),
+    };
+    let edge = match spec.crossing {
+        CrossingKind::Rise(p) => format!("RISE={}", render_pick(p)),
+        CrossingKind::Fall(p) => format!("FALL={}", render_pick(p)),
+        CrossingKind::Cross(p) => format!("CROSS={}", render_pick(p)),
+    };
+    format!(
+        "{}={} {edge}{}",
+        spec.signal,
+        threshold,
+        render_range(spec.from, spec.to)
+    )
+}
+
+fn render_find_at(at: &FindAt) -> String {
+    match at {
+        FindAt::Sweep(v) => format!("AT={}", render_num(*v)),
+        FindAt::SweepLast => "AT=LAST".to_string(),
+        FindAt::Crossing(spec) => format!("WHEN {}", render_crossing(spec)),
+    }
+}
+
+fn render_trig_targ(clause: &TrigTargClause) -> String {
+    match clause {
+        TrigTargClause::At(v) => format!("AT={}", render_num(*v)),
+        TrigTargClause::Signal {
+            signal,
+            val,
+            crossing,
+            td,
+        } => {
+            let edge = match crossing {
+                CrossingKind::Rise(p) => format!("RISE={}", render_pick(*p)),
+                CrossingKind::Fall(p) => format!("FALL={}", render_pick(*p)),
+                CrossingKind::Cross(p) => format!("CROSS={}", render_pick(*p)),
+            };
+            let td = match td {
+                Some(t) => format!(" TD={}", render_num(*t)),
+                None => String::new(),
+            };
+            format!("{signal} VAL={} {edge}{td}", render_num(*val))
+        }
+    }
+}
+
+/// Render a [`MeasArith`] tree back into the infix syntax the arithmetic
+/// parser accepts. Every binary node is fully parenthesised so precedence is
+/// preserved without tracking it explicitly.
+fn render_arith(a: &MeasArith) -> String {
+    match a {
+        MeasArith::Const(v) => render_num(*v),
+        MeasArith::Ref(name) => name.clone(),
+        MeasArith::Neg(inner) => format!("-({})", render_arith(inner)),
+        MeasArith::Not(inner) => format!("!({})", render_arith(inner)),
+        MeasArith::BinOp(lhs, op, rhs) => {
+            let op = match op {
+                ArithOp::Add => "+",
+                ArithOp::Sub => "-",
+                ArithOp::Mul => "*",
+                ArithOp::Div => "/",
+                ArithOp::Lt => "<",
+                ArithOp::Gt => ">",
+                ArithOp::Le => "<=",
+                ArithOp::Ge => ">=",
+                ArithOp::Eq => "==",
+                ArithOp::Ne => "!=",
+                ArithOp::And => "&&",
+                ArithOp::Or => "||",
+            };
+            format!("({} {op} {})", render_arith(lhs), render_arith(rhs))
+        }
+        MeasArith::Cond { cond, then, els } => format!(
+            "({} ? {} : {})",
+            render_arith(cond),
+            render_arith(then),
+            render_arith(els)
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AggregateKind {
     Max,
@@ -684,12 +859,28 @@ pub enum TrigTargClause {
 /// Arithmetic over constants and references to other measurement results.
 /// Identifiers are resolved at evaluation time against the running
 /// `measurements` plot.
+///
+/// In addition to plain arithmetic, the grammar supports comparisons
+/// (`< > <= >= == !=`), logical combinators (`&& ||`, `!`), and a C-style
+/// ternary (`cond ? then : else`). Booleans are represented numerically:
+/// a true result evaluates to `1.0` and false to `0.0`, and any non-zero
+/// value is treated as true. This lets pass/fail measurements be written as
+/// ordinary expressions, e.g. `(vout_swing > 100m) ? 1 : 0`.
 #[derive(Debug, Clone)]
 pub enum MeasArith {
     Const(f64),
     Ref(String),
     Neg(Box<MeasArith>),
+    /// Logical negation: `!x` is `1.0` when `x == 0.0`, else `0.0`.
+    Not(Box<MeasArith>),
     BinOp(Box<MeasArith>, ArithOp, Box<MeasArith>),
+    /// Ternary conditional: evaluates `cond`, then yields `then` if it is
+    /// non-zero, otherwise `els`.
+    Cond {
+        cond: Box<MeasArith>,
+        then: Box<MeasArith>,
+        els: Box<MeasArith>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -698,6 +889,14 @@ pub enum ArithOp {
     Sub,
     Mul,
     Div,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne,
+    And,
+    Or,
 }
 
 /// Errors from parsing a `.meas` spec string.
@@ -1110,10 +1309,15 @@ mod measure_parse {
 
     // ---- PARAM arithmetic parser ----
     //
-    // Grammar:
-    //   expr   ::= term (('+' | '-') term)*
-    //   term   ::= factor (('*' | '/') factor)*
-    //   factor ::= ('-' | '+') factor | primary
+    // Grammar (lowest to highest precedence):
+    //   expr    ::= ternary
+    //   ternary ::= or ('?' ternary ':' ternary)?
+    //   or      ::= and ('||' and)*
+    //   and     ::= cmp ('&&' cmp)*
+    //   cmp     ::= add (('<' | '>' | '<=' | '>=' | '==' | '!=') add)*
+    //   add     ::= term (('+' | '-') term)*
+    //   term    ::= factor (('*' | '/') factor)*
+    //   factor  ::= ('-' | '+' | '!') factor | primary
     //   primary ::= number | identifier | '(' expr ')'
 
     pub(super) fn parse_arith(input: &str) -> Result<MeasArith, MeasParseError> {
@@ -1168,7 +1372,88 @@ mod measure_parse {
             }
         }
 
+        /// Returns the two-byte operator at the cursor (after whitespace) if it
+        /// matches `op`, advancing past it. Used for `<=`, `>=`, `==`, `!=`,
+        /// `&&`, `||`.
+        fn consume2(&mut self, op: [u8; 2]) -> bool {
+            self.skip_ws();
+            if self.src.get(self.pos) == Some(&op[0]) && self.src.get(self.pos + 1) == Some(&op[1])
+            {
+                self.pos += 2;
+                true
+            } else {
+                false
+            }
+        }
+
         fn parse_expr(&mut self) -> Result<MeasArith, MeasParseError> {
+            self.parse_ternary()
+        }
+
+        fn parse_ternary(&mut self) -> Result<MeasArith, MeasParseError> {
+            let cond = self.parse_or()?;
+            if self.consume(b'?') {
+                let then = self.parse_ternary()?;
+                if !self.consume(b':') {
+                    return Err(MeasParseError::InvalidArith(
+                        "missing `:` in ternary expression".into(),
+                    ));
+                }
+                let els = self.parse_ternary()?;
+                return Ok(MeasArith::Cond {
+                    cond: Box::new(cond),
+                    then: Box::new(then),
+                    els: Box::new(els),
+                });
+            }
+            Ok(cond)
+        }
+
+        fn parse_or(&mut self) -> Result<MeasArith, MeasParseError> {
+            let mut lhs = self.parse_and()?;
+            while self.consume2([b'|', b'|']) {
+                let rhs = self.parse_and()?;
+                lhs = MeasArith::BinOp(Box::new(lhs), ArithOp::Or, Box::new(rhs));
+            }
+            Ok(lhs)
+        }
+
+        fn parse_and(&mut self) -> Result<MeasArith, MeasParseError> {
+            let mut lhs = self.parse_cmp()?;
+            while self.consume2([b'&', b'&']) {
+                let rhs = self.parse_cmp()?;
+                lhs = MeasArith::BinOp(Box::new(lhs), ArithOp::And, Box::new(rhs));
+            }
+            Ok(lhs)
+        }
+
+        fn parse_cmp(&mut self) -> Result<MeasArith, MeasParseError> {
+            let mut lhs = self.parse_add()?;
+            loop {
+                self.skip_ws();
+                // Two-char operators must be tested before the one-char `<`/`>`.
+                let op = if self.consume2([b'<', b'=']) {
+                    ArithOp::Le
+                } else if self.consume2([b'>', b'=']) {
+                    ArithOp::Ge
+                } else if self.consume2([b'=', b'=']) {
+                    ArithOp::Eq
+                } else if self.consume2([b'!', b'=']) {
+                    ArithOp::Ne
+                } else if self.consume(b'<') {
+                    ArithOp::Lt
+                } else if self.consume(b'>') {
+                    ArithOp::Gt
+                } else {
+                    break;
+                };
+                let rhs = self.parse_add()?;
+                lhs = MeasArith::BinOp(Box::new(lhs), op, Box::new(rhs));
+            }
+            Ok(lhs)
+        }
+
+        fn parse_add(&mut self) -> Result<MeasArith, MeasParseError> {
             let mut lhs = self.parse_term()?;
             loop {
                 self.skip_ws();
@@ -1210,6 +1495,12 @@ mod measure_parse {
                 Some(b'+') => {
                     self.pos += 1;
                     self.parse_factor()
+                }
+                // `!x` is logical negation. `!=` is handled one level up in
+                // `parse_cmp`, so a `!` reaching here is always a prefix.
+                Some(b'!') => {
+                    self.pos += 1;
+                    Ok(MeasArith::Not(Box::new(self.parse_factor()?)))
                 }
                 _ => self.parse_primary(),
             }
@@ -1624,6 +1915,62 @@ mod measure_tests {
         match parse("PARAM=1k") {
             MeasureExpr::Param(MeasArith::Const(v)) => assert!((v - 1000.0).abs() < 1e-9),
             other => panic!("expected Param(Const), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_param_comparison() {
+        match parse("PARAM=vout_swing > 100m") {
+            MeasureExpr::Param(MeasArith::BinOp(_, ArithOp::Gt, _)) => {}
+            other => panic!("expected Param(Gt), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_param_ternary() {
+        // The headline case: a pass/fail conditional.
+        match parse("PARAM=(vout_diff < 100k) ? 1 : 0") {
+            MeasureExpr::Param(MeasArith::Cond { cond, then, els }) => {
+                assert!(matches!(cond.as_ref(), MeasArith::BinOp(_, ArithOp::Lt, _)));
+                assert!(matches!(then.as_ref(), MeasArith::Const(v) if *v == 1.0));
+                assert!(matches!(els.as_ref(), MeasArith::Const(v) if *v == 0.0));
+            }
+            other => panic!("expected Param(Cond), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_param_logical_and_precedence() {
+        // `&&` binds looser than comparison, so this is `(a < b) && (c > d)`.
+        match parse("PARAM=td < 80p && swing > 100m") {
+            MeasureExpr::Param(MeasArith::BinOp(lhs, ArithOp::And, rhs)) => {
+                assert!(matches!(lhs.as_ref(), MeasArith::BinOp(_, ArithOp::Lt, _)));
+                assert!(matches!(rhs.as_ref(), MeasArith::BinOp(_, ArithOp::Gt, _)));
+            }
+            other => panic!("expected Param(And), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn measure_expr_spec_roundtrips() {
+        // Render each variant family back to a spec string and confirm it
+        // re-parses to the same family.
+        for spec in [
+            "MAX v(out) FROM=10n TO=50n",
+            "INTEG i(vd) FROM=0 TO=20n",
+            "WHEN v(out)=4.95 RISE=1",
+            "FIND v(out) AT=1meg",
+            "TRIG v(in) VAL=0.5 RISE=1 TARG v(out) VAL=0.5 FALL=1",
+            "PARAM=(vout_diff < 100k) ? 1 : 0",
+        ] {
+            let original = parse(spec);
+            let rendered = original.to_spec_string();
+            let reparsed = parse(&rendered);
+            assert_eq!(
+                std::mem::discriminant(&original),
+                std::mem::discriminant(&reparsed),
+                "spec `{spec}` rendered to `{rendered}` which changed variant",
+            );
         }
     }
 
