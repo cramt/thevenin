@@ -276,8 +276,11 @@ synthesizes a canonical clause string, so native and SPICE-imported
 measurements stay identical in the IR and round-trip losslessly. A measurement
 that cannot be lowered surfaces an error diagnostic at its source span.
 
-Status of advanced `.meas` features (`ERROR` mode, file-referenced `PARAM`):
-planned.
+Advanced `.meas` features are supported: `ERR`/`ERR1`/`ERR2`/`ERR3` error
+metrics (with `MINVAL=`/`IGNORE=`), the `IF '<cond>'` conditional gate, and
+`FILE=<path>` output. The `PARAM=` arithmetic covers comparisons, logical
+operators, and the ternary, so pass/fail checks like `(a < b) ? 1 : 0` work
+directly.
 
 ## Multiple Analyses
 

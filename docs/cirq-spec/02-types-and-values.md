@@ -64,7 +64,8 @@ true
 false
 ```
 
-Used in conditional parameter expressions (future) and model selection.
+Used in conditional parameter expressions and model selection (see the
+compile-time `if/elseif/else` blocks in `05-parameters.md`).
 
 ## Expressions
 
@@ -78,6 +79,6 @@ param half = vdd / 2
 // Function calls (built-in math)
 param rms = sqrt(v1**2 + v2**2)
 
-// Ternary (future consideration)
-// param val = if condition then a else b
+// Ternary conditional
+param val = condition ? a : b
 ```
