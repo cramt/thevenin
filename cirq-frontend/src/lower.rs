@@ -3,10 +3,11 @@
 
 use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CodeDecl,
-    CoupledLineDecl, CoupledLineField, ElementInst, ExportDecl, Expr, FuncDecl, GlobalDecl, IcDecl,
-    IcEntry, Ident, Import, LetDecl, MeasureBody, MeasureDecl, ModelDef, ModelParam, ModuleDef,
-    ModuleInst, OptionSetting, OptionsDecl, ParamDecl, PortDecl, PortDirection, QualifiedName,
-    SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp, span::Span,
+    ConditionalBranch, ConditionalDecl, CoupledLineDecl, CoupledLineField, ElementInst, ExportDecl,
+    Expr, FuncDecl, GlobalDecl, IcDecl, IcEntry, Ident, Import, LetDecl, MeasureBody, MeasureDecl,
+    ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting, OptionsDecl, ParamDecl, PortDecl,
+    PortDirection, QualifiedName, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp,
+    span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -166,6 +167,57 @@ impl Ctx<'_> {
         })
     }
 
+    fn lower_conditional(&mut self, node: tree_sitter::Node) -> Option<ConditionalDecl> {
+        let mut branches = Vec::new();
+
+        // The leading `if` branch.
+        let cond_node = self.required_field(node, "condition")?;
+        let condition = self.lower_expr(cond_node)?;
+        let then_node = self.required_field(node, "then")?;
+        let body = self.lower_conditional_block(then_node);
+        branches.push(ConditionalBranch { condition, body });
+
+        // Any `elseif` arms, then an optional `else`.
+        let mut else_body = None;
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "elseif_clause" => {
+                    if let Some(cond_node) = child.child_by_field_name("condition")
+                        && let Some(body_node) = child.child_by_field_name("body")
+                        && let Some(condition) = self.lower_expr(cond_node)
+                    {
+                        let body = self.lower_conditional_block(body_node);
+                        branches.push(ConditionalBranch { condition, body });
+                    }
+                }
+                "else_clause" => {
+                    if let Some(body_node) = child.child_by_field_name("body") {
+                        else_body = Some(self.lower_conditional_block(body_node));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Some(ConditionalDecl {
+            branches,
+            else_body,
+            span: span_of(node),
+        })
+    }
+
+    fn lower_conditional_block(&mut self, node: tree_sitter::Node) -> Vec<CircuitItem> {
+        let mut items = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if let Some(item) = self.lower_circuit_item(child) {
+                items.push(item);
+            }
+        }
+        items
+    }
+
     fn lower_circuit_item(&mut self, node: tree_sitter::Node) -> Option<CircuitItem> {
         match node.kind() {
             "param_decl" => self.lower_param(node).map(CircuitItem::Param),
@@ -184,6 +236,7 @@ impl Ctx<'_> {
             "coupled_line_decl" => self.lower_coupled_line(node).map(CircuitItem::CoupledLine),
             "code_decl" => self.lower_code(node).map(CircuitItem::Code),
             "measure_decl" => self.lower_measure(node).map(CircuitItem::Measure),
+            "conditional_decl" => self.lower_conditional(node).map(CircuitItem::Conditional),
             "line_comment" | "block_comment" => None,
             "ERROR" => {
                 self.error_at(node, "syntax error in circuit body");

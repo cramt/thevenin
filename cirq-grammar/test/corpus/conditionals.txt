@@ -1,0 +1,61 @@
+================================================================================
+Compile-time if / elseif / else
+================================================================================
+
+circuit t {
+  if a { param x = 1 } elseif b { param y = 2 } else { param z = 3 }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (conditional_decl
+      condition: (identifier)
+      then: (conditional_block
+        (param_decl
+          name: (identifier)
+          value: (number_literal)))
+      (elseif_clause
+        condition: (identifier)
+        body: (conditional_block
+          (param_decl
+            name: (identifier)
+            value: (number_literal))))
+      (else_clause
+        body: (conditional_block
+          (param_decl
+            name: (identifier)
+            value: (number_literal)))))))
+
+================================================================================
+If with no else, condition expression
+================================================================================
+
+circuit t {
+  if vdd > 1.5 {
+    R1: resistor(in -> gate, 10k)
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (circuit_decl
+    name: (identifier)
+    (conditional_decl
+      condition: (binary_expression
+        left: (identifier)
+        right: (number_literal))
+      then: (conditional_block
+        (element_inst
+          name: (identifier)
+          type: (identifier)
+          (argument_list
+            (argument
+              (connection
+                from: (identifier)
+                to: (identifier)))
+            (argument
+              (number_literal))))))))

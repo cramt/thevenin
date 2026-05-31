@@ -350,25 +350,17 @@ impl IrCtx {
     fn lower_circuit_body_prefixed(&mut self, items: &[CircuitItem], prefix: &str) {
         // Two-pass: first collect all declaration names to detect duplicates
         // and register models/params, then lower elements and analyses.
-
-        // Pass 1: declarations (params, lets, models, globals, module defs).
-        for item in items {
-            match item {
-                CircuitItem::Param(p) => self.lower_param(p, prefix),
-                CircuitItem::Let(l) => self.lower_let(l, prefix),
-                CircuitItem::ModelDef(m) => self.lower_model_def(m),
-                CircuitItem::Global(g) => {
-                    self.intern_net(&g.name.name, true);
-                }
-                CircuitItem::ModuleDef(m) => {
-                    self.module_defs.insert(m.name.name.clone(), m.clone());
-                }
-                _ => {}
-            }
-        }
+        //
+        // Compile-time `if/elseif/else` conditionals are resolved during pass
+        // 1, in declaration order, by folding each condition against the
+        // params known so far. The taken branch's items are spliced into
+        // `flat`, so pass 2 never sees a conditional and both passes agree on
+        // which branch was chosen.
+        let mut flat: Vec<&CircuitItem> = Vec::new();
+        self.collect_pass1(items, prefix, &mut flat);
 
         // Pass 2: elements, module instances, analyses, options, temp.
-        for item in items {
+        for item in flat {
             match item {
                 CircuitItem::Element(e) => self.lower_element_prefixed(e, prefix),
                 CircuitItem::Analysis(a) => self.lower_analysis(a),
@@ -386,13 +378,89 @@ impl IrCtx {
                     ));
                 }
                 CircuitItem::Measure(m) => self.lower_measure_decl(m),
-                // Already handled in pass 1, or collected above.
+                // Already handled in pass 1, or collected above. Conditionals
+                // are flattened away in pass 1 and never reach `flat`.
                 CircuitItem::Param(_)
                 | CircuitItem::Let(_)
                 | CircuitItem::ModelDef(_)
                 | CircuitItem::ModuleDef(_)
-                | CircuitItem::Global(_) => {}
+                | CircuitItem::Global(_)
+                | CircuitItem::Conditional(_) => {}
             }
+        }
+    }
+
+    /// Pass 1: resolve declarations (params, lets, models, globals, module
+    /// defs) and flatten compile-time conditionals into `flat` for pass 2.
+    fn collect_pass1<'a>(
+        &mut self,
+        items: &'a [CircuitItem],
+        prefix: &str,
+        flat: &mut Vec<&'a CircuitItem>,
+    ) {
+        for item in items {
+            match item {
+                CircuitItem::Param(p) => {
+                    self.lower_param(p, prefix);
+                    flat.push(item);
+                }
+                CircuitItem::Let(l) => {
+                    self.lower_let(l, prefix);
+                    flat.push(item);
+                }
+                CircuitItem::ModelDef(m) => {
+                    self.lower_model_def(m);
+                    flat.push(item);
+                }
+                CircuitItem::Global(g) => {
+                    self.intern_net(&g.name.name, true);
+                    flat.push(item);
+                }
+                CircuitItem::ModuleDef(m) => {
+                    self.module_defs.insert(m.name.name.clone(), m.clone());
+                    flat.push(item);
+                }
+                CircuitItem::Conditional(c) => {
+                    if let Some(branch) = self.resolve_conditional_branch(c) {
+                        self.collect_pass1(branch, prefix, flat);
+                    }
+                }
+                // Pass-2 items: defer, but keep them in source order.
+                _ => flat.push(item),
+            }
+        }
+    }
+
+    /// Evaluate an `if/elseif/else` chain and return the taken branch's items
+    /// (or `None` if no branch is taken or a condition cannot be folded). The
+    /// condition is evaluated against the params resolved so far.
+    fn resolve_conditional_branch<'a>(
+        &mut self,
+        c: &'a cirq_ast::ConditionalDecl,
+    ) -> Option<&'a [CircuitItem]> {
+        for branch in &c.branches {
+            match self.eval_condition(&branch.condition) {
+                Some(true) => return Some(&branch.body),
+                Some(false) => continue,
+                None => {
+                    self.error_expr(
+                        &branch.condition,
+                        "`if` condition must be a constant expression over params and literals",
+                    );
+                    return None;
+                }
+            }
+        }
+        c.else_body.as_deref()
+    }
+
+    /// Fold a conditional's predicate to a boolean. Numbers and booleans are
+    /// truthy when non-zero / `true`; anything that can't be reduced to a
+    /// scalar at lowering time yields `None`.
+    fn eval_condition(&mut self, expr: &Expr) -> Option<bool> {
+        match self.eval_expr(expr) {
+            Ok(v) => value_as_f64(&v).ok().map(|f| f != 0.0),
+            Err(_) => None,
         }
     }
 
@@ -2777,6 +2845,16 @@ fn eval_binop(
     rhs: &Value,
     _span: cirq_ast::span::Span,
 ) -> Result<Value, String> {
+    // String equality/inequality — lets compile-time conditionals compare
+    // string params, e.g. `if corner == "ff" { ... }`.
+    if let (Value::String(a), Value::String(b)) = (lhs, rhs) {
+        match op {
+            BinOp::Eq => return Ok(Value::Bool(a == b)),
+            BinOp::Ne => return Ok(Value::Bool(a != b)),
+            _ => return Err("strings only support `==` and `!=`".to_string()),
+        }
+    }
+
     let l = value_as_f64(lhs)?;
     let r = value_as_f64(rhs)?;
 
@@ -5105,5 +5183,162 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // -------------------------------------------------------------------
+    // Compile-time conditionals (`if/elseif/else`)
+    // -------------------------------------------------------------------
+
+    fn has_element(circuit: &Circuit, name: &str) -> bool {
+        circuit.elements.iter().any(|e| e.name == name)
+    }
+
+    fn has_param(circuit: &Circuit, name: &str) -> bool {
+        circuit.params.iter().any(|p| p.name == name)
+    }
+
+    #[test]
+    fn if_true_branch_includes_items() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param vdd = 1.8
+                if vdd > 1.5 {
+                    Rprot: resistor(in -> gate, 10k)
+                }
+            }
+            "#,
+        );
+        assert!(has_element(&circuit, "Rprot"));
+    }
+
+    #[test]
+    fn if_false_branch_is_excluded() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param vdd = 1.0
+                if vdd > 1.5 {
+                    Rprot: resistor(in -> gate, 10k)
+                }
+            }
+            "#,
+        );
+        assert!(!has_element(&circuit, "Rprot"));
+    }
+
+    #[test]
+    fn elseif_else_chain_picks_first_true() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param corner = "ss"
+                if corner == "ff" {
+                    param vto = 0.35
+                } elseif corner == "ss" {
+                    param vto = 0.55
+                } else {
+                    param vto = 0.45
+                }
+            }
+            "#,
+        );
+        assert_eq!(real_val(find_param(&circuit, "vto")), 0.55);
+    }
+
+    #[test]
+    fn else_branch_taken_when_all_false() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param corner = "tt"
+                if corner == "ff" {
+                    param vto = 0.35
+                } elseif corner == "ss" {
+                    param vto = 0.55
+                } else {
+                    param vto = 0.45
+                }
+            }
+            "#,
+        );
+        assert_eq!(real_val(find_param(&circuit, "vto")), 0.45);
+    }
+
+    #[test]
+    fn conditional_param_visible_to_later_items() {
+        // A param declared inside a taken branch must be in scope for code
+        // that follows the conditional.
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param fast = true
+                if fast {
+                    param rval = 1k
+                }
+                R1: resistor(a -> b, rval)
+            }
+            "#,
+        );
+        assert!(has_param(&circuit, "rval"));
+        assert!(has_element(&circuit, "R1"));
+    }
+
+    #[test]
+    fn nested_conditional_resolves() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                param vdd = 1.8
+                param fast = true
+                if vdd > 1.5 {
+                    if fast {
+                        R1: resistor(a -> b, 1k)
+                    } else {
+                        R2: resistor(a -> b, 2k)
+                    }
+                }
+            }
+            "#,
+        );
+        assert!(has_element(&circuit, "R1"));
+        assert!(!has_element(&circuit, "R2"));
+    }
+
+    #[test]
+    fn conditional_works_in_module_scope() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                module leaf {
+                    port a: in
+                    port b: out
+                    param big = true
+                    if big {
+                        R1: resistor(a -> b, 10k)
+                    } else {
+                        R1: resistor(a -> b, 1k)
+                    }
+                }
+                inst: leaf(a: n1, b: n2)
+            }
+            "#,
+        );
+        // The instantiated resistor should carry the true-branch value.
+        let r = circuit
+            .elements
+            .iter()
+            .find(|e| e.name.ends_with("R1"))
+            .expect("R1 from module");
+        let rval = r
+            .params
+            .iter()
+            .find(|(k, _)| k == "resistance" || k == "r" || k == "value")
+            .map(|(_, v)| match v {
+                Value::Real(x) => *x,
+                Value::Integer(x) => *x as f64,
+                _ => f64::NAN,
+            });
+        assert_eq!(rval, Some(10_000.0));
     }
 }

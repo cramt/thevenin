@@ -99,3 +99,58 @@ param device_type = "nmos"
 ```
 
 See `09-attributes.md` for attribute syntax. Validation is checked at IR lowering time.
+
+## Compile-Time Conditionals
+
+`if / elseif / else` blocks select which declarations exist, resolved at
+lowering time — not during simulation. Each condition is a constant expression
+over params and literals; only the first true branch (or the `else` body)
+reaches the IR.
+
+```cirq
+circuit amp {
+    param corner = "tt"        // ff | tt | ss
+    param vdd = 1.8
+    param fast = true
+
+    // Conditional parameter selection.
+    if corner == "ff" {
+        param vto = 0.35
+    } elseif corner == "ss" {
+        param vto = 0.55
+    } else {
+        param vto = 0.45
+    }
+
+    // Conditional element inclusion — the resistor only exists when true.
+    if vdd > 1.5 {
+        Rprot: resistor(in -> gate, 10k)
+    }
+
+    // Bodies hold any circuit item, including whole analyses and nested ifs.
+    if fast {
+        analysis tran { step: 10p; stop: 5n }
+    } else {
+        analysis tran { step: 100p; stop: 50n }
+    }
+}
+```
+
+Rules:
+
+- **Compile-time, not runtime.** The condition is folded during lowering; the
+  non-taken branch never reaches the IR. This is distinct from the runtime
+  ternary (`cond ? a : b`, an expression) and from `.control` script `if`.
+- **Conditions must be constant-foldable** — params and literals only, with
+  arithmetic, comparisons (`< > <= >= == !=`, including string `==`/`!=`),
+  logical operators (`&& || !`), and the ternary. A condition that cannot be
+  reduced to a scalar at lowering time is a compile error.
+- **Declaration order.** A condition sees the params declared before the `if`;
+  params declared inside a taken branch are in scope for items that follow it.
+- **Any circuit item** may appear in a branch body: `param`, `let`, elements,
+  `model`, `analysis`, module instances, or a nested `if`.
+- **Works at circuit and module scope**, since module bodies accept the same
+  items.
+
+This is the native counterpart of SPICE's `.if/.elseif/.else/.endif`, which the
+importer maps onto the same construct.

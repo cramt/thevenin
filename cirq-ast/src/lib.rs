@@ -62,6 +62,34 @@ pub enum CircuitItem {
     CoupledLine(CoupledLineDecl),
     Code(CodeDecl),
     Measure(MeasureDecl),
+    /// Compile-time `if/elseif/else` conditional selecting circuit items.
+    Conditional(ConditionalDecl),
+}
+
+// ---------------------------------------------------------------------------
+// Compile-time conditional
+// ---------------------------------------------------------------------------
+
+/// A compile-time `if <cond> { ... } elseif <cond> { ... } else { ... }`.
+///
+/// Resolved during lowering: each branch condition is a constant expression
+/// over params/literals, and only the first true branch's items (or the
+/// `else` body) reach the IR. Bodies may contain any circuit item, including
+/// nested conditionals.
+#[derive(Debug, Clone)]
+pub struct ConditionalDecl {
+    /// The `if` branch followed by any `elseif` branches, in source order.
+    pub branches: Vec<ConditionalBranch>,
+    /// The optional `else` body.
+    pub else_body: Option<Vec<CircuitItem>>,
+    pub span: Span,
+}
+
+/// One `if`/`elseif` arm: a condition and the items it guards.
+#[derive(Debug, Clone)]
+pub struct ConditionalBranch {
+    pub condition: Expr,
+    pub body: Vec<CircuitItem>,
 }
 
 // ---------------------------------------------------------------------------

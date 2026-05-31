@@ -56,8 +56,32 @@ module.exports = grammar({
         $.ic_decl,
         $.coupled_line_decl,
         $.code_decl,
-        $.measure_decl
+        $.measure_decl,
+        $.conditional_decl
       ),
+
+    // ── Compile-time conditional ─────────────────────────────────────
+    //
+    // `if <cond> { items } elseif <cond> { items } else { items }`.
+    // Resolved at lowering time: the condition is a constant expression over
+    // params/literals, and only the taken branch's items reach the IR. The
+    // body holds any circuit item (params, elements, models, analyses, or a
+    // nested conditional), so it works at circuit and module scope alike.
+    conditional_decl: ($) =>
+      seq(
+        "if",
+        field("condition", $._expression),
+        field("then", $.conditional_block),
+        repeat($.elseif_clause),
+        optional($.else_clause)
+      ),
+
+    elseif_clause: ($) =>
+      seq("elseif", field("condition", $._expression), field("body", $.conditional_block)),
+
+    else_clause: ($) => seq("else", field("body", $.conditional_block)),
+
+    conditional_block: ($) => seq("{", repeat($._circuit_item), "}"),
 
     // ── Module ───────────────────────────────────────────────────────
 

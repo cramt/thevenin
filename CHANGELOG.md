@@ -96,6 +96,12 @@ the URC element and HiSIMHV high-voltage extensions.
   `(vout_diff < 100k) ? 1 : 0` now parses and evaluates, in both the SPICE
   clause parser and native Cirq. Named call arguments (`f(x, key: value)`) were
   added to the grammar for the probe functions.
+- **Compile-time `if / elseif / else` conditionals** — native brace blocks at
+  circuit and module scope (`if vdd > 1.5 { ... } elseif ... { ... } else { ... }`)
+  that select which declarations reach the IR. Conditions are constant
+  expressions over params/literals (numeric, boolean, and string `==`/`!=`);
+  resolved during lowering, so the non-taken branch is dropped. The native
+  counterpart of SPICE `.if/.elseif/.else/.endif`.
 - Built-in functions: `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`,
   `tanh`, `sgn`, `floor`, `ceil`, `int`, `db`, `db20`, `limit(x, lo, hi)`.
 - `.control` commands: `while`, `repeat N`, `save`.
