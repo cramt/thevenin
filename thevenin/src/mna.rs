@@ -1187,7 +1187,7 @@ pub(crate) fn push_mosfet_caps(
 /// Currently supports: resistors (R), independent voltage sources (V),
 /// independent current sources (I), capacitors (C, open in DC),
 /// inductors (L, short in DC), and diodes (D, nonlinear).
-pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
+pub(crate) fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     assemble_mna_inner(netlist, false, None)
 }
 
