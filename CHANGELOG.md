@@ -96,6 +96,12 @@ the URC element and HiSIMHV high-voltage extensions.
   `(vout_diff < 100k) ? 1 : 0` now parses and evaluates, in both the SPICE
   clause parser and native Cirq. Named call arguments (`f(x, key: value)`) were
   added to the grammar for the probe functions.
+- **Native `analysis four` / `analysis fft` blocks** — Fourier and FFT
+  post-processing as first-class analysis kinds (`analysis four { fundamental:
+  1k; output: v(out) }`, `analysis fft { output: v(out); window: hann }`).
+  `output:` accepts a single signal or a list. Lower to the same
+  `Analysis::Four` / `Analysis::Fft` IR as imported SPICE `.four`/`.fft`, so the
+  existing Fourier post-processors run them — no new grammar required.
 - **Compile-time `if / elseif / else` conditionals** — native brace blocks at
   circuit and module scope (`if vdd > 1.5 { ... } elseif ... { ... } else { ... }`)
   that select which declarations reach the IR. Conditions are constant

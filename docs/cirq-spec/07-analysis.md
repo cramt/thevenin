@@ -155,6 +155,45 @@ analysis tf {
 }
 ```
 
+## Fourier Analysis
+
+`analysis four` runs a Fourier decomposition of the final fundamental period of
+the preceding transient (the native counterpart of SPICE `.four`):
+
+```cirq
+analysis tran { step: 5u; stop: 5m }
+
+analysis four {
+    fundamental: 1k            // fundamental frequency (Hz) — required
+    output: v(out)             // signal(s) to analyse — required
+    harmonics: 9               // harmonics to report — optional, default 9
+}
+```
+
+`output` accepts a single signal or a list: `output: [v(out), i(vd)]`. Results
+land in a `fourier1` plot with `<signal>_freq` / `_mag` / `_phase` / `_norm`
+columns (index 0 is the DC term).
+
+## FFT Analysis
+
+`analysis fft` runs a windowed FFT over a transient interval (the native
+counterpart of SPICE `.fft`):
+
+```cirq
+analysis fft {
+    output: v(out)             // signal(s) — required
+    start: 1u                  // window start (s) — optional, default tstart
+    stop: 10u                  // window stop  (s) — optional, default tstop
+    npoints: 1024              // rounded up to a power of two — optional, default 1024
+    window: hann               // rectangular | hann | hamming | blackman | bartlett (default hann)
+    format: magnitude          // magnitude | complex — optional, default magnitude
+}
+```
+
+Results land in an `fft1` plot with `<signal>_freq` (real) and `<signal>_fft`
+(complex spectrum) columns. Both `four` and `fft` post-process the preceding
+`analysis tran`, so a transient must be declared alongside them.
+
 ## Measurements
 
 A `measure` declaration records a post-simulation measurement on the results

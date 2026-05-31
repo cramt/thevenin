@@ -2010,6 +2010,8 @@ impl IrCtx {
                     source: source_id,
                 }))
             }
+            "four" => self.lower_four_analysis(&a.body, a).map(Analysis::Four),
+            "fft" => self.lower_fft_analysis(&a.body, a).map(Analysis::Fft),
             _ => {
                 self.diags.push(
                     Diagnostic::error(format!("unknown analysis type: `{kind}`"))
@@ -2022,6 +2024,138 @@ impl IrCtx {
         if let Some(an) = analysis {
             self.analyses.push(an);
         }
+    }
+
+    /// Extract the vector list from an analysis setting. Accepts a single
+    /// signal (`output: v(out)`) or a list (`output: [v(out), i(vd)]`). Each
+    /// entry is rendered to the canonical vector string (`v(out)`, `i(vd)`).
+    fn setting_vectors(&self, body: &[AnalysisItem], key: &str) -> Vec<String> {
+        for item in body {
+            if let AnalysisItem::Setting { name, value } = item
+                && name.name == key
+            {
+                return match value {
+                    Expr::List { elements, .. } | Expr::Tuple { elements, .. } => {
+                        elements.iter().map(expr_to_spice_string).collect()
+                    }
+                    other => vec![expr_to_spice_string(other)],
+                };
+            }
+        }
+        Vec::new()
+    }
+
+    /// The value expression of an analysis setting, if present.
+    fn setting_expr<'a>(&self, body: &'a [AnalysisItem], key: &str) -> Option<&'a Expr> {
+        body.iter().find_map(|item| match item {
+            AnalysisItem::Setting { name, value } if name.name == key => Some(value),
+            _ => None,
+        })
+    }
+
+    /// A numeric analysis setting, constant-folded, if present.
+    fn setting_f64(&mut self, body: &[AnalysisItem], key: &str) -> Option<f64> {
+        let expr = self.setting_expr(body, key)?;
+        self.eval_to_f64(expr)
+    }
+
+    /// `analysis four { fundamental: <freq>; output: v(out) [, ...]; harmonics: <n> }`
+    /// — Fourier post-processing of the preceding transient.
+    fn lower_four_analysis(
+        &mut self,
+        body: &[AnalysisItem],
+        a: &AnalysisDecl,
+    ) -> Option<cirq_ir::FourAnalysis> {
+        let Some(fundamental) = self.setting_f64(body, "fundamental") else {
+            self.diags.push(
+                Diagnostic::error("`analysis four` requires a `fundamental: <freq>` setting")
+                    .with_span(a.kind.span),
+            );
+            return None;
+        };
+        let vectors = self.setting_vectors(body, "output");
+        if vectors.is_empty() {
+            self.diags.push(
+                Diagnostic::error("`analysis four` requires an `output:` vector (or list)")
+                    .with_span(a.kind.span),
+            );
+            return None;
+        }
+        let num_harmonics = self
+            .setting_f64(body, "harmonics")
+            .map(|n| n as usize)
+            .unwrap_or(9);
+        Some(cirq_ir::FourAnalysis {
+            fundamental,
+            vectors,
+            num_harmonics,
+        })
+    }
+
+    /// `analysis fft { output: v(out) [, ...]; start:; stop:; npoints:;
+    /// window: hann|...; format: magnitude|complex }` — windowed FFT of the
+    /// preceding transient.
+    fn lower_fft_analysis(
+        &mut self,
+        body: &[AnalysisItem],
+        a: &AnalysisDecl,
+    ) -> Option<cirq_ir::FftAnalysis> {
+        let vectors = self.setting_vectors(body, "output");
+        if vectors.is_empty() {
+            self.diags.push(
+                Diagnostic::error("`analysis fft` requires an `output:` vector (or list)")
+                    .with_span(a.kind.span),
+            );
+            return None;
+        }
+        let npoints = self
+            .setting_f64(body, "npoints")
+            .map(|n| n as usize)
+            .unwrap_or(1024);
+        let window = match self
+            .setting_expr(body, "window")
+            .and_then(expr_as_ident)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("rect" | "rectangular" | "none") => cirq_ir::FftWindow::Rectangular,
+            Some("hann" | "hanning") => cirq_ir::FftWindow::Hann,
+            Some("hamming") => cirq_ir::FftWindow::Hamming,
+            Some("blackman") => cirq_ir::FftWindow::Blackman,
+            Some("bartlett" | "triangular") => cirq_ir::FftWindow::Bartlett,
+            Some(other) => {
+                self.diags.push(
+                    Diagnostic::error(format!("unknown fft window: `{other}`"))
+                        .with_span(a.kind.span),
+                );
+                cirq_ir::FftWindow::Hann
+            }
+            None => cirq_ir::FftWindow::Hann,
+        };
+        let format = match self
+            .setting_expr(body, "format")
+            .and_then(expr_as_ident)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("complex") => cirq_ir::FftFormat::Complex,
+            Some("magnitude" | "mag") | None => cirq_ir::FftFormat::Magnitude,
+            Some(other) => {
+                self.diags.push(
+                    Diagnostic::error(format!("unknown fft format: `{other}`"))
+                        .with_span(a.kind.span),
+                );
+                cirq_ir::FftFormat::Magnitude
+            }
+        };
+        Some(cirq_ir::FftAnalysis {
+            vectors,
+            start: self.setting_f64(body, "start"),
+            stop: self.setting_f64(body, "stop"),
+            npoints,
+            window,
+            format,
+        })
     }
 
     fn lower_dc_analysis(&mut self, body: &[AnalysisItem], _decl: &AnalysisDecl) -> Analysis {
@@ -5340,5 +5474,132 @@ mod tests {
                 _ => f64::NAN,
             });
         assert_eq!(rval, Some(10_000.0));
+    }
+
+    // -------------------------------------------------------------------
+    // Native four / fft analysis blocks
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn four_analysis_lowers() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                analysis four {
+                    fundamental: 1k
+                    output: v(out)
+                    harmonics: 5
+                }
+            }
+            "#,
+        );
+        let four = circuit
+            .analyses
+            .iter()
+            .find_map(|a| match a {
+                Analysis::Four(f) => Some(f),
+                _ => None,
+            })
+            .expect("a four analysis");
+        assert!((four.fundamental - 1000.0).abs() < 1e-9);
+        assert_eq!(four.vectors, vec!["v(out)".to_string()]);
+        assert_eq!(four.num_harmonics, 5);
+    }
+
+    #[test]
+    fn four_defaults_to_nine_harmonics() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                analysis four { fundamental: 2k
+                                output: v(out) }
+            }
+            "#,
+        );
+        let four = circuit
+            .analyses
+            .iter()
+            .find_map(|a| match a {
+                Analysis::Four(f) => Some(f),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(four.num_harmonics, 9);
+    }
+
+    #[test]
+    fn fft_analysis_lowers_with_list_and_options() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                analysis fft {
+                    output: [v(out), i(vd)]
+                    start: 1u
+                    stop: 10u
+                    npoints: 500
+                    window: blackman
+                    format: complex
+                }
+            }
+            "#,
+        );
+        let fft = circuit
+            .analyses
+            .iter()
+            .find_map(|a| match a {
+                Analysis::Fft(f) => Some(f),
+                _ => None,
+            })
+            .expect("an fft analysis");
+        assert_eq!(fft.vectors, vec!["v(out)".to_string(), "i(vd)".to_string()]);
+        assert!((fft.start.unwrap() - 1e-6).abs() < 1e-15);
+        assert!((fft.stop.unwrap() - 10e-6).abs() < 1e-15);
+        assert_eq!(fft.npoints, 500);
+        assert_eq!(fft.window, cirq_ir::FftWindow::Blackman);
+        assert_eq!(fft.format, cirq_ir::FftFormat::Complex);
+    }
+
+    #[test]
+    fn fft_defaults_match_ngspice() {
+        let circuit = compile_unwrap(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                analysis fft { output: v(out) }
+            }
+            "#,
+        );
+        let fft = circuit
+            .analyses
+            .iter()
+            .find_map(|a| match a {
+                Analysis::Fft(f) => Some(f),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(fft.npoints, 1024);
+        assert_eq!(fft.window, cirq_ir::FftWindow::Hann);
+        assert_eq!(fft.format, cirq_ir::FftFormat::Magnitude);
+        assert!(fft.start.is_none());
+    }
+
+    #[test]
+    fn four_missing_fundamental_errors() {
+        let diags = compile(
+            r#"
+            circuit t {
+                R1: resistor(a -> gnd, 1k)
+                analysis four { output: v(out) }
+            }
+            "#,
+        )
+        .expect_err("should fail without fundamental");
+        assert!(
+            diags.iter().any(|d| d.message.contains("fundamental")),
+            "diags: {diags:?}"
+        );
     }
 }
