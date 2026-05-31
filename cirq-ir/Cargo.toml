@@ -3,6 +3,8 @@ name = "cirq-ir"
 version = "0.1.0"
 edition = "2024"
 description = "Canonical Cirq IR — the resolved, validated semantic representation"
+keywords = ["cirq", "ir", "circuit", "eda", "spice"]
+categories = ["compilers", "data-structures"]
 license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 

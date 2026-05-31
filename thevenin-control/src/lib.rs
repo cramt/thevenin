@@ -1,8 +1,21 @@
 //! `.control` block interpreter for the thevenin circuit simulator.
 //!
-//! Parses and executes the ngspice `.control` / `.endc` scripting language,
-//! supporting simulation commands, vector expressions, control flow, and
-//! variable management.
+//! Parses and executes the ngspice `.control` / `.endc` scripting language
+//! against a [`cirq_ir::Circuit`]: simulation commands (`op`, `dc`, `ac`,
+//! `tran`, `run`, …), vector expressions and `print` / `let`, control flow
+//! (`if` / `while` / `foreach` / `repeat`), `alter` of element and model
+//! parameters, multi-run state (`resume`, `reset`), and result output
+//! (`write` to ngspice raw / CSV).
+//!
+//! The interpreter is IR-native on the input side: simulation runs through
+//! [`thevenin::circuit`](https://docs.rs/thevenin), `alter` mutates the
+//! [`cirq_ir::Circuit`] directly, and analysis commands parse straight to
+//! [`cirq_ir::Analysis`]. It depends on [`thevenin_types`] only for the
+//! simulator's *result* types ([`SimResult`](thevenin_types::SimResult) and
+//! friends).
+//!
+//! The typed `.control` statement AST and its parser live in
+//! [`cirq_ir::control`]; this crate is the executor on top of them.
 
 pub mod ast;
 pub mod context;
@@ -27,7 +40,7 @@ pub fn has_control_block_ir(circuit: &Circuit) -> bool {
 ///
 /// Builds a [`SimContext`] via [`SimContext::from_circuit`] so the analysis
 /// dispatcher in `exec.rs` routes Op / Dc / Tran / Ac through
-/// [`thevenin::circuit::simulate_*`]. The executor consumes the IR's typed
+/// [`thevenin::circuit`]. The executor consumes the IR's typed
 /// `parsed` AST directly when present, falling back to re-parsing `lines`
 /// for blocks constructed without the typed form (e.g. by test fixtures
 /// that bypass [`cirq_ir::CodeBlock::from_lines`]).

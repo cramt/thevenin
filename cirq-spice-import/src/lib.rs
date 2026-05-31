@@ -1,8 +1,42 @@
-//! SPICE import — converts `thevenin_types::Netlist` into `cirq_ir::Circuit`.
+//! SPICE import — turn an ngspice netlist into canonical [`cirq_ir::Circuit`] IR.
 //!
-//! This crate provides the bridge from legacy SPICE netlists into the canonical
-//! Cirq IR. It enables gradual migration: existing SPICE files can be imported
-//! into the Cirq toolchain without manual rewriting.
+//! This is the bridge from existing SPICE files into the Cirq toolchain: parse
+//! the netlist (via [`thevenin_types`]), resolve parameters and brace
+//! expressions, flatten subcircuits, and emit one [`cirq_ir::Circuit`] per
+//! top-level circuit — ready to hand to the simulator
+//! ([`thevenin::circuit`](https://docs.rs/thevenin)) without manual rewriting.
+//!
+//! # Entry points
+//!
+//! - [`import_spice`] — SPICE source → `Vec<`[`cirq_ir::Circuit`]`>`.
+//! - [`import_spice_with_options`] — same, with [`IncludeOptions`].
+//! - [`import_spice_path`] — read and import a file, resolving `.include` /
+//!   `.lib` relative to it.
+//! - [`import_netlist`] — convert an already-parsed [`thevenin_types::Netlist`].
+//!
+//! # Example
+//!
+//! ```
+//! use cirq_spice_import::import_spice;
+//!
+//! let circuits = import_spice(
+//!     "Voltage divider
+//!      V1 in 0 1.0
+//!      R1 in mid 1k
+//!      R2 mid 0 2k
+//!      .op
+//!      .end
+//!      ",
+//! )
+//! .expect("imports");
+//!
+//! assert_eq!(circuits.len(), 1);
+//! assert_eq!(circuits[0].elements.len(), 3);
+//! ```
+//!
+//! To parse *and* simulate in one call, see the
+//! [`thevenin-cirq`](https://docs.rs/thevenin-cirq) crate's `simulate_spice_*`
+//! helpers.
 
 mod preprocess;
 

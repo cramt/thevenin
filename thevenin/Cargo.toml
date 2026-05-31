@@ -3,6 +3,8 @@ name = "thevenin"
 version = "0.3.0"
 edition = "2024"
 description = "Core simulation engine for thevenin: sparse matrices, MNA assembly, solvers"
+keywords = ["spice", "circuit", "simulation", "ngspice", "eda"]
+categories = ["science", "simulation", "mathematics"]
 license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 

@@ -174,12 +174,12 @@ pub const MAX_LOOP_ITERS: usize = 10_000;
 /// Parse raw `.control` lines into a list of statements.
 ///
 /// The canonical implementation drives `cirq-control-grammar`'s tree-sitter
-/// parser and lowers the resulting CST via [`crate::control_lower`]. Per-
+/// parser and lowers the resulting CST via the `control_lower` module. Per-
 /// statement body parsing (numbers, SI suffixes, alter vector syntax, set
 /// `key=value` pairs, …) is delegated to the helpers in this module so the
 /// CST path and the legacy line-based path stay byte-identical on the
 /// shapes the executor consumes. The legacy line-based parser is retained
-/// below as [`parse_control_block_line_based`] for fallback when block
+/// below as `parse_control_block_line_based` for fallback when block
 /// terminators are missing (the tree-sitter parser tolerates that, but
 /// existing tests assert specific error messages from the line walker).
 pub fn parse_control_block(lines: &[String]) -> Result<Vec<Statement>, String> {

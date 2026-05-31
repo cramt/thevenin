@@ -1,8 +1,19 @@
-//! XSPICE code model framework for the thevenin circuit simulator.
+//! XSPICE code-model framework for the thevenin circuit simulator.
 //!
-//! This crate provides the type definitions, builder API, registry, and MNA
-//! stamping logic for user-defined XSPICE analog code models. Users depend on
-//! this crate to define models without pulling in the full simulator.
+//! XSPICE lets you define behavioural analog "code models" — devices whose
+//! port currents/voltages are computed by Rust code rather than a fixed
+//! equation set — and bind them to the `A` element in a netlist. This crate
+//! holds the type definitions, builder API, [registry](CodeModelRegistry), and
+//! MNA-stamping contract for those models, so a model can be authored (and
+//! unit-tested) without pulling in the full simulator.
+//!
+//! A model implements the code-model trait, declares its ports and parameters,
+//! and registers itself in a [`CodeModelRegistry`]; the simulator threads that
+//! registry through MNA assembly and calls the model to stamp its contribution
+//! at each Newton iteration.
+//!
+//! Compiled-in models via the registry are fully supported; dynamically loaded
+//! (`.cm` shared-object) models are out of scope.
 
 pub mod eval;
 pub mod instance;

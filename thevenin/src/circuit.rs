@@ -1,24 +1,51 @@
-//! Cirq IR — direct simulation entry points.
+//! The canonical simulation surface: run analyses on a [`cirq_ir::Circuit`].
 //!
-//! These are the **Stage 4 surface** of the Cirq adoption plan
-//! (`docs/archive/migration/cirq-adoption-plan.md`). Callers pass a
-//! [`cirq_ir::Circuit`] directly instead of constructing a
-//! [`thevenin_types::Netlist`] themselves.
+//! Every entry point here takes a name-resolved, parameter-evaluated
+//! [`cirq_ir::Circuit`] (produced by [`cirq_frontend`] from Cirq source, or by
+//! [`cirq_spice_import`](https://docs.rs/cirq-spice-import) from a SPICE
+//! netlist) and returns a [`SimResult`](thevenin_types::SimResult) of named
+//! result plots.
 //!
-//! For now, the entry points lower the circuit to one or more Netlists
-//! internally via [`cirq_frontend::to_netlist::circuit_to_netlists`] and then
-//! dispatch to the existing Netlist-shaped simulator. As Stage 4 progresses,
-//! individual analyses will gain direct IR → MNA paths that bypass the
-//! Netlist adapter entirely; callers see no behavioural change.
+//! - [`simulate`] — top-level driver. Runs **every** analysis the circuit
+//!   declares, in order, applies multi-temperature sweeps, and evaluates any
+//!   `measure` declarations. This is the usual entry point.
+//! - [`simulate_op`], [`simulate_dc`], [`simulate_tran`], [`simulate_ac`],
+//!   [`simulate_noise`], [`simulate_sens`], [`simulate_pz`], [`simulate_tf`] —
+//!   run a single analysis of that kind, selecting the first matching analysis
+//!   the circuit declares.
+//! - [`simulate_four`] / [`simulate_fft`] — Fourier / FFT post-processing of a
+//!   preceding transient.
 //!
-//! ## Picking the right analysis
+//! # How it runs
 //!
-//! A [`cirq_ir::Circuit`] can declare any number of analyses
-//! (`circuit.analyses`); each [`Self::simulate_op`]-style entry point picks
-//! the first analysis matching its discriminant. Callers wanting fine
-//! control over multi-analysis circuits should call
-//! [`cirq_frontend::to_netlist::circuit_to_netlists`] themselves and dispatch
-//! each resulting netlist with [`crate::simulate_op`] / etc.
+//! On the happy path the MNA system is assembled **directly from the IR** via
+//! [`crate::mna_ir::assemble_mna_from_circuit`], with no SPICE netlist in the
+//! loop. For device kinds that path does not yet cover (see
+//! [`crate::mna_ir`]), the circuit is lowered to a
+//! [`thevenin_types::Netlist`] through
+//! [`cirq_frontend::to_netlist::circuit_to_netlists`] and dispatched to the
+//! netlist-shaped solver. Both paths are numerically identical; callers never
+//! observe the difference.
+//!
+//! # Example
+//!
+//! ```
+//! use thevenin::circuit::simulate;
+//!
+//! // A resistive divider written in Cirq source, compiled to IR.
+//! let circuit = cirq_frontend::compile(
+//!     "circuit divider {
+//!          V1: vsource(in -> gnd, dc: 1.0)
+//!          R1: resistor(in -> mid, 1k)
+//!          R2: resistor(mid -> gnd, 2k)
+//!          analysis op {}
+//!      }",
+//! )
+//! .expect("compiles");
+//!
+//! let result = simulate(&circuit).expect("simulates");
+//! assert!(!result.plots.is_empty());
+//! ```
 
 use std::sync::Arc;
 
@@ -229,16 +256,14 @@ pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
 /// Top-level dispatcher: run every analysis declared on `circuit.analyses`
 /// and concatenate the result plots.
 ///
-/// This is the Circuit-input analogue of [`thevenin::simulate(&Netlist)`],
-/// covering the same eight analysis kinds. Per the Stage 4 plan
-/// (`docs/archive/migration/cirq-adoption-plan.md`) this is the recommended entry
-/// for new code; the Netlist-shaped wrapper remains available for legacy
-/// callers.
+/// Covers all eight core analysis kinds (op / dc / tran / ac / noise / sens /
+/// pz / tf) plus Fourier/FFT post-processing. This is the recommended entry
+/// point; the historical netlist-shaped simulator is now a crate-internal
+/// implementation detail.
 ///
 /// Multi-temperature sweeps (`circuit.temps.len() > 1`) re-run every
 /// analysis at each temperature and label the resulting plots with
-/// `{plot_name}_temp{index}_{temp}` — matching the shape produced by
-/// [`thevenin::simulate(&Netlist)`].
+/// `{plot_name}_temp{index}_{temp}`.
 pub fn simulate(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
     let mut result = if circuit.temps.len() > 1 {
         simulate_multi_temp(circuit, &circuit.temps)?

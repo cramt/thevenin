@@ -3,6 +3,8 @@ name = "cirq-ast"
 version = "0.1.0"
 edition = "2024"
 description = "Cirq language AST types and CST-to-AST lowering"
+keywords = ["cirq", "ast", "circuit", "eda", "spice"]
+categories = ["parser-implementations", "compilers"]
 license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 

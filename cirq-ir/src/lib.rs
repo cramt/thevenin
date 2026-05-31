@@ -1,8 +1,34 @@
 //! Canonical Cirq IR — the semantic center of the Cirq toolchain.
 //!
-//! This IR is produced by lowering the Cirq AST (name resolution, parameter
-//! evaluation, subcircuit flattening, validation). All downstream consumers
-//! (simulator adapter, linting, formatting) should work from this representation.
+//! A [`Circuit`] is a **name-resolved, parameter-evaluated, subcircuit-flattened**
+//! description of an electrical circuit: the single representation every
+//! downstream tool works from. It is produced by lowering the Cirq AST (in
+//! [`cirq-frontend`](https://docs.rs/cirq-frontend)) or by importing SPICE (in
+//! [`cirq-spice-import`](https://docs.rs/cirq-spice-import)), and consumed by
+//! the simulator ([`thevenin`](https://docs.rs/thevenin)).
+//!
+//! # Shape of the IR
+//!
+//! [`Circuit`] holds flat, id-addressed tables — names are already resolved to
+//! [`Id`]s, so consumers never re-parse identifiers:
+//!
+//! - [`Net`]s — the electrical nodes (ground is always [`Id`]`(0)`).
+//! - [`Element`]s — devices with a typed [`ElementKind`], terminal
+//!   [`Connection`]s, evaluated [`Value`] params, an optional [`Model`] link,
+//!   and an optional [`SourceSpec`] (DC / AC / waveform) for sources.
+//! - [`Model`]s — device model cards.
+//! - [`Analysis`] declarations — [`Analysis::Op`], [`DcAnalysis`],
+//!   [`TranAnalysis`], [`AcAnalysis`], [`NoiseAnalysis`], [`SensAnalysis`],
+//!   [`PzAnalysis`], [`TfAnalysis`], [`FourAnalysis`], [`FftAnalysis`].
+//! - [`MeasureSpec`]s, params, options, initial conditions, and `.control`
+//!   code blocks.
+//!
+//! All numeric parameters are concrete [`Value`]s — every expression has
+//! already been evaluated, so there are no unresolved symbols in the IR.
+//!
+//! The [`control`] module additionally hosts the typed `.control` script AST
+//! and its parser ([`control::parse_control_block`]), shared by the interpreter
+//! in [`thevenin-control`](https://docs.rs/thevenin-control).
 
 pub mod control;
 mod control_lower;
@@ -681,7 +707,7 @@ impl MeasureExpr {
     }
 }
 
-/// Format an `f64` so that [`parse_si_value`]/`f64::from_str` round-trips it.
+/// Format an `f64` so that `parse_si_value` / `f64::from_str` round-trips it.
 /// Rust's `Display` for `f64` never uses scientific notation, so the result
 /// is always a plain decimal the measure parser accepts.
 fn render_num(v: f64) -> String {

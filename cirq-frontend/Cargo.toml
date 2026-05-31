@@ -3,6 +3,8 @@ name = "cirq-frontend"
 version = "0.1.0"
 edition = "2024"
 description = "Cirq frontend pipeline: source → AST → IR → Netlist"
+keywords = ["cirq", "compiler", "circuit", "spice", "eda"]
+categories = ["compilers", "parser-implementations"]
 license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 

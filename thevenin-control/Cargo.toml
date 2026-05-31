@@ -3,6 +3,8 @@ name = "thevenin-control"
 version = "0.1.0"
 edition = "2024"
 description = ".control block interpreter for thevenin circuit simulator"
+keywords = ["spice", "ngspice", "control", "scripting", "circuit"]
+categories = ["science", "simulation"]
 license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 

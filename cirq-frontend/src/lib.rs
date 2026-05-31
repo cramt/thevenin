@@ -1,8 +1,55 @@
-//! Cirq frontend pipeline -- orchestrates parsing, lowering, and IR generation.
+//! Cirq frontend — compile Cirq source into canonical [`cirq_ir::Circuit`] IR.
 //!
-//! This crate provides the high-level entry points for processing Cirq source
-//! files into either Cirq IR (for tooling) or `thevenin_types::Netlist` (for
-//! simulation).
+//! This crate owns the Cirq compilation pipeline:
+//!
+//! ```text
+//! Cirq source ──▶ Tree-sitter CST ──▶ cirq-ast ──▶ cirq-ir Circuit
+//!                (cirq-grammar)        (lower)      (ir_lower)
+//! ```
+//!
+//! The result is a name-resolved, parameter-evaluated [`cirq_ir::Circuit`] —
+//! the canonical input to the simulator ([`thevenin::circuit`](https://docs.rs/thevenin)).
+//!
+//! # Entry points
+//!
+//! - [`compile`] — Cirq source → [`cirq_ir::Circuit`].
+//! - [`compile_file`] — same, resolving `include` directives relative to a base
+//!   directory.
+//! - [`compile_to_netlist`] / [`compile_file_to_netlist`] — compile and then
+//!   lower to one [`thevenin_types::Netlist`] per analysis (the SPICE-shaped
+//!   adapter), via [`to_netlist`].
+//!
+//! Errors are returned as a `Vec` of [`Diagnostic`]s carrying source spans for
+//! rich reporting (see the [`diagnostics`] module).
+//!
+//! [`Diagnostic`]: diagnostics::Diagnostic
+//!
+//! # Example
+//!
+//! ```
+//! let circuit = cirq_frontend::compile(
+//!     "circuit divider {
+//!          V1: vsource(in -> gnd, dc: 1.0)
+//!          R1: resistor(in -> mid, 1k)
+//!          R2: resistor(mid -> gnd, 2k)
+//!          analysis op {}
+//!      }",
+//! )
+//! .expect("compiles");
+//!
+//! assert_eq!(circuit.name, "divider");
+//! assert_eq!(circuit.elements.len(), 3);
+//! ```
+//!
+//! # Modules
+//!
+//! - [`parser`] — Tree-sitter parse into a CST.
+//! - [`lower`] — CST → [`cirq_ast`].
+//! - [`ir_lower`] — AST → [`cirq_ir::Circuit`] (name resolution, parameter
+//!   evaluation, subcircuit flattening, validation).
+//! - [`to_netlist`] — [`cirq_ir::Circuit`] → [`thevenin_types::Netlist`].
+//! - [`control_analysis`] — parse a `.control` analysis command straight to
+//!   [`cirq_ir::Analysis`].
 
 pub mod control_analysis;
 pub mod diagnostics;

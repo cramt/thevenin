@@ -117,7 +117,7 @@ impl SimContext {
     /// The Cirq IR circuit driving this context, if any.
     ///
     /// Returns `None` only for the crate-internal test-only constructor
-    /// [`SimContext::new`]. External callers always go through
+    /// `SimContext::new`. External callers always go through
     /// [`SimContext::from_circuit`] and so always see `Some`.
     pub fn circuit(&self) -> Option<&Circuit> {
         self.circuit.as_ref()

@@ -2,7 +2,9 @@
 name = "thevenin-cirq"
 version = "0.1.0"
 edition = "2024"
-description = "Cirq IR -> Thevenin simulation entry points (Stage 4 surface of the Cirq adoption plan)"
+description = "Parse-and-simulate convenience entry points pairing SPICE/Cirq import with the thevenin simulator"
+keywords = ["spice", "circuit", "simulation", "cirq", "ngspice"]
+categories = ["science", "simulation"]
 license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 

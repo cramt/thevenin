@@ -5,12 +5,14 @@
 //! [`cirq_ir::Circuit`] internally. This crate re-exports those Circuit
 //! entry points for callers already using `thevenin-cirq`, and adds
 //! SPICE-source convenience helpers that pair [`cirq_spice_import`] with the
-//! simulator in one call.
+//! simulator in one call: [`simulate_spice_op`], [`simulate_spice_dc`],
+//! [`simulate_spice_tran`], [`simulate_spice_ac`].
 //!
-//! ```ignore
+//! ```
 //! use thevenin_cirq::simulate_spice_op;
 //!
-//! let result = simulate_spice_op("V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")?;
+//! let result = simulate_spice_op("V1 in 0 1\nR1 in 0 1k\n.op\n.end\n").unwrap();
+//! assert!(!result.plots.is_empty());
 //! ```
 //!
 //! ## Why a separate crate?

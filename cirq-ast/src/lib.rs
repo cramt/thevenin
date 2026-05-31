@@ -1,8 +1,20 @@
 //! Cirq AST — source-faithful abstract syntax tree for the Cirq language.
 //!
-//! This crate defines the AST types produced by lowering Tree-sitter's CST.
-//! The AST preserves source spans and syntactic structure but does not resolve
-//! names, evaluate parameters, or flatten hierarchy.
+//! These are the typed nodes produced by lowering the Tree-sitter CST (in
+//! [`cirq-frontend`](https://docs.rs/cirq-frontend)). The AST is the middle
+//! stage of the pipeline:
+//!
+//! ```text
+//! Cirq source ──▶ Tree-sitter CST ──▶ cirq-ast ──▶ cirq-ir Circuit
+//! ```
+//!
+//! It preserves source spans and syntactic structure faithfully — every node
+//! carries its byte span for diagnostics — but does **not** resolve names,
+//! evaluate parameter expressions, or flatten subcircuit hierarchy. That
+//! semantic work happens in the next stage ([`cirq-ir`](https://docs.rs/cirq-ir)).
+//!
+//! Use this crate when you need the syntax tree itself — formatters, linters,
+//! and refactoring tools — rather than the resolved semantic model.
 
 pub mod span;
 

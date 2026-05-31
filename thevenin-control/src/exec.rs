@@ -255,7 +255,7 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
 /// Run a simulation command (op, dc, ac, tran, sens, noise, pz, tf).
 ///
 /// Routes through the Circuit-input simulator surface
-/// ([`thevenin::circuit::simulate_*`]) by parsing the command tokens straight
+/// ([`thevenin::circuit`]) by parsing the command tokens straight
 /// into [`cirq_ir::Analysis`] via
 /// [`cirq_frontend::control_analysis::parse_analysis_to_ir`]. TEMPER eval and
 /// `@model[param]` resolution both operate on the IR Circuit directly — no

@@ -445,7 +445,7 @@ pub fn circuit_temp(circuit: &Circuit) -> f64 {
 /// `mna.node_map` (for I-sources) into [`crate::ac::AcExcitation`]
 /// records. The IR's `source_spec.ac: Option<AcSpec>` carries magnitude +
 /// phase directly so no expression evaluation is needed.
-pub fn collect_ac_excitations_from_circuit(
+pub(crate) fn collect_ac_excitations_from_circuit(
     circuit: &Circuit,
     mna: &MnaSystem,
     num_nodes: usize,
@@ -626,7 +626,7 @@ pub fn integration_method_from_circuit(circuit: &Circuit) -> crate::transient::I
 /// IR's [`cirq_ir::TfAnalysis`] stores `output` as a verbatim spec string
 /// and `source` as an element [`Id`]; the source is resolved to an
 /// element name for [`crate::tf::run_tf`].
-pub fn tf_spec_from_circuit(circuit: &Circuit) -> Result<(String, String), MnaError> {
+pub(crate) fn tf_spec_from_circuit(circuit: &Circuit) -> Result<(String, String), MnaError> {
     let tf = circuit
         .analyses
         .iter()
@@ -653,7 +653,9 @@ pub fn tf_spec_from_circuit(circuit: &Circuit) -> Result<(String, String), MnaEr
 /// their string names (with `gnd → 0` rewrite) and the typed enums map
 /// onto the Netlist-shaped [`thevenin_types::PzInputType`] /
 /// [`thevenin_types::PzAnalysisType`].
-pub fn pz_params_from_circuit(circuit: &Circuit) -> Result<crate::pz::PzRunParams, MnaError> {
+pub(crate) fn pz_params_from_circuit(
+    circuit: &Circuit,
+) -> Result<crate::pz::PzRunParams, MnaError> {
     use cirq_ir::{PzType, TransferType};
     let pz = circuit
         .analyses
@@ -708,7 +710,7 @@ pub fn pz_params_from_circuit(circuit: &Circuit) -> Result<crate::pz::PzRunParam
 /// first declared `Analysis::Noise(NoiseAnalysis)`. The IR carries typed
 /// net / element Ids which are resolved to the SPICE-shaped string specs
 /// (`"v(name,ref)"`, source name) that `crate::noise::run_noise` consumes.
-pub fn noise_params_from_circuit(
+pub(crate) fn noise_params_from_circuit(
     circuit: &Circuit,
     mna: &MnaSystem,
 ) -> Result<crate::noise::NoiseRunParams, MnaError> {
@@ -786,7 +788,7 @@ pub fn noise_params_from_circuit(
 /// like `"v(out)"`) and an optional `SensAcSpec` with the AC sweep params.
 /// AC excitations are collected against `mna` so the simulator's
 /// [`crate::sens::run_sens`] is fully Netlist-free.
-pub fn sens_params_from_circuit(
+pub(crate) fn sens_params_from_circuit(
     circuit: &Circuit,
     mna: &MnaSystem,
 ) -> Result<crate::sens::SensRunParams, MnaError> {

@@ -1,24 +1,60 @@
-//! Thevenin — a Rust circuit simulator (ngspice-compatible).
+//! Thevenin — a circuit simulator in Rust, compatible with
+//! [ngspice](https://ngspice.sourceforge.io/).
+//!
+//! Thevenin runs SPICE-style analyses — DC operating point, DC sweep, AC
+//! small-signal, transient, noise, sensitivity, transfer function, pole-zero,
+//! and Fourier/FFT post-processing — over the same algorithms ngspice uses
+//! (Modified Nodal Analysis, Newton–Raphson, sparse direct solve), with Rust's
+//! type safety and first-class `wasm32` support.
+//!
+//! The canonical input is a [`cirq_ir::Circuit`] — a name-resolved,
+//! parameter-evaluated circuit. The simulation entry points live in
+//! [`circuit`]; [`circuit::simulate`] is the usual one.
 //!
 //! # Quick start
 //!
-//! ```rust
-//! use thevenin::simulate;
-//! use thevenin_types::Netlist;
-//!
-//! let netlist = Netlist::parse_single("
-//! Voltage Divider
-//! V1 in 0 1.0
-//! R1 in mid 1k
-//! R2 mid 0 2k
-//! .op
-//! .end
-//! ").unwrap();
-//!
-//! let result = simulate(&netlist).unwrap();
-//! let vmid = result["v(mid)"].data.as_real()[0];
-//! assert!((vmid - 0.6667).abs() < 0.001);
 //! ```
+//! use thevenin::circuit::simulate;
+//!
+//! // Compile a Cirq-source circuit to IR, then simulate it.
+//! let circuit = cirq_frontend::compile(
+//!     "circuit divider {
+//!          V1: vsource(in -> gnd, dc: 1.0)
+//!          R1: resistor(in -> mid, 1k)
+//!          R2: resistor(mid -> gnd, 2k)
+//!          analysis op {}
+//!      }",
+//! )
+//! .expect("compiles");
+//!
+//! let result = simulate(&circuit).expect("simulates");
+//! let vmid = result["v(mid)"].data.as_real()[0];
+//! assert!((vmid - 0.6667).abs() < 1e-3);
+//! ```
+//!
+//! # Getting a `Circuit`
+//!
+//! - **From Cirq source** — [`cirq_frontend::compile`].
+//! - **From a SPICE netlist** — [`cirq_spice_import`](https://docs.rs/cirq-spice-import),
+//!   or use the [`thevenin-cirq`](https://docs.rs/thevenin-cirq) convenience
+//!   crate's `simulate_spice_*` helpers to parse and simulate in one call.
+//!
+//! # What's supported
+//!
+//! Passive R/L/C/K; independent and dependent sources (V, I, E, G, H, F);
+//! behavioural `B` sources; diodes; BJTs (Gummel-Poon, VBIC); a broad MOSFET
+//! family (Levels 1/2/3/6, BSIM1–4, BSIM3SOI, HiSIM, VDMOS); JFET/MESFET/HFET;
+//! transmission lines (LTRA/TXL/CPL/ideal); switches; XSPICE code models; and
+//! nested subcircuits. See the [crate
+//! README](https://github.com/cramt/thevenin#readme) for the full matrix and
+//! known gaps.
+//!
+//! # Module map
+//!
+//! - [`circuit`] — the public simulation surface (start here).
+//! - [`mna`] / [`mna_ir`] — Modified Nodal Analysis assembly (Netlist- and
+//!   IR-input).
+//! - [`raw_output`] — ngspice raw-file / CSV result writers.
 
 use thevenin_types::{Expr, Item, Netlist};
 

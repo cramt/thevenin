@@ -1,4 +1,16 @@
 //! Tree-sitter grammar for the ngspice `.control` scripting language.
+//!
+//! Exposes the compiled Tree-sitter [`language`] for `.control` / `.endc`
+//! scripts plus a [`parse`] convenience. The resulting CST is lowered to the
+//! typed statement AST in [`cirq-ir`](https://docs.rs/cirq-ir)'s `control`
+//! module and executed by
+//! [`thevenin-control`](https://docs.rs/thevenin-control).
+//!
+//! ```
+//! let tree = cirq_control_grammar::parse("let x = 1\nprint x\n")
+//!     .expect("parser configured");
+//! assert_eq!(tree.root_node().kind(), "source_file");
+//! ```
 
 use tree_sitter::Language;
 

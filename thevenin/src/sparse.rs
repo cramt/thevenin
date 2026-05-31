@@ -376,7 +376,7 @@ impl LinearSystem {
         self.solve_with_cache_refined(cache, false)
     }
 
-    /// Like [`solve_with_cache`] but optionally applies one pass of iterative
+    /// Like [`solve_with_cache`](Self::solve_with_cache) but optionally applies one pass of iterative
     /// refinement after the LU solve.
     ///
     /// Iterative refinement is cheap insurance against ill-conditioning:
@@ -483,7 +483,7 @@ impl LinearSystem {
         self.solve_refined(false)
     }
 
-    /// Like [`solve`] but optionally applies one pass of iterative
+    /// Like [`solve`](Self::solve) but optionally applies one pass of iterative
     /// refinement.  See [`solve_with_cache_refined`](Self::solve_with_cache_refined)
     /// for rationale.  This path is used for one-shot (uncached) solves
     /// and for the dense branch.

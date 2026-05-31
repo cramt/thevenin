@@ -3,6 +3,8 @@ name = "thevenin-types"
 version = "0.3.0"
 edition = "2024"
 description = "Types and parser for SPICE netlists (ngspice dialect)"
+keywords = ["spice", "netlist", "parser", "ngspice", "eda"]
+categories = ["parser-implementations", "science"]
 license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 
