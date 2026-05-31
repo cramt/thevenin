@@ -32,13 +32,18 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-        # Include both Cargo sources and the tree-sitter grammar directory so
-        # that build.rs can run `tree-sitter generate` during the pure build.
+        # Include both Cargo sources and the tree-sitter grammar directories
+        # (their committed `src/parser.c` etc.) so the grammar crates compile
+        # during the pure build. The `.*grammar/.*` glob covers every
+        # `*-grammar/` crate — currently `cirq-grammar/` and
+        # `cirq-control-grammar/` — so adding another grammar needs no flake
+        # change. (The earlier `cirq-grammar/`-only glob silently excluded
+        # `cirq-control-grammar/src/parser.c`, breaking the sandboxed build.)
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
             (craneLib.filterCargoSources path type)
-            || (builtins.match ".*cirq-grammar/.*" path != null);
+            || (builtins.match ".*grammar/.*" path != null);
         };
 
         commonCraneArgs = {
