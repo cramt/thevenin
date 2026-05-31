@@ -1,10 +1,7 @@
 //! Executor for `.control` block statements.
 
 use thevenin::{TranOutcome, TranStartState};
-use thevenin_types::{
-    AcVariation, Analysis, DcSweep, Expr, PzAnalysisType, PzInputType, SimPlot, SimResult,
-    SimVector,
-};
+use thevenin_types::{SimPlot, SimResult, SimVector};
 
 use crate::ast::{AlterValue, EchoFragment, Statement, StopCondition};
 use crate::context::SimContext;
@@ -258,11 +255,11 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
 /// Run a simulation command (op, dc, ac, tran, sens, noise, pz, tf).
 ///
 /// Routes through the Circuit-input simulator surface
-/// ([`thevenin::circuit::simulate_*`]) by lifting the parsed
-/// [`thevenin_types::Analysis`] to its IR equivalent via
-/// [`cirq_frontend::from_netlist::netlist_analysis_to_ir`]. TEMPER eval and
-/// `@model[param]` resolution both operate on the IR Circuit directly —
-/// no lowered Netlist is constructed.
+/// ([`thevenin::circuit::simulate_*`]) by parsing the command tokens straight
+/// into [`cirq_ir::Analysis`] via
+/// [`cirq_frontend::control_analysis::parse_analysis_to_ir`]. TEMPER eval and
+/// `@model[param]` resolution both operate on the IR Circuit directly — no
+/// `thevenin_types::Analysis` or lowered Netlist is constructed.
 fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
     let parts: Vec<&str> = cmd_line.split_whitespace().collect();
     if parts.is_empty() {
@@ -289,8 +286,7 @@ fn run_analysis(cmd_line: &str, ctx: &mut SimContext) -> Result<(), String> {
             .cloned()
             .unwrap_or(cirq_ir::Analysis::Op)
     } else {
-        let parsed = parse_analysis_command(&cmd, &parts[1..])?;
-        cirq_frontend::from_netlist::netlist_analysis_to_ir(&parsed, circuit_ref)
+        cirq_frontend::control_analysis::parse_analysis_to_ir(&cmd, &parts[1..], circuit_ref)
             .map_err(|e| format!("{cmd}: {e}"))?
     };
 
@@ -651,6 +647,14 @@ fn execute_write(
     Ok(())
 }
 
+/// Parse a SPICE number token, stripping any trailing non-SI unit designator
+/// first (so `27C` / `5V` resolve like the analysis-command parser).
+fn parse_num(s: &str) -> Result<f64, String> {
+    let s =
+        s.trim_end_matches(|c: char| c.is_ascii_alphabetic() && !"tTgGkKmMuUnNpPfFaA".contains(c));
+    cirq_ir::control::parse_spice_number(s)
+}
+
 /// Run a DC temperature sweep: `dc temp start stop step`.
 ///
 /// At each temperature point, sets `circuit.temps`, re-evaluates
@@ -917,159 +921,6 @@ fn evaluate_temper_exprs_circuit(circuit: &mut cirq_ir::Circuit, temp_c: f64) {
             });
         }
     }
-}
-
-/// Parse an analysis command string into an Analysis enum.
-fn parse_analysis_command(cmd: &str, args: &[&str]) -> Result<Analysis, String> {
-    match cmd {
-        "op" => Ok(Analysis::Op),
-        "dc" => {
-            if args.len() < 4 {
-                return Err(format!("dc: need src start stop step, got {args:?}"));
-            }
-            let src = args[0].to_string();
-            let start = Expr::Num(parse_num(args[1])?);
-            let stop = Expr::Num(parse_num(args[2])?);
-            let step = Expr::Num(parse_num(args[3])?);
-            let src2 = if args.len() >= 8 {
-                Some(DcSweep {
-                    src: args[4].to_string(),
-                    start: Expr::Num(parse_num(args[5])?),
-                    stop: Expr::Num(parse_num(args[6])?),
-                    step: Expr::Num(parse_num(args[7])?),
-                })
-            } else {
-                None
-            };
-            Ok(Analysis::Dc {
-                src,
-                start,
-                stop,
-                step,
-                src2,
-            })
-        }
-        "ac" => {
-            if args.len() < 4 {
-                return Err("ac: need variation n fstart fstop".to_string());
-            }
-            let variation = match args[0].to_lowercase().as_str() {
-                "dec" => AcVariation::Dec,
-                "oct" => AcVariation::Oct,
-                "lin" => AcVariation::Lin,
-                other => return Err(format!("ac: unknown variation: {other}")),
-            };
-            Ok(Analysis::Ac {
-                variation,
-                n: parse_num(args[1])? as u32,
-                fstart: Expr::Num(parse_num(args[2])?),
-                fstop: Expr::Num(parse_num(args[3])?),
-            })
-        }
-        "tran" => {
-            // ngspice grammar: `tran tstep tstop [tstart [tmax]] [uic]`.
-            // The trailing `uic` keyword is optional and order-independent
-            // relative to the numeric positionals — strip it first so the
-            // remaining args are pure positionals.
-            let mut numeric: Vec<&str> = Vec::with_capacity(args.len());
-            let mut uic = false;
-            for a in args {
-                if a.eq_ignore_ascii_case("uic") {
-                    uic = true;
-                } else {
-                    numeric.push(a);
-                }
-            }
-            if numeric.len() < 2 {
-                return Err("tran: need tstep tstop".to_string());
-            }
-            Ok(Analysis::Tran {
-                tstep: Expr::Num(parse_num(numeric[0])?),
-                tstop: Expr::Num(parse_num(numeric[1])?),
-                tstart: if numeric.len() > 2 {
-                    Some(Expr::Num(parse_num(numeric[2])?))
-                } else {
-                    None
-                },
-                tmax: if numeric.len() > 3 {
-                    Some(Expr::Num(parse_num(numeric[3])?))
-                } else {
-                    None
-                },
-                uic,
-            })
-        }
-        "sens" => {
-            if args.is_empty() {
-                return Err("sens: need output variable".to_string());
-            }
-            // `sens v(1) dc` or `sens v(1) ac lin 1 1e6 1.1e6`
-            // Keep all tokens — simulate_sens parses dc/ac from output[1].
-            let output: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            Ok(Analysis::Sens { output })
-        }
-        "noise" => {
-            if args.len() < 6 {
-                return Err("noise: need output ref src variation n fstart fstop".to_string());
-            }
-            let variation = match args[2].to_lowercase().as_str() {
-                "dec" => AcVariation::Dec,
-                "oct" => AcVariation::Oct,
-                "lin" => AcVariation::Lin,
-                other => return Err(format!("noise: unknown variation: {other}")),
-            };
-            Ok(Analysis::Noise {
-                output: args[0].to_string(),
-                ref_node: None,
-                src: args[1].to_string(),
-                variation,
-                n: parse_num(args[3])? as u32,
-                fstart: Expr::Num(parse_num(args[4])?),
-                fstop: Expr::Num(parse_num(args[5])?),
-            })
-        }
-        "pz" => {
-            if args.len() < 6 {
-                return Err("pz: need 6 args".to_string());
-            }
-            let input_type = match args[4].to_lowercase().as_str() {
-                "vol" => PzInputType::Vol,
-                "cur" => PzInputType::Cur,
-                other => return Err(format!("pz: unknown input type: {other}")),
-            };
-            let analysis_type = match args[5].to_lowercase().as_str() {
-                "pol" => PzAnalysisType::Pol,
-                "zer" => PzAnalysisType::Zer,
-                "pz" => PzAnalysisType::Pz,
-                other => return Err(format!("pz: unknown analysis type: {other}")),
-            };
-            Ok(Analysis::Pz {
-                node_i: args[0].to_string(),
-                node_g: args[1].to_string(),
-                node_j: args[2].to_string(),
-                node_k: args[3].to_string(),
-                input_type,
-                analysis_type,
-            })
-        }
-        "tf" => {
-            if args.len() < 2 {
-                return Err("tf: need output input".to_string());
-            }
-            Ok(Analysis::Tf {
-                output: args[0].to_string(),
-                input: args[1].to_string(),
-            })
-        }
-        _ => Err(format!("unknown analysis command: {cmd}")),
-    }
-}
-
-fn parse_num(s: &str) -> Result<f64, String> {
-    // Strip trailing unit suffixes that aren't SI prefixes
-    let s =
-        s.trim_end_matches(|c: char| c.is_ascii_alphabetic() && !"tTgGkKmMuUnNpPfFaA".contains(c));
-    crate::parse::parse_spice_number_pub(s)
 }
 
 /// Execute an `alter` command.

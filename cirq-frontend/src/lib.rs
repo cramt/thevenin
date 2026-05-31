@@ -4,8 +4,8 @@
 //! files into either Cirq IR (for tooling) or `thevenin_types::Netlist` (for
 //! simulation).
 
+pub mod control_analysis;
 pub mod diagnostics;
-pub mod from_netlist;
 pub mod ir_lower;
 pub mod lower;
 pub mod parser;
