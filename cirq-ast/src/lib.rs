@@ -119,9 +119,15 @@ pub struct ModuleDef {
 }
 
 /// A port declaration within a module.
+///
+/// `width` is `None` for a scalar port and `Some(expr)` for a bus port
+/// (`port d[8]: in` or `port d[width]: in`). The width expression is evaluated
+/// at module-instantiation time against the instance's parameter scope, so it
+/// may reference a module parameter.
 #[derive(Debug, Clone)]
 pub struct PortDecl {
     pub name: Ident,
+    pub width: Option<Expr>,
     pub direction: PortDirection,
     pub attrs: Vec<Attribute>,
     pub span: Span,
@@ -159,6 +165,40 @@ pub struct ModuleInst {
     pub span: Span,
 }
 
+/// A reference to a net in a connection: a scalar net, ground, or a single
+/// line of a bus (`d[2]`). Whole-bus connections (`d -> bus`) use the
+/// [`NetRef::Scalar`] form on both sides — the elaborator expands them by
+/// looking up the port width.
+#[derive(Debug, Clone)]
+pub enum NetRef {
+    /// A bare net name (or `gnd`).
+    Scalar(Ident),
+    /// One line of a bus: `name[index]`.
+    Indexed {
+        name: Ident,
+        index: Expr,
+        span: Span,
+    },
+}
+
+impl NetRef {
+    /// The base net/bus name, ignoring any subscript.
+    pub fn base_name(&self) -> &str {
+        match self {
+            NetRef::Scalar(id) => &id.name,
+            NetRef::Indexed { name, .. } => &name.name,
+        }
+    }
+
+    /// The source span of the reference.
+    pub fn span(&self) -> Span {
+        match self {
+            NetRef::Scalar(id) => id.span,
+            NetRef::Indexed { span, .. } => *span,
+        }
+    }
+}
+
 /// An argument in an element or module instantiation.
 #[derive(Debug, Clone)]
 pub enum Argument {
@@ -167,9 +207,13 @@ pub enum Argument {
     /// Named argument: `resistance: 10k`, `model: nch`
     Named { name: Ident, value: Expr },
     /// Connection argument: `a -> b`
-    Connection { from: Ident, to: Ident },
+    Connection { from: NetRef, to: NetRef },
     /// Named connection: `control: a -> b`
-    NamedConnection { name: Ident, from: Ident, to: Ident },
+    NamedConnection {
+        name: Ident,
+        from: NetRef,
+        to: NetRef,
+    },
 }
 
 // ---------------------------------------------------------------------------

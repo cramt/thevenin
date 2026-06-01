@@ -32,6 +32,7 @@
 
 pub mod control;
 mod control_lower;
+pub mod urc;
 
 /// Unique identifier for IR nodes (nets, elements, modules, etc.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

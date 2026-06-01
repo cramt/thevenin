@@ -28,7 +28,17 @@ use crate::diagnostics::{Diagnostic, Severity};
 /// lowering is best-effort (as much IR as possible is still produced
 /// internally).
 pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>> {
-    let mut ctx = IrCtx::new();
+    lower_to_ir_with_languages(source_file, &crate::LanguageRegistry::default())
+}
+
+/// Like [`lower_to_ir`], but validates embedded `code "lang" { … }` blocks
+/// against `languages`. Blocks with an unregistered language tag produce a
+/// spanned error diagnostic instead of being silently accepted.
+pub fn lower_to_ir_with_languages(
+    source_file: &SourceFile,
+    languages: &crate::LanguageRegistry,
+) -> Result<Circuit, Vec<Diagnostic>> {
+    let mut ctx = IrCtx::with_languages(languages.clone());
 
     // Find the first circuit declaration.
     let circuit_ast = source_file.items.iter().find_map(|item| {
@@ -245,11 +255,23 @@ struct IrCtx {
     funcs: Vec<FuncDef>,
     initial_conditions: Vec<(Id, f64)>,
     measures: Vec<MeasureSpec>,
+
+    /// Accepted `code "lang" { … }` language tags. Blocks with an
+    /// unregistered tag are rejected during lowering (see the
+    /// `CircuitItem::Code` arm).
+    languages: crate::LanguageRegistry,
+
+    /// `model NAME urc(...)` cards, keyed by model name. URC is a macro that
+    /// expands into an R/C(/D) ladder at lowering time (see `lower_urc_element`),
+    /// so its model is a lowering construct that never becomes a simulator
+    /// device — hence a side table rather than an entry in `models`.
+    urc_models: HashMap<String, cirq_ir::urc::UrcParams>,
 }
 
 impl IrCtx {
-    fn new() -> Self {
+    fn with_languages(languages: crate::LanguageRegistry) -> Self {
         let mut ctx = Self {
+            languages,
             diags: Vec::new(),
             next_net_id: 0,
             next_element_id: 0,
@@ -275,6 +297,7 @@ impl IrCtx {
             initial_conditions: Vec::new(),
             param_overrides: HashMap::new(),
             measures: Vec::new(),
+            urc_models: HashMap::new(),
             circuit_temp_c: 27.0,
         };
         // `gnd` always gets Id(0).
@@ -372,10 +395,30 @@ impl IrCtx {
                 CircuitItem::Ic(ic) => self.lower_ic_decl(ic),
                 CircuitItem::CoupledLine(cl) => self.lower_coupled_line_decl(cl, prefix),
                 CircuitItem::Code(c) => {
-                    self.code_blocks.push(cirq_ir::CodeBlock::from_lines(
-                        c.language.clone(),
-                        c.lines.clone(),
-                    ));
+                    if self.languages.accepts(&c.language) {
+                        self.code_blocks.push(cirq_ir::CodeBlock::from_lines(
+                            c.language.clone(),
+                            c.lines.clone(),
+                        ));
+                    } else {
+                        let accepted: Vec<&str> = self.languages.tags().collect();
+                        let known = if accepted.is_empty() {
+                            "no languages are registered".to_string()
+                        } else {
+                            format!("registered languages: {}", accepted.join(", "))
+                        };
+                        self.diags.push(
+                            Diagnostic::error(format!(
+                                "unknown code block language {:?}; {known}",
+                                c.language
+                            ))
+                            .with_span(c.span)
+                            .with_note(
+                                "register the language via cirq_frontend::LanguageRegistry, \
+                                 or use a supported tag (e.g. \"control\")",
+                            ),
+                        );
+                    }
                 }
                 CircuitItem::Measure(m) => self.lower_measure_decl(m),
                 // Already handled in pass 1, or collected above. Conditionals
@@ -574,6 +617,13 @@ impl IrCtx {
             return;
         }
 
+        // URC is a macro, not a device: its model is read at element-expansion
+        // time (see `lower_urc_element`) and never becomes a simulator `Model`.
+        if m.device_type.name.eq_ignore_ascii_case("urc") {
+            self.lower_urc_model_def(m);
+            return;
+        }
+
         // Resolve device type. For inherited models (base != None), we look
         // up the base model's device_type string. But the device_type field in
         // the AST is always present (it's the token after the colon), so try
@@ -658,6 +708,269 @@ impl IrCtx {
         });
     }
 
+    /// Lower a `model NAME urc(...)` card into the `urc_models` side table.
+    /// URC params are per-length scalars; the card never becomes a `Model`.
+    fn lower_urc_model_def(&mut self, m: &ModelDef) {
+        let mut params = cirq_ir::urc::UrcParams::default();
+        for mp in &m.params {
+            let Some(v) = self.eval_to_f64(&mp.value) else {
+                self.diags.push(
+                    Diagnostic::error(format!(
+                        "URC model param `{}` must be a number",
+                        mp.name.name
+                    ))
+                    .with_span(mp.span),
+                );
+                continue;
+            };
+            if !apply_urc_param(&mut params, &mp.name.name, v) {
+                self.diags.push(
+                    Diagnostic::warning(format!(
+                        "unknown URC model param `{}` (ignored)",
+                        mp.name.name
+                    ))
+                    .with_span(mp.span),
+                );
+            }
+        }
+        self.urc_models.insert(m.name.name.clone(), params);
+    }
+
+    /// Expand a native `urc` element into its R/C(/D) ladder via the shared
+    /// [`cirq_ir::urc::plan`]. `name` is the already-prefixed element name.
+    fn lower_urc_element(&mut self, e: &ElementInst, name: &str, prefix: &str) {
+        // Collect terminals + params from the element args.
+        let mut pos_neg: Option<(&cirq_ast::NetRef, &cirq_ast::NetRef)> = None;
+        let mut gnd_name: Option<String> = None;
+        let mut model_params: Option<cirq_ir::urc::UrcParams> = None;
+        let mut overrides: Vec<(String, f64)> = Vec::new();
+        let mut length: Option<f64> = None;
+        let mut user_lumps: Option<f64> = None;
+
+        for arg in &e.args {
+            match arg {
+                Argument::Connection { from, to } => {
+                    if pos_neg.is_some() {
+                        self.diags.push(
+                            Diagnostic::error("urc takes a single `pos -> neg` connection")
+                                .with_span(from.span()),
+                        );
+                        continue;
+                    }
+                    pos_neg = Some((from, to));
+                }
+                Argument::Named { name: pname, value } => {
+                    let key = pname.name.to_ascii_lowercase();
+                    match key.as_str() {
+                        "gnd" | "ground" => match expr_as_net_name(value) {
+                            Some(n) => gnd_name = Some(n),
+                            None => self.diags.push(
+                                Diagnostic::error("urc `gnd` must be a net name")
+                                    .with_span(pname.span),
+                            ),
+                        },
+                        "model" => match expr_as_ident(value) {
+                            Some(mn) => match self.urc_models.get(mn) {
+                                Some(p) => model_params = Some(*p),
+                                None => self.diags.push(
+                                    Diagnostic::error(format!("unknown urc model: `{mn}`"))
+                                        .with_span(pname.span),
+                                ),
+                            },
+                            None => self.diags.push(
+                                Diagnostic::error("urc `model` must be an identifier")
+                                    .with_span(pname.span),
+                            ),
+                        },
+                        "len" | "length" => match self.eval_to_f64(value) {
+                            Some(v) => length = Some(v),
+                            None => self.diags.push(
+                                Diagnostic::error("urc `len` must be a number")
+                                    .with_span(pname.span),
+                            ),
+                        },
+                        "lumps" | "n" => match self.eval_to_f64(value) {
+                            Some(v) => user_lumps = Some(v),
+                            None => self.diags.push(
+                                Diagnostic::error("urc `lumps` must be a number")
+                                    .with_span(pname.span),
+                            ),
+                        },
+                        "k" | "fmax" | "rperl" | "cperl" | "isperl" | "rsperl" => {
+                            match self.eval_to_f64(value) {
+                                Some(v) => overrides.push((key, v)),
+                                None => self.diags.push(
+                                    Diagnostic::error(format!("urc `{key}` must be a number"))
+                                        .with_span(pname.span),
+                                ),
+                            }
+                        }
+                        _ => self.diags.push(
+                            Diagnostic::warning(format!(
+                                "unknown urc param `{}` (ignored)",
+                                pname.name
+                            ))
+                            .with_span(pname.span),
+                        ),
+                    }
+                }
+                Argument::NamedConnection { name: nc, .. } => self.diags.push(
+                    Diagnostic::warning(format!(
+                        "unexpected named connection `{}` on urc (ignored)",
+                        nc.name
+                    ))
+                    .with_span(nc.span),
+                ),
+                Argument::Positional(_) => self.diags.push(
+                    Diagnostic::warning("unexpected positional argument on urc (ignored)")
+                        .with_span(e.span),
+                ),
+            }
+        }
+
+        // Validate required pieces.
+        let Some((pos_src, neg_src)) = pos_neg else {
+            self.diags.push(
+                Diagnostic::error("urc requires a `pos -> neg` connection").with_span(e.span),
+            );
+            return;
+        };
+        let Some(length) = length else {
+            self.diags
+                .push(Diagnostic::error("urc requires `len`").with_span(e.span));
+            return;
+        };
+
+        // Build params: model seed (or defaults), then inline overrides.
+        let mut params = model_params.unwrap_or_default();
+        for (k, v) in &overrides {
+            apply_urc_param(&mut params, k, *v);
+        }
+
+        let pos_id = self.resolve_net_ref(pos_src, prefix);
+        let neg_id = self.resolve_net_ref(neg_src, prefix);
+        let gnd_id = match &gnd_name {
+            Some(n) => self.resolve_net_name_prefixed(n, prefix),
+            None => self.resolve_net_name_prefixed("gnd", prefix),
+        };
+
+        let plan = cirq_ir::urc::plan(&params, length, user_lumps);
+
+        // Synthesize the diode model when ISPERL > 0.
+        let diode_model_id = plan.diode_model.map(|dm| {
+            let mid = self.alloc_model_id();
+            let mname = format!("{name}.dio");
+            self.models.push(Model {
+                id: mid,
+                name: mname.clone(),
+                device_type: cirq_ir::DeviceType::Diode,
+                params: vec![
+                    ("is".into(), Value::Real(dm.is)),
+                    ("cjo".into(), Value::Real(dm.cjo)),
+                    ("rs".into(), Value::Real(dm.rs)),
+                ],
+            });
+            self.model_by_name.insert(mname, mid);
+            mid
+        });
+
+        let raw_name = &e.name.name;
+
+        for r in &plan.resistors {
+            let from = self.urc_node_id(&r.from, raw_name, prefix, pos_id, neg_id, gnd_id);
+            let to = self.urc_node_id(&r.to, raw_name, prefix, pos_id, neg_id, gnd_id);
+            let elem_name = format!("{name}.{}", r.suffix);
+            let id = self.alloc_element_id();
+            self.element_by_name.insert(elem_name.clone(), id);
+            self.elements.push(Element {
+                id,
+                name: elem_name,
+                kind: ElementKind::Resistor,
+                connections: vec![
+                    Connection {
+                        terminal: "pos".into(),
+                        net: from,
+                    },
+                    Connection {
+                        terminal: "neg".into(),
+                        net: to,
+                    },
+                ],
+                params: vec![("value".into(), Value::Real(r.value))],
+                model: None,
+                source_spec: None,
+            });
+        }
+
+        for s in &plan.shunts {
+            let node = self.urc_node_id(&s.node, raw_name, prefix, pos_id, neg_id, gnd_id);
+            let elem_name = format!("{name}.{}", s.suffix);
+            let id = self.alloc_element_id();
+            self.element_by_name.insert(elem_name.clone(), id);
+            match s.shunt {
+                cirq_ir::urc::UrcShunt::Cap(c) => self.elements.push(Element {
+                    id,
+                    name: elem_name,
+                    kind: ElementKind::Capacitor,
+                    connections: vec![
+                        Connection {
+                            terminal: "pos".into(),
+                            net: node,
+                        },
+                        Connection {
+                            terminal: "neg".into(),
+                            net: gnd_id,
+                        },
+                    ],
+                    params: vec![("value".into(), Value::Real(c))],
+                    model: None,
+                    source_spec: None,
+                }),
+                cirq_ir::urc::UrcShunt::Diode => self.elements.push(Element {
+                    id,
+                    name: elem_name,
+                    kind: ElementKind::Diode,
+                    connections: vec![
+                        Connection {
+                            terminal: "anode".into(),
+                            net: node,
+                        },
+                        Connection {
+                            terminal: "cathode".into(),
+                            net: gnd_id,
+                        },
+                    ],
+                    params: vec![("area".into(), Value::Real(1.0))],
+                    model: diode_model_id,
+                    source_spec: None,
+                }),
+            }
+        }
+    }
+
+    /// Resolve a [`cirq_ir::urc::UrcNode`] to a net id. Internal nodes are
+    /// synthesised under the element's (unprefixed) name so the hierarchy
+    /// prefix is applied exactly once.
+    fn urc_node_id(
+        &mut self,
+        node: &cirq_ir::urc::UrcNode,
+        raw_name: &str,
+        prefix: &str,
+        pos: Id,
+        neg: Id,
+        gnd: Id,
+    ) -> Id {
+        use cirq_ir::urc::UrcNode;
+        match node {
+            UrcNode::Pos => pos,
+            UrcNode::Neg => neg,
+            UrcNode::Gnd => gnd,
+            UrcNode::Internal(s) => {
+                self.resolve_net_name_prefixed(&format!("{raw_name}.{s}"), prefix)
+            }
+        }
+    }
+
     // -------------------------------------------------------------------
     // Element lowering
     // -------------------------------------------------------------------
@@ -674,6 +987,13 @@ impl IrCtx {
             self.diags.push(
                 Diagnostic::error(format!("duplicate element: `{name}`")).with_span(e.name.span),
             );
+            return;
+        }
+
+        // URC is a macro element: it expands into an R/C(/D) ladder right here
+        // at lowering time (the simulator never sees a URC device).
+        if e.element_type.name.eq_ignore_ascii_case("urc") {
+            self.lower_urc_element(e, &name, prefix);
             return;
         }
 
@@ -723,12 +1043,12 @@ impl IrCtx {
                                 "too many connections for element type `{}`",
                                 e.element_type.name
                             ))
-                            .with_span(from.span),
+                            .with_span(from.span()),
                         );
                         continue;
                     }
 
-                    let from_net = self.resolve_net_ident_prefixed(from, prefix);
+                    let from_net = self.resolve_net_ref(from, prefix);
                     let pin_from = pins[positional_conn_idx].to_string();
                     connections.push(Connection {
                         terminal: pin_from,
@@ -737,7 +1057,7 @@ impl IrCtx {
                     positional_conn_idx += 1;
 
                     if positional_conn_idx < pins.len() {
-                        let to_net = self.resolve_net_ident_prefixed(to, prefix);
+                        let to_net = self.resolve_net_ref(to, prefix);
                         let pin_to = pins[positional_conn_idx].to_string();
                         connections.push(Connection {
                             terminal: pin_to,
@@ -749,8 +1069,8 @@ impl IrCtx {
                 Argument::NamedConnection { name, from, to } => {
                     // Named connection pair, e.g. `control: a -> b`.
                     // We treat this as two connections with derived terminal names.
-                    let from_net = self.resolve_net_ident_prefixed(from, prefix);
-                    let to_net = self.resolve_net_ident_prefixed(to, prefix);
+                    let from_net = self.resolve_net_ref(from, prefix);
+                    let to_net = self.resolve_net_ref(to, prefix);
                     connections.push(Connection {
                         terminal: format!("{}_pos", name.name),
                         net: from_net,
@@ -966,6 +1286,17 @@ impl IrCtx {
             let remapped = remapped.clone();
             return self.intern_net(&remapped, false);
         }
+        // Bus fallback: a reference to a bus line `d.i` whose base bus `d` is
+        // bound to a caller bus `bus_a` resolves to `bus_a.i`. This lets a
+        // whole-bus port binding (`d -> bus_a`) carry through to per-line
+        // references inside the module without enumerating every index at the
+        // binding site.
+        if let Some((base, index)) = name.rsplit_once('.')
+            && let Some(remapped_base) = self.net_remap.get(base)
+        {
+            let target = format!("{remapped_base}.{index}");
+            return self.intern_net(&target, false);
+        }
         // Otherwise, prefix the net name for hierarchy.
         if prefix.is_empty() {
             self.intern_net(name, false)
@@ -975,9 +1306,61 @@ impl IrCtx {
         }
     }
 
-    /// Resolve an identifier to a net Id, applying prefix and remapping.
-    fn resolve_net_ident_prefixed(&mut self, ident: &cirq_ast::Ident, prefix: &str) -> Id {
-        self.resolve_net_name_prefixed(&ident.name, prefix)
+    /// Resolve a [`NetRef`] to a net Id. A `Scalar` resolves like a plain net;
+    /// an `Indexed` bus line `d[i]` resolves to the per-line net `d.i` (so a
+    /// bus is sugar for the scalar nets `d.0 … d.N-1`). On a bad index a
+    /// diagnostic is pushed and net `0` (ground) is returned as a placeholder.
+    fn resolve_net_ref(&mut self, nr: &cirq_ast::NetRef, prefix: &str) -> Id {
+        match nr {
+            cirq_ast::NetRef::Scalar(id) => self.resolve_net_name_prefixed(&id.name, prefix),
+            cirq_ast::NetRef::Indexed { name, index, .. } => match self.eval_bus_index(index) {
+                Some(i) => self.resolve_net_name_prefixed(&format!("{}.{i}", name.name), prefix),
+                None => {
+                    self.diags.push(
+                        Diagnostic::error(format!(
+                            "bus index for `{}` must be a non-negative integer",
+                            name.name
+                        ))
+                        .with_span(nr.span()),
+                    );
+                    Id(0)
+                }
+            },
+        }
+    }
+
+    /// Evaluate a bus-index expression to a `usize`, or `None` if it isn't a
+    /// non-negative integer.
+    fn eval_bus_index(&mut self, expr: &Expr) -> Option<usize> {
+        let v = self.eval_to_f64(expr)?;
+        if v >= 0.0 && v.fract() == 0.0 {
+            Some(v as usize)
+        } else {
+            None
+        }
+    }
+
+    /// The caller-side net name a [`NetRef`] denotes, used when building a
+    /// module's port→caller-net remap. A `Scalar` is its bare name; an
+    /// `Indexed` bus line `bus[i]` becomes `bus.i`. Returns `None` (after
+    /// pushing a diagnostic) on a non-integer index.
+    fn netref_caller_name(&mut self, nr: &cirq_ast::NetRef) -> Option<String> {
+        match nr {
+            cirq_ast::NetRef::Scalar(id) => Some(id.name.clone()),
+            cirq_ast::NetRef::Indexed { name, index, .. } => match self.eval_bus_index(index) {
+                Some(i) => Some(format!("{}.{i}", name.name)),
+                None => {
+                    self.diags.push(
+                        Diagnostic::error(format!(
+                            "bus index for `{}` must be a non-negative integer",
+                            name.name
+                        ))
+                        .with_span(nr.span()),
+                    );
+                    None
+                }
+            },
+        }
     }
 
     // -------------------------------------------------------------------
@@ -1298,20 +1681,28 @@ impl IrCtx {
                 Argument::Connection { from, to } => {
                     // Connection-style: maps two ports positionally.
                     let idx = port_remap.len();
-                    if idx < ports.len() {
-                        port_remap.insert(ports[idx].name.name.clone(), from.name.clone());
+                    if idx < ports.len()
+                        && let Some(n) = self.netref_caller_name(from)
+                    {
+                        port_remap.insert(ports[idx].name.name.clone(), n);
                     }
                     let idx2 = port_remap.len();
-                    if idx2 < ports.len() {
-                        port_remap.insert(ports[idx2].name.name.clone(), to.name.clone());
+                    if idx2 < ports.len()
+                        && let Some(n) = self.netref_caller_name(to)
+                    {
+                        port_remap.insert(ports[idx2].name.name.clone(), n);
                     }
                 }
                 Argument::NamedConnection { name, from, to } => {
                     // Named connection pair binding — less common for modules
                     // but handle it: `control: a -> b` maps to ports
                     // `control_pos` and `control_neg` (or similar).
-                    port_remap.insert(format!("{}_pos", name.name), from.name.clone());
-                    port_remap.insert(format!("{}_neg", name.name), to.name.clone());
+                    if let Some(n) = self.netref_caller_name(from) {
+                        port_remap.insert(format!("{}_pos", name.name), n);
+                    }
+                    if let Some(n) = self.netref_caller_name(to) {
+                        port_remap.insert(format!("{}_neg", name.name), n);
+                    }
                 }
             }
         }
@@ -1476,17 +1867,25 @@ impl IrCtx {
                 }
                 Argument::Connection { from, to } => {
                     let idx = port_remap.len();
-                    if idx < ports.len() {
-                        port_remap.insert(ports[idx].name.name.clone(), from.name.clone());
+                    if idx < ports.len()
+                        && let Some(n) = self.netref_caller_name(from)
+                    {
+                        port_remap.insert(ports[idx].name.name.clone(), n);
                     }
                     let idx2 = port_remap.len();
-                    if idx2 < ports.len() {
-                        port_remap.insert(ports[idx2].name.name.clone(), to.name.clone());
+                    if idx2 < ports.len()
+                        && let Some(n) = self.netref_caller_name(to)
+                    {
+                        port_remap.insert(ports[idx2].name.name.clone(), n);
                     }
                 }
                 Argument::NamedConnection { name, from, to } => {
-                    port_remap.insert(format!("{}_pos", name.name), from.name.clone());
-                    port_remap.insert(format!("{}_neg", name.name), to.name.clone());
+                    if let Some(n) = self.netref_caller_name(from) {
+                        port_remap.insert(format!("{}_pos", name.name), n);
+                    }
+                    if let Some(n) = self.netref_caller_name(to) {
+                        port_remap.insert(format!("{}_neg", name.name), n);
+                    }
                 }
             }
         }
@@ -2886,6 +3285,21 @@ fn expr_as_ident(expr: &Expr) -> Option<&str> {
         Expr::Ident(id) => Some(&id.name),
         _ => None,
     }
+}
+
+/// Apply one per-length URC param to `p` by (case-insensitive) name. Returns
+/// `false` for an unrecognised name so the caller can warn.
+fn apply_urc_param(p: &mut cirq_ir::urc::UrcParams, name: &str, v: f64) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        "k" => p.k = v,
+        "fmax" => p.fmax = v,
+        "rperl" => p.rperl = v,
+        "cperl" => p.cperl = v,
+        "isperl" => p.isperl = v,
+        "rsperl" => p.rsperl = v,
+        _ => return false,
+    }
+    true
 }
 
 /// The source span of any expression node.

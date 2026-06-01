@@ -101,6 +101,8 @@ module.exports = grammar({
         repeat($.attribute),
         "port",
         field("name", $.identifier),
+        // Optional bus width: `port d[8]: in` or `port d[width]: in`.
+        optional(seq("[", field("width", $._expression), "]")),
         ":",
         field("direction", $.port_direction)
       ),
@@ -156,7 +158,13 @@ module.exports = grammar({
         field("to", $._net_ref)
       ),
 
-    _net_ref: ($) => choice($.identifier, $.gnd),
+    // A net reference in a connection: a scalar net, a single bus line
+    // (`d[2]`), or ground. Bus references only appear in connections (around
+    // `->`), so the `[` here never collides with expression-level lists.
+    _net_ref: ($) => choice($.subscripted_net, $.identifier, $.gnd),
+
+    subscripted_net: ($) =>
+      seq(field("name", $.identifier), "[", field("index", $._expression), "]"),
 
     // ── Parameters ───────────────────────────────────────────────────
 

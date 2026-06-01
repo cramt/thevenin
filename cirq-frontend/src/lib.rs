@@ -59,9 +59,76 @@ pub mod parser;
 pub mod resolve;
 pub mod to_netlist;
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use diagnostics::{Diagnostic, Severity};
+
+/// The set of `code "lang" { … }` language tags the compiler will accept.
+///
+/// Cirq's embedded code blocks ([`cirq_ir::CodeBlock`]) carry a free-form
+/// language tag. This registry is the **compile-time** half of the language
+/// registry: [`compile_with_languages`] rejects any block whose tag is not
+/// registered here, with a spanned diagnostic, so typos and unsupported
+/// languages fail loudly instead of being silently dropped.
+///
+/// The **execution-time** half lives in `thevenin_control::LanguageRegistry`
+/// (a tag → handler map). A host that registers extra handlers there should
+/// mirror the tags into this registry — `thevenin_control::LanguageRegistry::tags()`
+/// returns exactly the set to pass to [`LanguageRegistry::with_languages`] —
+/// so validation and execution stay in sync.
+///
+/// The default accepts only `"control"`, matching the built-in `.control`
+/// interpreter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LanguageRegistry {
+    tags: BTreeSet<String>,
+}
+
+impl Default for LanguageRegistry {
+    /// Accepts only `"control"`.
+    fn default() -> Self {
+        let mut tags = BTreeSet::new();
+        tags.insert("control".to_string());
+        Self { tags }
+    }
+}
+
+impl LanguageRegistry {
+    /// An empty registry that accepts no code-block languages.
+    pub fn empty() -> Self {
+        Self {
+            tags: BTreeSet::new(),
+        }
+    }
+
+    /// Build a registry from an explicit set of accepted tags.
+    pub fn with_languages<I, S>(tags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            tags: tags.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// Register an additional accepted language tag (builder-style).
+    pub fn register(mut self, tag: impl Into<String>) -> Self {
+        self.tags.insert(tag.into());
+        self
+    }
+
+    /// Whether `tag` is accepted by this registry.
+    pub fn accepts(&self, tag: &str) -> bool {
+        self.tags.contains(tag)
+    }
+
+    /// The accepted tags, sorted, for diagnostics and host synchronisation.
+    pub fn tags(&self) -> impl Iterator<Item = &str> {
+        self.tags.iter().map(String::as_str)
+    }
+}
 
 /// Parse Cirq source text into a [`cirq_ast::SourceFile`].
 ///
@@ -92,8 +159,18 @@ pub fn parse(source: &str) -> Result<cirq_ast::SourceFile, Vec<Diagnostic>> {
 /// This is a convenience function that chains [`parse`] and
 /// [`ir_lower::lower_to_ir`].
 pub fn compile(source: &str) -> Result<cirq_ir::Circuit, Vec<Diagnostic>> {
+    compile_with_languages(source, &LanguageRegistry::default())
+}
+
+/// Like [`compile`], but validates `code "lang" { … }` blocks against an
+/// explicit [`LanguageRegistry`]. Any block whose language tag is not accepted
+/// produces a spanned error diagnostic.
+pub fn compile_with_languages(
+    source: &str,
+    languages: &LanguageRegistry,
+) -> Result<cirq_ir::Circuit, Vec<Diagnostic>> {
     let ast = parse(source)?;
-    ir_lower::lower_to_ir(&ast)
+    ir_lower::lower_to_ir_with_languages(&ast, languages)
 }
 
 /// Full compilation pipeline with import resolution.
@@ -101,6 +178,16 @@ pub fn compile(source: &str) -> Result<cirq_ir::Circuit, Vec<Diagnostic>> {
 /// Like [`compile`], but resolves `import` declarations by reading files
 /// relative to `base_dir`. Use this when compiling a file from disk.
 pub fn compile_file(source: &str, base_dir: &Path) -> Result<cirq_ir::Circuit, Vec<Diagnostic>> {
+    compile_file_with_languages(source, base_dir, &LanguageRegistry::default())
+}
+
+/// Like [`compile_file`], but validates `code "lang" { … }` blocks against an
+/// explicit [`LanguageRegistry`].
+pub fn compile_file_with_languages(
+    source: &str,
+    base_dir: &Path,
+    languages: &LanguageRegistry,
+) -> Result<cirq_ir::Circuit, Vec<Diagnostic>> {
     let ast = parse(source)?;
     let (resolved, resolve_diags) = resolve::resolve_imports(ast, base_dir, &[]);
 
@@ -109,7 +196,7 @@ pub fn compile_file(source: &str, base_dir: &Path) -> Result<cirq_ir::Circuit, V
         return Err(resolve_diags);
     }
 
-    ir_lower::lower_to_ir(&resolved).map_err(|mut ir_diags| {
+    ir_lower::lower_to_ir_with_languages(&resolved, languages).map_err(|mut ir_diags| {
         let mut all = resolve_diags;
         all.append(&mut ir_diags);
         all

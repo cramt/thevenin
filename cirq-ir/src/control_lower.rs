@@ -17,10 +17,7 @@ use tree_sitter::{Node, Tree};
 pub fn lower_tree(tree: &Tree, source: &str) -> Result<Vec<Statement>, String> {
     let root = tree.root_node();
     if root.kind() != "source_file" {
-        return Err(format!(
-            "expected source_file at root, got {}",
-            root.kind()
-        ));
+        return Err(format!("expected source_file at root, got {}", root.kind()));
     }
     lower_block(root, source)
 }
@@ -43,36 +40,60 @@ fn lower_statement(node: Node<'_>, source: &str) -> Result<Option<Statement>, St
         "line_comment" | "inline_comment" => Ok(Some(Statement::Comment)),
 
         "let_stmt" => control::parse_let(rest_after_first_word(node_text(node, source))).map(Some),
-        "echo_stmt" => Ok(Some(Statement::Echo(control::parse_echo(rest_after_first_word(
-            node_text(node, source),
-        ))))),
+        "echo_stmt" => Ok(Some(Statement::Echo(control::parse_echo(
+            rest_after_first_word(node_text(node, source)),
+        )))),
         "if_stmt" => lower_if(node, source).map(Some),
         "foreach_stmt" => lower_foreach(node, source).map(Some),
         "while_stmt" => lower_while(node, source).map(Some),
         "repeat_stmt" => lower_repeat(node, source).map(Some),
-        "save_stmt" => Ok(Some(control::parse_save(rest_after_first_word(node_text(node, source))))),
-        "quit_stmt" => control::parse_quit(rest_after_first_word(node_text(node, source))).map(Some),
+        "save_stmt" => Ok(Some(control::parse_save(rest_after_first_word(node_text(
+            node, source,
+        ))))),
+        "quit_stmt" => {
+            control::parse_quit(rest_after_first_word(node_text(node, source))).map(Some)
+        }
         "set_stmt" => control::parse_set(rest_after_first_word(node_text(node, source))).map(Some),
         "setplot_stmt" => Ok(Some(Statement::Setplot(
             rest_after_first_word(node_text(node, source)).to_string(),
         ))),
-        "define_stmt" => control::parse_define(rest_after_first_word(node_text(node, source))).map(Some),
-        "compose_stmt" => control::parse_compose(rest_after_first_word(node_text(node, source))).map(Some),
-        "alter_stmt" => control::parse_alter(rest_after_first_word(node_text(node, source))).map(Some),
-        "strcmp_stmt" => control::parse_strcmp(rest_after_first_word(node_text(node, source))).map(Some),
-        "print_stmt" => control::parse_print(rest_after_first_word(node_text(node, source))).map(Some),
-        "write_stmt" => Ok(Some(control::parse_write(rest_after_first_word(node_text(node, source))))),
-        "run_analysis" => Ok(Some(Statement::RunAnalysis(trim_terminators(node_text(node, source)).to_string()))),
+        "define_stmt" => {
+            control::parse_define(rest_after_first_word(node_text(node, source))).map(Some)
+        }
+        "compose_stmt" => {
+            control::parse_compose(rest_after_first_word(node_text(node, source))).map(Some)
+        }
+        "alter_stmt" => {
+            control::parse_alter(rest_after_first_word(node_text(node, source))).map(Some)
+        }
+        "strcmp_stmt" => {
+            control::parse_strcmp(rest_after_first_word(node_text(node, source))).map(Some)
+        }
+        "print_stmt" => {
+            control::parse_print(rest_after_first_word(node_text(node, source))).map(Some)
+        }
+        "write_stmt" => Ok(Some(control::parse_write(rest_after_first_word(
+            node_text(node, source),
+        )))),
+        "run_analysis" => Ok(Some(Statement::RunAnalysis(
+            trim_terminators(node_text(node, source)).to_string(),
+        ))),
         "eprint_stmt" => Ok(Some(Statement::Eprint(
             rest_after_first_word(node_text(node, source))
                 .split_whitespace()
                 .map(|s| s.to_string())
                 .collect(),
         ))),
-        "stop_when_stmt" => control::parse_stop(rest_after_first_word(node_text(node, source))).map(Some),
+        "stop_when_stmt" => {
+            control::parse_stop(rest_after_first_word(node_text(node, source))).map(Some)
+        }
         "resume_stmt" => Ok(Some(Statement::Resume)),
-        "source_stmt" => control::parse_source(rest_after_first_word(node_text(node, source))).map(Some),
-        "measure_stmt" => control::parse_measure(rest_after_first_word(node_text(node, source))).map(Some),
+        "source_stmt" => {
+            control::parse_source(rest_after_first_word(node_text(node, source))).map(Some)
+        }
+        "measure_stmt" => {
+            control::parse_measure(rest_after_first_word(node_text(node, source))).map(Some)
+        }
 
         // Catch-all node emitted by the grammar for non-keyword lines.
         // The line-based parser treats unknown commands as no-op

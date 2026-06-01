@@ -1076,9 +1076,50 @@ fn urc_param(model: &thevenin_types::ModelDef, names: &[&str], default: f64) -> 
     default
 }
 
+/// Read a [`cirq_ir::urc::UrcParams`] out of a SPICE `.model … URC (...)` card.
+fn urc_params_from_model(model: &thevenin_types::ModelDef) -> cirq_ir::urc::UrcParams {
+    let d = cirq_ir::urc::UrcParams::default();
+    cirq_ir::urc::UrcParams {
+        k: urc_param(model, &["K"], d.k),
+        fmax: urc_param(model, &["FMAX"], d.fmax),
+        rperl: urc_param(model, &["RPERL"], d.rperl),
+        cperl: urc_param(model, &["CPERL"], d.cperl),
+        isperl: urc_param(model, &["ISPERL"], d.isperl),
+        rsperl: urc_param(model, &["RSPERL"], d.rsperl),
+    }
+}
+
+/// Map an abstract [`cirq_ir::urc::UrcNode`] onto a concrete SPICE node name.
+/// Internal nodes get the `__urc__{name}__` reservation prefix (see the comment
+/// in `expand_urc`).
+fn urc_node_name(
+    node: &cirq_ir::urc::UrcNode,
+    name: &str,
+    pos: &str,
+    neg: &str,
+    gnd: &str,
+) -> String {
+    use cirq_ir::urc::UrcNode;
+    match node {
+        UrcNode::Pos => pos.to_string(),
+        UrcNode::Neg => neg.to_string(),
+        UrcNode::Gnd => gnd.to_string(),
+        UrcNode::Internal(s) => format!("__urc__{name}__{s}"),
+    }
+}
+
 /// Expand a single URC element into a Vec of plain R / C / D SPICE elements,
-/// matching `urcsetup.c`. The returned elements are named with the URC
-/// instance's name as prefix (e.g. `U1:rlo1`, `U1:clo1`, `U1:dlo3`).
+/// matching `urcsetup.c`. The ladder itself is computed by the shared
+/// [`cirq_ir::urc::plan`]; this function only materialises it into
+/// `thevenin_types::Element`s.
+///
+/// Internal node names use the `__urc__{name}__` reservation prefix. Earlier
+/// revisions used `{name}:lo{i}` — a colon-separated form that can legally
+/// appear in user netlists, so a user node literally named `u1:lo1` would
+/// silently merge with the URC-synthesised one inside `NetTable::intern`. The
+/// double-underscore prefix is exceedingly unlikely to clash with a hand-written
+/// node name. The diodes (when `ISPERL > 0`) reference the model
+/// `__urc__{name}__dio`, which `expand_urc_in_netlist` emits separately.
 fn expand_urc(
     name: &str,
     pos: &str,
@@ -1088,150 +1129,44 @@ fn expand_urc(
     length: f64,
     user_lumps: Option<f64>,
 ) -> Vec<thevenin_types::Element> {
-    let k = urc_param(model, &["K"], 1.5);
-    let fmax = urc_param(model, &["FMAX"], 1.0e9);
-    let r_per_l = urc_param(model, &["RPERL"], 1000.0);
-    let c_per_l = urc_param(model, &["CPERL"], 1.0e-12);
-    let is_per_l = urc_param(model, &["ISPERL"], 0.0);
-    let rs_per_l = urc_param(model, &["RSPERL"], 0.0);
-
-    let r0 = length * r_per_l;
-    let c0 = length * c_per_l;
-    let i0 = length * is_per_l;
-
-    let lumps = match user_lumps {
-        Some(n) if n >= 1.0 => n as usize,
-        _ => {
-            let wnorm = fmax * r0 * c0 * 2.0 * std::f64::consts::PI;
-            if wnorm < 35.0 {
-                3
-            } else {
-                let n = (wnorm * ((k - 1.0) / k).powi(2)).ln() / k.ln();
-                (n.ceil() as usize).max(3)
-            }
-        }
-    };
-    let n_f = lumps as f64;
-
-    // Per-stage component values from urcsetup.c lines 90-93.
-    let r1 = (r0 * (k - 1.0)) / (2.0 * (k.powf(n_f)) - 2.0);
-    let c1 = (c0 * (k - 1.0)) / (k.powf(n_f - 1.0) * (k + 1.0) - 2.0);
-    let i1 = (i0 * (k - 1.0)) / (k.powf(n_f - 1.0) * (k + 1.0) - 2.0);
-    let rd = length * n_f * rs_per_l;
-
-    // Diode model — synthesised once if needed. Captured by reference into
-    // each diode element's `model` field.
-    //
-    // URC expansion synthesises internal nodes (the per-lump `lo`/`hi`
-    // taps) and a diode model name. Earlier revisions used `{name}:lo{i}`
-    // — a colon-separated form that can legally appear in user-supplied
-    // netlists, so a user node literally named `u1:lo1` would silently
-    // merge with the URC-synthesised one inside `NetTable::intern`. The
-    // `__urc__` double-underscore prefix and segment marker is reserved
-    // for URC-internal use and is exceedingly unlikely to clash with a
-    // hand-written node name.
+    let params = urc_params_from_model(model);
+    let plan = cirq_ir::urc::plan(&params, length, user_lumps);
     let diode_model_name = format!("__urc__{name}__dio");
-    let has_diodes = is_per_l > 0.0;
 
-    let mut out: Vec<thevenin_types::Element> = Vec::with_capacity(4 * lumps + 1);
+    let node = |n: &cirq_ir::urc::UrcNode| urc_node_name(n, name, pos, neg, gnd);
 
-    // Inline the diode model as a `.model` row in the output, so the
-    // importer's later model-table pass picks it up.
-    if has_diodes {
+    let mut out: Vec<thevenin_types::Element> =
+        Vec::with_capacity(plan.resistors.len() + plan.shunts.len());
+
+    for r in &plan.resistors {
         out.push(thevenin_types::Element {
-            name: format!("__urc__{name}__dummy_for_model"),
-            kind: SpiceElementKind::Raw(format!(
-                "0 0 0 ; URC synthesised diode model `{}` follows separately as .model {} D (IS={} CJO={} RS={})",
-                diode_model_name, diode_model_name, i1, c1, rd,
-            )),
+            name: format!("__urc__{name}__{}", r.suffix),
+            kind: SpiceElementKind::Resistor {
+                pos: node(&r.from),
+                neg: node(&r.to),
+                value: Expr::Num(r.value),
+                params: vec![],
+            },
         });
     }
-
-    let mut lowl = pos.to_string();
-    let mut hir = neg.to_string();
-    for i in 1..=lumps {
-        let lowr = format!("__urc__{name}__lo{i}");
-        let hil = format!("__urc__{name}__hi{i}");
-        // At the last lump the two paths meet — lowr collapses to hil.
-        let (lowr_node, hil_node) = if i == lumps {
-            (hil.clone(), hil.clone())
-        } else {
-            (lowr.clone(), hil.clone())
-        };
-
-        // Left-path resistor: lowl -> lowr_node
-        out.push(thevenin_types::Element {
-            name: format!("__urc__{name}__rlo{i}"),
-            kind: SpiceElementKind::Resistor {
-                pos: lowl.clone(),
-                neg: lowr_node.clone(),
-                value: Expr::Num(r1),
-                params: vec![],
-            },
-        });
-        // Right-path resistor: hil_node -> hir
-        out.push(thevenin_types::Element {
-            name: format!("__urc__{name}__rhi{i}"),
-            kind: SpiceElementKind::Resistor {
-                pos: hil_node.clone(),
-                neg: hir.clone(),
-                value: Expr::Num(r1),
-                params: vec![],
-            },
-        });
-
-        // Shunt to ground at the lowr node — either a capacitor or a
-        // diode (with cjo + rs + is from the model's RC/IS per length).
-        if has_diodes {
-            out.push(thevenin_types::Element {
-                name: format!("__urc__{name}__dlo{i}"),
-                kind: SpiceElementKind::Raw(format!("{lowr_node} {gnd} {diode_model_name} 1.0")),
-            });
-        } else {
-            out.push(thevenin_types::Element {
-                name: format!("__urc__{name}__clo{i}"),
+    for s in &plan.shunts {
+        let node_name = node(&s.node);
+        match s.shunt {
+            cirq_ir::urc::UrcShunt::Cap(c) => out.push(thevenin_types::Element {
+                name: format!("__urc__{name}__{}", s.suffix),
                 kind: SpiceElementKind::Capacitor {
-                    pos: lowr_node.clone(),
+                    pos: node_name,
                     neg: gnd.to_string(),
-                    value: Expr::Num(c1),
+                    value: Expr::Num(c),
                     params: vec![],
                 },
-            });
+            }),
+            cirq_ir::urc::UrcShunt::Diode => out.push(thevenin_types::Element {
+                name: format!("__urc__{name}__{}", s.suffix),
+                kind: SpiceElementKind::Raw(format!("{node_name} {gnd} {diode_model_name} 1.0")),
+            }),
         }
-
-        // Additional shunt at hil node for non-final stages (the merge
-        // point already has its shunt above).
-        if i != lumps {
-            if has_diodes {
-                out.push(thevenin_types::Element {
-                    name: format!("__urc__{name}__dhi{i}"),
-                    kind: SpiceElementKind::Raw(format!("{hil_node} {gnd} {diode_model_name} 1.0")),
-                });
-            } else {
-                out.push(thevenin_types::Element {
-                    name: format!("__urc__{name}__chi{i}"),
-                    kind: SpiceElementKind::Capacitor {
-                        pos: hil_node.clone(),
-                        neg: gnd.to_string(),
-                        value: Expr::Num(c1),
-                        params: vec![],
-                    },
-                });
-            }
-        }
-
-        lowl = lowr;
-        hir = hil;
-
-        // Suppress the unused-variable warning for the last iteration's
-        // assignment to lowl/hir (they're consumed by the next iter that
-        // doesn't run).
-        let _ = (&lowl, &hir);
     }
-
-    // Bury the unused-warning for c1/i1 when both happen to be zero
-    // (defensive: shouldn't trigger in normal use).
-    let _ = (c1, i1);
 
     out
 }
@@ -1284,40 +1219,12 @@ fn expand_urc_in_netlist(netlist: &Netlist) -> Netlist {
                         _ => None,
                     });
                     let expanded = expand_urc(&e.name, pos, neg, gnd, model_def, length_v, lumps_v);
-                    // If the URC needed diodes, also synthesise a `.model`
-                    // entry. Detect by looking at the model's ISPERL.
-                    let isperl = urc_param(model_def, &["ISPERL"], 0.0);
-                    if isperl > 0.0 {
-                        let i1 = (length_v * isperl) * /* simplified — exact */ 1.0;
-                        // The exact c1/rd are recomputed here so the model
-                        // params match what `expand_urc` used above. This
-                        // duplicates a little arithmetic but keeps the two
-                        // sites cleanly decoupled.
-                        let k = urc_param(model_def, &["K"], 1.5);
-                        let fmax = urc_param(model_def, &["FMAX"], 1.0e9);
-                        let r_per_l = urc_param(model_def, &["RPERL"], 1000.0);
-                        let c_per_l = urc_param(model_def, &["CPERL"], 1.0e-12);
-                        let rs_per_l = urc_param(model_def, &["RSPERL"], 0.0);
-                        let r0 = length_v * r_per_l;
-                        let c0 = length_v * c_per_l;
-                        let n = match lumps_v {
-                            Some(n) if n >= 1.0 => n as usize,
-                            _ => {
-                                let wnorm = fmax * r0 * c0 * 2.0 * std::f64::consts::PI;
-                                if wnorm < 35.0 {
-                                    3
-                                } else {
-                                    let nf = (wnorm * ((k - 1.0) / k).powi(2)).ln() / k.ln();
-                                    (nf.ceil() as usize).max(3)
-                                }
-                            }
-                        };
-                        let n_f = n as f64;
-                        let c1 = (c0 * (k - 1.0)) / (k.powf(n_f - 1.0) * (k + 1.0) - 2.0);
-                        let i1_real = ((length_v * isperl) * (k - 1.0))
-                            / (k.powf(n_f - 1.0) * (k + 1.0) - 2.0);
-                        let rd = length_v * n_f * rs_per_l;
-                        let _ = i1; // shadow
+                    // If the URC needed diodes, also synthesise the matching
+                    // `.model` entry. The params come from the same shared
+                    // expansion plan the elements were built from, so the two
+                    // can never drift.
+                    let params = urc_params_from_model(model_def);
+                    if let Some(dm) = cirq_ir::urc::plan(&params, length_v, lumps_v).diode_model {
                         let dio_name = format!("__urc__{}__dio", e.name);
                         synth_diode_models.push(Item::Model(thevenin_types::ModelDef {
                             name: dio_name,
@@ -1325,27 +1232,20 @@ fn expand_urc_in_netlist(netlist: &Netlist) -> Netlist {
                             params: vec![
                                 Param {
                                     name: "IS".to_string(),
-                                    value: Expr::Num(i1_real),
+                                    value: Expr::Num(dm.is),
                                 },
                                 Param {
                                     name: "CJO".to_string(),
-                                    value: Expr::Num(c1),
+                                    value: Expr::Num(dm.cjo),
                                 },
                                 Param {
                                     name: "RS".to_string(),
-                                    value: Expr::Num(rd),
+                                    value: Expr::Num(dm.rs),
                                 },
                             ],
                         }));
                     }
                     for el in expanded {
-                        // Skip the synthetic "dummy_for_model" Raw element
-                        // — its sole purpose is to carry the diode-model
-                        // hint, and we've already emitted a real .model
-                        // item for it above.
-                        if el.name.ends_with("__dummy_for_model") {
-                            continue;
-                        }
                         new_items.push(Item::Element(el));
                     }
                 } else {

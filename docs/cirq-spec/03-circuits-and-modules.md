@@ -75,6 +75,38 @@ Port direction is metadata for tooling and validation. Electrically, all ports a
 
 Ports are ordered by declaration order. This matters for positional instantiation (see below).
 
+### Bus ports
+
+A port may declare a **width** to become a bus — a group of N nets:
+
+```cirq
+module tap {
+    port d[8]: in            // literal width
+    port q[width]: out       // parameter-driven width (const-generics style)
+    param width = 8
+    // ...
+}
+```
+
+A bus is sugar for the scalar nets `base.0 … base.N-1`. A single line is
+referenced with a subscript, `d[2]` (which is the net `d.2`); the whole bus is
+referenced by its bare name, `d`.
+
+```cirq
+R0: resistor(d[0] -> q[0], 1k)   // one line
+T1: tap(d: in8, q: out8)         // whole-bus binding (in8/out8 are buses)
+```
+
+A whole-bus binding connects index-wise: inside `tap`, `d[i]` resolves to the
+caller's `in8.i`. Widths are checked where both are statically known; binding a
+bus to a scalar (or mismatched width) is an error.
+
+> **No generate loops (yet).** Cirq has no compile-time loop, so a `port
+> d[width]` module cannot *generate* width-many elements — buses are for
+> bundling, pass-through, and explicit per-line indexing (`d[0]`, `d[1]`, …).
+> Range slices (`d[0:4]`) and a `generate`-style loop are post-1.0; the `[ ]`
+> index syntax itself is in (see [`01-lexical.md`](01-lexical.md)).
+
 ## Module Instantiation
 
 Modules are instantiated like elements, with explicit port connections:
@@ -235,8 +267,39 @@ circuit demo {
 ```
 
 Contents of the block are preserved as raw text and dispatched at
-simulate time. Unrecognised language tags are passed through for future
-tooling but ignored by the simulator.
+simulate time.
+
+### Language registry
+
+The set of accepted language tags is governed by a **language registry**, in
+two halves:
+
+- **Compile time** — `cirq_frontend::LanguageRegistry` is the set of accepted
+  tags. `cirq_frontend::compile` accepts only `"control"`; a block with any
+  other tag is **rejected with a spanned diagnostic** rather than silently
+  dropped. A host that supports additional languages compiles with
+  `cirq_frontend::compile_with_languages(source, &registry)`, registering the
+  extra tags first.
+- **Execution time** — `thevenin_control::LanguageRegistry` maps each tag to a
+  `LanguageHandler`. The default handles only `"control"` (the `.control`
+  interpreter). Hosts register additional handlers
+  (`registry.register("js", Box::new(JsHandler))`) and run blocks with
+  `thevenin_control::execute_code_blocks_ir(circuit, &registry)`.
+
+The two halves are kept in sync by the host: `LanguageRegistry::tags()` on the
+execution registry returns exactly the tags to feed into
+`cirq_frontend::LanguageRegistry::with_languages`.
+
+A `LanguageHandler` receives the verbatim block body, the IR's pre-parsed AST
+when available (today only for `"control"`), and the live simulation context;
+it reports results purely through side effects on that context (appended
+plots, printed output, an exit code). The full contract is documented in
+[`docs/architecture/language-registry.md`](../architecture/language-registry.md).
+
+This is the extensibility mechanism for embedding other languages (an embedded
+JS engine, a Python block, a domain-specific DSL) without adding new Cirq
+syntax for each.
+
 
 ## Import
 

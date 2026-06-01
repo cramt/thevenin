@@ -20,55 +20,79 @@
 pub mod ast;
 pub mod context;
 pub mod exec;
+pub mod language;
 pub mod parse;
 pub mod vecexpr;
 
 use cirq_ir::Circuit;
 use context::SimContext;
 use exec::ControlResult;
+use language::LanguageRegistry;
 use thevenin_types::SimResult;
 
 /// Check if a Cirq IR circuit contains a `.control` code block.
 ///
 /// The Cirq IR stores `.control` source verbatim as a [`cirq_ir::CodeBlock`]
-/// with `language == "control"`.
+/// with `language == "control"`. This is the back-compat convenience over
+/// [`has_code_block_ir`] with the [default](LanguageRegistry::default)
+/// registry.
 pub fn has_control_block_ir(circuit: &Circuit) -> bool {
-    circuit.code_blocks.iter().any(|b| b.language == "control")
+    has_code_block_ir(circuit, &LanguageRegistry::default())
+}
+
+/// Whether `circuit` has any code block whose language `registry` can execute.
+pub fn has_code_block_ir(circuit: &Circuit, registry: &LanguageRegistry) -> bool {
+    circuit
+        .code_blocks
+        .iter()
+        .any(|b| registry.contains(&b.language))
 }
 
 /// Execute a `.control` block from a Cirq IR circuit.
 ///
-/// Builds a [`SimContext`] via [`SimContext::from_circuit`] so the analysis
-/// dispatcher in `exec.rs` routes Op / Dc / Tran / Ac through
-/// [`thevenin::circuit`]. The executor consumes the IR's typed
-/// `parsed` AST directly when present, falling back to re-parsing `lines`
-/// for blocks constructed without the typed form (e.g. by test fixtures
-/// that bypass [`cirq_ir::CodeBlock::from_lines`]).
+/// Back-compat convenience over [`execute_code_blocks_ir`] with the
+/// [default](LanguageRegistry::default) registry (which handles only
+/// `"control"`).
 pub fn execute_control_block_ir(circuit: &Circuit) -> Result<ControlResult, String> {
-    let control_blocks: Vec<&cirq_ir::CodeBlock> = circuit
+    execute_code_blocks_ir(circuit, &LanguageRegistry::default())
+}
+
+/// Execute every embedded code block in `circuit`, routing each through the
+/// handler `registry` registers for its language tag.
+///
+/// Builds one [`SimContext`] via [`SimContext::from_circuit`] (so the analysis
+/// dispatcher in `exec.rs` routes Op / Dc / Tran / Ac through
+/// [`thevenin::circuit`]) and runs all blocks against it in declaration order,
+/// stopping early if a handler sets [`SimContext::exit_code`]. Each handler
+/// receives the IR's pre-parsed AST when present (see [`language`]).
+///
+/// Returns `Err` if the circuit has no executable code block, or if a block's
+/// language has no registered handler — the latter should not happen when the
+/// circuit was compiled with a matching `cirq_frontend::LanguageRegistry`.
+pub fn execute_code_blocks_ir(
+    circuit: &Circuit,
+    registry: &LanguageRegistry,
+) -> Result<ControlResult, String> {
+    let blocks: Vec<&cirq_ir::CodeBlock> = circuit
         .code_blocks
         .iter()
-        .filter(|b| b.language == "control")
+        .filter(|b| registry.contains(&b.language))
         .collect();
 
-    if control_blocks.is_empty() {
-        return Err("no .control block found".to_string());
+    if blocks.is_empty() {
+        return Err("no executable code block found".to_string());
     }
 
     let mut ctx = SimContext::from_circuit(circuit.clone())?;
 
-    for block in control_blocks {
-        // Prefer the IR's pre-parsed AST. Re-parse `lines` only as a
-        // fallback for blocks built without going through `from_lines`.
-        let fallback;
-        let stmts: &[cirq_ir::control::Statement] = match &block.parsed {
-            Some(p) => p.as_slice(),
-            None => {
-                fallback = cirq_ir::control::parse_control_block(&block.lines)?;
-                &fallback
-            }
-        };
-        exec::execute(stmts, &mut ctx)?;
+    for block in blocks {
+        let handler = registry.handler(&block.language).ok_or_else(|| {
+            format!(
+                "no handler registered for code block language {:?}",
+                block.language
+            )
+        })?;
+        handler.execute(&block.lines, block.parsed.as_deref(), &mut ctx)?;
         if ctx.exit_code.is_some() {
             break;
         }
@@ -219,8 +243,8 @@ mod tests {
             Err(e) => e,
         };
         assert!(
-            err.contains("no .control block"),
-            "expected missing-control error, got: {err}"
+            err.contains("no executable code block"),
+            "expected missing-code-block error, got: {err}"
         );
     }
 
@@ -946,5 +970,73 @@ quit 0
             "csv header lists v(mid): {header:?}"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    // -----------------------------------------------------------------------
+    // Language registry (B4 — execution half)
+    // -----------------------------------------------------------------------
+
+    use crate::language::{LanguageHandler, LanguageRegistry};
+
+    /// A stub handler that records that it ran and emits a marker into the
+    /// context's output, proving custom languages route through the registry.
+    struct MarkerHandler;
+    impl LanguageHandler for MarkerHandler {
+        fn execute(
+            &self,
+            lines: &[String],
+            _parsed: Option<&[cirq_ir::control::Statement]>,
+            ctx: &mut SimContext,
+        ) -> Result<(), String> {
+            ctx.output.push_str(&format!("marker:{}", lines.join("|")));
+            ctx.exit_code = Some(7);
+            Ok(())
+        }
+    }
+
+    /// A custom handler registered for a non-`control` tag is invoked, and its
+    /// side effects (output, exit code) land on the shared context.
+    #[test]
+    fn custom_handler_routes_and_mutates_context() {
+        let mut circuit = divider_with_control(vec!["op".into(), "quit 0".into()]);
+        // Replace the control block with a custom-language block.
+        circuit.code_blocks = vec![CodeBlock::from_lines("marker", vec!["hello".into()])];
+
+        let mut registry = LanguageRegistry::empty();
+        registry.register("marker", Box::new(MarkerHandler));
+
+        let result = execute_code_blocks_ir(&circuit, &registry).expect("custom handler runs");
+        assert_eq!(result.exit_code, 7);
+        assert!(
+            result.output.contains("marker:hello"),
+            "expected marker output, got: {:?}",
+            result.output
+        );
+    }
+
+    /// `has_code_block_ir` reports whether the registry can execute any block.
+    #[test]
+    fn has_code_block_ir_respects_registry() {
+        let circuit = Circuit {
+            code_blocks: vec![CodeBlock::from_lines("marker", vec!["x".into()])],
+            ..divider_with_control(vec![])
+        };
+        // Default registry only knows "control" → no executable block.
+        assert!(!has_code_block_ir(&circuit, &LanguageRegistry::default()));
+        // A registry with the marker handler sees it.
+        let mut registry = LanguageRegistry::empty();
+        registry.register("marker", Box::new(MarkerHandler));
+        assert!(has_code_block_ir(&circuit, &registry));
+    }
+
+    /// `tags()` exposes the registered languages so a host can mirror them into
+    /// the frontend's compile-time registry.
+    #[test]
+    fn registry_tags_lists_registered_languages() {
+        let mut registry = LanguageRegistry::with_control();
+        registry.register("scheme", Box::new(MarkerHandler));
+        let mut tags: Vec<&str> = registry.tags().collect();
+        tags.sort_unstable();
+        assert_eq!(tags, vec!["control", "scheme"]);
     }
 }

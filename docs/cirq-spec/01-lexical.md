@@ -14,6 +14,19 @@ Block comments nest:
 /* outer /* inner */ still in outer */
 ```
 
+Cirq has **only** these two comment forms. SPICE-style comments are
+deliberately not accepted:
+
+- A leading `*` is **not** a comment. (In SPICE, `*` at the start of a line
+  begins a comment; in Cirq it is a syntax error.) To reuse a SPICE deck,
+  run it through the SPICE importer rather than pasting it into Cirq source.
+- `;` is treated as insignificant whitespace (an optional statement
+  terminator), not an inline-comment marker as in some SPICE dialects.
+
+Keeping the comment surface minimal preserves a clean boundary between Cirq
+source and SPICE: anything SPICE-shaped belongs in the importer, not the Cirq
+grammar.
+
 ## Identifiers
 
 ```
@@ -115,7 +128,7 @@ Escape sequences: `\\`, `\"`, `\n`, `\t`.
 ```
 {  }        // blocks
 (  )        // grouping, function calls
-[  ]        // reserved (future: arrays)
+[  ]        // bus width / subscript (`port d[8]`, `d[2]`); list literals
 ,           // separator
 ;           // statement terminator (optional — newline also terminates)
 :           // type annotation, port direction

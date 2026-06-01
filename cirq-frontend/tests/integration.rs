@@ -1535,6 +1535,78 @@ fn cirq_control_block_round_trip() {
     assert!(has_control, "netlist should contain Item::Control");
 }
 
+// ---------------------------------------------------------------------------
+// Test 21b: Language registry (B4 — compile-time validation half)
+// ---------------------------------------------------------------------------
+
+const REGISTRY_SOURCE_SCHEME: &str = r#"
+    circuit reg_test {
+        V1: vsource(in -> gnd, dc: 1)
+        R1: resistor(in -> gnd, 1k)
+        analysis op {}
+        code "scheme" {
+            (display 42)
+        }
+    }
+"#;
+
+/// An unregistered `code "lang" { … }` tag is rejected at compile time with a
+/// spanned diagnostic — not silently dropped (the pre-B4 behaviour).
+#[test]
+fn cirq_unknown_code_block_language_is_rejected() {
+    let diags = match cirq_frontend::compile(REGISTRY_SOURCE_SCHEME) {
+        Ok(_) => panic!("expected unknown code-block language to fail compilation"),
+        Err(d) => d,
+    };
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("scheme")
+                && d.message.contains("unknown code block language")),
+        "expected unknown-language diagnostic, got: {:?}",
+        diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    // The diagnostic must carry a span for rich reporting.
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("scheme") && d.span.is_some()),
+        "unknown-language diagnostic should carry a span"
+    );
+}
+
+/// The default registry still accepts `"control"` (no behaviour change for the
+/// built-in language).
+#[test]
+fn cirq_default_registry_accepts_control() {
+    let source = r#"
+        circuit ctrl_ok {
+            V1: vsource(in -> gnd, dc: 1)
+            R1: resistor(in -> gnd, 1k)
+            analysis op {}
+            code "control" { op }
+        }
+    "#;
+    let ir = cirq_frontend::compile(source).expect("control is accepted by default");
+    assert_eq!(ir.code_blocks.len(), 1);
+    assert_eq!(ir.code_blocks[0].language, "control");
+}
+
+/// A host can widen the accepted set via `compile_with_languages`; the custom
+/// block then survives into the IR (unparsed, since the IR only types control).
+#[test]
+fn cirq_custom_registry_accepts_registered_language() {
+    let registry = cirq_frontend::LanguageRegistry::default().register("scheme");
+    let ir = cirq_frontend::compile_with_languages(REGISTRY_SOURCE_SCHEME, &registry)
+        .expect("registered language is accepted");
+    assert_eq!(ir.code_blocks.len(), 1);
+    assert_eq!(ir.code_blocks[0].language, "scheme");
+    assert!(
+        ir.code_blocks[0].parsed.is_none(),
+        "non-control blocks are not pre-parsed by the IR"
+    );
+}
+
 // ===========================================================================
 // Round-trip tests for newly wired simulator features
 // ===========================================================================

@@ -5,9 +5,9 @@ use cirq_ast::{
     AnalysisDecl, AnalysisItem, Argument, Attribute, BinOp, Circuit, CircuitItem, CodeDecl,
     ConditionalBranch, ConditionalDecl, CoupledLineDecl, CoupledLineField, ElementInst, ExportDecl,
     Expr, FuncDecl, GlobalDecl, IcDecl, IcEntry, Ident, Import, LetDecl, MeasureBody, MeasureDecl,
-    ModelDef, ModelParam, ModuleDef, ModuleInst, OptionSetting, OptionsDecl, ParamDecl, PortDecl,
-    PortDirection, QualifiedName, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel, UnaryOp,
-    span::Span,
+    ModelDef, ModelParam, ModuleDef, ModuleInst, NetRef, OptionSetting, OptionsDecl, ParamDecl,
+    PortDecl, PortDirection, QualifiedName, SaveDecl, SaveTarget, SourceFile, TempDecl, TopLevel,
+    UnaryOp, span::Span,
 };
 
 use crate::diagnostics::{Diagnostic, Severity};
@@ -306,6 +306,11 @@ impl Ctx<'_> {
             }
         };
 
+        // Optional bus width: `port d[8]: in`.
+        let width = node
+            .child_by_field_name("width")
+            .and_then(|w| self.lower_expr(w));
+
         let mut attrs = Vec::new();
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
@@ -318,6 +323,7 @@ impl Ctx<'_> {
 
         Some(PortDecl {
             name,
+            width,
             direction,
             attrs,
             span: span_of(node),
@@ -432,14 +438,25 @@ impl Ctx<'_> {
         }
     }
 
-    fn lower_net_ref(&mut self, parent: tree_sitter::Node, field_name: &str) -> Option<Ident> {
+    fn lower_net_ref(&mut self, parent: tree_sitter::Node, field_name: &str) -> Option<NetRef> {
         let node = self.required_field(parent, field_name)?;
         match node.kind() {
-            "gnd" => Some(Ident {
+            "gnd" => Some(NetRef::Scalar(Ident {
                 name: "gnd".to_owned(),
                 span: span_of(node),
-            }),
-            "identifier" => Some(self.ident(node)),
+            })),
+            "identifier" => Some(NetRef::Scalar(self.ident(node))),
+            "subscripted_net" => {
+                let name_node = self.required_field(node, "name")?;
+                let name = self.ident(name_node);
+                let index_node = self.required_field(node, "index")?;
+                let index = self.lower_expr(index_node)?;
+                Some(NetRef::Indexed {
+                    name,
+                    index,
+                    span: span_of(node),
+                })
+            }
             _ => {
                 let kind = node.kind().to_owned();
                 self.error_at(node, format!("expected net reference, got {kind}"));
@@ -1720,8 +1737,8 @@ circuit test {
                 assert_eq!(e.args.len(), 2);
                 match &e.args[0] {
                     Argument::Connection { from, to } => {
-                        assert_eq!(from.name, "a");
-                        assert_eq!(to.name, "gnd");
+                        assert_eq!(from.base_name(), "a");
+                        assert_eq!(to.base_name(), "gnd");
                     }
                     other => panic!("expected Connection, got {other:?}"),
                 }
@@ -1750,8 +1767,8 @@ circuit test {
                 match &e.args[1] {
                     Argument::NamedConnection { name, from, to } => {
                         assert_eq!(name.name, "control");
-                        assert_eq!(from.name, "ctrl_p");
-                        assert_eq!(to.name, "ctrl_n");
+                        assert_eq!(from.base_name(), "ctrl_p");
+                        assert_eq!(to.base_name(), "ctrl_n");
                     }
                     other => panic!("expected NamedConnection, got {other:?}"),
                 }

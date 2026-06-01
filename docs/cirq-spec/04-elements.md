@@ -275,6 +275,33 @@ coupled_line P1 {
 The `in` and `out` lists must be the same length. The optional `gnd`
 field is the common reference net. The model must be a CPL model card.
 
+### Uniform distributed RC (URC / U element)
+
+A `urc` element models a uniform distributed RC line. It is a **macro**: at
+compile time it expands into a ladder of lumped R/C sections (or R/C/D when the
+per-length saturation current `isperl > 0`), mirroring ngspice's `urcsetup.c`.
+The simulator never sees a URC device.
+
+```cirq
+// Reusable model card (optional):
+model rcline: urc { rperl = 1k, cperl = 1p, fmax = 1G, k = 1.5 }
+
+U1: urc(in -> out, model: rcline, len: 1000, lumps: 16)   // model-based
+U2: urc(in -> out, model: rcline, len: 1000, cperl: 2p)   // model + override
+U3: urc(in -> out, rperl: 1k, cperl: 1p, len: 500)        // inline params
+```
+
+- Terminals: positional `pos -> neg` is the signal path; the ground reference
+  is the optional `gnd:` net, defaulting to the global `gnd`.
+- Per-length params — `rperl`, `cperl`, `fmax`, `k`, `isperl`, `rsperl` — may
+  come from a `model:` card, be given inline, or both (inline overrides the
+  model). `len` is the line length and is always required; `lumps` (the section
+  count) is optional and otherwise auto-sized from `fmax`, `k`, and the total
+  RC.
+
+The same expansion math backs the SPICE importer's `U` element, so a native
+`urc` and the equivalent imported `U` + `.model URC` are identical.
+
 ## XSPICE Code Models (A element)
 
 XSPICE code-model instances bind to a model registered with the
