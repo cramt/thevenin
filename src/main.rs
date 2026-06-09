@@ -1,3 +1,23 @@
+//! `thevenin` — command-line front end for the thevenin circuit simulator.
+//!
+//! ```text
+//! thevenin run <input>
+//! ```
+//!
+//! `<input>` is either a Cirq source file (`.cirq`) or a SPICE netlist (any
+//! other extension). Cirq sources are compiled through
+//! [`cirq_frontend::compile_file`]; SPICE netlists are imported with
+//! [`cirq_spice_import::import_spice`]. Either way the result is one or more
+//! [`cirq_ir::Circuit`] values, each dispatched to the simulator: circuits
+//! containing a `.control` block run through the
+//! [`thevenin_control`](https://docs.rs/thevenin-control) interpreter, the rest
+//! through [`thevenin::circuit::simulate`]. Result plots are printed to stdout
+//! in ngspice's batch-output style.
+//!
+//! This binary is a thin driver over the library crates; for programmatic use,
+//! depend on `thevenin` and the `cirq-*` crates directly rather than shelling
+//! out. The `wasm32` build compiles to an empty `main` so the workspace stays
+//! `wasm`-clean.
 #![cfg_attr(target_arch = "wasm32", allow(unused))]
 
 #[cfg(target_arch = "wasm32")]

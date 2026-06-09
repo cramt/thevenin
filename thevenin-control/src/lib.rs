@@ -11,8 +11,9 @@
 //! [`thevenin::circuit`](https://docs.rs/thevenin), `alter` mutates the
 //! [`cirq_ir::Circuit`] directly, and analysis commands parse straight to
 //! [`cirq_ir::Analysis`]. It depends on [`thevenin_types`] only for the
-//! simulator's *result* types ([`SimResult`](thevenin_types::SimResult) and
-//! friends).
+//! simulator's *result* types ([`SimResult`] and friends).
+//!
+//! [`SimResult`]: thevenin_types::SimResult
 //!
 //! The typed `.control` statement AST and its parser live in
 //! [`cirq_ir::control`]; this crate is the executor on top of them.

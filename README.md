@@ -68,6 +68,10 @@ For per-row source-file pointers and known gaps, see [`docs/devices.md`](docs/de
 
 ## Quick start
 
+New here? The [**Getting Started guide**](docs/getting-started.md) walks from a
+clean checkout through your first CLI run, writing a Cirq circuit, importing a
+SPICE netlist, and using the library API.
+
 ```rust
 use cirq_spice_import::import_spice;
 use thevenin::circuit::simulate;
@@ -132,11 +136,32 @@ See [`docs/architecture/raw-file-format.md`](docs/architecture/raw-file-format.m
 
 ## Test coverage
 
-The regression harness runs every test fixture from `ngspice-upstream/tests/` through SPICE → Cirq IR → simulate and diffs against the ngspice reference output — **101 passing, 6 skipped**. Across the full workspace it's **1416 passing, 7 skipped**. See `thevenin/tests/ignore.toml` for the skip reasons and `docs/future-work.md` for the diagnosis of each.
+The regression harness runs every test fixture from `ngspice-upstream/tests/` through SPICE → Cirq IR → simulate and diffs against the ngspice reference output — **101 passing, 6 skipped**. Across the full workspace it's **1441 passing, 7 skipped**. See `thevenin/tests/ignore.toml` for the skip reasons and `docs/future-work.md` for the diagnosis of each.
 
 ## Status
 
-The project is approaching 1.0. The simulator core, the Cirq IR pipeline, and the device-model coverage are all feature-complete relative to the [`docs/1.0-checklist.md`](docs/1.0-checklist.md) targets; remaining work is release polish (versioning, CHANGELOG, API-stability statement) plus the URC element and the HiSIMHV HV extensions. See `docs/archive/migration/` for the historical Stage 4 retirement work that pruned the `thevenin-types::Netlist`-shaped API surface in favour of `cirq_ir::Circuit`.
+The project is approaching 1.0. The simulator core, the Cirq IR pipeline, the
+Cirq source language, and the SPICE importer are all feature-complete relative
+to the [`docs/1.0-checklist.md`](docs/1.0-checklist.md) targets. Remaining work
+before the 1.0 cut is release process (version bumps, publish-dry-run CI) plus a
+small set of explicit post-1.0 deferrals: `.disto`, the HiSIM/HiSIMHV
+high-voltage extensions, and a curated real-world stress corpus. The
+[`docs/api-stability.md`](docs/api-stability.md) statement defines the stable
+1.x surface. See `docs/archive/migration/` for the historical Stage 4 retirement
+work that pruned the `thevenin-types::Netlist`-shaped API surface in favour of
+`cirq_ir::Circuit`.
+
+## Documentation
+
+- [**Getting Started**](docs/getting-started.md) — clean checkout to first simulation, CLI and library.
+- [Cirq language spec](docs/cirq-spec/00-overview.md) — the full source-language reference.
+- [Device coverage matrix](docs/devices.md) — supported models and known gaps.
+- [API stability](docs/api-stability.md) — the stable 1.x surface and breaking-change policy.
+- [Architecture](docs/architecture/cirq-crate-map.md) — crate map, Cirq → Thevenin boundary, raw-file format, language registry.
+- [1.0 checklist](docs/1.0-checklist.md) / [future work](docs/future-work.md) — release readiness and post-1.0 backlog.
+
+Per-crate API docs render on [docs.rs](https://docs.rs); build them locally with
+`nix develop --command cargo doc --no-deps --workspace --open`.
 
 ## License
 

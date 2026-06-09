@@ -3,8 +3,9 @@
 //! Every entry point here takes a name-resolved, parameter-evaluated
 //! [`cirq_ir::Circuit`] (produced by [`cirq_frontend`] from Cirq source, or by
 //! [`cirq_spice_import`](https://docs.rs/cirq-spice-import) from a SPICE
-//! netlist) and returns a [`SimResult`](thevenin_types::SimResult) of named
-//! result plots.
+//! netlist) and returns a [`SimResult`] of named result plots.
+//!
+//! [`SimResult`]: thevenin_types::SimResult
 //!
 //! - [`simulate`] — top-level driver. Runs **every** analysis the circuit
 //!   declares, in order, applies multi-temperature sweeps, and evaluates any
