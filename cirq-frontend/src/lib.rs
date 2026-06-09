@@ -80,6 +80,7 @@ use diagnostics::{Diagnostic, Severity};
 ///
 /// The default accepts only `"control"`, matching the built-in `.control`
 /// interpreter.
+// r[impl circuit.language-registry]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LanguageRegistry {
     tags: BTreeSet<String>,
@@ -138,6 +139,7 @@ impl LanguageRegistry {
 ///
 /// Even on `Err`, the diagnostics contain span information so callers can
 /// present precise error messages.
+// r[impl circuit.decl]
 pub fn parse(source: &str) -> Result<cirq_ast::SourceFile, Vec<Diagnostic>> {
     let tree = match parser::parse(source) {
         Some(t) => t,
@@ -165,6 +167,7 @@ pub fn compile(source: &str) -> Result<cirq_ir::Circuit, Vec<Diagnostic>> {
 /// Like [`compile`], but validates `code "lang" { … }` blocks against an
 /// explicit [`LanguageRegistry`]. Any block whose language tag is not accepted
 /// produces a spanned error diagnostic.
+// r[impl circuit.language-registry]
 pub fn compile_with_languages(
     source: &str,
     languages: &LanguageRegistry,
@@ -177,6 +180,7 @@ pub fn compile_with_languages(
 ///
 /// Like [`compile`], but resolves `import` declarations by reading files
 /// relative to `base_dir`. Use this when compiling a file from disk.
+// r[impl import.resolution]
 pub fn compile_file(source: &str, base_dir: &Path) -> Result<cirq_ir::Circuit, Vec<Diagnostic>> {
     compile_file_with_languages(source, base_dir, &LanguageRegistry::default())
 }

@@ -70,14 +70,18 @@ pub enum AnalysisError {
 /// `op`, `dc`, `ac`, `tran`, `sens`, `noise`, `pz`, `tf`. (`four` / `fft` are
 /// declared as native `analysis` blocks and reach the run-path through
 /// `Circuit.analyses`, not as `.control` commands.)
+// r[impl circuit.code-block]
+// r[impl analysis.order]
 pub fn parse_analysis_to_ir(
     cmd: &str,
     args: &[&str],
     circuit: &Circuit,
 ) -> Result<cirq_ir::Analysis, AnalysisError> {
     match cmd {
+        // r[impl analysis.op]
         "op" => Ok(cirq_ir::Analysis::Op),
 
+        // r[impl analysis.dc]
         "dc" => {
             if args.len() < 4 {
                 return Err(AnalysisError::DcArity(
@@ -101,6 +105,7 @@ pub fn parse_analysis_to_ir(
             Ok(cirq_ir::Analysis::Dc(cirq_ir::DcAnalysis { sweeps }))
         }
 
+        // r[impl analysis.ac]
         "ac" => {
             if args.len() < 4 {
                 return Err(AnalysisError::AcArity);
@@ -119,6 +124,7 @@ pub fn parse_analysis_to_ir(
             }))
         }
 
+        // r[impl analysis.tran]
         "tran" => {
             // ngspice grammar: `tran tstep tstop [tstart [tmax]] [uic]`. The
             // trailing `uic` keyword is optional and order-independent relative
@@ -152,6 +158,7 @@ pub fn parse_analysis_to_ir(
             }))
         }
 
+        // r[impl analysis.sens]
         "sens" => {
             // `.sens output [AC|DC variation n fstart fstop]`. The first token
             // is the output expression; the optional tail is an AC sweep.
@@ -170,6 +177,7 @@ pub fn parse_analysis_to_ir(
             }))
         }
 
+        // r[impl analysis.noise]
         "noise" => {
             if args.len() < 6 {
                 return Err(AnalysisError::NoiseArity);
@@ -198,6 +206,7 @@ pub fn parse_analysis_to_ir(
             }))
         }
 
+        // r[impl analysis.pz]
         "pz" => {
             if args.len() < 6 {
                 return Err(AnalysisError::PzArity);
@@ -223,6 +232,7 @@ pub fn parse_analysis_to_ir(
             }))
         }
 
+        // r[impl analysis.tf]
         "tf" => {
             if args.len() < 2 {
                 return Err(AnalysisError::TfArity);

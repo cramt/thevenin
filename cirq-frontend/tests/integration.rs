@@ -28,6 +28,12 @@ fn simulate(netlist: &thevenin_types::Netlist) -> thevenin_types::SimResult {
 // Test 1: Cirq source -> AST -> IR -> Netlist round-trip
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify circuit.body]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
+// r[verify net.implicit]
 #[test]
 fn cirq_voltage_divider_round_trip() {
     let source = r#"
@@ -92,6 +98,10 @@ fn cirq_voltage_divider_round_trip() {
 // Test 2: Cirq source -> Netlist -> Simulate (operating point)
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn cirq_voltage_divider_simulate_op() {
     let source = r#"
@@ -135,6 +145,12 @@ fn cirq_voltage_divider_simulate_op() {
 // to_netlist expects. This means the full SPICE -> IR -> Netlist round-trip
 // works for passives.
 
+// r[verify spice.element-map]
+// r[verify spice.node-map]
+// r[verify spice.si-suffix]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn spice_to_cirq_ir_structural_equivalence() {
     let spice_source = "\
@@ -214,6 +230,10 @@ R2 mid 0 1k
 // Test 3b: SPICE -> IR -> Netlist full round-trip (passives + voltage source)
 // ---------------------------------------------------------------------------
 
+// r[verify spice.element-map]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn spice_ir_netlist_round_trip() {
     let spice_source = "\
@@ -268,6 +288,11 @@ R2 mid 0 2k
 // Test 4: SPICE -> Cirq IR semantic equivalence for two equivalent circuits
 // ---------------------------------------------------------------------------
 
+// r[verify spice.element-map]
+// r[verify spice.si-suffix]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn spice_semantic_equivalence_at_ir_level() {
     // Circuit A: resistors with explicit DC keyword.
@@ -359,6 +384,10 @@ R2 outp 0 2000
 // Test 5: Cirq DC sweep -> Simulate
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.dc]
 #[test]
 fn cirq_dc_sweep_simulate() {
     let source = r#"
@@ -411,6 +440,11 @@ fn cirq_dc_sweep_simulate() {
 // Test 6: Cirq AC analysis -> Simulate
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.vsource]
+// r[verify analysis.ac]
 #[test]
 fn cirq_ac_analysis_simulate() {
     // Simple RC lowpass filter: R=1k, C=1uF.
@@ -481,6 +515,12 @@ fn cirq_ac_analysis_simulate() {
 // Test 7: Cirq transient with PULSE waveform -> simulate
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.vsource]
+// r[verify elem.waveform]
+// r[verify analysis.tran]
 #[test]
 fn cirq_transient_pulse_waveform_simulate() {
     // RC circuit with a PULSE voltage source.
@@ -555,6 +595,9 @@ fn cirq_transient_pulse_waveform_simulate() {
 // Test 8: Cirq transient with SIN waveform -> compile
 // ---------------------------------------------------------------------------
 
+// r[verify elem.vsource]
+// r[verify elem.waveform]
+// r[verify analysis.tran]
 #[test]
 fn cirq_sin_waveform_compile() {
     let source = r#"
@@ -602,6 +645,10 @@ fn cirq_sin_waveform_compile() {
 // Test 9: Cirq noise analysis -> compile to netlist
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.noise]
 #[test]
 fn cirq_noise_analysis_compile_to_netlist() {
     let source = r#"
@@ -660,6 +707,11 @@ fn cirq_noise_analysis_compile_to_netlist() {
 // Test 10: Cirq PZ analysis -> compile to netlist
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.vsource]
+// r[verify analysis.pz]
 #[test]
 fn cirq_pz_analysis_compile_to_netlist() {
     let source = r#"
@@ -718,6 +770,12 @@ fn cirq_pz_analysis_compile_to_netlist() {
 // Test 11: Cirq RLC circuit (capacitor + inductor) -> simulate OP
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.inductor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn cirq_rlc_circuit_simulate_op() {
     // RLC circuit: V=5V, R=100, L=1mH, C=1uF.
@@ -781,6 +839,12 @@ fn cirq_rlc_circuit_simulate_op() {
 // Test 12: Cirq coupling element -> compile
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify elem.inductor]
+// r[verify elem.coupling]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn cirq_coupling_element_compile() {
     let source = r#"
@@ -870,6 +934,14 @@ fn cirq_coupling_element_compile() {
 // Test 13: Cirq MOSFET with model -> compile
 // ---------------------------------------------------------------------------
 
+// r[verify circuit.decl]
+// r[verify elem.mosfet]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify model.decl]
+// r[verify model.device-kinds]
+// r[verify model.reference]
+// r[verify analysis.op]
 #[test]
 fn cirq_mosfet_with_model_compile() {
     let source = r#"
@@ -970,6 +1042,11 @@ fn cirq_mosfet_with_model_compile() {
 // Test 14: SPICE waveform round-trip (PULSE source)
 // ---------------------------------------------------------------------------
 
+// r[verify spice.element-map]
+// r[verify spice.directive-map]
+// r[verify elem.vsource]
+// r[verify elem.waveform]
+// r[verify analysis.tran]
 #[test]
 fn spice_pulse_waveform_round_trip() {
     let spice_source = "\
@@ -1043,6 +1120,12 @@ R1 in 0 1k
 // Test 15: SPICE AC source round-trip
 // ---------------------------------------------------------------------------
 
+// r[verify spice.element-map]
+// r[verify spice.directive-map]
+// r[verify elem.vsource]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify analysis.ac]
 #[test]
 fn spice_ac_source_round_trip() {
     let spice_source = "\
@@ -1117,6 +1200,10 @@ C1 out 0 1u
 // Test 16: SPICE options + temp round-trip
 // ---------------------------------------------------------------------------
 
+// r[verify spice.directive-map]
+// r[verify circuit.options]
+// r[verify circuit.temp]
+// r[verify analysis.op]
 #[test]
 fn spice_options_and_temp_round_trip() {
     let spice_source = "\
@@ -1176,6 +1263,11 @@ V1 a 0 DC 5
 // Test 17: SPICE dependent sources round-trip (VCVS/VCCS)
 // ---------------------------------------------------------------------------
 
+// r[verify spice.element-map]
+// r[verify elem.vcvs]
+// r[verify elem.vsource]
+// r[verify elem.resistor]
+// r[verify analysis.op]
 #[test]
 fn spice_dependent_sources_round_trip() {
     let spice_source = "\
@@ -1235,6 +1327,11 @@ R2 out 0 1k
 // Test 18: SPICE behavioral source -> IR
 // ---------------------------------------------------------------------------
 
+// r[verify spice.element-map]
+// r[verify elem.behavioral]
+// r[verify elem.vsource]
+// r[verify elem.resistor]
+// r[verify analysis.op]
 #[test]
 fn spice_behavioral_source_to_ir() {
     let spice_source = "\
@@ -1304,6 +1401,18 @@ R2 out 0 1k
 // Test 19: Hierarchical modules — multi-instance flattening
 // ---------------------------------------------------------------------------
 
+// r[verify module.decl]
+// r[verify module.port]
+// r[verify module.instantiate]
+// r[verify module.nesting]
+// r[verify module.param-override]
+// r[verify param.decl]
+// r[verify param.scope]
+// r[verify elem.mosfet]
+// r[verify elem.vsource]
+// r[verify elem.waveform]
+// r[verify model.decl]
+// r[verify analysis.tran]
 #[test]
 fn cirq_hierarchical_module_flattening() {
     // Module `inverter` instantiated twice inside `buffer`, then `buffer`
@@ -1419,6 +1528,14 @@ fn cirq_hierarchical_module_flattening() {
 // Test 20: Single module with multiple instantiations at circuit level
 // ---------------------------------------------------------------------------
 
+// r[verify module.decl]
+// r[verify module.port]
+// r[verify module.instantiate]
+// r[verify param.decl]
+// r[verify param.scope]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn cirq_module_multiple_instances_top_level() {
     // Simpler case: two instances of the same module at the circuit level.
@@ -1493,6 +1610,11 @@ fn cirq_module_multiple_instances_top_level() {
 /// IR→Netlist round-trip, and the IR-shaped interpreter must be able to run
 /// it. The IR-shaped end-to-end execution (with simulator dispatch) is
 /// covered in thevenin-control's own tests; here we just pin the round-trip.
+// r[verify circuit.code-block]
+// r[verify circuit.language-registry]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn cirq_control_block_round_trip() {
     let source = r#"
@@ -1552,6 +1674,8 @@ const REGISTRY_SOURCE_SCHEME: &str = r#"
 
 /// An unregistered `code "lang" { … }` tag is rejected at compile time with a
 /// spanned diagnostic — not silently dropped (the pre-B4 behaviour).
+// r[verify circuit.language-registry]
+// r[verify circuit.code-block]
 #[test]
 fn cirq_unknown_code_block_language_is_rejected() {
     let diags = match cirq_frontend::compile(REGISTRY_SOURCE_SCHEME) {
@@ -1577,6 +1701,8 @@ fn cirq_unknown_code_block_language_is_rejected() {
 
 /// The default registry still accepts `"control"` (no behaviour change for the
 /// built-in language).
+// r[verify circuit.language-registry]
+// r[verify circuit.code-block]
 #[test]
 fn cirq_default_registry_accepts_control() {
     let source = r#"
@@ -1594,6 +1720,8 @@ fn cirq_default_registry_accepts_control() {
 
 /// A host can widen the accepted set via `compile_with_languages`; the custom
 /// block then survives into the IR (unparsed, since the IR only types control).
+// r[verify circuit.language-registry]
+// r[verify circuit.code-block]
 #[test]
 fn cirq_custom_registry_accepts_registered_language() {
     let registry = cirq_frontend::LanguageRegistry::default().register("scheme");
@@ -1620,6 +1748,11 @@ fn cirq_custom_registry_accepts_registered_language() {
 /// A simple RC circuit with V1=5V, R1=1k, C1=1n. With `.ic v(cap)=5.0`,
 /// the capacitor node starts at 5V (same as supply), so there should be
 /// no initial transient — v(cap) should stay at ~5V throughout.
+// r[verify circuit.ic]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.vsource]
+// r[verify analysis.tran]
 #[test]
 fn cirq_ic_node_voltage_in_transient() {
     let source = r#"
@@ -1664,6 +1797,11 @@ fn cirq_ic_node_voltage_in_transient() {
 ///
 /// R1=1k from in to out, V1=5V on in, C1 on out. Without UIC, DC OP gives
 /// v(out)=5V. With UIC and ic{v(out)=0}, we start at 0V and charge up.
+// r[verify circuit.ic]
+// r[verify analysis.tran]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.vsource]
 #[test]
 fn cirq_uic_skips_dc_op() {
     let source = r#"
@@ -1715,6 +1853,10 @@ fn cirq_uic_skips_dc_op() {
 
 /// Verify that `.nodeset` passes through the pipeline and doesn't break
 /// simulation. The circuit should converge to the same DC OP regardless.
+// r[verify spice.directive-map]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn cirq_nodeset_passes_through_pipeline() {
     // Build a circuit with nodeset via the SPICE import path, since the Cirq
@@ -1766,6 +1908,14 @@ R2 mid 0 1k
 // ---------------------------------------------------------------------------
 
 /// Verify that `.meas` directives produce measurement results after simulation.
+// r[verify spice.directive-map]
+// r[verify analysis.measure]
+// r[verify analysis.measure.expr]
+// r[verify analysis.tran]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.vsource]
+// r[verify elem.waveform]
 #[test]
 fn cirq_meas_max_in_transient() {
     // Use SPICE path since Cirq grammar doesn't have .meas syntax yet,
@@ -1824,6 +1974,14 @@ C1 out 0 1n
 
 /// Verify newly added `.meas` features (LAST, TD, PARAM=) ride the full
 /// SPICE → IR → simulator pipeline end-to-end.
+// r[verify spice.directive-map]
+// r[verify analysis.measure]
+// r[verify analysis.measure.expr]
+// r[verify analysis.tran]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.vsource]
+// r[verify elem.waveform]
 #[test]
 fn cirq_meas_param_and_last_end_to_end() {
     // Pulse-driven RC: vout swings; we measure max, min, the delta via
@@ -1881,6 +2039,9 @@ C1 out 0 1n
 }
 
 /// Verify .meas round-trips through SPICE → IR → netlist → simulate.
+// r[verify spice.directive-map]
+// r[verify analysis.measure]
+// r[verify analysis.op]
 #[test]
 fn spice_meas_round_trip_through_ir() {
     let spice = "\
@@ -1918,6 +2079,10 @@ R2 out 0 1k
 // ---------------------------------------------------------------------------
 
 /// Multiple `.temp` values should produce multiple plots (one per temperature).
+// r[verify circuit.temp]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn cirq_multi_temp_produces_multiple_plots() {
     let source = r#"
@@ -1987,6 +2152,9 @@ fn cirq_multi_temp_produces_multiple_plots() {
 }
 
 /// SPICE multi-temp round-trip: `.temp 25 50` → IR → netlist → simulate.
+// r[verify spice.directive-map]
+// r[verify circuit.temp]
+// r[verify analysis.op]
 #[test]
 fn spice_multi_temp_round_trip() {
     let spice = "\
@@ -2040,6 +2208,12 @@ R2 mid 0 1k
 
 /// Verify .ic passes through the full SPICE → IR → netlist pipeline and the
 /// simulator consumes it.
+// r[verify spice.directive-map]
+// r[verify circuit.ic]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.vsource]
+// r[verify analysis.tran]
 #[test]
 fn spice_ic_round_trip_simulate() {
     let spice = "\
@@ -2090,6 +2264,13 @@ C1 cap 0 1n
 
 /// Cirq source carrying a native measure block parses and lowers to the
 /// same typed `MeasureExpr::TrigTarg` shape the SPICE importer would produce.
+// r[verify analysis.measure]
+// r[verify analysis.measure.block]
+// r[verify analysis.measure.expr]
+// r[verify analysis.tran]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
+// r[verify elem.vsource]
 #[test]
 fn cirq_native_measure_trig_targ_block() {
     let source = r#"
@@ -2158,6 +2339,11 @@ fn cirq_native_measure_trig_targ_block() {
 
 /// A measurement expressed natively in Cirq lowers to the same IR shape as
 /// the equivalent SPICE `.meas` directive imported through `cirq-spice-import`.
+// r[verify analysis.measure]
+// r[verify analysis.measure.block]
+// r[verify analysis.measure.expr]
+// r[verify spice.directive-map]
+// r[verify analysis.tran]
 #[test]
 fn cirq_native_measure_round_trips_with_spice() {
     let cirq_src = r#"
@@ -2210,6 +2396,8 @@ C1 out 0 1n
 
 /// A malformed measure spec produces an error diagnostic whose span points
 /// at the spec string in the user's source.
+// r[verify analysis.measure]
+// r[verify analysis.measure.block]
 #[test]
 fn cirq_native_measure_malformed_emits_diagnostic() {
     // `BOGUS` is not a recognised .meas keyword, so MeasureSpec::parse fails.
@@ -2248,6 +2436,12 @@ fn cirq_native_measure_malformed_emits_diagnostic() {
 // ---------------------------------------------------------------------------
 
 /// End-to-end: a Cirq ternary expression survives lowering → netlist → simulate.
+// r[verify param.conditional]
+// r[verify expr.arithmetic]
+// r[verify param.decl]
+// r[verify elem.resistor]
+// r[verify elem.vsource]
+// r[verify analysis.op]
 #[test]
 fn cirq_ternary_param_simulates() {
     let source = r#"
@@ -2281,6 +2475,12 @@ fn cirq_ternary_param_simulates() {
 
 /// `temper` inside a parameter expression resolves to the circuit's static
 /// temperature at IR-lower time. Setting `temp 100` shifts the resolved value.
+// r[verify param.constants]
+// r[verify param.expr]
+// r[verify circuit.temp]
+// r[verify elem.vsource]
+// r[verify elem.resistor]
+// r[verify analysis.op]
 #[test]
 fn cirq_temper_in_param_picks_up_temp_directive() {
     let source_27 = r#"

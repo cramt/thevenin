@@ -49,6 +49,9 @@ fn approx_eq(a: &[f64], b: &[f64]) -> bool {
 
 /// A model-based native `urc` lowers to an R/C ladder. With `lumps: 4` we get
 /// 2 resistors per lump (8) and 7 caps (lo on all 4, hi on the 3 non-final).
+// r[verify elem.urc]
+// r[verify model.decl]
+// r[verify model.device-kinds]
 #[test]
 fn native_urc_model_based_expands() {
     let src = r#"
@@ -72,6 +75,8 @@ fn native_urc_model_based_expands() {
 
 /// Inline params (no model) produce the identical ladder to the model-based
 /// form with the same numbers.
+// r[verify elem.urc]
+// r[verify model.reference]
 #[test]
 fn native_urc_inline_matches_model() {
     let model_src = r#"
@@ -105,6 +110,8 @@ fn native_urc_inline_matches_model() {
 
 /// A per-instance inline override changes only the overridden param. Doubling
 /// `cperl` scales every cap value by 2 relative to the un-overridden line.
+// r[verify elem.urc]
+// r[verify module.param-override]
 #[test]
 fn native_urc_inline_overrides_model() {
     let base = r#"
@@ -138,6 +145,9 @@ fn native_urc_inline_overrides_model() {
 
 /// A native `urc` and the equivalent SPICE `U` + `.model URC` expand to the
 /// same ladder (same resistor and capacitor value multisets).
+// r[verify elem.urc]
+// r[verify spice.element-map]
+// r[verify model.decl]
 #[test]
 fn native_urc_matches_spice_import() {
     let native = r#"
@@ -173,6 +183,10 @@ U1 in out 0 rcline L=2 N=5
 }
 
 /// `isperl > 0` turns the shunts into diodes and synthesizes a diode model.
+// r[verify elem.urc]
+// r[verify elem.diode]
+// r[verify model.decl]
+// r[verify model.device-kinds]
 #[test]
 fn native_urc_isperl_uses_diodes() {
     let src = r#"
@@ -202,6 +216,8 @@ fn native_urc_isperl_uses_diodes() {
 }
 
 /// `urc` without `len` is a hard error.
+// r[verify elem.urc]
+// r[verify param.required]
 #[test]
 fn native_urc_missing_len_errors() {
     let src = r#"
@@ -223,6 +239,8 @@ fn native_urc_missing_len_errors() {
 
 /// End-to-end: a URC-bearing circuit reaches a finite DC operating point (at
 /// DC the ladder is a pure resistive divider into the load).
+// r[verify elem.urc]
+// r[verify analysis.op]
 #[test]
 fn native_urc_simulates_to_finite_op() {
     let src = r#"

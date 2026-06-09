@@ -57,6 +57,8 @@ impl IncludeOptions {
 
 /// Run the include preprocessor over `source` and return the flattened SPICE
 /// text. `opts` controls search-path behaviour.
+// r[impl import.decl]
+// r[impl import.resolution]
 pub fn preprocess_includes(source: &str, opts: &IncludeOptions) -> Result<String, ImportError> {
     let mut visiting: HashSet<PathBuf> = HashSet::new();
     let mut out = String::with_capacity(source.len());
@@ -115,6 +117,7 @@ fn expand_text(
         let upper = trimmed.to_ascii_uppercase();
 
         // -- conditional region markers ----------------------------------
+        // r[impl import.decl]
         if upper.starts_with(".LIB ") || upper == ".LIB" {
             // Distinguish `.lib <libname>` (1-arg, region marker) from
             // `.lib <path> <libname>` (2-arg, file include).
@@ -186,6 +189,7 @@ fn expand_text(
         }
 
         // -- .include resolution ----------------------------------------
+        // r[impl import.resolution]
         let is_include = upper.starts_with(".INCLUDE ")
             || upper == ".INCLUDE"
             || upper.starts_with(".INC ")

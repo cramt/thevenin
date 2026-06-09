@@ -57,6 +57,13 @@ circuit rc_step {
 }
 "#;
 
+// r[verify analysis.measure]
+// r[verify analysis.measure.expr]
+// r[verify analysis.tran]
+// r[verify elem.vsource]
+// r[verify elem.waveform]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
 #[test]
 fn aggregate_probes_reach_simulator() {
     // After ~5 time-constants (RC = 100 µs) the cap is nearly fully charged.
@@ -67,6 +74,11 @@ fn aggregate_probes_reach_simulator() {
     assert!(vmin.abs() < 1e-3, "vout_min should be ~0 V, got {vmin}");
 }
 
+// r[verify analysis.measure]
+// r[verify analysis.measure.expr]
+// r[verify analysis.tran]
+// r[verify param.conditional]
+// r[verify expr.arithmetic]
 #[test]
 fn derived_and_conditional_measurements_evaluate() {
     let swing = measure_value(RC_STEP, "swing");

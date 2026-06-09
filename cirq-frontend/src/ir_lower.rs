@@ -27,6 +27,7 @@ use crate::diagnostics::{Diagnostic, Severity};
 /// `Err(diagnostics)` when there are any error-level diagnostics, though the
 /// lowering is best-effort (as much IR as possible is still produced
 /// internally).
+// r[impl circuit.decl]
 pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>> {
     lower_to_ir_with_languages(source_file, &crate::LanguageRegistry::default())
 }
@@ -34,6 +35,7 @@ pub fn lower_to_ir(source_file: &SourceFile) -> Result<Circuit, Vec<Diagnostic>>
 /// Like [`lower_to_ir`], but validates embedded `code "lang" { … }` blocks
 /// against `languages`. Blocks with an unregistered language tag produce a
 /// spanned error diagnostic instead of being silently accepted.
+// r[impl circuit.language-registry]
 pub fn lower_to_ir_with_languages(
     source_file: &SourceFile,
     languages: &crate::LanguageRegistry,
@@ -108,6 +110,7 @@ pub fn lower_to_ir_with_languages(
 // ---------------------------------------------------------------------------
 
 /// Standard pin names for each element kind, in positional order.
+// r[impl module.port.order]
 fn standard_pins(kind: &ElementKind) -> &'static [&'static str] {
     match kind {
         ElementKind::Resistor => &["pos", "neg"],
@@ -145,6 +148,7 @@ fn standard_pins(kind: &ElementKind) -> &'static [&'static str] {
 }
 
 /// Map an element type name string to an [`ElementKind`].
+// r[impl model.device-kinds]
 fn element_kind_from_str(name: &str) -> Option<ElementKind> {
     match name {
         "resistor" => Some(ElementKind::Resistor),
@@ -310,6 +314,7 @@ impl IrCtx {
     // -------------------------------------------------------------------
 
     /// Get or create a net with the given name. Returns the net's Id.
+    // r[impl net.implicit]
     fn intern_net(&mut self, name: &str, is_global: bool) -> Id {
         if let Some(&id) = self.net_by_name.get(name) {
             // If we're making it global now, update the existing net.
@@ -394,6 +399,8 @@ impl IrCtx {
                 CircuitItem::Func(f) => self.lower_func_decl(f),
                 CircuitItem::Ic(ic) => self.lower_ic_decl(ic),
                 CircuitItem::CoupledLine(cl) => self.lower_coupled_line_decl(cl, prefix),
+                // r[impl circuit.code-block]
+                // r[impl circuit.language-registry]
                 CircuitItem::Code(c) => {
                     if self.languages.accepts(&c.language) {
                         self.code_blocks.push(cirq_ir::CodeBlock::from_lines(
@@ -477,6 +484,7 @@ impl IrCtx {
     /// Evaluate an `if/elseif/else` chain and return the taken branch's items
     /// (or `None` if no branch is taken or a condition cannot be folded). The
     /// condition is evaluated against the params resolved so far.
+    // r[impl param.conditional]
     fn resolve_conditional_branch<'a>(
         &mut self,
         c: &'a cirq_ast::ConditionalDecl,
@@ -511,6 +519,9 @@ impl IrCtx {
     // Param / let lowering
     // -------------------------------------------------------------------
 
+    // r[impl param.scope]
+    // r[impl param.no-forward-ref]
+    // r[impl type.infer]
     fn lower_param(&mut self, p: &ParamDecl, prefix: &str) {
         let name = &p.name.name;
 
@@ -522,6 +533,7 @@ impl IrCtx {
             return;
         }
 
+        // r[impl module.param-override]
         // An override supplied at the instantiation site shadows the default.
         // Overrides were evaluated in the caller's scope before we swapped
         // into this module's, so we just consume the precomputed Value here.
@@ -570,6 +582,7 @@ impl IrCtx {
         // eval_expr time with "undefined param".
     }
 
+    // r[impl param.let]
     fn lower_let(&mut self, l: &LetDecl, prefix: &str) {
         let name = &l.name.name;
 
@@ -607,6 +620,7 @@ impl IrCtx {
     // Model lowering
     // -------------------------------------------------------------------
 
+    // r[impl model.decl]
     fn lower_model_def(&mut self, m: &ModelDef) {
         let name = &m.name.name;
 
@@ -659,6 +673,7 @@ impl IrCtx {
             }
         };
 
+        // r[impl model.inheritance]
         // Start with base model params if inheriting (Gap 2.6).
         let mut params: Vec<(String, Value)> = if device_type.is_none() {
             // This is an inherited model; copy base params first.
@@ -975,6 +990,7 @@ impl IrCtx {
     // Element lowering
     // -------------------------------------------------------------------
 
+    // r[impl elem.syntax]
     fn lower_element_prefixed(&mut self, e: &ElementInst, prefix: &str) {
         let raw_name = &e.name.name;
         let name = if prefix.is_empty() {
@@ -1101,7 +1117,7 @@ impl IrCtx {
                             );
                         }
                     } else if param_name == "model" {
-                        // Model reference.
+                        // r[impl model.reference]
                         if let Some(model_name) = expr_as_ident(value) {
                             match self.model_by_name.get(model_name) {
                                 Some(&mid) => model_ref = Some(mid),
@@ -1276,6 +1292,7 @@ impl IrCtx {
     /// Resolve a net name with prefix and remapping applied.
     /// Used during module inlining to map port names to caller nets and
     /// prefix internal nets with the instance path.
+    // r[impl net.global]
     fn resolve_net_name_prefixed(&mut self, name: &str, prefix: &str) -> Id {
         // Global nets are never remapped or prefixed.
         if name == "gnd" {
@@ -1310,6 +1327,7 @@ impl IrCtx {
     /// an `Indexed` bus line `d[i]` resolves to the per-line net `d.i` (so a
     /// bus is sugar for the scalar nets `d.0 … d.N-1`). On a bad index a
     /// diagnostic is pushed and net `0` (ground) is returned as a placeholder.
+    // r[impl module.port.bus]
     fn resolve_net_ref(&mut self, nr: &cirq_ast::NetRef, prefix: &str) -> Id {
         match nr {
             cirq_ast::NetRef::Scalar(id) => self.resolve_net_name_prefixed(&id.name, prefix),
@@ -1540,6 +1558,8 @@ impl IrCtx {
     /// 2. Detect instantiation cycles.
     /// 3. Map module ports to caller nets (via `net_remap`).
     /// 4. Recursively lower the module body with a hierarchical prefix.
+    // r[impl module.instantiate]
+    // r[impl module.nesting]
     fn lower_module_inst(&mut self, mi: &ModuleInst, parent_prefix: &str) {
         // Build the module name from the qualified name segments.
         let module_name = mi
@@ -2015,6 +2035,7 @@ impl IrCtx {
             .push(Diagnostic::error(msg.into()).with_span(expr_span(expr)));
     }
 
+    // r[impl analysis.measure]
     fn lower_measure_decl(&mut self, m: &MeasureDecl) {
         let name = m.name.clone();
         let analysis = m.analysis_kind.name.clone();
@@ -2067,6 +2088,7 @@ impl IrCtx {
     /// [`MeasureExpr`]. Probe functions (`max`, `when`, `delay`, ...) map onto
     /// the structured variants; anything else is a derived/conditional
     /// expression and lowers to [`MeasureExpr::Param`].
+    // r[impl analysis.measure.expr]
     fn measure_expr_from_ast(&mut self, expr: &Expr) -> Option<MeasureExpr> {
         if let Expr::Call {
             func,
@@ -2381,17 +2403,26 @@ impl IrCtx {
     // Analysis lowering
     // -------------------------------------------------------------------
 
+    // r[impl analysis.decl]
     fn lower_analysis(&mut self, a: &AnalysisDecl) {
         let kind = a.kind.name.as_str();
 
         let analysis = match kind {
+            // r[impl analysis.op]
             "op" => Some(Analysis::Op),
+            // r[impl analysis.dc]
             "dc" => Some(self.lower_dc_analysis(&a.body, a)),
+            // r[impl analysis.ac]
             "ac" => Some(self.lower_ac_analysis(&a.body, a)),
+            // r[impl analysis.tran]
             "tran" => Some(self.lower_tran_analysis(&a.body, a)),
+            // r[impl analysis.noise]
             "noise" => Some(self.lower_noise_analysis(&a.body, a)),
+            // r[impl analysis.pz]
             "pz" => Some(self.lower_pz_analysis(&a.body, a)),
+            // r[impl analysis.sens]
             "sens" => Some(Analysis::Sens(self.lower_sens_analysis(&a.body))),
+            // r[impl analysis.tf]
             "tf" => {
                 let output = self
                     .get_setting_string(&a.body, "output")
@@ -2409,7 +2440,9 @@ impl IrCtx {
                     source: source_id,
                 }))
             }
+            // r[impl analysis.four]
             "four" => self.lower_four_analysis(&a.body, a).map(Analysis::Four),
+            // r[impl analysis.fft]
             "fft" => self.lower_fft_analysis(&a.body, a).map(Analysis::Fft),
             _ => {
                 self.diags.push(
@@ -3153,6 +3186,9 @@ impl IrCtx {
     // Expression evaluation (constant folding)
     // -------------------------------------------------------------------
 
+    // r[impl param.expr]
+    // r[impl expr.arithmetic]
+    // r[impl expr.contexts]
     fn eval_expr(&mut self, expr: &Expr) -> Result<Value, String> {
         match expr {
             Expr::Number { value, .. } => Ok(Value::Real(*value)),
@@ -3176,6 +3212,7 @@ impl IrCtx {
                     return Ok(val.clone());
                 }
 
+                // r[impl param.constants]
                 // Well-known constants.
                 match name.as_str() {
                     "pi" => return Ok(Value::Real(std::f64::consts::PI)),
@@ -3247,6 +3284,7 @@ impl IrCtx {
                 let v = self.eval_expr(operand)?;
                 eval_unaryop(*op, &v, *span)
             }
+            // r[impl expr.builtin-math]
             Expr::Call { func, args, .. } => {
                 // Evaluate builtin math functions.
                 let evaluated: Result<Vec<Value>, String> =
@@ -3332,6 +3370,8 @@ fn named_arg<'a>(named: &'a [(Ident, Expr)], key: &str) -> Option<&'a Expr> {
 }
 
 /// Extract a net name from an expression. Handles Ident and Gnd.
+// r[impl type.net]
+// r[impl expr.net]
 fn expr_as_net_name(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Ident(id) => Some(id.name.clone()),
@@ -3410,6 +3450,7 @@ fn eval_binop(
         BinOp::Add => l + r,
         BinOp::Sub => l - r,
         BinOp::Mul => l * r,
+        // r[impl expr.div-zero]
         BinOp::Div => {
             if r == 0.0 {
                 return Err("division by zero".to_string());
@@ -3453,6 +3494,7 @@ fn eval_unaryop(op: UnaryOp, val: &Value, _span: cirq_ast::span::Span) -> Result
 }
 
 /// Coerce a Value to f64.
+// r[impl type.coerce]
 fn value_as_f64(val: &Value) -> Result<f64, String> {
     match val {
         Value::Real(v) => Ok(*v),

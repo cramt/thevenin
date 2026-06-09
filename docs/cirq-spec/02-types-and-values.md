@@ -6,6 +6,8 @@ Cirq has a minimal type system focused on circuit description. Types exist prima
 
 ### Primitive Types
 
+r[type.primitives]
+
 | Type | Description | Example |
 |------|------------|---------|
 | `real` | 64-bit floating-point | `3.14`, `1k`, `2.2M` |
@@ -15,6 +17,8 @@ Cirq has a minimal type system focused on circuit description. Types exist prima
 | `net` | Electrical net (node) | `vdd`, `gnd`, port names |
 
 ### Net Type
+
+r[type.net]
 
 The `net` type is special — it represents an electrical connection point. Nets are not numeric values; they are topological identifiers.
 
@@ -28,10 +32,14 @@ port out: net
 
 ### Implicit Coercion
 
+r[type.coerce]
+
 - `int` → `real`: always safe
 - No other implicit coercions exist
 
 ### No General Type Annotations Required
+
+r[type.infer]
 
 Parameters and port values are inferred from context in most cases:
 
@@ -51,6 +59,8 @@ param r_val: real = 10k
 
 ### Ground
 
+r[type.gnd]
+
 `gnd` is a built-in net representing the global reference node (SPICE node 0).
 
 ```cirq
@@ -58,6 +68,8 @@ V1: vsource(vdd -> gnd, dc: 5V)
 ```
 
 ### Boolean Values
+
+r[type.bool]
 
 ```cirq
 true

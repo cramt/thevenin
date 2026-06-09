@@ -26,6 +26,7 @@ use crate::diagnostics::Diagnostic;
 ///
 /// Returns the merged [`SourceFile`] with imports replaced by the imported
 /// declarations, plus any diagnostics from the import process.
+// r[impl import.resolution]
 pub fn resolve_imports(
     source_file: SourceFile,
     base_dir: &Path,
@@ -54,6 +55,7 @@ pub fn resolve_imports(
 // Internal resolution
 // ---------------------------------------------------------------------------
 
+// r[impl import.decl]
 fn resolve_items(
     items: Vec<TopLevel>,
     base_dir: &Path,
@@ -87,6 +89,7 @@ fn resolve_items(
                         // For named imports we still need to read the file even
                         // if it has been visited before (different names may be
                         // requested). For plain imports, diamond dedup applies.
+                        // r[impl import.resolution]
                         if import.names.is_empty() && !visited.insert(canonical.clone()) {
                             continue;
                         }
@@ -177,6 +180,7 @@ fn parse_and_resolve(
 /// Parse an imported file and extract bare (non-exported) top-level
 /// declarations. Export blocks are kept opaque — their contents are only
 /// reachable via named imports.
+// r[impl model.library]
 fn parse_and_extract(
     source: &str,
     file_path: &Path,

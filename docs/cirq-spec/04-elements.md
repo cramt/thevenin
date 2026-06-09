@@ -2,6 +2,8 @@
 
 ## Element Syntax
 
+r[elem.syntax]
+
 Every element instantiation follows the same pattern:
 
 ```cirq
@@ -11,6 +13,8 @@ name: element_type(connections, parameters...)
 The name is a user-chosen identifier. The element type is a keyword or model reference. Connections use the `->` operator to indicate current flow direction.
 
 ## Connection Operator
+
+r[elem.connection-operator]
 
 The `->` operator connects two nets through an element, indicating conventional current flow direction (positive terminal → negative terminal):
 
@@ -30,6 +34,8 @@ M1: nmos(drain -> source, gate: g, bulk: gnd, model: nch, w: 1u, l: 180n)
 
 ### Resistor
 
+r[elem.resistor]
+
 ```cirq
 R1: resistor(a -> b, 10k)
 R2: resistor(a -> b, resistance: 10k)       // named parameter
@@ -43,6 +49,8 @@ Parameters:
 
 ### Capacitor
 
+r[elem.capacitor]
+
 ```cirq
 C1: capacitor(a -> b, 100n)
 C2: capacitor(a -> b, capacitance: 100p, ic: 0)  // initial condition
@@ -53,6 +61,8 @@ Parameters:
 - `ic`: initial voltage across capacitor — optional
 
 ### Inductor
+
+r[elem.inductor]
 
 ```cirq
 L1: inductor(a -> b, 10u)
@@ -65,6 +75,8 @@ Parameters:
 
 ### Mutual Inductance (Coupled Inductors)
 
+r[elem.coupling]
+
 ```cirq
 K1: coupling(L1, L2, coefficient: 0.99)
 ```
@@ -76,6 +88,8 @@ Parameters:
 ## Sources
 
 ### Voltage Source
+
+r[elem.vsource]
 
 ```cirq
 V1: vsource(vdd -> gnd, dc: 5)
@@ -91,6 +105,8 @@ Parameters:
 
 ### Current Source
 
+r[elem.isource]
+
 ```cirq
 I1: isource(a -> b, dc: 1m)
 I2: isource(a -> b, dc: 0, ac: 0.5)
@@ -99,6 +115,8 @@ I2: isource(a -> b, dc: 0, ac: 0.5)
 Same parameter structure as voltage source.
 
 ### Waveform Specifications
+
+r[elem.waveform]
 
 Sources can carry transient waveforms. Field names follow SPICE conventions:
 
@@ -149,6 +167,8 @@ V_am: vsource(a -> gnd,
 
 ### Diode
 
+r[elem.diode]
+
 ```cirq
 D1: diode(anode -> cathode, model: d1n4148)
 D2: diode(a -> b, model: zener_5v1, area: 2)
@@ -160,6 +180,8 @@ Parameters:
 - `ic`: initial condition — optional
 
 ### BJT (NPN/PNP)
+
+r[elem.bjt]
 
 ```cirq
 Q1: npn(collector: c, base: b, emitter: e, model: bc547)
@@ -173,6 +195,8 @@ Parameters:
 - Connections: `collector`, `base`, `emitter`, optional `substrate`
 
 ### MOSFET
+
+r[elem.mosfet]
 
 ```cirq
 M1: nmos(drain -> source, gate: g, bulk: gnd,
@@ -194,12 +218,16 @@ Parameters:
 
 ### JFET
 
+r[elem.jfet]
+
 ```cirq
 J1: njfet(drain -> source, gate: g, model: j201)
 J2: pjfet(drain -> source, gate: g, model: pjf1)
 ```
 
 ### MESFET
+
+r[elem.mesfet]
 
 ```cirq
 Z1: nmesfet(drain -> source, gate: g, model: gaas_n)
@@ -210,11 +238,15 @@ Z2: pmesfet(drain -> source, gate: g, model: gaas_p)
 
 ### Voltage-Controlled Voltage Source (VCVS)
 
+r[elem.vcvs]
+
 ```cirq
 E1: vcvs(out_p -> out_n, control: ctrl_p -> ctrl_n, gain: 10)
 ```
 
 ### Voltage-Controlled Current Source (VCCS)
+
+r[elem.vccs]
 
 ```cirq
 G1: vccs(out_p -> out_n, control: ctrl_p -> ctrl_n, transconductance: 1m)
@@ -222,17 +254,23 @@ G1: vccs(out_p -> out_n, control: ctrl_p -> ctrl_n, transconductance: 1m)
 
 ### Current-Controlled Voltage Source (CCVS)
 
+r[elem.ccvs]
+
 ```cirq
 H1: ccvs(out_p -> out_n, sense: V_sense, transresistance: 100)
 ```
 
 ### Current-Controlled Current Source (CCCS)
 
+r[elem.cccs]
+
 ```cirq
 F1: cccs(out_p -> out_n, sense: V_sense, gain: 50)
 ```
 
 ## Behavioral Sources
+
+r[elem.behavioral]
 
 Behavioral sources define voltage or current as an arbitrary expression of circuit variables:
 
@@ -250,6 +288,8 @@ The named argument `v:` selects voltage mode; `i:` selects current mode. The exp
 
 ### Lossless (LTRA / O element)
 
+r[elem.tline]
+
 ```cirq
 T1: tline(in_p -> in_n, out_p -> out_n, model: line_model)
 ```
@@ -259,6 +299,8 @@ kinds (`ltra`, `txl`, etc.). Length, characteristic impedance, and other
 electrical parameters come from the model card.
 
 ### Coupled multiconductor (CPL / P element)
+
+r[elem.coupled-line]
 
 Multi-port transmission lines use a dedicated block syntax because they
 have a variable number of input/output ports:
@@ -276,6 +318,8 @@ The `in` and `out` lists must be the same length. The optional `gnd`
 field is the common reference net. The model must be a CPL model card.
 
 ### Uniform distributed RC (URC / U element)
+
+r[elem.urc]
 
 A `urc` element models a uniform distributed RC line. It is a **macro**: at
 compile time it expands into a ladder of lumped R/C sections (or R/C/D when the
@@ -303,6 +347,8 @@ The same expansion math backs the SPICE importer's `U` element, so a native
 `urc` and the equivalent imported `U` + `.model URC` are identical.
 
 ## XSPICE Code Models (A element)
+
+r[elem.xspice]
 
 XSPICE code-model instances bind to a model registered with the
 `thevenin-xspice` registry. Ports can be scalar or array, depending on

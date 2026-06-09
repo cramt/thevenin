@@ -38,6 +38,7 @@ pub mod urc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Id(pub u32);
 
+// r[impl circuit.decl]
 /// A fully resolved circuit ready for simulation or analysis.
 #[derive(Debug, Clone)]
 pub struct Circuit {
@@ -54,24 +55,29 @@ pub struct Circuit {
     /// the same name, the `.csparam` value wins in the control scope —
     /// matching ngspice's behaviour.
     pub csparams: Vec<ResolvedParam>,
+    // r[impl circuit.options]
     /// Simulation options (e.g. GMIN, ABSTOL, RELTOL).
     pub options: Vec<(String, Value)>,
+    // r[impl circuit.temp]
     /// Simulation temperatures in °C.
     ///
     /// Empty means use the default (27 °C). A single entry is the common case.
     /// Multiple entries request the simulation be run at each temperature
     /// (equivalent to SPICE `.temp 25 50 100`).
     pub temps: Vec<f64>,
+    // r[impl circuit.save]
     /// Output save targets (e.g. `v(out)`, `i(R1)`).
     pub save: Vec<String>,
     /// User-defined functions.
     pub funcs: Vec<FuncDef>,
+    // r[impl circuit.ic]
     /// Initial node voltages (`.ic`).
     pub initial_conditions: Vec<(Id, f64)>,
     /// Suggested initial node voltages for convergence (`.nodeset`).
     pub nodeset: Vec<(Id, f64)>,
     /// Measurement specifications (`.meas`).
     pub measures: Vec<MeasureSpec>,
+    // r[impl circuit.code-block]
     /// Verbatim embedded code blocks — each entry is `(language, lines)`.
     /// `"control"` blocks are passed to the SPICE control-block interpreter.
     pub code_blocks: Vec<CodeBlock>,
@@ -82,6 +88,7 @@ pub struct Circuit {
     pub raw_directives: Vec<String>,
 }
 
+// r[impl circuit.language-registry]
 /// An embedded code block with a language tag.
 ///
 /// `lines` is the verbatim source preserved for round-trip emission. For
@@ -119,6 +126,7 @@ impl CodeBlock {
     }
 }
 
+// r[impl net.global]
 /// A resolved electrical net.
 #[derive(Debug, Clone)]
 pub struct Net {
@@ -156,35 +164,57 @@ pub struct Connection {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ElementKind {
+    // r[impl elem.resistor]
     Resistor,
+    // r[impl elem.capacitor]
     Capacitor,
+    // r[impl elem.inductor]
     Inductor,
+    // r[impl elem.coupling]
     Coupling,
+    // r[impl elem.vsource]
     VoltageSource,
+    // r[impl elem.isource]
     CurrentSource,
+    // r[impl elem.behavioral]
     BehavioralSource {
         /// `Voltage` or `Current` — voltage or current mode.
         mode: BehavioralMode,
         /// The expression string, e.g. `"sin(2*pi*1k*time)"`.
         spec: String,
     },
+    // r[impl elem.diode]
     Diode,
+    // r[impl elem.bjt]
     Npn,
+    // r[impl elem.bjt]
     Pnp,
+    // r[impl elem.mosfet]
     Nmos,
+    // r[impl elem.mosfet]
     Pmos,
+    // r[impl elem.jfet]
     NJfet,
+    // r[impl elem.jfet]
     PJfet,
+    // r[impl elem.mesfet]
     NMesfet,
+    // r[impl elem.mesfet]
     PMesfet,
+    // r[impl elem.vcvs]
     Vcvs,
+    // r[impl elem.vccs]
     Vccs,
+    // r[impl elem.ccvs]
     Ccvs,
+    // r[impl elem.cccs]
     Cccs,
     /// Lossy transmission line (SPICE O element / LTRA model).
+    // r[impl elem.tline]
     TransmissionLine,
     /// Single lossy transmission line (SPICE Y element / TXL model).
     Txl,
+    // r[impl elem.tline]
     /// Ideal lossless transmission line (SPICE `T` element).
     /// Terminals appear in `connections` under the names `"port1_pos"`,
     /// `"port1_neg"`, `"port2_pos"`, `"port2_neg"`.
@@ -196,6 +226,7 @@ pub enum ElementKind {
         /// Optional initial conditions `(v1, i1, v2, i2)`.
         ic: Option<[f64; 4]>,
     },
+    // r[impl elem.coupled-line]
     /// Coupled multiconductor transmission line (P element).
     /// Connections use terminal names `"in0"`, `"in1"`, ..., `"gnd"`,
     /// `"out0"`, `"out1"`, ... in the element's `connections` field.
@@ -203,6 +234,7 @@ pub enum ElementKind {
         /// Number of coupled lines (= number of in/out port pairs).
         width: usize,
     },
+    // r[impl elem.xspice]
     /// XSPICE code model instance (A element).
     /// Scalar connections use terminal names `"c0"`, `"c1"`, ...
     /// The full structured connection list (scalar vs. array) is here.
@@ -258,6 +290,7 @@ pub enum XspiceConnection {
     Array(Vec<Id>),
 }
 
+// r[impl model.decl]
 /// A resolved device model.
 #[derive(Debug, Clone)]
 pub struct Model {
@@ -267,6 +300,7 @@ pub struct Model {
     pub params: Vec<(String, Value)>,
 }
 
+// r[impl model.device-kinds]
 /// Device types for models.
 ///
 /// SPICE has a large and growing menagerie of model kinds (BSIM variants,
@@ -302,6 +336,7 @@ pub enum DeviceType {
     Other(String),
 }
 
+// r[impl type.primitives]
 /// A resolved parameter value.
 ///
 /// `#[non_exhaustive]` — new typed variants (e.g. `Complex`, `Net`) may
@@ -311,6 +346,7 @@ pub enum DeviceType {
 pub enum Value {
     Real(f64),
     Integer(i64),
+    // r[impl type.bool]
     Bool(bool),
     String(String),
 }
@@ -327,6 +363,7 @@ pub struct AcSpec {
     pub phase: f64,
 }
 
+// r[impl elem.waveform]
 /// Transient waveform for voltage/current sources.
 ///
 /// `#[non_exhaustive]` — new waveform shapes may be added in any 1.x.
@@ -392,6 +429,7 @@ pub struct SourceSpec {
     pub waveform: Option<Waveform>,
 }
 
+// r[impl param.decl]
 /// A resolved parameter binding.
 #[derive(Debug, Clone)]
 pub struct ResolvedParam {
@@ -399,6 +437,7 @@ pub struct ResolvedParam {
     pub value: Value,
 }
 
+// r[impl expr.user-func]
 /// A user-defined function.
 #[derive(Debug, Clone)]
 pub struct FuncDef {
@@ -408,6 +447,7 @@ pub struct FuncDef {
     pub body: String,
 }
 
+// r[impl analysis.measure]
 /// A measurement specification (SPICE `.meas`).
 ///
 /// Captures the measurement name, the analysis it applies to, the parsed
@@ -558,6 +598,7 @@ fn find_keyword_word(s: &str, key: &str) -> Option<usize> {
     None
 }
 
+// r[impl analysis.measure.expr]
 /// Typed form of a `.meas` expression.
 ///
 /// Parsed by [`parse_measure_expr`] from the verbatim spec string. Each
@@ -1623,17 +1664,27 @@ mod measure_parse {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Analysis {
+    // r[impl analysis.op]
     Op,
+    // r[impl analysis.dc]
     Dc(DcAnalysis),
+    // r[impl analysis.ac]
     Ac(AcAnalysis),
+    // r[impl analysis.tran]
     Tran(TranAnalysis),
+    // r[impl analysis.noise]
     Noise(NoiseAnalysis),
+    // r[impl analysis.pz]
     Pz(PzAnalysis),
+    // r[impl analysis.sens]
     Sens(SensAnalysis),
+    // r[impl analysis.tf]
     Tf(TfAnalysis),
+    // r[impl analysis.four]
     /// `.four <freq> <vec> [<vec> ...]` — Fourier post-processing of a
     /// transient simulation.
     Four(FourAnalysis),
+    // r[impl analysis.fft]
     /// `.fft <vec> [<vec> ...] [opts]` — windowed FFT of transient output.
     Fft(FftAnalysis),
 }

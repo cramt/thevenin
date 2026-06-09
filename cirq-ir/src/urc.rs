@@ -15,6 +15,7 @@
 
 use std::f64::consts::PI;
 
+// r[impl elem.urc]
 /// Per-unit-length URC model parameters, with ngspice's defaults.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UrcParams {

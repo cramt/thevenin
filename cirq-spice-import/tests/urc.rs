@@ -11,6 +11,10 @@ use cirq_spice_import::import_spice;
 /// to ground + 1 per non-terminal lump from the hi midnode to ground, with
 /// the terminal lump's hi/lo collapsed to a single shared midnode → so the
 /// terminal lump contributes 1 cap and each earlier lump contributes 2).
+// r[verify elem.urc]
+// r[verify spice.element-map]
+// r[verify model.decl]
+// r[verify spice.si-suffix]
 #[test]
 fn urc_default_expands_to_r_c_stages() {
     let source = r#"URC default 3-lump expansion
@@ -43,6 +47,11 @@ Rload out 0 1k
 
 /// A URC with `ISPERL > 0` expands its shunt-to-ground elements as diodes
 /// rather than capacitors, and synthesises a `D`-kind model for them.
+// r[verify elem.urc]
+// r[verify elem.diode]
+// r[verify spice.element-map]
+// r[verify model.decl]
+// r[verify model.device-kinds]
 #[test]
 fn urc_with_isperl_uses_diodes() {
     let source = r#"URC with diode-shunt
@@ -89,6 +98,9 @@ Rload out 0 1k
 }
 
 /// The URC default-lumps path picks at least 3 lumps when no N= is given.
+// r[verify elem.urc]
+// r[verify spice.element-map]
+// r[verify model.decl]
 #[test]
 fn urc_default_lumps_is_at_least_three() {
     let source = r#"URC implicit-N lumps
@@ -120,6 +132,10 @@ Rload out 0 1k
 /// End-to-end: a URC-bearing circuit simulates to a finite DC operating point.
 /// The URC acts as a low-pass network — at DC it's just a resistance ladder
 /// from `in` to `out` with shunts to ground.
+// r[verify elem.urc]
+// r[verify spice.element-map]
+// r[verify model.decl]
+// r[verify analysis.op]
 #[test]
 fn urc_op_point_is_finite() {
     let source = r#"URC OP smoke

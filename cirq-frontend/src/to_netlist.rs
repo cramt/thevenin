@@ -36,6 +36,9 @@ pub enum ConvertError {
 ///
 /// Produces one netlist per analysis. If the circuit has no analyses, a single
 /// netlist with `.op` is returned.
+// r[impl circuit.decl]
+// r[impl net.global]
+// r[impl analysis.order]
 pub fn circuit_to_netlists(circuit: &Circuit) -> Result<Vec<Netlist>, ConvertError> {
     let net_names = build_net_map(circuit);
     let element_names = build_element_name_map(circuit);
@@ -403,6 +406,7 @@ pub fn extra_params(elem: &IrElement, exclude: &[&str]) -> Vec<Param> {
 /// directly to `thevenin::waveform::evaluate` without rebuilding the whole
 /// element record. Every numeric field in IR is already an `f64`, so this is
 /// a straight enum-to-enum translation through [`Expr::Num`].
+// r[impl elem.waveform]
 pub fn convert_waveform(w: &IrWaveform) -> Waveform {
     match w {
         IrWaveform::Pulse {
@@ -540,6 +544,7 @@ fn resolve_model_name(
 // Element conversion
 // ---------------------------------------------------------------------------
 
+// r[impl elem.syntax]
 fn convert_element(
     elem: &IrElement,
     net_names: &HashMap<Id, String>,
@@ -548,6 +553,7 @@ fn convert_element(
     circuit: &Circuit,
 ) -> Result<Element, ConvertError> {
     match &elem.kind {
+        // r[impl elem.resistor]
         IrElementKind::Resistor => {
             let pos = get_conn(elem, "pos", net_names)?;
             let neg = get_conn(elem, "neg", net_names)?;
@@ -565,6 +571,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.capacitor]
         IrElementKind::Capacitor => {
             let pos = get_conn(elem, "pos", net_names)?;
             let neg = get_conn(elem, "neg", net_names)?;
@@ -582,6 +589,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.inductor]
         IrElementKind::Inductor => {
             let pos = get_conn(elem, "pos", net_names)?;
             let neg = get_conn(elem, "neg", net_names)?;
@@ -599,6 +607,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.vsource]
         IrElementKind::VoltageSource => {
             let pos = get_conn(elem, "pos", net_names)?;
             let neg = get_conn(elem, "neg", net_names)?;
@@ -609,6 +618,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.isource]
         IrElementKind::CurrentSource => {
             let pos = get_conn(elem, "pos", net_names)?;
             let neg = get_conn(elem, "neg", net_names)?;
@@ -619,6 +629,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.behavioral]
         IrElementKind::BehavioralSource { mode, spec } => {
             let pos = get_conn(elem, "pos", net_names)?;
             let neg = get_conn(elem, "neg", net_names)?;
@@ -636,6 +647,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.diode]
         IrElementKind::Diode => {
             let anode = get_conn(elem, "anode", net_names)?;
             let cathode = get_conn(elem, "cathode", net_names)?;
@@ -652,6 +664,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.bjt]
         IrElementKind::Npn | IrElementKind::Pnp => {
             let c = get_conn(elem, "collector", net_names)?;
             let b = get_conn(elem, "base", net_names)?;
@@ -677,6 +690,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.mosfet]
         IrElementKind::Nmos | IrElementKind::Pmos => {
             let d = get_conn(elem, "drain", net_names)?;
             let g = get_conn(elem, "gate", net_names)?;
@@ -699,6 +713,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.jfet]
         IrElementKind::NJfet | IrElementKind::PJfet => {
             let d = get_conn(elem, "drain", net_names)?;
             let g = get_conn(elem, "gate", net_names)?;
@@ -717,6 +732,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.mesfet]
         IrElementKind::NMesfet | IrElementKind::PMesfet => {
             let d = get_conn(elem, "drain", net_names)?;
             let g = get_conn(elem, "gate", net_names)?;
@@ -735,6 +751,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.vcvs]
         IrElementKind::Vcvs => {
             let out_pos = get_conn(elem, "out_pos", net_names)?;
             let out_neg = get_conn(elem, "out_neg", net_names)?;
@@ -760,6 +777,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.vccs]
         IrElementKind::Vccs => {
             let out_pos = get_conn(elem, "out_pos", net_names)?;
             let out_neg = get_conn(elem, "out_neg", net_names)?;
@@ -785,6 +803,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.ccvs]
         IrElementKind::Ccvs => {
             let out_pos = get_conn(elem, "out_pos", net_names)?;
             let out_neg = get_conn(elem, "out_neg", net_names)?;
@@ -814,6 +833,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.cccs]
         IrElementKind::Cccs => {
             let out_pos = get_conn(elem, "out_pos", net_names)?;
             let out_neg = get_conn(elem, "out_neg", net_names)?;
@@ -843,6 +863,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.tline]
         IrElementKind::TransmissionLine | IrElementKind::Txl => {
             let in_pos = get_conn(elem, "in_pos", net_names)?;
             let in_neg = get_conn(elem, "in_neg", net_names)?;
@@ -876,6 +897,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.tline]
         IrElementKind::Tline { z0, td, ic } => {
             let pos1 = get_conn(elem, "port1_pos", net_names)?;
             let neg1 = get_conn(elem, "port1_neg", net_names)?;
@@ -941,6 +963,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.coupled-line]
         IrElementKind::CoupledLine { width } => {
             let mut in_nodes = Vec::new();
             for i in 0..*width {
@@ -973,6 +996,7 @@ fn convert_element(
             })
         }
 
+        // r[impl elem.xspice]
         IrElementKind::Xspice {
             connections: xspice_conns,
         } => {
@@ -1101,6 +1125,8 @@ fn resolve_inductor_spice_name(
 /// Public so the MNA-on-IR pivot (`docs/archive/migration/mna-ir-pivot-plan.md`) can
 /// reuse it to feed `thevenin`'s existing `*Model::from_model_def` loaders
 /// without rewriting them per device family.
+// r[impl model.decl]
+// r[impl model.device-kinds]
 pub fn convert_model(model: &cirq_ir::Model) -> ModelDef {
     let kind: String = match &model.device_type {
         DeviceType::Diode => "D".into(),
@@ -1145,14 +1171,17 @@ pub fn convert_model(model: &cirq_ir::Model) -> ModelDef {
 // Analysis conversion
 // ---------------------------------------------------------------------------
 
+// r[impl analysis.decl]
 fn convert_analysis(
     analysis: &cirq_ir::Analysis,
     net_names: &HashMap<Id, String>,
     element_names: &HashMap<Id, String>,
 ) -> Analysis {
     match analysis {
+        // r[impl analysis.op]
         cirq_ir::Analysis::Op => Analysis::Op,
 
+        // r[impl analysis.dc]
         cirq_ir::Analysis::Dc(dc) => {
             if dc.sweeps.is_empty() {
                 return Analysis::Op;
@@ -1186,6 +1215,7 @@ fn convert_analysis(
             }
         }
 
+        // r[impl analysis.ac]
         cirq_ir::Analysis::Ac(ac) => {
             let variation = match ac.scale {
                 FrequencyScale::Decade => AcVariation::Dec,
@@ -1200,6 +1230,7 @@ fn convert_analysis(
             }
         }
 
+        // r[impl analysis.tran]
         cirq_ir::Analysis::Tran(tran) => {
             let tstart = if tran.start != 0.0 {
                 Some(Expr::Num(tran.start))
@@ -1215,6 +1246,7 @@ fn convert_analysis(
             }
         }
 
+        // r[impl analysis.noise]
         cirq_ir::Analysis::Noise(noise) => {
             let output = net_names
                 .get(&noise.output_net)
@@ -1241,6 +1273,7 @@ fn convert_analysis(
             }
         }
 
+        // r[impl analysis.pz]
         cirq_ir::Analysis::Pz(pz) => {
             let node_i = net_names
                 .get(&pz.input_pos)
@@ -1277,6 +1310,7 @@ fn convert_analysis(
             }
         }
 
+        // r[impl analysis.sens]
         cirq_ir::Analysis::Sens(sens) => {
             let mut output = vec![sens.output.clone()];
             if let Some(ac) = &sens.ac {
@@ -1296,6 +1330,7 @@ fn convert_analysis(
             Analysis::Sens { output }
         }
 
+        // r[impl analysis.tf]
         cirq_ir::Analysis::Tf(tf) => {
             let input = element_names
                 .get(&tf.source)
@@ -1307,11 +1342,13 @@ fn convert_analysis(
             }
         }
 
+        // r[impl analysis.four]
         cirq_ir::Analysis::Four(four) => Analysis::Four {
             fundamental: Expr::Num(four.fundamental),
             vectors: four.vectors.clone(),
         },
 
+        // r[impl analysis.fft]
         cirq_ir::Analysis::Fft(fft) => {
             let window = match fft.window {
                 cirq_ir::FftWindow::Rectangular => "rect",

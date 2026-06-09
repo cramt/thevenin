@@ -59,6 +59,12 @@ fn plot_vec(result: &thevenin_types::SimResult, plot: &str, vec: &str) -> Vec<f6
     }
 }
 
+// r[verify analysis.four]
+// r[verify analysis.tran]
+// r[verify elem.vsource]
+// r[verify elem.waveform]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
 #[test]
 fn native_four_block_runs_fourier() {
     let result = thevenin_cirq::simulate(&compile(SINE_RC)).expect("simulate");
@@ -79,6 +85,12 @@ fn native_four_block_runs_fourier() {
     );
 }
 
+// r[verify analysis.fft]
+// r[verify analysis.tran]
+// r[verify elem.vsource]
+// r[verify elem.waveform]
+// r[verify elem.resistor]
+// r[verify elem.capacitor]
 #[test]
 fn native_fft_block_runs_fft() {
     let result = thevenin_cirq::simulate(&compile(SINE_RC)).expect("simulate");

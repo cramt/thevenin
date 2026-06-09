@@ -2,6 +2,8 @@
 
 ## Analysis Declaration
 
+r[analysis.decl]
+
 Analysis commands tell the simulator what to compute. They are declared inside a `circuit` block.
 
 ```cirq
@@ -30,6 +32,8 @@ circuit my_circuit {
 
 ## DC Operating Point
 
+r[analysis.op]
+
 ```cirq
 analysis op {}
 ```
@@ -37,6 +41,8 @@ analysis op {}
 No parameters needed. Computes the DC bias point.
 
 ## DC Sweep
+
+r[analysis.dc]
 
 ```cirq
 analysis dc {
@@ -55,6 +61,8 @@ Parameters:
 
 ## AC Small-Signal Analysis
 
+r[analysis.ac]
+
 ```cirq
 analysis ac {
     start: 1           // start frequency (Hz)
@@ -71,6 +79,8 @@ Parameters:
 - `scale`: frequency scale — **required**, one of `decade`, `octave`, `linear`
 
 ## Transient Analysis
+
+r[analysis.tran]
 
 ```cirq
 analysis tran {
@@ -95,6 +105,8 @@ Parameters:
 
 ## Noise Analysis
 
+r[analysis.noise]
+
 ```cirq
 analysis noise {
     output: out         // output net
@@ -108,6 +120,8 @@ analysis noise {
 ```
 
 ## Pole-Zero Analysis
+
+r[analysis.pz]
 
 ```cirq
 analysis pz {
@@ -123,6 +137,8 @@ analysis pz {
 The node names also accept the short aliases `in_pos`, `in_neg`, `out_pos`, `out_neg`.
 
 ## Sensitivity Analysis
+
+r[analysis.sens]
 
 ```cirq
 // DC sensitivity (default)
@@ -148,6 +164,8 @@ Parameters:
 
 ## Transfer Function
 
+r[analysis.tf]
+
 ```cirq
 analysis tf {
     output: v(out)             // output variable
@@ -156,6 +174,8 @@ analysis tf {
 ```
 
 ## Fourier Analysis
+
+r[analysis.four]
 
 `analysis four` runs a Fourier decomposition of the final fundamental period of
 the preceding transient (the native counterpart of SPICE `.four`):
@@ -175,6 +195,8 @@ land in a `fourier1` plot with `<signal>_freq` / `_mag` / `_phase` / `_norm`
 columns (index 0 is the DC term).
 
 ## FFT Analysis
+
+r[analysis.fft]
 
 `analysis fft` runs a windowed FFT over a transient interval (the native
 counterpart of SPICE `.fft`):
@@ -196,6 +218,8 @@ Results land in an `fft1` plot with `<signal>_freq` (real) and `<signal>_fft`
 
 ## Measurements
 
+r[analysis.measure]
+
 A `measure` declaration records a post-simulation measurement on the results
 of a preceding analysis. It is the native Cirq counterpart of SPICE's `.meas`
 directive. The header has three pieces:
@@ -207,6 +231,8 @@ directive. The header has three pieces:
    `measurements` result plot.
 
 ### Expression form (preferred)
+
+r[analysis.measure.expr]
 
 A measurement is an expression: `measure <kind> <name> = <expr>`. The
 expression layer is the same one used by `let` and `param`, so derived and
@@ -260,6 +286,8 @@ directly as `(vout_diff < 100k) ? 1 : 0`.
 
 ### Block form (legacy)
 
+r[analysis.measure.block]
+
 The original block form remains as an escape hatch. The name is a string
 literal and the body wraps a verbatim SPICE `.meas` clause string in a `spec:`
 field:
@@ -283,6 +311,8 @@ operators, and the ternary, so pass/fail checks like `(a < b) ? 1 : 0` work
 directly.
 
 ## Multiple Analyses
+
+r[analysis.order]
 
 A circuit can contain multiple analysis commands. They run in declaration order:
 

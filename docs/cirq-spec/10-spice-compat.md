@@ -6,6 +6,8 @@ Every valid SPICE netlist that Thevenin supports can be mechanically translated 
 
 ## Element Name Mapping
 
+r[spice.element-map]
+
 | SPICE Prefix | Cirq Element Type |
 |-------------|-------------------|
 | R | `resistor` |
@@ -29,6 +31,8 @@ Every valid SPICE netlist that Thevenin supports can be mechanically translated 
 
 ## Node Mapping
 
+r[spice.node-map]
+
 | SPICE | Cirq |
 |-------|------|
 | Node `0` | `gnd` |
@@ -36,6 +40,8 @@ Every valid SPICE netlist that Thevenin supports can be mechanically translated 
 | Numeric nodes (e.g., `1`, `2`, `3`) | Mapped to `n1`, `n2`, `n3` etc. |
 
 ## Directive Mapping
+
+r[spice.directive-map]
 
 | SPICE Directive | Cirq Equivalent |
 |----------------|-----------------|
@@ -65,6 +71,8 @@ Every valid SPICE netlist that Thevenin supports can be mechanically translated 
 | `.control` / `.endc` | `code "control" { ... }` block |
 
 ## SI Suffix Differences
+
+r[spice.si-suffix]
 
 | Suffix | SPICE Meaning | Cirq Meaning |
 |--------|--------------|--------------|

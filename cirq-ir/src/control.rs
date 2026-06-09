@@ -112,6 +112,7 @@ pub enum Statement {
     /// (same variables, same circuit). A recursion guard prevents `a.cs`
     /// from sourcing itself directly or transitively.
     Source { path: String },
+    // r[impl analysis.measure]
     /// `measure <kind> <name> <spec>` — evaluate a measurement against the
     /// current plot at the time the command runs (vs the `.meas`
     /// directive, which runs once at end-of-simulation).

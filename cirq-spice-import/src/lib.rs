@@ -169,6 +169,7 @@ struct NetTable {
 impl NetTable {
     fn new() -> Self {
         let mut map = HashMap::new();
+        // r[impl spice.node-map]
         map.insert("0".to_owned(), Id(0));
         Self {
             map,
@@ -184,6 +185,7 @@ impl NetTable {
     /// Cirq surface-syntax constraints on net identifiers; any rewriting
     /// needed to emit valid Cirq source happens at the Cirq emitter, not
     /// here. Ground `"0"` is pre-seeded and always maps to `Id(0)`.
+    // r[impl spice.node-map]
     fn intern(&mut self, name: &str) -> Id {
         if let Some(&id) = self.map.get(name) {
             return id;
@@ -195,6 +197,7 @@ impl NetTable {
     }
 
     /// Mark a set of node names as global.
+    // r[impl net.global]
     fn mark_global(&mut self, names: &[String]) {
         for name in names {
             self.globals.push(name.clone());
@@ -358,6 +361,7 @@ fn tokenize_expr(input: &str) -> Vec<ExprToken> {
                     i += 1;
                 }
                 let s: String = chars[start..i].iter().collect();
+                // r[impl spice.si-suffix]
                 if let Some(v) = thevenin_types::parse::parse_spice_number(&s) {
                     tokens.push(ExprToken::Num(v));
                 } else if let Ok(v) = s.parse::<f64>() {
@@ -736,6 +740,7 @@ fn parse_primary(
 /// (e.g., `.param a=1k` then `.param b=2*a`). Parameters whose values
 /// are numeric are resolved immediately; parameters referencing other
 /// params are resolved in subsequent passes until no more progress is made.
+// r[impl param.decl]
 ///
 /// `TEMPER` is seeded from `.options temp=<value>` (defaulting to 27 degC
 /// when not set) so brace expressions in element values and waveforms can
@@ -834,6 +839,7 @@ fn build_source_spec(
 }
 
 /// Convert a `thevenin_types::Waveform` to an `IrWaveform`.
+// r[impl elem.waveform]
 fn convert_waveform(
     w: &thevenin_types::Waveform,
     params: &HashMap<String, f64>,
@@ -971,6 +977,7 @@ fn connection(terminal: &str, net: Id) -> Connection {
 /// discarded — the simulator dispatches several model families (TXL, LTRA,
 /// CPL, XSPICE code models, HFETs, etc.) directly on the kind string, so a
 /// lossy import would silently drop entire device classes.
+// r[impl model.device-kinds]
 fn map_device_type(kind: &str) -> cirq_ir::DeviceType {
     match kind.to_ascii_uppercase().as_str() {
         "D" => cirq_ir::DeviceType::Diode,
@@ -1112,6 +1119,7 @@ fn urc_node_name(
 /// matching `urcsetup.c`. The ladder itself is computed by the shared
 /// [`cirq_ir::urc::plan`]; this function only materialises it into
 /// `thevenin_types::Element`s.
+// r[impl elem.urc]
 ///
 /// Internal node names use the `__urc__{name}__` reservation prefix. Earlier
 /// revisions used `{name}:lo{i}` — a colon-separated form that can legally
@@ -1175,6 +1183,7 @@ fn expand_urc(
 /// Returns a new netlist with all URC elements gone and the synthesised
 /// R / C / D elements (plus any URC-derived diode models) inlined in their
 /// place.
+// r[impl elem.urc]
 fn expand_urc_in_netlist(netlist: &Netlist) -> Netlist {
     // Build a lookup of URC models by name.
     let mut urc_models: HashMap<String, thevenin_types::ModelDef> = HashMap::new();
@@ -1281,6 +1290,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
 
     // 1. Build model table: model name (uppercased) → DeviceType.
     //    Also collect model IR objects.
+    // r[impl model.decl]
     let mut model_type_table: HashMap<String, cirq_ir::DeviceType> = HashMap::new();
     let mut ir_models: Vec<IrModel> = Vec::new();
     let mut model_id_counter: u32 = 0;
@@ -1351,6 +1361,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     let mut net_table = NetTable::new();
 
     // Also handle .global directives.
+    // r[impl net.global]
     for item in &netlist.items {
         if let Item::Global(nodes) = item {
             net_table.mark_global(nodes);
@@ -1412,6 +1423,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     )?;
 
     // 7. Collect .param items.
+    // r[impl param.decl]
     let mut ir_params: Vec<ResolvedParam> = Vec::new();
     for item in &netlist.items {
         if let Item::Param(params) = item {
@@ -1442,6 +1454,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     }
 
     // 8. Collect .options items.
+    // r[impl circuit.options]
     //
     // Every `.option <key>=<value>` line survives verbatim into
     // `Circuit::options`; downstream consumers (the simulator, the IR-side
@@ -1466,6 +1479,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     }
 
     // 9. Collect .temp (multi-point: accumulate all values).
+    // r[impl circuit.temp]
     let mut ir_temps: Vec<f64> = Vec::new();
     for item in &netlist.items {
         if let Item::Temp(t) = item {
@@ -1474,6 +1488,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     }
 
     // 10. Collect .save targets.
+    // r[impl circuit.save]
     let mut ir_save: Vec<String> = Vec::new();
     for item in &netlist.items {
         if let Item::Save(targets) = item {
@@ -1498,6 +1513,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     }
 
     // 12. Collect .ic initial conditions.
+    // r[impl circuit.ic]
     let mut ir_initial_conditions: Vec<(cirq_ir::Id, f64)> = Vec::new();
     for item in &netlist.items {
         if let Item::Ic(pairs) = item {
@@ -1509,6 +1525,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     }
 
     // 13. Collect .control blocks as code blocks with "control" language tag.
+    // r[impl circuit.code-block]
     let mut ir_code_blocks: Vec<cirq_ir::CodeBlock> = Vec::new();
     for item in &netlist.items {
         if let Item::Control(lines) = item {
@@ -1528,6 +1545,7 @@ pub fn import_netlist(netlist: &Netlist) -> Result<Circuit, ImportError> {
     }
 
     // 15. Collect .meas measurement specifications.
+    // r[impl analysis.measure]
     let mut ir_measures: Vec<cirq_ir::MeasureSpec> = Vec::new();
     for item in &netlist.items {
         if let Item::Meas(spec) = item {
@@ -1595,6 +1613,8 @@ pub fn import_spice(source: &str) -> Result<Vec<Circuit>, ImportError> {
 /// netlist string. `opts` controls search paths, encoding tolerance, and the
 /// originating source directory. Pass `IncludeOptions::default()` to fall back
 /// to CWD-relative resolution.
+// r[impl import.decl]
+// r[impl import.resolution]
 pub fn import_spice_with_options(
     source: &str,
     opts: &IncludeOptions,
@@ -1606,6 +1626,7 @@ pub fn import_spice_with_options(
 
 /// Read a SPICE file from disk and import it, resolving `.include` / `.lib`
 /// relative to the file's directory and the supplied `lib_paths`.
+// r[impl import.resolution]
 pub fn import_spice_path(
     path: impl AsRef<Path>,
     lib_paths: &[std::path::PathBuf],
@@ -1845,6 +1866,7 @@ fn intern_analysis_nodes(analysis: &SpiceAnalysis, nets: &mut NetTable) {
 
 /// Convert a single SPICE element to an IR element. Returns `None` for elements
 /// that are intentionally skipped (e.g., subcircuit calls).
+// r[impl spice.element-map]
 fn convert_element(
     id: Id,
     elem: &thevenin_types::Element,
@@ -1856,6 +1878,7 @@ fn convert_element(
     let name = &elem.name;
 
     match &elem.kind {
+        // r[impl elem.resistor]
         SpiceElementKind::Resistor {
             pos,
             neg,
@@ -1878,6 +1901,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.capacitor]
         SpiceElementKind::Capacitor {
             pos,
             neg,
@@ -1900,6 +1924,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.inductor]
         SpiceElementKind::Inductor {
             pos,
             neg,
@@ -1922,6 +1947,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.vsource]
         SpiceElementKind::VoltageSource { pos, neg, source } => {
             let mut ir_params = Vec::new();
             if let Some(dc) = &source.dc {
@@ -1948,6 +1974,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.isource]
         SpiceElementKind::CurrentSource { pos, neg, source } => {
             let mut ir_params = Vec::new();
             if let Some(dc) = &source.dc {
@@ -1974,6 +2001,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.diode]
         SpiceElementKind::Diode {
             anode,
             cathode,
@@ -1995,6 +2023,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.bjt]
         SpiceElementKind::Bjt {
             c,
             b,
@@ -2029,6 +2058,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.mosfet]
         SpiceElementKind::Mosfet {
             d,
             g,
@@ -2060,6 +2090,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.jfet]
         SpiceElementKind::Jfet {
             d,
             g,
@@ -2084,6 +2115,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.mesfet]
         SpiceElementKind::Mesa {
             d,
             g,
@@ -2109,6 +2141,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.coupling]
         SpiceElementKind::MutualCoupling { l1, l2, coupling } => {
             // Coupling references inductor element names, not net nodes.
             // We store the inductor names as string params.
@@ -2127,6 +2160,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.vcvs]
         SpiceElementKind::Vcvs {
             out_pos,
             out_neg,
@@ -2148,6 +2182,7 @@ fn convert_element(
             source_spec: None,
         })),
 
+        // r[impl elem.vccs]
         SpiceElementKind::Vccs {
             out_pos,
             out_neg,
@@ -2169,6 +2204,7 @@ fn convert_element(
             source_spec: None,
         })),
 
+        // r[impl elem.ccvs]
         SpiceElementKind::Ccvs {
             out_pos,
             out_neg,
@@ -2190,6 +2226,7 @@ fn convert_element(
             source_spec: None,
         })),
 
+        // r[impl elem.cccs]
         SpiceElementKind::Cccs {
             out_pos,
             out_neg,
@@ -2211,6 +2248,7 @@ fn convert_element(
             source_spec: None,
         })),
 
+        // r[impl elem.tline]
         SpiceElementKind::Ltra {
             pos1,
             neg1,
@@ -2236,6 +2274,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.tline]
         SpiceElementKind::Txl {
             pos1,
             neg1,
@@ -2261,6 +2300,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.tline]
         SpiceElementKind::Tline {
             pos1,
             neg1,
@@ -2343,6 +2383,7 @@ fn convert_element(
             )))
         }
 
+        // r[impl elem.behavioral]
         SpiceElementKind::BehavioralSource { pos, neg, spec } => {
             let spec_trimmed = spec.trim();
             // Parse "V=expr" or "I=expr" to determine mode and extract expression.
@@ -2377,6 +2418,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.coupled-line]
         SpiceElementKind::Cpl {
             in_nodes,
             out_nodes,
@@ -2406,6 +2448,7 @@ fn convert_element(
             }))
         }
 
+        // r[impl elem.xspice]
         SpiceElementKind::Xspice { connections, model } => {
             let mut ir_conns: Vec<Connection> = Vec::new();
             let mut xspice_conns: Vec<IrXspiceConnection> = Vec::new();
@@ -2529,6 +2572,7 @@ fn convert_element(
 // Analysis conversion
 // ---------------------------------------------------------------------------
 
+// r[impl spice.directive-map]
 fn convert_analysis(
     analysis: &SpiceAnalysis,
     element_names: &HashMap<String, Id>,
@@ -2537,8 +2581,10 @@ fn convert_analysis(
 ) -> Result<Vec<IrAnalysis>, ImportError> {
     let resolve = |e: &Expr| expr_to_f64(e, params);
     let ir = match analysis {
+        // r[impl analysis.op]
         SpiceAnalysis::Op => IrAnalysis::Op,
 
+        // r[impl analysis.dc]
         SpiceAnalysis::Dc {
             src,
             start,
@@ -2571,6 +2617,7 @@ fn convert_analysis(
             IrAnalysis::Dc(DcAnalysis { sweeps })
         }
 
+        // r[impl analysis.ac]
         SpiceAnalysis::Ac {
             variation,
             n,
@@ -2590,6 +2637,7 @@ fn convert_analysis(
             })
         }
 
+        // r[impl analysis.tran]
         SpiceAnalysis::Tran {
             tstep,
             tstop,
@@ -2604,6 +2652,7 @@ fn convert_analysis(
             tmax: tmax.as_ref().and_then(|e| resolve(e).ok()),
         }),
 
+        // r[impl analysis.noise]
         SpiceAnalysis::Noise {
             output,
             ref_node,
@@ -2644,6 +2693,7 @@ fn convert_analysis(
             })
         }
 
+        // r[impl analysis.tf]
         SpiceAnalysis::Tf { output, input } => {
             let src_id = element_names
                 .get(&input.to_ascii_uppercase())
@@ -2655,6 +2705,7 @@ fn convert_analysis(
             })
         }
 
+        // r[impl analysis.sens]
         SpiceAnalysis::Sens { output } => {
             let output_var = output
                 .first()
@@ -2667,6 +2718,7 @@ fn convert_analysis(
             })
         }
 
+        // r[impl analysis.pz]
         SpiceAnalysis::Pz {
             node_i,
             node_g,
@@ -2694,6 +2746,7 @@ fn convert_analysis(
             })
         }
 
+        // r[impl analysis.four]
         SpiceAnalysis::Four {
             fundamental,
             vectors,
@@ -2703,6 +2756,7 @@ fn convert_analysis(
             num_harmonics: 9,
         }),
 
+        // r[impl analysis.fft]
         SpiceAnalysis::Fft {
             vectors,
             start,

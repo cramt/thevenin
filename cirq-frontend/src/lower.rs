@@ -137,6 +137,7 @@ impl<'src> Ctx<'src> {
 // ---------------------------------------------------------------------------
 
 impl Ctx<'_> {
+    // r[impl circuit.decl]
     fn lower_circuit(&mut self, node: tree_sitter::Node) -> Option<Circuit> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -167,6 +168,7 @@ impl Ctx<'_> {
         })
     }
 
+    // r[impl param.conditional]
     fn lower_conditional(&mut self, node: tree_sitter::Node) -> Option<ConditionalDecl> {
         let mut branches = Vec::new();
 
@@ -218,6 +220,7 @@ impl Ctx<'_> {
         items
     }
 
+    // r[impl circuit.body]
     fn lower_circuit_item(&mut self, node: tree_sitter::Node) -> Option<CircuitItem> {
         match node.kind() {
             "param_decl" => self.lower_param(node).map(CircuitItem::Param),
@@ -253,6 +256,7 @@ impl Ctx<'_> {
 // ---------------------------------------------------------------------------
 
 impl Ctx<'_> {
+    // r[impl module.decl]
     fn lower_module(&mut self, node: tree_sitter::Node) -> Option<ModuleDef> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -290,6 +294,7 @@ impl Ctx<'_> {
         })
     }
 
+    // r[impl module.port]
     fn lower_port(&mut self, node: tree_sitter::Node) -> Option<PortDecl> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -306,6 +311,7 @@ impl Ctx<'_> {
             }
         };
 
+        // r[impl module.port.bus]
         // Optional bus width: `port d[8]: in`.
         let width = node
             .child_by_field_name("width")
@@ -336,6 +342,7 @@ impl Ctx<'_> {
 // ---------------------------------------------------------------------------
 
 impl Ctx<'_> {
+    // r[impl elem.syntax]
     fn lower_element(&mut self, node: tree_sitter::Node) -> Option<ElementInst> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -361,6 +368,7 @@ impl Ctx<'_> {
         })
     }
 
+    // r[impl module.instantiate]
     fn lower_module_inst(&mut self, node: tree_sitter::Node) -> Option<ModuleInst> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -404,6 +412,7 @@ impl Ctx<'_> {
         args
     }
 
+    // r[impl elem.connection-operator]
     fn lower_argument(&mut self, node: tree_sitter::Node) -> Option<Argument> {
         // An argument node has a single named child which is one of:
         // named_argument, connection, named_connection, or an expression
@@ -438,6 +447,7 @@ impl Ctx<'_> {
         }
     }
 
+    // r[impl type.gnd]
     fn lower_net_ref(&mut self, parent: tree_sitter::Node, field_name: &str) -> Option<NetRef> {
         let node = self.required_field(parent, field_name)?;
         match node.kind() {
@@ -471,6 +481,8 @@ impl Ctx<'_> {
 // ---------------------------------------------------------------------------
 
 impl Ctx<'_> {
+    // r[impl param.decl]
+    // r[impl attr.targets]
     fn lower_param(&mut self, node: tree_sitter::Node) -> Option<ParamDecl> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -498,6 +510,7 @@ impl Ctx<'_> {
         })
     }
 
+    // r[impl param.let]
     fn lower_let(&mut self, node: tree_sitter::Node) -> Option<LetDecl> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -522,6 +535,7 @@ impl Ctx<'_> {
         })
     }
 
+    // r[impl net.global]
     fn lower_global(&mut self, node: tree_sitter::Node) -> Option<GlobalDecl> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -531,6 +545,7 @@ impl Ctx<'_> {
         })
     }
 
+    // r[impl circuit.options]
     fn lower_options(&mut self, node: tree_sitter::Node) -> Option<OptionsDecl> {
         let mut settings = Vec::new();
         let mut cursor = node.walk();
@@ -559,6 +574,7 @@ impl Ctx<'_> {
         })
     }
 
+    // r[impl circuit.temp]
     fn lower_temp(&mut self, node: tree_sitter::Node) -> Option<TempDecl> {
         let value_node = self.required_field(node, "value")?;
         let value = self.lower_expr(value_node)?;
@@ -568,6 +584,7 @@ impl Ctx<'_> {
         })
     }
 
+    // r[impl circuit.save]
     fn lower_save(&mut self, node: tree_sitter::Node) -> Option<SaveDecl> {
         let mut targets = Vec::new();
         let mut cursor = node.walk();
@@ -730,6 +747,7 @@ impl Ctx<'_> {
             span: span_of(node),
         })
     }
+    // r[impl circuit.code-block]
     fn lower_code(&mut self, node: tree_sitter::Node) -> Option<CodeDecl> {
         let lang_node = self.required_field(node, "language")?;
         let raw_lang = self.text(lang_node);
@@ -757,6 +775,7 @@ impl Ctx<'_> {
         })
     }
 
+    // r[impl analysis.measure]
     fn lower_measure(&mut self, node: tree_sitter::Node) -> Option<MeasureDecl> {
         let kind_node = self.required_field(node, "analysis_kind")?;
         let analysis_kind = self.ident(kind_node);
@@ -765,6 +784,7 @@ impl Ctx<'_> {
         let name = strip_quotes(self.text(name_node)).to_owned();
         let name_span = span_of(name_node);
 
+        // r[impl analysis.measure.expr]
         // Expression form: `measure <kind> <ident> = <expr>` — the grammar
         // exposes the body as a `value` field. The block form has no such
         // field; it carries `measure_field` children instead.
@@ -786,6 +806,7 @@ impl Ctx<'_> {
     /// Lower the legacy block body `{ spec: "<SPICE clause>" }` into a
     /// [`MeasureBody::Spec`]. Emits diagnostics for missing/duplicate/unknown
     /// fields.
+    // r[impl analysis.measure.block]
     fn lower_measure_block_body(&mut self, node: tree_sitter::Node) -> Option<MeasureBody> {
         let mut spec_value: Option<String> = None;
         let mut spec_span: Option<Span> = None;
@@ -845,6 +866,7 @@ fn span_of_dummy() -> Span {
 // ---------------------------------------------------------------------------
 
 impl Ctx<'_> {
+    // r[impl model.decl]
     fn lower_model(&mut self, node: tree_sitter::Node) -> Option<ModelDef> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -903,6 +925,7 @@ impl Ctx<'_> {
 // ---------------------------------------------------------------------------
 
 impl Ctx<'_> {
+    // r[impl analysis.decl]
     fn lower_analysis(&mut self, node: tree_sitter::Node) -> Option<AnalysisDecl> {
         let kind_node = self.required_field(node, "kind")?;
         let kind = self.ident(kind_node);
@@ -963,6 +986,7 @@ impl Ctx<'_> {
 // ---------------------------------------------------------------------------
 
 impl Ctx<'_> {
+    // r[impl import.decl]
     fn lower_import(&mut self, node: tree_sitter::Node) -> Option<Import> {
         let path_node = self.required_field(node, "path")?;
         let raw = self.text(path_node);
@@ -1042,6 +1066,8 @@ impl Ctx<'_> {
 // ---------------------------------------------------------------------------
 
 impl Ctx<'_> {
+    // r[impl attr.syntax]
+    // r[impl attr.custom]
     fn lower_attribute(&mut self, node: tree_sitter::Node) -> Option<Attribute> {
         let name_node = self.required_field(node, "name")?;
         let name = self.ident(name_node);
@@ -1346,6 +1372,9 @@ impl Ctx<'_> {
 // ---------------------------------------------------------------------------
 
 /// Parse a Cirq number literal, handling SI suffixes and alternative bases.
+// r[impl lex.si-suffix]
+// r[impl lex.int]
+// r[impl lex.float]
 fn parse_number(text: &str) -> Option<f64> {
     let text = text.replace('_', "");
 

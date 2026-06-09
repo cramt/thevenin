@@ -2,6 +2,8 @@
 
 ## Comments
 
+r[lex.comment]
+
 ```cirq
 // Line comment — extends to end of line
 
@@ -29,6 +31,8 @@ grammar.
 
 ## Identifiers
 
+r[lex.identifier]
+
 ```
 identifier = [a-zA-Z_][a-zA-Z0-9_]*
 ```
@@ -38,6 +42,8 @@ Identifiers are case-sensitive. `Vdd` and `vdd` are different names.
 Reserved keywords cannot be used as identifiers (see below).
 
 ## Keywords
+
+r[lex.keywords]
 
 ```
 circuit    module     port       in         out        inout
@@ -50,6 +56,8 @@ save       ic         sweep      step
 
 ### Integer Literals
 
+r[lex.int]
+
 ```cirq
 42
 0xFF        // hexadecimal (for digital masks, flags)
@@ -57,6 +65,8 @@ save       ic         sweep      step
 ```
 
 ### Floating-Point Literals
+
+r[lex.float]
 
 ```cirq
 3.14
@@ -66,6 +76,8 @@ save       ic         sweep      step
 ```
 
 ### SI Suffix Literals
+
+r[lex.si-suffix]
 
 Numeric literals may carry an SI suffix. The suffix is part of the literal, not a separate operator.
 
@@ -101,6 +113,8 @@ Underscores are allowed as visual separators in numeric literals: `1_000_000`, `
 
 ### Unit Annotations
 
+r[lex.unit-annotation]
+
 Values may optionally carry a unit annotation after the number/suffix:
 
 ```cirq
@@ -114,6 +128,8 @@ Unit annotations are informational metadata for tooling and documentation. They 
 
 ## String Literals
 
+r[lex.string]
+
 ```cirq
 "hello world"
 "path/to/model.lib"
@@ -124,6 +140,8 @@ Strings are used for file paths in imports and model library references. They ar
 Escape sequences: `\\`, `\"`, `\n`, `\t`.
 
 ## Punctuation and Operators
+
+r[lex.punctuation]
 
 ```
 {  }        // blocks
@@ -147,6 +165,8 @@ Escape sequences: `\\`, `\"`, `\n`, `\t`.
 
 ## Whitespace and Line Handling
 
+r[lex.whitespace]
+
 Whitespace (spaces, tabs) is insignificant except as token separator.
 
 Newlines are significant as statement terminators, but a statement can span multiple lines if:
@@ -165,6 +185,8 @@ R1: resistor(
 ```
 
 ## Semicolons
+
+r[lex.semicolon]
 
 Semicolons are optional statement terminators. Newlines serve the same purpose. Semicolons are useful for multiple statements on one line:
 

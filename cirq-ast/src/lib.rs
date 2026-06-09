@@ -46,6 +46,7 @@ pub enum TopLevel {
 // Circuit
 // ---------------------------------------------------------------------------
 
+// r[impl circuit.decl]
 /// A `circuit` declaration — the top-level simulation unit.
 #[derive(Debug, Clone)]
 pub struct Circuit {
@@ -55,6 +56,7 @@ pub struct Circuit {
     pub span: Span,
 }
 
+// r[impl circuit.body]
 /// Items that can appear inside a circuit body.
 #[derive(Debug, Clone)]
 pub enum CircuitItem {
@@ -66,14 +68,22 @@ pub enum CircuitItem {
     ModelDef(ModelDef),
     Analysis(AnalysisDecl),
     Global(GlobalDecl),
+    // r[impl circuit.options]
     Options(OptionsDecl),
+    // r[impl circuit.temp]
     Temp(TempDecl),
+    // r[impl circuit.save]
     Save(SaveDecl),
     Func(FuncDecl),
+    // r[impl circuit.ic]
     Ic(IcDecl),
+    // r[impl elem.coupled-line]
     CoupledLine(CoupledLineDecl),
+    // r[impl circuit.code-block]
     Code(CodeDecl),
+    // r[impl analysis.measure]
     Measure(MeasureDecl),
+    // r[impl param.conditional]
     /// Compile-time `if/elseif/else` conditional selecting circuit items.
     Conditional(ConditionalDecl),
 }
@@ -108,6 +118,7 @@ pub struct ConditionalBranch {
 // Module
 // ---------------------------------------------------------------------------
 
+// r[impl module.decl]
 /// A `module` definition (subcircuit).
 #[derive(Debug, Clone)]
 pub struct ModuleDef {
@@ -118,6 +129,8 @@ pub struct ModuleDef {
     pub span: Span,
 }
 
+// r[impl module.port]
+// r[impl module.port.bus]
 /// A port declaration within a module.
 ///
 /// `width` is `None` for a scalar port and `Some(expr)` for a bus port
@@ -155,6 +168,7 @@ pub struct ElementInst {
     pub span: Span,
 }
 
+// r[impl module.instantiate]
 /// A module instantiation: `inv1: inverter(in: a, out: b, vdd: vdd, vss: gnd)`
 #[derive(Debug, Clone)]
 pub struct ModuleInst {
@@ -220,6 +234,7 @@ pub enum Argument {
 // Parameters and bindings
 // ---------------------------------------------------------------------------
 
+// r[impl param.decl]
 /// `param name = value` or `param name: type = value`
 #[derive(Debug, Clone)]
 pub struct ParamDecl {
@@ -230,6 +245,7 @@ pub struct ParamDecl {
     pub span: Span,
 }
 
+// r[impl param.let]
 /// `let name = expr`
 #[derive(Debug, Clone)]
 pub struct LetDecl {
@@ -239,6 +255,7 @@ pub struct LetDecl {
     pub span: Span,
 }
 
+// r[impl net.global]
 /// `global net_name`
 #[derive(Debug, Clone)]
 pub struct GlobalDecl {
@@ -246,6 +263,7 @@ pub struct GlobalDecl {
     pub span: Span,
 }
 
+// r[impl circuit.options]
 /// `options { gmin: 1e-12, abstol: 1e-12, ... }`
 #[derive(Debug, Clone)]
 pub struct OptionsDecl {
@@ -261,6 +279,7 @@ pub struct OptionSetting {
     pub span: Span,
 }
 
+// r[impl circuit.temp]
 /// `temp 27`
 #[derive(Debug, Clone)]
 pub struct TempDecl {
@@ -268,6 +287,7 @@ pub struct TempDecl {
     pub span: Span,
 }
 
+// r[impl circuit.save]
 /// `save { v(out), i(R1), ... }`
 #[derive(Debug, Clone)]
 pub struct SaveDecl {
@@ -307,6 +327,7 @@ pub struct FuncDecl {
 // Initial conditions
 // ---------------------------------------------------------------------------
 
+// r[impl circuit.ic]
 /// `ic { v(out) = 1.5, v(mid) = 0.8 }`
 #[derive(Debug, Clone)]
 pub struct IcDecl {
@@ -346,6 +367,7 @@ pub struct CoupledLineField {
 // Code block
 // ---------------------------------------------------------------------------
 
+// r[impl circuit.code-block]
 /// `code "lang" { ... }` — verbatim embedded language block passed through
 /// without Cirq-level parsing. The `language` tag selects the interpreter
 /// (e.g. `"control"` for SPICE control language).
@@ -360,6 +382,7 @@ pub struct CodeDecl {
 // Measure
 // ---------------------------------------------------------------------------
 
+// r[impl analysis.measure]
 /// A native Cirq `measure` block, the source-language counterpart to SPICE's
 /// `.meas` directive.
 ///
@@ -386,8 +409,10 @@ pub struct MeasureDecl {
 /// The body of a [`MeasureDecl`].
 #[derive(Debug, Clone)]
 pub enum MeasureBody {
+    // r[impl analysis.measure.expr]
     /// Native expression form: `measure tran vout_max = max(v(out))`.
     Expr(Expr),
+    // r[impl analysis.measure.block]
     /// Legacy block form: `measure tran "vout_max" { spec: "MAX v(out)" }`.
     /// `spec` holds the verbatim measurement clauses (no surrounding quotes).
     Spec { spec: String, spec_span: Span },
@@ -397,6 +422,8 @@ pub enum MeasureBody {
 // Models
 // ---------------------------------------------------------------------------
 
+// r[impl model.decl]
+// r[impl model.inheritance]
 /// `model name: device_type { ... }`
 #[derive(Debug, Clone)]
 pub struct ModelDef {
@@ -420,6 +447,7 @@ pub struct ModelParam {
 // Analysis
 // ---------------------------------------------------------------------------
 
+// r[impl analysis.decl]
 /// `analysis <kind> { ... }`
 #[derive(Debug, Clone)]
 pub struct AnalysisDecl {
@@ -446,6 +474,7 @@ pub enum AnalysisItem {
 // Expressions
 // ---------------------------------------------------------------------------
 
+// r[impl expr.arithmetic]
 /// An expression node.
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -453,8 +482,10 @@ pub enum Expr {
     Number { value: f64, span: Span },
     /// Integer literal: `42`, `0xFF`
     Integer { value: i64, span: Span },
+    // r[impl expr.string]
     /// String literal: `"hello"`
     StringLit { value: String, span: Span },
+    // r[impl type.bool]
     /// Boolean literal: `true`, `false`
     Bool { value: bool, span: Span },
     /// Identifier reference: `vdd`, `r_load`
@@ -474,6 +505,8 @@ pub enum Expr {
         operand: Box<Expr>,
         span: Span,
     },
+    // r[impl expr.builtin-math]
+    // r[impl expr.user-func]
     /// Function call: `sqrt(x)`, `max(v(out), from: 10n, to: 50n)`.
     /// Positional arguments live in `args`; named arguments (`key: value`,
     /// used by measurement probe functions) live in `named_args`.
@@ -483,6 +516,7 @@ pub enum Expr {
         named_args: Vec<(Ident, Expr)>,
         span: Span,
     },
+    // r[impl param.conditional]
     /// Ternary conditional: `cond ? then_expr : else_expr`.
     ///
     /// Lowered to the same IR shape as the `if(cond, then, else)` builtin so
@@ -509,6 +543,7 @@ pub enum Expr {
         entries: Vec<(Ident, Expr)>,
         span: Span,
     },
+    // r[impl type.gnd]
     /// The `gnd` keyword
     Gnd { span: Span },
 }
@@ -543,6 +578,7 @@ pub enum UnaryOp {
 // Imports
 // ---------------------------------------------------------------------------
 
+// r[impl import.decl]
 /// `import "path.cirq"` or `import "path.cirq" as name`
 /// or `import { name1, name2 } from "path.cirq"`
 #[derive(Debug, Clone)]
@@ -574,6 +610,7 @@ pub struct ExportDecl {
 // Attributes
 // ---------------------------------------------------------------------------
 
+// r[impl attr.syntax]
 /// `@name` or `@name(args...)`
 #[derive(Debug, Clone)]
 pub struct Attribute {

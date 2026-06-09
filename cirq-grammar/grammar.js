@@ -11,8 +11,11 @@
 module.exports = grammar({
   name: "cirq",
 
+  // r[impl lex.whitespace]
+  // r[impl lex.semicolon]
   extras: ($) => [/\s/, /;/, $.line_comment, $.block_comment],
 
+  // r[impl lex.keywords]
   word: ($) => $.identifier,
 
   // Externally-tokenized symbols. The body of `code "lang" { ... }` is
@@ -96,6 +99,7 @@ module.exports = grammar({
         "}"
       ),
 
+    // r[impl module.port.bus]
     port_decl: ($) =>
       seq(
         repeat($.attribute),
@@ -111,6 +115,7 @@ module.exports = grammar({
 
     // ── Elements ─────────────────────────────────────────────────────
 
+    // r[impl elem.syntax]
     element_inst: ($) =>
       seq(
         repeat($.attribute),
@@ -146,9 +151,11 @@ module.exports = grammar({
     named_argument: ($) =>
       seq(field("name", $.identifier), ":", field("value", $._expression)),
 
+    // r[impl elem.connection-operator]
     connection: ($) =>
       seq(field("from", $._net_ref), "->", field("to", $._net_ref)),
 
+    // r[impl lex.punctuation]
     named_connection: ($) =>
       seq(
         field("name", $.identifier),
@@ -460,6 +467,7 @@ module.exports = grammar({
         )
       ),
 
+    // r[impl expr.precedence]
     binary_expression: ($) =>
       choice(
         // Right-associative exponentiation
@@ -548,6 +556,9 @@ module.exports = grammar({
 
     // ── Literals ─────────────────────────────────────────────────────
 
+    // r[impl lex.int]
+    // r[impl lex.float]
+    // r[impl lex.si-suffix]
     number_literal: (_$) =>
       token(
         seq(
@@ -570,15 +581,19 @@ module.exports = grammar({
         )
       ),
 
+    // r[impl lex.string]
     string_literal: (_$) =>
       token(seq('"', repeat(choice(/[^"\\]/, seq("\\", /./),)), '"')),
 
+    // r[impl type.bool]
     boolean_literal: (_$) => choice("true", "false"),
 
+    // r[impl type.gnd]
     gnd: (_$) => "gnd",
 
     // ── Names ────────────────────────────────────────────────────────
 
+    // r[impl lex.identifier]
     identifier: (_$) => /[a-zA-Z_][a-zA-Z0-9_]*/,
 
     qualified_name: ($) =>
@@ -586,6 +601,7 @@ module.exports = grammar({
 
     // ── Comments ─────────────────────────────────────────────────────
 
+    // r[impl lex.comment]
     line_comment: (_$) => token(seq("//", /[^\n]*/)),
 
     block_comment: (_$) => token(seq("/*", /[^*]*\*+([^/*][^*]*\*+)*/, "/")),

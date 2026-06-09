@@ -12,6 +12,9 @@ fn opts(dir: &std::path::Path) -> IncludeOptions {
     IncludeOptions::new().with_source_dir(dir)
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
 #[test]
 fn include_resolves_sibling_file() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -29,6 +32,9 @@ fn include_resolves_sibling_file() {
     assert!(names.iter().any(|n| n.eq_ignore_ascii_case("R_in_parent")));
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
 #[test]
 fn nested_include_three_levels() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -53,6 +59,9 @@ fn nested_include_three_levels() {
     assert!(names.contains(&"r_c".to_string()));
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
 #[test]
 fn search_path_resolution_uses_lib_paths() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -75,6 +84,10 @@ fn search_path_resolution_uses_lib_paths() {
     assert!(names.contains(&"r_from_lib".to_string()));
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
+// r[verify model.library]
 #[test]
 fn lib_two_arg_extracts_named_block_only() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -104,6 +117,10 @@ R_ff 1 0 3k
     assert!(!names.contains(&"r_ff".to_string()));
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
+// r[verify model.library]
 #[test]
 fn lib_one_arg_marker_inside_included_file() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -131,6 +148,9 @@ R_ss 1 0 2k
     assert!(!names.contains(&"r_tt".to_string()));
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
 #[test]
 fn circular_include_is_caught() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -147,6 +167,9 @@ fn circular_include_is_caught() {
     );
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
 #[test]
 fn latin1_encoded_file_does_not_panic() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -167,6 +190,9 @@ fn latin1_encoded_file_does_not_panic() {
     assert!(names.contains(&"r_l1".to_string()));
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
 #[test]
 fn missing_file_reports_searched_paths() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -194,6 +220,8 @@ fn missing_file_reports_searched_paths() {
     );
 }
 
+// r[verify import.decl]
+// r[verify spice.directive-map]
 #[test]
 fn malformed_include_yields_error() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -206,6 +234,9 @@ fn malformed_include_yields_error() {
     }
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
 #[test]
 fn include_without_options_still_works_for_cwd_relative() {
     // Sanity: if no source_dir is provided, CWD-relative resolution kicks in.
@@ -226,6 +257,10 @@ fn include_without_options_still_works_for_cwd_relative() {
     assert!(names.contains(&"r_abs".to_string()));
 }
 
+// r[verify import.decl]
+// r[verify import.resolution]
+// r[verify spice.directive-map]
+// r[verify model.library]
 #[test]
 fn lib_section_not_found_errors_cleanly() {
     let tmp = tempfile::TempDir::new().unwrap();

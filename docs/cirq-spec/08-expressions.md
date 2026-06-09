@@ -2,12 +2,16 @@
 
 ## Expression Contexts
 
+r[expr.contexts]
+
 Expressions appear in:
 - parameter values: `param r = 10k * 2`
 - element parameters: `R1: resistor(a -> b, r1 + r2)`
 - analysis specifications: `sweep V1: 0..vdd step vdd/100`
 
 ## Operator Precedence (highest to lowest)
+
+r[expr.precedence]
 
 | Precedence | Operators | Associativity | Description |
 |-----------|-----------|---------------|-------------|
@@ -24,6 +28,8 @@ Expressions appear in:
 
 ## Arithmetic Expressions
 
+r[expr.arithmetic]
+
 ```cirq
 param a = 10k
 param b = a * 2          // 20k
@@ -32,11 +38,15 @@ param d = (a * b) / c    // 6666.67
 param e = 2 ** 10        // 1024
 ```
 
+r[expr.div-zero]
+
 Division by zero is a compile-time error if detectable, runtime error otherwise.
 
 ## Built-in Functions
 
 ### Math Functions
+
+r[expr.builtin-math]
 
 | Function | Description | Status |
 |----------|------------|--------|
@@ -69,6 +79,8 @@ Division by zero is a compile-time error if detectable, runtime error otherwise.
 
 ### User-Defined Functions
 
+r[expr.user-func]
+
 Users can define named functions using Haskell-style syntax:
 
 ```cirq
@@ -88,6 +100,8 @@ let vt = pi * 2   // use built-in constants in expressions
 
 ## String Expressions
 
+r[expr.string]
+
 Strings do not support arithmetic. They can only be compared for equality:
 
 ```cirq
@@ -96,6 +110,8 @@ param model_name = "nmos_3v3"
 ```
 
 ## Net Expressions
+
+r[expr.net]
 
 Nets are not values. They cannot participate in arithmetic expressions. They can only be:
 - used in connections (`a -> b`)

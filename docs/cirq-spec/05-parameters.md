@@ -2,6 +2,8 @@
 
 ## Parameter Declaration
 
+r[param.decl]
+
 Parameters are named constants that can be used throughout a circuit or module.
 
 ```cirq
@@ -11,6 +13,8 @@ param temperature = 27
 ```
 
 ### Scope
+
+r[param.scope]
 
 Parameters are scoped to their enclosing block (circuit or module).
 
@@ -26,6 +30,8 @@ circuit top {
 ```
 
 ### Required Parameters (No Default)
+
+r[param.required]
 
 Module parameters without defaults must be provided at instantiation:
 
@@ -48,6 +54,8 @@ amp1: amplifier(in: sig, out: buf, vdd: vdd, vss: gnd, gain: 20)
 
 ### Parameter Expressions
 
+r[param.expr]
+
 Parameter values can reference other parameters:
 
 ```cirq
@@ -56,9 +64,13 @@ param r2 = r1 * 2             // 20k
 param r_parallel = (r1 * r2) / (r1 + r2)
 ```
 
+r[param.no-forward-ref]
+
 Forward references are not allowed — a parameter must be declared before it is used. This keeps evaluation order simple and predictable.
 
 ## Let Bindings
+
+r[param.let]
 
 `let` introduces a local computed value. Unlike `param`, `let` bindings cannot be overridden at instantiation:
 
@@ -78,12 +90,16 @@ module divider {
 
 ## Built-in Constants
 
+r[param.constants]
+
 | Name | Value | Description | Status |
 |------|-------|-------------|--------|
 | `pi` | 3.14159... | Pi | ✓ implemented |
 | `e` | 2.71828... | Euler's number | ✓ implemented |
 
 ## Parameter Validation
+
+r[param.validation]
 
 Parameters can carry validation constraints via attributes:
 
@@ -101,6 +117,8 @@ param device_type = "nmos"
 See `09-attributes.md` for attribute syntax. Validation is checked at IR lowering time.
 
 ## Compile-Time Conditionals
+
+r[param.conditional]
 
 `if / elseif / else` blocks select which declarations exist, resolved at
 lowering time — not during simulation. Each condition is a constant expression

@@ -2,6 +2,8 @@
 
 ## Circuit Declaration
 
+r[circuit.decl]
+
 A Cirq file contains one or more `circuit` declarations. A circuit is the top-level unit — it defines a complete netlist with elements, parameters, and analysis commands.
 
 ```cirq
@@ -22,6 +24,8 @@ The circuit name is an identifier. It serves as the title (equivalent to SPICE's
 
 ### Circuit Body
 
+r[circuit.body]
+
 The circuit body is a block `{ ... }` containing:
 - parameter declarations (`param`, `let`)
 - element instantiations
@@ -38,6 +42,8 @@ The circuit body is a block `{ ... }` containing:
 - `measure { ... }` blocks (see `07-analysis.md`)
 
 ## Module Declaration
+
+r[module.decl]
 
 Modules are reusable subcircuit definitions. They are the Cirq equivalent of SPICE `.subckt`.
 
@@ -59,6 +65,8 @@ module inverter {
 
 ### Ports
 
+r[module.port]
+
 Ports define the external interface of a module. Every port has:
 - a name
 - a direction: `in`, `out`, or `inout`
@@ -73,9 +81,13 @@ Port direction is metadata for tooling and validation. Electrically, all ports a
 
 ### Port Ordering
 
+r[module.port.order]
+
 Ports are ordered by declaration order. This matters for positional instantiation (see below).
 
 ### Bus ports
+
+r[module.port.bus]
 
 A port may declare a **width** to become a bus — a group of N nets:
 
@@ -109,6 +121,8 @@ bus to a scalar (or mismatched width) is an error.
 
 ## Module Instantiation
 
+r[module.instantiate]
+
 Modules are instantiated like elements, with explicit port connections:
 
 ```cirq
@@ -124,6 +138,8 @@ inv3: inverter(signal_a, signal_b, vdd: vdd, vss: gnd)
 
 ### Parameter Override
 
+r[module.param-override]
+
 Module parameters can be overridden at instantiation:
 
 ```cirq
@@ -136,6 +152,8 @@ inv_fast: inverter(
 Only parameters with defaults can be overridden. Parameters without defaults are required.
 
 ## Nesting
+
+r[module.nesting]
 
 Modules can be defined inline within circuits or other modules:
 
@@ -157,6 +175,8 @@ circuit top {
 
 ## Net Declaration
 
+r[net.implicit]
+
 Nets are created implicitly by use — if a name appears in a connection position that isn't a port or `gnd`, it creates a local net.
 
 Explicit net declaration is optional but useful for documentation:
@@ -168,6 +188,8 @@ R2: resistor(mid -> gnd, 2k)
 ```
 
 ## Global Nets
+
+r[net.global]
 
 `gnd` is the only built-in global net. Other global nets can be declared:
 
@@ -181,6 +203,8 @@ circuit top {
 ```
 
 ## Options
+
+r[circuit.options]
 
 Simulation options are set using an `options` block:
 
@@ -198,6 +222,8 @@ Each setting is a key-value pair. Options correspond to SPICE `.options` setting
 
 ## Temperature
 
+r[circuit.temp]
+
 The simulation temperature (in °C) is set with `temp`:
 
 ```cirq
@@ -209,6 +235,8 @@ circuit top {
 If omitted, the default temperature is 27°C.
 
 ## Save Targets
+
+r[circuit.save]
 
 The `save` block specifies which signals to record during simulation:
 
@@ -230,6 +258,8 @@ Save targets can be:
 
 ## Initial Conditions
 
+r[circuit.ic]
+
 The `ic` block sets initial node voltages for transient analysis:
 
 ```cirq
@@ -244,6 +274,8 @@ circuit top {
 Initial conditions are used with `uic: true` in transient analysis, or as hints for the DC operating point solver.
 
 ## Embedded Code Blocks
+
+r[circuit.code-block]
 
 A `code` block embeds a verbatim block of source text from another
 language. The simulator currently recognises `"control"`, which routes
@@ -270,6 +302,8 @@ Contents of the block are preserved as raw text and dispatched at
 simulate time.
 
 ### Language registry
+
+r[circuit.language-registry]
 
 The set of accepted language tags is governed by a **language registry**, in
 two halves:
@@ -303,6 +337,8 @@ syntax for each.
 
 ## Import
 
+r[import.decl]
+
 Modules can be imported from other files:
 
 ```cirq
@@ -315,6 +351,8 @@ circuit top {
 ```
 
 Import resolves at the file level. The imported file is parsed and its top-level declarations (modules, models, functions) are merged into the importing file's AST.
+
+r[import.resolution]
 
 Import resolution:
 - Paths are resolved relative to the importing file's directory

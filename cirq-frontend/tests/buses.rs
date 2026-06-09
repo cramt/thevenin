@@ -15,6 +15,8 @@ fn has_net(ir: &Circuit, name: &str) -> bool {
 }
 
 /// A bus-line reference `d[i]` in a connection resolves to net `d.i`.
+// r[verify module.port.bus]
+// r[verify net.implicit]
 #[test]
 fn bus_line_reference_creates_dotted_net() {
     let src = r#"
@@ -38,6 +40,9 @@ fn bus_line_reference_creates_dotted_net() {
 
 /// A fixed-width bus port carries each line through a whole-bus binding: the
 /// module's internal `d[i]` references map onto the caller's `bus.i` nets.
+// r[verify module.port.bus]
+// r[verify module.port]
+// r[verify module.instantiate]
 #[test]
 fn fixed_width_bus_port_passes_through() {
     let src = r#"
@@ -78,6 +83,9 @@ fn fixed_width_bus_port_passes_through() {
 /// module elaborates at the width passed at the call site. The body references
 /// explicit lines, but the width override is accepted and the bus binding
 /// carries the referenced lines through.
+// r[verify module.port.bus]
+// r[verify module.param-override]
+// r[verify param.decl]
 #[test]
 fn param_width_bus_accepts_override() {
     let src = r#"
@@ -100,6 +108,9 @@ fn param_width_bus_accepts_override() {
 
 /// End-to-end: two independent RC channels expressed as buses simulate to the
 /// expected per-channel DC operating point (a resistive divider per line).
+// r[verify module.port.bus]
+// r[verify analysis.op]
+// r[verify elem.resistor]
 #[test]
 fn bus_channels_simulate_independently() {
     let src = r#"
@@ -133,6 +144,7 @@ fn bus_channels_simulate_independently() {
 }
 
 /// A non-integer bus index is a hard error.
+// r[verify module.port.bus]
 #[test]
 fn fractional_bus_index_errors() {
     let src = r#"
@@ -153,6 +165,9 @@ fn fractional_bus_index_errors() {
 
 /// Scalar (non-bus) ports and connections still behave exactly as before —
 /// regression guard for the NetRef change.
+// r[verify module.port]
+// r[verify module.instantiate]
+// r[verify net.implicit]
 #[test]
 fn scalar_ports_unaffected() {
     let src = r#"

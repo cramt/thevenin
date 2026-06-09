@@ -2,6 +2,8 @@
 
 ## Attribute Syntax
 
+r[attr.syntax]
+
 Attributes are metadata annotations that do not affect simulation semantics. They provide information for tooling, documentation, and validation.
 
 ```cirq
@@ -16,6 +18,8 @@ Attributes attach to the next declaration.
 
 ### @range
 
+r[attr.range]
+
 Constrains a parameter to a numeric range. Checked at IR validation.
 
 ```cirq
@@ -28,6 +32,8 @@ param width = 1u
 
 ### @positive
 
+r[attr.positive]
+
 Shorthand for `@range(min: 0, exclusive: true)`.
 
 ```cirq
@@ -37,6 +43,8 @@ param resistance = 10k
 
 ### @choices
 
+r[attr.choices]
+
 Restricts a string parameter to a set of allowed values.
 
 ```cirq
@@ -45,6 +53,8 @@ param scale = "decade"
 ```
 
 ### @deprecated
+
+r[attr.deprecated]
 
 Marks a parameter or module as deprecated. Tooling should warn on use.
 
@@ -57,6 +67,8 @@ module inverter_v1 {
 
 ### @description
 
+r[attr.description]
+
 Attaches a documentation string to a declaration.
 
 ```cirq
@@ -65,6 +77,8 @@ param vdd = 1.8
 ```
 
 ### @unit
+
+r[attr.unit]
 
 Declares the physical unit of a parameter (informational).
 
@@ -78,6 +92,8 @@ param f_clk = 100M
 
 ## Custom Attributes
 
+r[attr.custom]
+
 Users may define arbitrary attributes. Unrecognized attributes are preserved in the AST/IR for external tooling but ignored by the simulator.
 
 ```cirq
@@ -86,6 +102,8 @@ M1: nmos(drain -> source, gate: g, bulk: gnd, model: nch, w: 1u, l: 180n)
 ```
 
 ## Attribute Targets
+
+r[attr.targets]
 
 Attributes can be applied to:
 - `param` declarations

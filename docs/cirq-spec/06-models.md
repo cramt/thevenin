@@ -2,6 +2,8 @@
 
 ## Model Declaration
 
+r[model.decl]
+
 A `model` block defines device model parameters. This is the Cirq equivalent of SPICE's `.model` card.
 
 ```cirq
@@ -35,6 +37,8 @@ model <name>: <base_model> {
 }
 ```
 
+r[model.device-kinds]
+
 The device type must be one of the built-in device kinds:
 - `diode`
 - `npn`, `pnp` (BJT)
@@ -43,6 +47,8 @@ The device type must be one of the built-in device kinds:
 - `nmesfet`, `pmesfet` (MESFET)
 
 ### Model Levels
+
+r[model.level]
 
 For MOSFETs, the `level` parameter selects the model equations:
 
@@ -71,6 +77,8 @@ model nch_bsim4: nmos {
 
 ## Model Inheritance
 
+r[model.inheritance]
+
 A model can extend another model, overriding specific parameters:
 
 ```cirq
@@ -90,6 +98,8 @@ model nch_fast: nch_base {
 The derived model inherits all parameters from the base and overrides only what is specified.
 
 ## Model Libraries
+
+r[model.library]
 
 Models can be organized in separate files and imported:
 
@@ -116,6 +126,8 @@ circuit inverter_test {
 
 ## Using Models
 
+r[model.reference]
+
 Models are referenced by name in element instantiations:
 
 ```cirq
@@ -130,6 +142,8 @@ D1: diode(a -> b, model: my_diode)
 The `model` parameter is always named (never positional) to avoid ambiguity.
 
 ## SPICE Model Level Mapping
+
+r[model.spice-levels]
 
 | Cirq Device | SPICE Element | Supported Levels |
 |-------------|--------------|-----------------|
