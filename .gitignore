@@ -6,5 +6,3 @@
 .DS_Store
 node_modules
 triage-report.json
-scripts/fix-tests.log
-scripts/attempted-tests.log

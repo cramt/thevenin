@@ -1,19 +1,14 @@
 {
   "name": "thevenin",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Tooling for the thevenin test harness",
+  "private": true,
   "scripts": {
-    "fix-tests": "tsx scripts/fix-tests-overnight.ts",
-    "fix-tests:stop": "touch scripts/.stop-fix-tests && echo 'Stop requested — will finish current iteration then exit.'",
     "triage": "tsx scripts/triage-ignored-tests.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "license": "BSD-3-Clause",
   "packageManager": "pnpm@10.29.2",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.104",
     "tsx": "^4.21.0",
     "zod": "^4.3.6"
   }
