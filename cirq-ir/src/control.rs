@@ -94,6 +94,11 @@ pub enum Statement {
         file: Option<String>,
         vectors: Vec<String>,
     },
+    /// `wrdata <filename> <vector_list>` — write simulation results as plain
+    /// whitespace-separated columns (ngspice's gnuplot-friendly format). The
+    /// filename is required and comes first; each vector is emitted as a
+    /// `scale value` column pair. Distinct from `write`, which emits raw/CSV.
+    Wrdata { file: String, vectors: Vec<String> },
     /// Simulation commands: op, dc, ac, tran, sens, noise, pz, tf
     RunAnalysis(String),
     /// `eprint ...` — print element info (treated as echo for now)
@@ -303,6 +308,7 @@ fn parse_statement(
         "strcmp" => parse_strcmp(rest),
         "print" => parse_print(rest),
         "write" => Ok(parse_write(rest)),
+        "wrdata" => parse_wrdata(rest),
         "eprint" | "eprvcd" => Ok(Statement::Eprint(
             rest.split_whitespace().map(|s| s.to_string()).collect(),
         )),
@@ -661,6 +667,21 @@ pub(crate) fn parse_write(rest: &str) -> Statement {
         (None, parts.iter().map(|s| s.to_string()).collect())
     };
     Statement::Write { file, vectors }
+}
+
+/// Parse `wrdata <filename> <vector_list>`. Unlike `write`, the filename is
+/// mandatory and always the first token (matching ngspice's `com_write_simple`).
+pub(crate) fn parse_wrdata(rest: &str) -> Result<Statement, String> {
+    let mut parts = rest.split_whitespace();
+    let file = parts
+        .next()
+        .ok_or_else(|| "wrdata: missing filename".to_string())?
+        .to_string();
+    let vectors: Vec<String> = parts.map(|s| s.to_string()).collect();
+    if vectors.is_empty() {
+        return Err("wrdata: at least one vector is required".to_string());
+    }
+    Ok(Statement::Wrdata { file, vectors })
 }
 
 /// Parse `stop when <condition>`. Only `stop when time = <value>` is supported
@@ -1468,5 +1489,34 @@ mod tests {
             Statement::Save { specs } => assert!(specs.is_empty()),
             other => panic!("expected Save, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_wrdata_basic() {
+        let lines = vec!["wrdata out.data v(1) v(2,3) i(vs)".to_string()];
+        let stmts = parse_control_block(&lines).unwrap();
+        match &stmts[0] {
+            Statement::Wrdata { file, vectors } => {
+                assert_eq!(file, "out.data");
+                assert_eq!(vectors, &["v(1)", "v(2,3)", "i(vs)"]);
+            }
+            other => panic!("expected Wrdata, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_wrdata_missing_filename_errors() {
+        let result = parse_wrdata("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing filename"));
+    }
+
+    #[test]
+    fn parse_wrdata_missing_vectors_errors() {
+        // Filename only, no vectors — invalid (unlike `write`, which can dump
+        // the whole plot).
+        let result = parse_wrdata("out.data");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("vector"));
     }
 }

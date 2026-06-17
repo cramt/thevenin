@@ -219,7 +219,50 @@ pub fn assemble_mna_from_circuit(
     if !circuit_is_supported_subset(circuit) {
         return Ok(None);
     }
-    Ok(Some(stamp_circuit(circuit, modedc, xspice_registry)?))
+    let resolved = resolve_model_param_exprs(circuit);
+    Ok(Some(stamp_circuit(&resolved, modedc, xspice_registry)?))
+}
+
+/// Fold `.model` brace-expression params (e.g. `vto={vt0+dvt}`) against the
+/// circuit's top-level params so the IR-native stamping path sees numeric
+/// values rather than the literal `{…}` string (device models read only
+/// numeric params, so an unresolved brace would silently fall back to the
+/// model default). Returns the circuit untouched when no model carries a
+/// brace param — the common case — to avoid a needless clone.
+fn resolve_model_param_exprs(circuit: &Circuit) -> std::borrow::Cow<'_, Circuit> {
+    let is_brace = |v: &cirq_ir::Value| matches!(v, cirq_ir::Value::String(s) if s.trim_start().starts_with('{'));
+    let has_brace = circuit
+        .models
+        .iter()
+        .any(|m| m.params.iter().any(|(_, v)| is_brace(v)));
+    if !has_brace {
+        return std::borrow::Cow::Borrowed(circuit);
+    }
+
+    let mut ctx = crate::expr::EvalContext::default();
+    for p in &circuit.params {
+        let f = match &p.value {
+            cirq_ir::Value::Real(v) => Some(*v),
+            cirq_ir::Value::Integer(v) => Some(*v as f64),
+            _ => None,
+        };
+        if let Some(f) = f {
+            ctx.params.insert(p.name.to_uppercase(), f);
+        }
+    }
+
+    let mut owned = circuit.clone();
+    for model in &mut owned.models {
+        for (_, value) in model.params.iter_mut() {
+            if let cirq_ir::Value::String(s) = value
+                && let Some(inner) = s.trim().strip_prefix('{').and_then(|x| x.strip_suffix('}'))
+                && let Ok(folded) = ctx.eval_str(inner)
+            {
+                *value = cirq_ir::Value::Real(folded);
+            }
+        }
+    }
+    std::borrow::Cow::Owned(owned)
 }
 
 /// Whether every element in `circuit` is in the device subset this module

@@ -243,6 +243,54 @@ fn eval_error(
 // Aggregates and INTEG
 // ---------------------------------------------------------------------------
 
+/// Whether a node name refers to circuit ground (the 0 V reference rail).
+fn is_ground_node(name: &str) -> bool {
+    matches!(name.trim(), "0" | "gnd" | "gnd!" | "ground")
+}
+
+/// Parse a two-node voltage probe `v(a, b)` into its `(a, b)` node names
+/// (case-folded). Returns `None` for any other probe form.
+fn two_node_voltage_legs(name: &str) -> Option<(String, String)> {
+    let lower = name.trim().to_ascii_lowercase();
+    let inner = lower.strip_prefix("v(")?.strip_suffix(')')?;
+    let (a, b) = inner.split_once(',')?;
+    Some((a.trim().to_string(), b.trim().to_string()))
+}
+
+/// Resolve a single node's voltage column from the plot, where node voltages
+/// are stored under their `v(node)` name. Ground has no column.
+fn node_voltage(plot: &SimPlot, node: &str) -> Option<Vec<f64>> {
+    if is_ground_node(node) {
+        return None;
+    }
+    plot.vector(&format!("v({node})"))
+        .map(|v| v.data.as_real().to_vec())
+}
+
+/// Resolve a measurement probe name to its data column.
+///
+/// Handles the two-node differential form `v(a, b) = v(a) - v(b)` (a ground
+/// leg `0`/`gnd` contributes a zero rail); every other name is a direct
+/// case-insensitive vector lookup (e.g. `v(out)`, `i(r1)`).
+fn probe_data(plot: &SimPlot, name: &str) -> Option<Vec<f64>> {
+    if let Some((a, b)) = two_node_voltage_legs(name) {
+        let (va, vb) = match (node_voltage(plot, &a), node_voltage(plot, &b)) {
+            (Some(va), Some(vb)) if va.len() == vb.len() => (va, vb),
+            (Some(va), None) if is_ground_node(&b) => {
+                let z = vec![0.0; va.len()];
+                (va, z)
+            }
+            (None, Some(vb)) if is_ground_node(&a) => {
+                let z = vec![0.0; vb.len()];
+                (z, vb)
+            }
+            _ => return None,
+        };
+        return Some(va.iter().zip(vb.iter()).map(|(x, y)| x - y).collect());
+    }
+    plot.vector(name).map(|v| v.data.as_real().to_vec())
+}
+
 fn eval_aggregate(
     kind: AggregateKind,
     vec_name: &str,
@@ -250,9 +298,8 @@ fn eval_aggregate(
     to: Option<f64>,
     plot: &SimPlot,
 ) -> Option<f64> {
-    let vec = plot.vector(vec_name)?;
-    let data = vec.data.as_real();
-    let filtered = filter_by_range(plot, data, from, to);
+    let data = probe_data(plot, vec_name)?;
+    let filtered = filter_by_range(plot, &data, from, to);
     if filtered.is_empty() {
         return None;
     }
@@ -303,8 +350,7 @@ fn filter_by_range(plot: &SimPlot, data: &[f64], from: Option<f64>, to: Option<f
 }
 
 fn eval_integ(vec_name: &str, from: Option<f64>, to: Option<f64>, plot: &SimPlot) -> Option<f64> {
-    let vec = plot.vector(vec_name)?;
-    let data = vec.data.as_real();
+    let data = probe_data(plot, vec_name)?;
     let sweep = plot.vecs.first()?;
     let sweep_data = sweep.data.as_real();
     if data.len() != sweep_data.len() || data.len() < 2 {
@@ -341,8 +387,7 @@ fn eval_find(vec_name: &str, at: &FindAt, plot: &SimPlot) -> Option<f64> {
 
 fn eval_deriv(vec_name: &str, at: &FindAt, plot: &SimPlot) -> Option<f64> {
     let at_val = resolve_find_at(at, plot)?;
-    let vec = plot.vector(vec_name)?;
-    let data = vec.data.as_real();
+    let data = probe_data(plot, vec_name)?;
     let sweep = plot.vecs.first()?;
     let sweep_data = sweep.data.as_real();
     if data.len() != sweep_data.len() || data.len() < 2 {
@@ -371,14 +416,13 @@ fn resolve_find_at(at: &FindAt, plot: &SimPlot) -> Option<f64> {
 }
 
 fn find_value_at_sweep(plot: &SimPlot, vec_name: &str, at_val: f64) -> Option<f64> {
-    let vec = plot.vector(vec_name)?;
-    let data = vec.data.as_real();
+    let data = probe_data(plot, vec_name)?;
     let sweep = plot.vecs.first()?;
     let sweep_data = sweep.data.as_real();
     if data.len() != sweep_data.len() || data.is_empty() {
         return None;
     }
-    interpolate_at(sweep_data, data, at_val)
+    interpolate_at(sweep_data, &data, at_val)
 }
 
 fn interpolate_at(x: &[f64], y: &[f64], target: f64) -> Option<f64> {
@@ -411,16 +455,14 @@ fn eval_when(spec: &CrossingSpec, plot: &SimPlot) -> Option<f64> {
 fn find_crossing_spec(spec: &CrossingSpec, plot: &SimPlot) -> Option<f64> {
     let sweep = plot.vecs.first()?;
     let sweep_data = sweep.data.as_real();
-    let signal_vec = plot.vector(&spec.signal)?;
-    let signal_data = signal_vec.data.as_real();
+    let signal_data = probe_data(plot, &spec.signal)?;
     if signal_data.len() != sweep_data.len() || signal_data.len() < 2 {
         return None;
     }
     let diff: Vec<f64> = match &spec.threshold {
         Threshold::Constant(val) => signal_data.iter().map(|&s| s - *val).collect(),
         Threshold::Vector(name) => {
-            let r = plot.vector(name)?;
-            let rd = r.data.as_real();
+            let rd = probe_data(plot, name)?;
             if rd.len() != signal_data.len() {
                 return None;
             }
@@ -538,8 +580,7 @@ fn resolve_trig_targ(clause: &TrigTargClause, plot: &SimPlot, is_trig: bool) -> 
         } => {
             let sweep = plot.vecs.first()?;
             let sweep_data = sweep.data.as_real();
-            let sig = plot.vector(signal)?;
-            let sig_data = sig.data.as_real();
+            let sig_data = probe_data(plot, signal)?;
             if sig_data.len() != sweep_data.len() || sig_data.len() < 2 {
                 return None;
             }
@@ -745,6 +786,23 @@ mod tests {
         );
         let val = eval("MAX v(out) FROM=1.0 TO=3.0", &plot).unwrap();
         assert!((val - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn two_node_voltage_probe() {
+        // Node voltages are stored under their v(node) names; a differential
+        // probe v(p, n) resolves to v(p) - v(n).
+        let plot = tran_plot(
+            vec![0.0, 1.0, 2.0],
+            vec![("v(p)", vec![3.0, 4.0, 5.0]), ("v(n)", vec![1.0, 1.0, 1.0])],
+        );
+        // v(p,n) = [2, 3, 4].
+        assert!((eval("MAX v(p,n)", &plot).unwrap() - 4.0).abs() < 1e-12);
+        assert!((eval("FIND v(p,n) AT=1.0", &plot).unwrap() - 3.0).abs() < 1e-12);
+        // A ground leg is a zero rail: v(p,0) = v(p).
+        assert!((eval("MAX v(p,0)", &plot).unwrap() - 5.0).abs() < 1e-12);
+        // Whitespace in the probe is tolerated.
+        assert!((eval("MAX v(p, n)", &plot).unwrap() - 4.0).abs() < 1e-12);
     }
 
     // -- FIND AT -------------------------------------------------------------

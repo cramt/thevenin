@@ -1071,9 +1071,23 @@ fn missing_resistor_value_is_error() {
 }
 
 #[test]
-fn missing_mosfet_bulk_is_error() {
-    // M needs d g s bulk model — only 3 nodes provided
-    assert!(Netlist::parse("T\nM1 d g s NMOD\n.end").is_err());
+fn three_terminal_mosfet_parses_as_vdmos_form() {
+    // `M d g s model` (3 nodes, no bulk) is the ngspice VDMOS power-MOSFET
+    // form. It parses, with the body defaulting to the source node — matching
+    // ngspice, which accepts the bulk-less M-line and ties the body to source.
+    // (Previously this was rejected as "missing bulk"; the VDMOS corpus decks
+    // in cirq-spice-import require it.)
+    let nls = Netlist::parse("T\nM1 d g s NMOD\n.end").expect("3-terminal M must parse");
+    let n = &nls[0];
+    match &n.elements().next().unwrap().kind {
+        thevenin_types::ElementKind::Mosfet {
+            s, bulk, model, ..
+        } => {
+            assert_eq!(bulk, s, "bulk defaults to the source node");
+            assert_eq!(model, "NMOD");
+        }
+        other => panic!("expected a Mosfet element, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

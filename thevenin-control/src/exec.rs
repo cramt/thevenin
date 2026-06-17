@@ -228,6 +228,8 @@ fn execute_one(stmt: &Statement, ctx: &mut SimContext) -> Result<(), String> {
 
         Statement::Write { file, vectors } => execute_write(file.as_deref(), vectors, ctx),
 
+        Statement::Wrdata { file, vectors } => execute_wrdata(file, vectors, ctx),
+
         Statement::Alter { spec, value } => execute_alter(spec, value, ctx),
 
         Statement::Eprint(_) => {
@@ -644,6 +646,57 @@ fn execute_write(
         thevenin::raw_output::write_binary_raw(&mut file, &result, &title)
     };
     write_result.map_err(|e| format!("write: I/O error on '{filename}': {e}"))?;
+    Ok(())
+}
+
+/// Execute the `wrdata` control command — write selected vectors as plain
+/// whitespace-separated columns (ngspice's gnuplot-friendly format). Unlike
+/// `write`, the filename is mandatory and at least one vector must be named;
+/// the columns come from the current plot, with the plot's first vector used
+/// as the shared scale.
+fn execute_wrdata(file: &str, vectors: &[String], ctx: &mut SimContext) -> Result<(), String> {
+    let filename = interpolate_vars(file, ctx);
+
+    let idx = ctx
+        .current_plot
+        .ok_or_else(|| "wrdata: no current plot to write".to_string())?;
+    let plot = ctx
+        .plots
+        .get(idx)
+        .ok_or_else(|| "wrdata: current plot is missing".to_string())?;
+    let scale = plot
+        .vecs
+        .first()
+        .ok_or_else(|| "wrdata: plot has no scale vector".to_string())?;
+
+    // Resolve each requested vector against the current plot, matching either
+    // the literal name or an `i(<x>)` query against `<x>#branch`.
+    let columns: Vec<&thevenin_types::SimVector> = vectors
+        .iter()
+        .filter_map(|want| {
+            let w = want.to_lowercase();
+            plot.vecs.iter().find(|v| {
+                let lower = v.name.to_lowercase();
+                if lower == w {
+                    return true;
+                }
+                w.strip_prefix("i(")
+                    .and_then(|s| s.strip_suffix(')'))
+                    .is_some_and(|x| lower == format!("{x}#branch"))
+            })
+        })
+        .collect();
+
+    if columns.is_empty() {
+        return Err(format!(
+            "wrdata: none of the requested vectors {vectors:?} were found in the current plot"
+        ));
+    }
+
+    let mut out = std::fs::File::create(&filename)
+        .map_err(|e| format!("wrdata: cannot create '{filename}': {e}"))?;
+    thevenin::raw_output::write_wrdata(&mut out, scale, &columns)
+        .map_err(|e| format!("wrdata: I/O error on '{filename}': {e}"))?;
     Ok(())
 }
 

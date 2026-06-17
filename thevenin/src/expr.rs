@@ -401,6 +401,49 @@ fn skip_ternary(tokens: &[Token], pos: &mut usize) {
     }
 }
 
+/// Parse an `if(cond, then, else)` call (the function spelling of the
+/// ternary). `pos` points at the opening `(`. Short-circuits like
+/// [`parse_ternary`]: the condition is evaluated, then exactly the taken
+/// branch is evaluated while the other is token-skipped.
+fn parse_if_function(
+    tokens: &[Token],
+    pos: &mut usize,
+    ctx: &EvalContext,
+) -> Result<f64, ExprError> {
+    let arity_err = || ExprError::ParseError("if: expected if(cond, then, else)".into());
+    // Consume '('.
+    *pos += 1;
+    let cond = parse_ternary(tokens, pos, ctx)?;
+    expect_arg_comma(tokens, pos).ok_or_else(arity_err)?;
+    let value = if cond != 0.0 {
+        let then_val = parse_ternary(tokens, pos, ctx)?;
+        expect_arg_comma(tokens, pos).ok_or_else(arity_err)?;
+        skip_ternary(tokens, pos); // skip the else branch
+        then_val
+    } else {
+        skip_ternary(tokens, pos); // skip the then branch
+        expect_arg_comma(tokens, pos).ok_or_else(arity_err)?;
+        parse_ternary(tokens, pos, ctx)?
+    };
+    if matches!(peek(tokens, *pos), Some(Token::Rparen)) {
+        *pos += 1;
+        Ok(value)
+    } else {
+        Err(arity_err())
+    }
+}
+
+/// Consume a single top-level `,` separating function arguments, returning
+/// `Some(())` on success and `None` if the current token is not a comma.
+fn expect_arg_comma(tokens: &[Token], pos: &mut usize) -> Option<()> {
+    if matches!(peek(tokens, *pos), Some(Token::Comma)) {
+        *pos += 1;
+        Some(())
+    } else {
+        None
+    }
+}
+
 // Precedence 2: ||
 fn parse_or(tokens: &[Token], pos: &mut usize, ctx: &EvalContext) -> Result<f64, ExprError> {
     let mut left = parse_and(tokens, pos, ctx)?;
@@ -601,6 +644,12 @@ fn parse_primary(tokens: &[Token], pos: &mut usize, ctx: &EvalContext) -> Result
             *pos += 1;
             // Function call?
             if matches!(peek(tokens, *pos), Some(Token::Lparen)) {
+                // `if(c, t, e)` is the function spelling of the ternary and
+                // short-circuits the same way: only the selected branch is
+                // evaluated, so a guard branch never trips on the dead side.
+                if name.eq_ignore_ascii_case("if") {
+                    return parse_if_function(tokens, pos, ctx);
+                }
                 *pos += 1;
                 let mut args = Vec::new();
                 if !matches!(peek(tokens, *pos), Some(Token::Rparen)) {
@@ -844,6 +893,15 @@ fn resolve_items(items: &mut [thevenin_types::Item], ctx: &EvalContext) -> Resul
     for item in items.iter_mut() {
         match item {
             thevenin_types::Item::Element(el) => resolve_element(&mut el.kind, ctx)?,
+            thevenin_types::Item::Model(model) => {
+                // `.model` cards may carry brace expressions referencing
+                // top-level params, e.g. `.model nch nmos (vto={vt0+dvt})`.
+                // Fold each to a number so device models (which read only
+                // `Expr::Num`) see the intended value rather than a default.
+                for p in model.params.iter_mut() {
+                    try_resolve_expr(&mut p.value, ctx);
+                }
+            }
             thevenin_types::Item::Subckt(_) => {
                 // Don't resolve inside subcircuit definitions — the subcircuit
                 // expander handles parameter substitution with instance params.
@@ -1428,6 +1486,45 @@ mod tests {
     fn ternary() {
         assert_eq!(eval("1 ? 10 : 20"), 10.0);
         assert_eq!(eval("0 ? 10 : 20"), 20.0);
+    }
+
+    #[test]
+    fn if_function_form() {
+        // `if(c, t, e)` is the function spelling of the ternary.
+        assert_eq!(eval("if(1, 10, 20)"), 10.0);
+        assert_eq!(eval("if(0, 10, 20)"), 20.0);
+        assert_eq!(eval("if(1 > 0, 5, 7)"), 5.0);
+        assert_eq!(eval("IF(0, 5, 7)"), 7.0); // case-insensitive
+        // Nests and composes with arithmetic and the operator form.
+        assert_eq!(eval("1 + if(1, 10, 20)"), 11.0);
+        assert_eq!(eval("if(1, if(0, 1, 2), 3)"), 2.0);
+        assert_eq!(eval("if(1, 1 ? 8 : 9, 0)"), 8.0);
+    }
+
+    #[test]
+    fn if_function_short_circuits_dead_branch() {
+        // Dead branch may reference unresolved names / unknown functions.
+        let v = try_eval_ctx(
+            "if(use, hit, nonexistent_func(1))",
+            &[("use", 1.0), ("hit", 42.0)],
+        )
+        .expect("dead else-branch must not be evaluated");
+        assert_eq!(v, 42.0);
+        let v = try_eval_ctx(
+            "if(use, unresolved_then, hit)",
+            &[("use", 0.0), ("hit", 7.0)],
+        )
+        .expect("dead then-branch must not be evaluated");
+        assert_eq!(v, 7.0);
+        // Selected-branch errors still propagate.
+        let err = try_eval_ctx("if(1, unresolved, 0)", &[]).unwrap_err();
+        assert!(matches!(err, ExprError::UnknownVariable(ref n) if n == "unresolved"));
+    }
+
+    #[test]
+    fn if_function_wrong_arity_is_an_error() {
+        let err = try_eval_ctx("if(1, 10)", &[]).unwrap_err();
+        assert!(matches!(err, ExprError::ParseError(ref m) if m.to_lowercase().contains("if")));
     }
 
     // ----- ternary short-circuit + grammar tests -------------------------

@@ -461,6 +461,50 @@ fn skip_ternary_expr(tokens: &[ExprToken], pos: &mut usize) {
     }
 }
 
+/// Parse an `if(cond, then, else)` call (the function spelling of the
+/// ternary). `pos` points at the opening `(`. Short-circuits like
+/// [`parse_ternary`]: the condition is evaluated, then exactly the taken
+/// branch is evaluated while the other is token-skipped.
+fn parse_if_function(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+    params: &HashMap<String, f64>,
+) -> Result<f64, ImportError> {
+    let arity_err =
+        || ImportError::UnevaluableExpr("function if: expected if(cond, then, else)".to_owned());
+    // Consume '('.
+    *pos += 1;
+    let cond = parse_ternary(tokens, pos, params)?;
+    expect_arg_comma(tokens, pos).ok_or_else(arity_err)?;
+    let value = if cond != 0.0 {
+        let then_branch = parse_ternary(tokens, pos, params)?;
+        expect_arg_comma(tokens, pos).ok_or_else(arity_err)?;
+        skip_ternary_expr(tokens, pos); // skip the else branch
+        then_branch
+    } else {
+        skip_ternary_expr(tokens, pos); // skip the then branch
+        expect_arg_comma(tokens, pos).ok_or_else(arity_err)?;
+        parse_ternary(tokens, pos, params)?
+    };
+    if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::RParen) {
+        *pos += 1;
+        Ok(value)
+    } else {
+        Err(arity_err())
+    }
+}
+
+/// Consume a single top-level `,` separating function arguments, returning
+/// `Some(())` on success and `None` if the current token is not a comma.
+fn expect_arg_comma(tokens: &[ExprToken], pos: &mut usize) -> Option<()> {
+    if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::Comma) {
+        *pos += 1;
+        Some(())
+    } else {
+        None
+    }
+}
+
 /// Parse comparison operators (`>`, `<`, `>=`, `<=`, `==`, `!=`).
 ///
 /// Result is 1.0 for true / 0.0 for false to feed the ternary. Comparisons
@@ -683,6 +727,13 @@ fn parse_primary(
             *pos += 1;
             // Check for function call: ident followed by '('
             if *pos < tokens.len() && matches!(&tokens[*pos], ExprToken::LParen) {
+                // `if(c, t, e)` is the function spelling of the ternary and
+                // short-circuits the same way: only the selected branch is
+                // evaluated, so a guard branch (e.g. `sqrt` of a value valid
+                // only when the condition holds) never trips on the dead side.
+                if name.eq_ignore_ascii_case("if") {
+                    return parse_if_function(tokens, pos, params);
+                }
                 *pos += 1; // consume '('
                 let mut args = Vec::new();
                 if *pos < tokens.len() && !matches!(&tokens[*pos], ExprToken::RParen) {
@@ -2923,6 +2974,48 @@ R1 in 0 1k
     }
 
     #[test]
+    fn model_level_preserved_for_sim_time_dispatch() {
+        // C1: MOSFET BSIM/BSIMSOI levels and VBIC's BJT LEVEL=4 are dispatched
+        // at simulation time from the model's preserved LEVEL param — the kind
+        // string alone (NMOS / NPN) doesn't encode the variant. Confirm the
+        // importer maps the kind to the family DeviceType *and* preserves LEVEL.
+        let spice = "\
+Level dispatch
+M1 d g s b msoi L=1u W=1u
+Q1 c b e qvbic
+.model msoi nmos (level=55 tox=2n)
+.model qvbic npn (level=4 rcx=10)
+.op
+.end
+";
+        let c = &import_spice(spice).unwrap()[0];
+        let model = |name: &str| {
+            c.models
+                .iter()
+                .find(|m| m.name.eq_ignore_ascii_case(name))
+                .unwrap_or_else(|| panic!("model {name} missing"))
+        };
+        let level = |name: &str| -> f64 {
+            match model(name)
+                .params
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("level"))
+                .map(|(_, v)| v)
+            {
+                Some(cirq_ir::Value::Real(v)) => *v,
+                Some(cirq_ir::Value::Integer(v)) => *v as f64,
+                other => panic!("model {name}: expected numeric LEVEL, got {other:?}"),
+            }
+        };
+        // BSIM3SOI-FD (level 55) on an NMOS kind.
+        assert_eq!(model("msoi").device_type, cirq_ir::DeviceType::Nmos);
+        assert!((level("msoi") - 55.0).abs() < 1e-9);
+        // VBIC (level 4) on an NPN kind.
+        assert_eq!(model("qvbic").device_type, cirq_ir::DeviceType::Npn);
+        assert!((level("qvbic") - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn global_nets_marked() {
         let spice = "\
 Global test
@@ -4121,6 +4214,88 @@ V1 a 0 DC 1
         assert!(
             matches!(err, ImportError::UnevaluableExpr(ref msg) if msg.contains(":")),
             "missing colon must surface a clear error, got: {err:?}"
+        );
+    }
+
+    // ----- C4: if(c, t, e) function form ---------------------------------
+    //
+    // `if(c, t, e)` is the function spelling of the ternary. It must share the
+    // ternary's short-circuit contract: only the selected branch evaluates.
+
+    #[test]
+    fn brace_if_function_picks_branch() {
+        let p = params(&[]);
+        assert_eq!(eval_brace_expr("if(1 > 0, 5, 10)", &p).unwrap(), 5.0);
+        assert_eq!(eval_brace_expr("if(1 < 0, 5, 10)", &p).unwrap(), 10.0);
+        // Bare numeric condition: any non-zero is truthy.
+        assert_eq!(eval_brace_expr("if(3, 5, 10)", &p).unwrap(), 5.0);
+        assert_eq!(eval_brace_expr("if(0, 5, 10)", &p).unwrap(), 10.0);
+    }
+
+    #[test]
+    fn brace_if_function_is_case_insensitive() {
+        let p = params(&[]);
+        assert_eq!(eval_brace_expr("IF(1, 2, 3)", &p).unwrap(), 2.0);
+        assert_eq!(eval_brace_expr("If(0, 2, 3)", &p).unwrap(), 3.0);
+    }
+
+    #[test]
+    fn brace_if_function_short_circuits_dead_branch() {
+        // Dead branch may reference unresolved params / unknown functions.
+        let p = params(&[("USE", 1.0), ("HIT", 42.0)]);
+        assert_eq!(
+            eval_brace_expr("if(use, hit, nonexistent_func(1))", &p)
+                .expect("dead else-branch must not be evaluated"),
+            42.0
+        );
+        let p = params(&[("USE", 0.0), ("HIT", 7.0)]);
+        assert_eq!(
+            eval_brace_expr("if(use, unresolved_then, hit)", &p)
+                .expect("dead then-branch must not be evaluated"),
+            7.0
+        );
+    }
+
+    #[test]
+    fn brace_if_function_safe_sqrt_guard() {
+        let p = params(&[("X", 9.0)]);
+        assert_eq!(eval_brace_expr("if(x > 0, sqrt(x), 0)", &p).unwrap(), 3.0);
+        let p = params(&[("X", -1.0)]);
+        assert_eq!(
+            eval_brace_expr("if(x > 0, sqrt(x), 0)", &p).unwrap(),
+            0.0,
+            "negative x → guard wins, sqrt never called"
+        );
+    }
+
+    #[test]
+    fn brace_if_function_propagates_error_in_selected_branch() {
+        let p = params(&[]);
+        let err = eval_brace_expr("if(1, unresolved_param, 0)", &p).unwrap_err();
+        assert!(
+            matches!(err, ImportError::UnevaluableExpr(ref msg) if msg.contains("unresolved_param")),
+            "selected-branch error must surface, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn brace_if_function_nests_and_composes() {
+        let p = params(&[]);
+        // Nested in then-branch and as an arg of another function.
+        assert_eq!(eval_brace_expr("if(1, if(0, 1, 2), 3)", &p).unwrap(), 2.0);
+        assert_eq!(eval_brace_expr("1 + if(1, 10, 20)", &p).unwrap(), 11.0);
+        assert_eq!(eval_brace_expr("min(if(0, 3, 7), 5)", &p).unwrap(), 5.0);
+        // Mixes with the operator form.
+        assert_eq!(eval_brace_expr("if(1 > 0, 1 ? 8 : 9, 0)", &p).unwrap(), 8.0);
+    }
+
+    #[test]
+    fn brace_if_function_wrong_arity_is_an_error() {
+        let p = params(&[]);
+        let err = eval_brace_expr("if(1, 10)", &p).unwrap_err();
+        assert!(
+            matches!(err, ImportError::UnevaluableExpr(ref msg) if msg.to_lowercase().contains("if")),
+            "missing else arg must surface a clear error, got: {err:?}"
         );
     }
 

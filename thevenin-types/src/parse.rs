@@ -1166,6 +1166,13 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             } else if positional.len() >= 2 {
                 // 4-terminal: bulk model
                 (positional[0].to_string(), None, positional[1].to_string())
+            } else if positional.len() == 1 {
+                // 3-terminal form: `M d g s model`. ngspice's VDMOS power
+                // MOSFETs omit the bulk node — the body is internally tied to
+                // the source — so default bulk to the source node. This yields
+                // the same element a 4-terminal `M d g s s model` would, which
+                // the VDMOS stamping path already handles.
+                (s.clone(), None, positional[0].to_string())
             } else {
                 return Err(syntax(lineno, "M: missing bulk/model"));
             };
@@ -2304,6 +2311,24 @@ mod tests {
     }
 
     #[test]
+    fn modeldir_directive_is_gracefully_skipped() {
+        // `.modeldir` is not a stock ngspice directive (ngspice uses the
+        // `sourcepath` variable, and the importer already resolves model/lib
+        // search paths via the input-file dir + `--lib-path`). An unknown
+        // directive must warn-and-skip, never break the parse.
+        let result = Netlist::parse("Title\n.modeldir /pdk/models\nR1 a 0 1k\n.end");
+        assert!(
+            result.is_ok(),
+            "expected .modeldir to parse, got {result:?}"
+        );
+        let netlists = result.unwrap();
+        assert!(
+            netlists[0].elements().count() == 1,
+            "the R1 element after .modeldir must still parse"
+        );
+    }
+
+    #[test]
     fn backslash_continuation_in_param_expression() {
         // `.param X={1+\` then `2}` should fold without injecting whitespace
         // so the brace expression stays a single contiguous token. The
@@ -2484,6 +2509,33 @@ mod tests {
             assert_eq!(params[1].name, "L");
         } else {
             panic!();
+        }
+    }
+
+    #[test]
+    fn mosfet_three_terminal_vdmos_form() {
+        // VDMOS power MOSFETs use the 3-terminal `M d g s model` form (no
+        // bulk node). The body is internally tied to the source, so bulk
+        // must default to the source node.
+        let n = parse_ok("T\nM1 out1 gate 0 IRF510\n.end");
+        if let ElementKind::Mosfet {
+            d,
+            g,
+            s,
+            bulk,
+            body,
+            model,
+            ..
+        } = &n.elements().next().unwrap().kind
+        {
+            assert_eq!(d, "out1");
+            assert_eq!(g, "gate");
+            assert_eq!(s, "0");
+            assert_eq!(bulk, "0", "bulk defaults to the source node");
+            assert!(body.is_none());
+            assert_eq!(model, "IRF510");
+        } else {
+            panic!("expected a Mosfet element");
         }
     }
 

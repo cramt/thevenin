@@ -67,6 +67,61 @@ pub fn write_csv<W: Write>(writer: &mut W, result: &SimResult) -> io::Result<()>
     write_plot_csv(writer, plot)
 }
 
+/// Write selected vectors as ngspice `wrdata` columns: each row holds, for
+/// every vector, its scale value followed by the vector's value
+/// (`scale v1 scale v2 …`). Complex vectors emit `re im` after the scale.
+/// Values use 8 significant digits, matching ngspice's `wrdata` default
+/// (`% .8e`). The `scale` is the plot's sweep vector (time / frequency / the
+/// DC swept variable).
+pub fn write_wrdata<W: Write>(
+    writer: &mut W,
+    scale: &SimVector,
+    columns: &[&SimVector],
+) -> io::Result<()> {
+    let maxlen = columns
+        .iter()
+        .map(|v| v.len())
+        .chain(std::iter::once(scale.len()))
+        .max()
+        .unwrap_or(0);
+    for i in 0..maxlen {
+        for vec in columns {
+            write_wrdata_scalar(writer, scale, i)?;
+            match &vec.data {
+                VectorData::Real(d) => {
+                    if let Some(v) = d.get(i) {
+                        write!(writer, "{v:.8e} ")?;
+                    }
+                }
+                VectorData::Complex(d) => {
+                    if let Some(c) = d.get(i) {
+                        write!(writer, "{:.8e} {:.8e} ", c.re, c.im)?;
+                    }
+                }
+            }
+        }
+        writeln!(writer)?;
+    }
+    Ok(())
+}
+
+/// Write a single scale value (real part for complex scales) for `wrdata`.
+fn write_wrdata_scalar<W: Write>(writer: &mut W, scale: &SimVector, i: usize) -> io::Result<()> {
+    match &scale.data {
+        VectorData::Real(d) => {
+            if let Some(x) = d.get(i) {
+                write!(writer, "{x:.8e} ")?;
+            }
+        }
+        VectorData::Complex(d) => {
+            if let Some(c) = d.get(i) {
+                write!(writer, "{:.8e} ", c.re)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Per-plot writers
 // ---------------------------------------------------------------------------
@@ -475,6 +530,56 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], "time,v(out)");
         assert!(lines[1].starts_with("0.000000000000000e0"));
+    }
+
+    #[test]
+    fn wrdata_columns_real() {
+        let plot = SimPlot {
+            name: "tran1".to_string(),
+            vecs: vec![
+                SimVector::real("time", vec![0.0, 1e-3]),
+                SimVector::real("v(out)", vec![1.0, 0.5]),
+                SimVector::real("v(in)", vec![2.0, 2.0]),
+            ],
+        };
+        let scale = &plot.vecs[0];
+        let columns = vec![&plot.vecs[1], &plot.vecs[2]];
+        let mut buf = Vec::new();
+        write_wrdata(&mut buf, scale, &columns).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        // Each vector is preceded by its scale: scale v(out) scale v(in).
+        let row0: Vec<f64> = lines[0]
+            .split_whitespace()
+            .map(|t| t.parse().unwrap())
+            .collect();
+        assert_eq!(row0, vec![0.0, 1.0, 0.0, 2.0]);
+        let row1: Vec<f64> = lines[1]
+            .split_whitespace()
+            .map(|t| t.parse().unwrap())
+            .collect();
+        assert_eq!(row1, vec![1e-3, 0.5, 1e-3, 2.0]);
+    }
+
+    #[test]
+    fn wrdata_complex_writes_re_im() {
+        let plot = SimPlot {
+            name: "ac1".to_string(),
+            vecs: vec![
+                SimVector::real("frequency", vec![1.0]),
+                SimVector::complex("v(out)", vec![Complex::new(3.0, -4.0)]),
+            ],
+        };
+        let mut buf = Vec::new();
+        write_wrdata(&mut buf, &plot.vecs[0], &[&plot.vecs[1]]).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let row: Vec<f64> = text
+            .split_whitespace()
+            .map(|t| t.parse().unwrap())
+            .collect();
+        // scale, re, im
+        assert_eq!(row, vec![1.0, 3.0, -4.0]);
     }
 
     #[test]

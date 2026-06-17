@@ -252,15 +252,51 @@ fn parse_single_print(line: &str) -> Option<PrintDirective> {
         });
     }
 
-    let vars: Vec<String> = parts[2..]
-        .iter()
-        .flat_map(|s| s.split(','))
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_lowercase())
-        .collect();
+    // Split on whitespace and top-level commas, but keep commas inside
+    // parentheses intact so two-node voltages like `v(n1,n2)` survive as a
+    // single probe.
+    let vars = split_output_vars(&parts[2..].join(" "));
 
     Some(PrintDirective { analysis, vars })
+}
+
+/// Split a `.print` variable list into individual probes. Separators are
+/// whitespace and top-level commas; commas inside parentheses (e.g. the
+/// two-node voltage `v(n1,n2)`) are preserved. Probes are lowercased.
+fn split_output_vars(s: &str) -> Vec<String> {
+    let mut vars = Vec::new();
+    let mut cur = String::new();
+    let mut depth: i32 = 0;
+    let flush = |cur: &mut String, vars: &mut Vec<String>| {
+        let trimmed = cur.trim();
+        if !trimmed.is_empty() {
+            vars.push(trimmed.to_lowercase());
+        }
+        cur.clear();
+    };
+    for ch in s.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            ')' => {
+                depth -= 1;
+                cur.push(ch);
+            }
+            ',' if depth == 0 => flush(&mut cur, &mut vars),
+            c if c.is_whitespace() => {
+                // Whitespace at top level separates probes; inside parens it
+                // is insignificant (so `v(out, outb)` normalizes cleanly).
+                if depth == 0 {
+                    flush(&mut cur, &mut vars);
+                }
+            }
+            _ => cur.push(ch),
+        }
+    }
+    flush(&mut cur, &mut vars);
+    vars
 }
 
 /// Determine the analysis type from a plot name like "op1", "tran1", "ac1", "dc1".
@@ -2039,8 +2075,53 @@ fn resolve_single_var(plot: &SimPlot, var: &str) -> Option<(String, Vec<f64>)> {
         return Some((format!("{name}*{rhs}"), scaled));
     }
 
+    // Two-node differential voltage: v(n1, n2) = v(n1) - v(n2). Standard
+    // SPICE. A ground reference leg (0 / gnd) contributes a zero rail.
+    if let Some(inner) = strip_func(&var_lower, "v")
+        && let Some((a, b)) = inner.split_once(',')
+    {
+        let (a, b) = (a.trim(), b.trim());
+        if let Some((va, vb)) = resolve_two_node_voltages(plot, a, b) {
+            let diff: Vec<f64> = va.iter().zip(vb.iter()).map(|(x, y)| x - y).collect();
+            return Some((format!("v({a},{b})"), diff));
+        }
+    }
+
     let data = resolve_base_var(plot, &var_lower)?;
     Some((var_lower, data))
+}
+
+/// Whether a node name refers to circuit ground (the 0 V reference rail).
+fn is_ground_node(name: &str) -> bool {
+    matches!(name.trim(), "0" | "gnd" | "gnd!" | "ground")
+}
+
+/// Resolve both legs of a two-node voltage `v(a, b)` to equal-length data
+/// vectors. A ground leg becomes a zero rail sized to the other leg. Returns
+/// `None` if a non-ground leg has no saved vector or the lengths disagree.
+fn resolve_two_node_voltages(plot: &SimPlot, a: &str, b: &str) -> Option<(Vec<f64>, Vec<f64>)> {
+    let va = if is_ground_node(a) {
+        None
+    } else {
+        Some(resolve_base_var(plot, a)?)
+    };
+    let vb = if is_ground_node(b) {
+        None
+    } else {
+        Some(resolve_base_var(plot, b)?)
+    };
+    match (va, vb) {
+        (Some(va), Some(vb)) if va.len() == vb.len() => Some((va, vb)),
+        (Some(va), None) => {
+            let z = vec![0.0; va.len()];
+            Some((va, z))
+        }
+        (None, Some(vb)) => {
+            let z = vec![0.0; vb.len()];
+            Some((z, vb))
+        }
+        _ => None,
+    }
 }
 
 /// Resolve a base variable name to data.
@@ -2849,6 +2930,16 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_print_two_node_voltage() {
+        // Comma inside v(...) is a node separator, not a probe separator.
+        let d = parse_single_print(".print tran v(1,2) i(vs)").unwrap();
+        assert_eq!(d.vars, vec!["v(1,2)", "i(vs)"]);
+        // Mixed with top-level separators and inner whitespace.
+        let d = parse_single_print(".PRINT TRAN V(out, outb), V(in)").unwrap();
+        assert_eq!(d.vars, vec!["v(out,outb)", "v(in)"]);
+    }
+
+    #[test]
     fn test_strip_func() {
         assert_eq!(strip_func("db(v(2))", "db"), Some("v(2)".to_string()));
         assert_eq!(
@@ -2872,5 +2963,30 @@ mod tests {
         assert_eq!(strip_v_wrapper("v(1)"), "1");
         assert_eq!(strip_v_wrapper("v1#branch"), "v1#branch");
         assert_eq!(strip_v_wrapper("v(out)"), "out");
+    }
+
+    #[test]
+    fn test_resolve_two_node_voltage() {
+        let plot = SimPlot {
+            name: "tran1".into(),
+            vecs: vec![
+                SimVector::real("1", vec![3.0, 4.0, 5.0]),
+                SimVector::real("2", vec![1.0, 1.0, 1.0]),
+            ],
+        };
+        // v(n1, n2) = v(n1) - v(n2).
+        let (name, data) = resolve_single_var(&plot, "v(1,2)").unwrap();
+        assert_eq!(name, "v(1,2)");
+        assert_eq!(data, vec![2.0, 3.0, 4.0]);
+        // A ground reference leg contributes a zero rail.
+        let (_, data) = resolve_single_var(&plot, "v(1,0)").unwrap();
+        assert_eq!(data, vec![3.0, 4.0, 5.0]);
+        let (_, data) = resolve_single_var(&plot, "v(0,2)").unwrap();
+        assert_eq!(data, vec![-1.0, -1.0, -1.0]);
+        // gnd is also recognized as the reference node.
+        let (_, data) = resolve_single_var(&plot, "v(1,gnd)").unwrap();
+        assert_eq!(data, vec![3.0, 4.0, 5.0]);
+        // A non-ground leg with no saved vector is unresolvable.
+        assert!(resolve_single_var(&plot, "v(1,9)").is_none());
     }
 }
