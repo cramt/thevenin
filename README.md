@@ -47,7 +47,7 @@ Every analysis above takes a `cirq_ir::Circuit` directly; `thevenin-types::Netli
 | Behavioural | B `V=expr` / `I=expr` with full expression engine |
 | Diodes | SPICE Shockley (IS, N, RS, BV, CJO, TT, KF/AF, pnjlim) |
 | BJTs | Gummel-Poon (LEVEL=1), VBIC95 (LEVEL=4) |
-| MOSFETs | Shichman-Hodges (1), Grove-Frohman (2), MOS3 short-channel (3), Sakurai-Newton (6), BSIM1 (4), BSIM2 (5), BSIM3v3 (8/49), BSIM4 (14/54), BSIM3SOI FD/DD/PD (55/56/57), HiSIM2 (68), HiSIMHV (73 — partial, no HV extensions yet), VDMOS power MOSFET |
+| MOSFETs | Shichman-Hodges (1), Grove-Frohman (2), MOS3 short-channel (3), Sakurai-Newton (6), BSIM1 (4), BSIM2 (5), BSIM3v3 (8/49), BSIM4 (14/54), BSIM3SOI FD/DD/PD (55/56/57), HiSIM2 (68 — partial, DC only), HiSIMHV (73 — partial, no HV extensions yet), VDMOS power MOSFET |
 | Other FETs | JFET, MESFET (Statz/Curtice), MESA (Ytterdal/Lee/Shur/Fjeldly), HFET1, HFET2 |
 | Transmission lines | LTRA (O), TXL (Y), CPL (P), ideal lossless line (T) |
 | Switches | S (voltage-controlled), W (current-controlled) — hysteretic |
@@ -136,7 +136,7 @@ See [`docs/architecture/raw-file-format.md`](docs/architecture/raw-file-format.m
 
 ## Test coverage
 
-The regression harness runs every test fixture from `ngspice-upstream/tests/` through SPICE → Cirq IR → simulate and diffs against the ngspice reference output — **101 passing, 6 skipped**. Across the full workspace it's **1441 passing, 7 skipped**. See `thevenin/tests/ignore.toml` for the skip reasons and `docs/future-work.md` for the diagnosis of each.
+The regression harness runs every test fixture from `ngspice-upstream/tests/` through SPICE → Cirq IR → simulate and diffs against the ngspice reference output — **101 passing, 6 skipped**. Across the full workspace it's **1464 passing, 7 skipped**. See `thevenin/tests/ignore.toml` for the skip reasons and `docs/future-work.md` for the diagnosis of each.
 
 ## Status
 
@@ -144,8 +144,9 @@ The project is approaching 1.0. The simulator core, the Cirq IR pipeline, the
 Cirq source language, and the SPICE importer are all feature-complete relative
 to the [`docs/1.0-checklist.md`](docs/1.0-checklist.md) targets. Remaining work
 before the 1.0 cut is release process (version bumps, publish-dry-run CI) plus a
-small set of explicit post-1.0 deferrals: `.disto`, the HiSIM/HiSIMHV
-high-voltage extensions, and a curated real-world stress corpus. The
+small set of explicit post-1.0 deferrals: `.disto`, full HiSIM/HiSIMHV physics
+(DC works today), and a handful of niche device models (HICUM2, MOS9, SOI3,
+BSIMSOI 4.x, JFET2) that each have a covering alternative already shipping. The
 [`docs/api-stability.md`](docs/api-stability.md) statement defines the stable
 1.x surface. See `docs/archive/migration/` for the historical Stage 4 retirement
 work that pruned the `thevenin-types::Netlist`-shaped API surface in favour of
