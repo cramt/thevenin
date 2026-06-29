@@ -45,7 +45,7 @@ Transient waveforms supported on V and I (all six from
 |---|---|---|---|---|
 | Gummel-Poon (default) | 1 | implemented | [bjt.rs](../thevenin/src/bjt.rs) | Ebers-Moll/Gummel-Poon with Early effect (VAF/VAR) and high-injection rolloff (IKF/IKR). |
 | VBIC95 | 4 | implemented | [vbic.rs](../thevenin/src/vbic.rs) | DC + NR stamps. Self-heating (Vrth) and excess phase (NQS) **not** implemented. |
-| HICUM L0 / L2 | 7 / 8 | not yet — assumed in 1.0 | — | "Weird BJT" enumeration pass still pending per checklist A1. |
+| HICUM L2 | 8 | deferred post-1.0 | — | 5.2 kLOC advanced bipolar; VBIC covers high-end bipolar for the 1.0 cut. Enumeration pass complete (checklist A1, 2026-06-29). |
 
 ## MOSFETs
 
@@ -114,23 +114,33 @@ object) loading is explicitly out of scope for 1.0 per the checklist.
 |---|---|---|
 | `.subckt` / `.ends` (nested) | implemented | Full hierarchy with parameter overrides. |
 | `X` element instantiation | implemented | Positional + `PARAMS:` keyword form. |
-| `.include` / `.lib` | importer recognises but does not resolve | File I/O is a real gap — see checklist C5. |
+| `.include` / `.lib` | implemented (importer-side) | Files resolved relative to the source dir + `--lib-path`; `.lib name … .endl` block splicing, circular-include guard, Latin-1/CP-1252 fallback. See checklist C5. |
 
 ## Known gaps for 1.0
 
-Items the checklist tags as in-scope for the 1.0 cut but where the source
-tree currently has no implementation:
+Models that are in-scope but only **partially** ported (DC works; AC
+small-signal caps / noise / advanced physics deferred):
 
-- **BSIM1** MOSFET level (BSIM2 LEVEL=5 is implemented as of feat/bsim2-r5).
-- **HiSIM** and **HiSIMHV** compact models.
-- Other "weird MOSFET / niche device" variants (HICUM2, NUMOS, …) flagged in
-  the checklist for an enumeration pass against
-  `ngspice-upstream/src/spicelib/devices/`.
+- **HiSIM** (LEVEL=68) and **HiSIMHV** (LEVEL=73) — DC core only; numerical
+  agreement against ngspice not yet verified. See checklist A1.
+
+The full device enumeration pass (checklist A1, 2026-06-29) confirmed there
+are no other in-scope models missing — BSIM1/BSIM2/VDMOS/URC and HFET1/HFET2
+are all implemented.
 
 ## Out-of-scope models
 
-All of BSIM1, BSIM2, HiSIM, HiSIMHV, VDMOS, and URC are explicitly **in**
-1.0 scope per the latest decisions log (see
-[1.0-checklist.md](1.0-checklist.md) "Decisions log"). The only firm
-exclusion is dynamic XSPICE plug-in loading (compiled-in code models via
-the registry stay in scope).
+Deferred or excluded after the device enumeration pass (checklist A1):
+
+- **Deferred post-1.0** (each has a covering alternative already shipping, so
+  none blocks a 1.0 goal): HICUM2 (→ VBIC), MOS9 (→ MOS1/2/3/6 + BSIM),
+  SOI3 (→ BSIM3SOI), BSIMSOI 4.x (→ BSIM3SOI 3.x), HiSIMHV2 (→ partial
+  HiSIMHV1), JFET2 / Parker-Skellern (→ JFET L1). A deck using any of these
+  imports (`DeviceType::Other` preserves the kind) but won't stamp the device.
+- **Out — BSIM version point-variants** selected by the `version=` model param,
+  not a distinct device: bsim3v0/v1 (we ship v3.2), bsim4v5/v6 (we ship v7).
+- **Out — CIDER numerical/TCAD devices** (PDE mixed-level device simulation, a
+  separate subsystem, not compact models): nbjt, nbjt2, ndev, numd, numd2,
+  numos.
+- **Out — dynamic XSPICE plug-in loading** (`cm` shared objects). Compiled-in
+  code models via the registry stay in scope.
