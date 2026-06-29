@@ -186,7 +186,7 @@ pub struct VoltageSourceInstance {
     /// Source name (matches the corresponding entry in `vsource_names`).
     pub name: String,
     /// Transient waveform, if any.
-    pub waveform: Option<thevenin_types::Waveform>,
+    pub waveform: Option<cirq_ir::Waveform>,
 }
 
 /// A resolved current source instance with matrix indices and waveform.
@@ -201,7 +201,7 @@ pub struct CurrentSourceInstance {
     /// DC value.
     pub dc_value: f64,
     /// Transient waveform, if any.
-    pub waveform: Option<thevenin_types::Waveform>,
+    pub waveform: Option<cirq_ir::Waveform>,
 }
 
 /// A resolved behavioral source (B-element) instance.

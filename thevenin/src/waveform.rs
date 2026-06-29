@@ -5,7 +5,7 @@
 
 use std::f64::consts::PI;
 
-use thevenin_types::{Expr, Waveform};
+use cirq_ir::Waveform;
 
 /// Parameters needed for waveform default value computation.
 #[derive(Debug, Clone, Copy)]
@@ -31,13 +31,13 @@ pub fn evaluate(wf: &Waveform, t: f64, tran: &TranParams) -> f64 {
             pw,
             per,
         } => eval_pulse(
-            val(v1),
-            val(v2),
-            opt(td).unwrap_or(0.0),
-            opt(tr).unwrap_or(tran.tstep).max(tran.tstep),
-            opt(tf).unwrap_or(tran.tstep).max(tran.tstep),
-            opt(pw).unwrap_or(tran.tstop).max(0.0),
-            opt(per),
+            *v1,
+            *v2,
+            td.unwrap_or(0.0),
+            tr.unwrap_or(tran.tstep).max(tran.tstep),
+            tf.unwrap_or(tran.tstep).max(tran.tstep),
+            pw.unwrap_or(tran.tstop).max(0.0),
+            *per,
             t,
             tran.tstep,
         ),
@@ -49,16 +49,16 @@ pub fn evaluate(wf: &Waveform, t: f64, tran: &TranParams) -> f64 {
             theta,
             phi,
         } => eval_sin(
-            val(v0),
-            val(va),
-            opt(freq).unwrap_or(if tran.tstop > 0.0 {
+            *v0,
+            *va,
+            freq.unwrap_or(if tran.tstop > 0.0 {
                 1.0 / tran.tstop
             } else {
                 1.0
             }),
-            opt(td).unwrap_or(0.0),
-            opt(theta).unwrap_or(0.0),
-            opt(phi).unwrap_or(0.0),
+            td.unwrap_or(0.0),
+            theta.unwrap_or(0.0),
+            phi.unwrap_or(0.0),
             t,
         ),
         Waveform::Exp {
@@ -69,45 +69,35 @@ pub fn evaluate(wf: &Waveform, t: f64, tran: &TranParams) -> f64 {
             td2,
             tau2,
         } => eval_exp(
-            val(v1),
-            val(v2),
-            opt(td1).unwrap_or(tran.tstep),
-            opt(tau1).unwrap_or(tran.tstep).max(tran.tstep),
-            opt(td2).unwrap_or(opt(td1).unwrap_or(tran.tstep) + tran.tstep),
-            opt(tau2).unwrap_or(tran.tstep).max(tran.tstep),
+            *v1,
+            *v2,
+            td1.unwrap_or(tran.tstep),
+            tau1.unwrap_or(tran.tstep).max(tran.tstep),
+            td2.unwrap_or(td1.unwrap_or(tran.tstep) + tran.tstep),
+            tau2.unwrap_or(tran.tstep).max(tran.tstep),
             t,
         ),
-        Waveform::Pwl(points) => {
-            let pairs: Vec<(f64, f64)> = points
-                .iter()
-                .map(|p| (val(&p.time), val(&p.value)))
-                .collect();
-            eval_pwl(&pairs, t)
-        }
+        Waveform::Pwl(points) => eval_pwl(points, t),
         Waveform::Sffm { v0, va, fc, fs, md } => {
-            let fc_val = opt(fc).unwrap_or(if tran.tstop > 0.0 {
+            let fc_val = fc.unwrap_or(if tran.tstop > 0.0 {
                 5.0 / tran.tstop
             } else {
                 5.0
             });
-            let fs_val = opt(fs).unwrap_or(if tran.tstop > 0.0 {
+            let fs_val = fs.unwrap_or(if tran.tstop > 0.0 {
                 500.0 / tran.tstop
             } else {
                 500.0
             });
             // Clamp modulation depth to [0, fc/fs].
             let max_md = if fs_val > 0.0 { fc_val / fs_val } else { 0.0 };
-            let md_val = opt(md).unwrap_or(0.0).clamp(0.0, max_md);
-            eval_sffm(val(v0), val(va), fc_val, fs_val, md_val, t)
+            let md_val = md.unwrap_or(0.0).clamp(0.0, max_md);
+            eval_sffm(*v0, *va, fc_val, fs_val, md_val, t)
         }
-        Waveform::Am { va, vo, fc, fs, td } => eval_am(
-            val(va),
-            val(vo),
-            val(fc),
-            val(fs),
-            opt(td).unwrap_or(0.0),
-            t,
-        ),
+        Waveform::Am { va, vo, fc, fs, td } => eval_am(*va, *vo, *fc, *fs, td.unwrap_or(0.0), t),
+        // `cirq_ir::Waveform` is `#[non_exhaustive]`; an unknown future
+        // variant contributes zero until it gets an explicit evaluator.
+        _ => 0.0,
     }
 }
 
@@ -273,13 +263,11 @@ pub fn breakpoints(wf: &Waveform, tran: &TranParams) -> Vec<f64> {
             per,
             ..
         } => {
-            let td_val = opt(td).unwrap_or(0.0);
-            let tr_val = opt(tr).unwrap_or(tran.tstep).max(tran.tstep);
-            let tf_val = opt(tf).unwrap_or(tran.tstep).max(tran.tstep);
-            let pw_val = opt(pw).unwrap_or(tran.tstop).max(0.0);
+            let td_val = td.unwrap_or(0.0);
+            let tr_val = tr.unwrap_or(tran.tstep).max(tran.tstep);
+            let tf_val = tf.unwrap_or(tran.tstep).max(tran.tstep);
+            let pw_val = pw.unwrap_or(tran.tstop).max(0.0);
             let period = per
-                .as_ref()
-                .map(val)
                 .unwrap_or(tr_val + pw_val + tf_val)
                 .max(tr_val + pw_val + tf_val)
                 .max(tran.tstep);
@@ -308,16 +296,15 @@ pub fn breakpoints(wf: &Waveform, tran: &TranParams) -> Vec<f64> {
             }
         }
         Waveform::Pwl(points) => {
-            for p in points {
-                let t = val(&p.time);
-                if t >= 0.0 && t <= tstop {
-                    bps.push(t);
+            for (t, _) in points {
+                if *t >= 0.0 && *t <= tstop {
+                    bps.push(*t);
                 }
             }
         }
         Waveform::Exp { td1, td2, .. } => {
-            let td1_val = opt(td1).unwrap_or(tran.tstep);
-            let td2_val = opt(td2).unwrap_or(td1_val + tran.tstep);
+            let td1_val = td1.unwrap_or(tran.tstep);
+            let td2_val = td2.unwrap_or(td1_val + tran.tstep);
             if td1_val >= 0.0 && td1_val <= tstop {
                 bps.push(td1_val);
             }
@@ -326,13 +313,13 @@ pub fn breakpoints(wf: &Waveform, tran: &TranParams) -> Vec<f64> {
             }
         }
         Waveform::Sin { td, .. } => {
-            let td_val = opt(td).unwrap_or(0.0);
+            let td_val = td.unwrap_or(0.0);
             if td_val > 0.0 && td_val <= tstop {
                 bps.push(td_val);
             }
         }
         Waveform::Am { td, .. } => {
-            let td_val = opt(td).unwrap_or(0.0);
+            let td_val = td.unwrap_or(0.0);
             if td_val > 0.0 && td_val <= tstop {
                 bps.push(td_val);
             }
@@ -340,26 +327,14 @@ pub fn breakpoints(wf: &Waveform, tran: &TranParams) -> Vec<f64> {
         Waveform::Sffm { .. } => {
             // SFFM is smooth everywhere, no breakpoints.
         }
+        // `cirq_ir::Waveform` is `#[non_exhaustive]`; an unknown future
+        // variant contributes no breakpoints until handled explicitly.
+        _ => {}
     }
 
     bps.sort_by(|a, b| a.partial_cmp(b).unwrap());
     bps.dedup_by(|a, b| (*a - *b).abs() < 1e-18);
     bps
-}
-
-// ---- Helpers ----
-
-/// Extract a numeric value from an Expr. Panics on non-numeric (param exprs not supported yet).
-fn val(expr: &Expr) -> f64 {
-    match expr {
-        Expr::Num(v) => *v,
-        _ => 0.0, // Fallback for unresolved params
-    }
-}
-
-/// Extract an optional numeric value.
-fn opt(expr: &Option<Expr>) -> Option<f64> {
-    expr.as_ref().map(val)
 }
 
 #[cfg(test)]
@@ -378,13 +353,13 @@ mod tests {
     #[test]
     fn test_pulse_basic() {
         let wf = Waveform::Pulse {
-            v1: Expr::Num(0.0),
-            v2: Expr::Num(5.0),
-            td: Some(Expr::Num(0.0)),
-            tr: Some(Expr::Num(1e-6)),
-            tf: Some(Expr::Num(1e-6)),
-            pw: Some(Expr::Num(10e-6)),
-            per: Some(Expr::Num(20e-6)),
+            v1: 0.0,
+            v2: 5.0,
+            td: Some(0.0),
+            tr: Some(1e-6),
+            tf: Some(1e-6),
+            pw: Some(10e-6),
+            per: Some(20e-6),
         };
         let tp = tran();
 
@@ -412,12 +387,12 @@ mod tests {
     #[test]
     fn test_sin_basic() {
         let wf = Waveform::Sin {
-            v0: Expr::Num(0.0),
-            va: Expr::Num(1.0),
-            freq: Some(Expr::Num(1000.0)),
-            td: Some(Expr::Num(0.0)),
-            theta: Some(Expr::Num(0.0)),
-            phi: Some(Expr::Num(0.0)),
+            v0: 0.0,
+            va: 1.0,
+            freq: Some(1000.0),
+            td: Some(0.0),
+            theta: Some(0.0),
+            phi: Some(0.0),
         };
         let tp = tran();
 
@@ -440,12 +415,12 @@ mod tests {
     #[test]
     fn test_sin_with_offset_and_phase() {
         let wf = Waveform::Sin {
-            v0: Expr::Num(2.5),
-            va: Expr::Num(1.0),
-            freq: Some(Expr::Num(1000.0)),
+            v0: 2.5,
+            va: 1.0,
+            freq: Some(1000.0),
             td: None,
             theta: None,
-            phi: Some(Expr::Num(90.0)), // 90 degrees
+            phi: Some(90.0), // 90 degrees
         };
         let tp = tran();
 
@@ -457,11 +432,11 @@ mod tests {
     #[test]
     fn test_sin_with_damping() {
         let wf = Waveform::Sin {
-            v0: Expr::Num(0.0),
-            va: Expr::Num(1.0),
-            freq: Some(Expr::Num(1000.0)),
-            td: Some(Expr::Num(0.0)),
-            theta: Some(Expr::Num(1000.0)), // Heavy damping
+            v0: 0.0,
+            va: 1.0,
+            freq: Some(1000.0),
+            td: Some(0.0),
+            theta: Some(1000.0), // Heavy damping
             phi: None,
         };
         let tp = tran();
@@ -475,12 +450,12 @@ mod tests {
     #[test]
     fn test_exp_basic() {
         let wf = Waveform::Exp {
-            v1: Expr::Num(0.0),
-            v2: Expr::Num(5.0),
-            td1: Some(Expr::Num(0.0)),
-            tau1: Some(Expr::Num(1e-3)),
-            td2: Some(Expr::Num(5e-3)),
-            tau2: Some(Expr::Num(1e-3)),
+            v1: 0.0,
+            v2: 5.0,
+            td1: Some(0.0),
+            tau1: Some(1e-3),
+            td2: Some(5e-3),
+            tau2: Some(1e-3),
         };
         let tp = tran();
 
@@ -499,24 +474,7 @@ mod tests {
 
     #[test]
     fn test_pwl_basic() {
-        let wf = Waveform::Pwl(vec![
-            thevenin_types::PwlPoint {
-                time: Expr::Num(0.0),
-                value: Expr::Num(0.0),
-            },
-            thevenin_types::PwlPoint {
-                time: Expr::Num(1e-3),
-                value: Expr::Num(5.0),
-            },
-            thevenin_types::PwlPoint {
-                time: Expr::Num(2e-3),
-                value: Expr::Num(5.0),
-            },
-            thevenin_types::PwlPoint {
-                time: Expr::Num(3e-3),
-                value: Expr::Num(0.0),
-            },
-        ]);
+        let wf = Waveform::Pwl(vec![(0.0, 0.0), (1e-3, 5.0), (2e-3, 5.0), (3e-3, 0.0)]);
         let tp = tran();
 
         assert_eq!(evaluate(&wf, 0.0, &tp), 0.0);
@@ -532,11 +490,11 @@ mod tests {
     #[test]
     fn test_sffm_basic() {
         let wf = Waveform::Sffm {
-            v0: Expr::Num(1.0),
-            va: Expr::Num(2.0),
-            fc: Some(Expr::Num(1000.0)),
-            fs: Some(Expr::Num(100.0)),
-            md: Some(Expr::Num(5.0)),
+            v0: 1.0,
+            va: 2.0,
+            fc: Some(1000.0),
+            fs: Some(100.0),
+            md: Some(5.0),
         };
         let tp = tran();
 
@@ -548,11 +506,11 @@ mod tests {
     #[test]
     fn test_am_basic() {
         let wf = Waveform::Am {
-            va: Expr::Num(1.0),
-            vo: Expr::Num(1.0),
-            fc: Expr::Num(10000.0),
-            fs: Expr::Num(1000.0),
-            td: Some(Expr::Num(0.0)),
+            va: 1.0,
+            vo: 1.0,
+            fc: 10000.0,
+            fs: 1000.0,
+            td: Some(0.0),
         };
         let tp = tran();
 
@@ -568,12 +526,12 @@ mod tests {
         let va = 3.3;
         let v0 = 1.65;
         let wf = Waveform::Sin {
-            v0: Expr::Num(v0),
-            va: Expr::Num(va),
-            freq: Some(Expr::Num(freq)),
-            td: Some(Expr::Num(0.0)),
-            theta: Some(Expr::Num(0.0)),
-            phi: Some(Expr::Num(0.0)),
+            v0,
+            va,
+            freq: Some(freq),
+            td: Some(0.0),
+            theta: Some(0.0),
+            phi: Some(0.0),
         };
         let tp = tran();
 

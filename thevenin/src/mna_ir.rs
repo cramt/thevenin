@@ -19,12 +19,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use cirq_frontend::to_netlist::convert_source_spec;
 use cirq_ir::{
-    BehavioralMode, Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Model, Value,
-    XspiceConnection as IrXspiceConnection,
+    BehavioralMode, Circuit, Element as IrElement, ElementKind as IrElementKind, Id, Model,
+    SourceSpec, Value, XspiceConnection as IrXspiceConnection,
 };
-use thevenin_types::{Expr, Source};
 use thevenin_xspice::{
     CodeModelRegistry, ParamValue, PortConnection, PortDirection, PortType, XspiceInstance,
 };
@@ -385,18 +383,11 @@ fn string_param(elem: &IrElement, name: &str) -> Option<String> {
 }
 
 /// Evaluate a source's DC contribution following the same MODEDC /
-/// MODEDCOP convention as `crate::mna::stamp_element`.
-fn evaluate_source_dc(source: &Source, modedc: bool) -> f64 {
-    let dc_from_expr = |e: &Expr| match e {
-        Expr::Num(v) => *v,
-        // IR sources always carry a typed Value, so convert_source_spec only
-        // emits Expr::Num. Anything else implies upstream drift; treat as
-        // zero rather than failing here (matches expr_value(Param/Brace)'s
-        // documented behaviour for sources without a numeric DC).
-        _ => 0.0,
-    };
+/// MODEDCOP convention as `crate::mna::stamp_element`, reading the IR
+/// [`SourceSpec`] directly (numeric `dc` + typed `cirq_ir::Waveform`).
+fn evaluate_source_dc(spec: &SourceSpec, modedc: bool) -> f64 {
     let waveform_at_zero = || {
-        source.waveform.as_ref().map_or(0.0, |wf| {
+        spec.waveform.as_ref().map_or(0.0, |wf| {
             let tran = crate::waveform::TranParams {
                 tstep: 1e-9,
                 tstop: 1.0,
@@ -407,18 +398,14 @@ fn evaluate_source_dc(source: &Source, modedc: bool) -> f64 {
     if modedc {
         // MODEDC: waveform takes precedence at t=0; only fall back to DC
         // when there's no waveform.
-        if source.waveform.is_some() {
+        if spec.waveform.is_some() {
             waveform_at_zero()
         } else {
-            source.dc.as_ref().map(dc_from_expr).unwrap_or(0.0)
+            spec.dc.unwrap_or(0.0)
         }
     } else {
         // MODEDCOP: explicit DC wins; otherwise use waveform at t=0.
-        source
-            .dc
-            .as_ref()
-            .map(dc_from_expr)
-            .unwrap_or_else(waveform_at_zero)
+        spec.dc.unwrap_or_else(waveform_at_zero)
     }
 }
 
@@ -1593,8 +1580,8 @@ fn stamp_circuit(
             IrElementKind::VoltageSource => {
                 let pos = terminal_name(elem, "pos", &net_name)?;
                 let neg = terminal_name(elem, "neg", &net_name)?;
-                let source = convert_source_spec(elem);
-                let v = evaluate_source_dc(&source, modedc);
+                let spec = elem.source_spec.as_ref();
+                let v = spec.map_or(0.0, |s| evaluate_source_dc(s, modedc));
                 let pi = mna.node_map.get(pos);
                 let ni = mna.node_map.get(neg);
                 let branch = n_nodes + vsource_idx;
@@ -1614,7 +1601,7 @@ fn stamp_circuit(
                     pos_idx: pi,
                     neg_idx: ni,
                     name: elem.name.clone(),
-                    waveform: source.waveform.clone(),
+                    waveform: spec.and_then(|s| s.waveform.clone()),
                 });
                 mna.vsource_names.push(elem.name.clone());
                 vsource_idx += 1;
@@ -1622,8 +1609,8 @@ fn stamp_circuit(
             IrElementKind::CurrentSource => {
                 let pos = terminal_name(elem, "pos", &net_name)?;
                 let neg = terminal_name(elem, "neg", &net_name)?;
-                let source = convert_source_spec(elem);
-                let i_val = evaluate_source_dc(&source, modedc);
+                let spec = elem.source_spec.as_ref();
+                let i_val = spec.map_or(0.0, |s| evaluate_source_dc(s, modedc));
                 let pi = mna.node_map.get(pos);
                 let ni = mna.node_map.get(neg);
 
@@ -1642,7 +1629,7 @@ fn stamp_circuit(
                     pos_idx: pi,
                     neg_idx: ni,
                     dc_value: i_val,
-                    waveform: source.waveform,
+                    waveform: spec.and_then(|s| s.waveform.clone()),
                 });
             }
             IrElementKind::Capacitor => {
