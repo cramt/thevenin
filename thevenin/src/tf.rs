@@ -344,7 +344,7 @@ R2 mid 0 1k
         )
         .unwrap();
 
-        let result = simulate_tf(&netlist).unwrap();
+        let result = crate::test_support::tf(&netlist).unwrap();
         assert_eq!(result.plots.len(), 1);
 
         let tf = tf_value(&result, 0, "transfer_function");
@@ -373,7 +373,7 @@ R1 1 0 2k
         )
         .unwrap();
 
-        let result = simulate_tf(&netlist).unwrap();
+        let result = crate::test_support::tf(&netlist).unwrap();
 
         let tf = tf_value(&result, 0, "transfer_function");
         assert_abs_diff_eq!(tf, 2000.0, epsilon = 1e-6);
@@ -403,7 +403,7 @@ R2 a 0 2k
         )
         .unwrap();
 
-        let result = simulate_tf(&netlist).unwrap();
+        let result = crate::test_support::tf(&netlist).unwrap();
 
         let tf = tf_value(&result, 0, "transfer_function");
         // V(1) - V(a): V(1)=10V (forced by V1), V(a) = 10*2k/(1k+2k) = 20/3
@@ -431,11 +431,11 @@ R2 mid 0 1k
 
         assert_eq!(netlists.len(), 2);
 
-        let result1 = simulate_tf(&netlists[0]).unwrap();
+        let result1 = crate::test_support::tf(&netlists[0]).unwrap();
         let tf1 = tf_value(&result1, 0, "transfer_function");
         assert_abs_diff_eq!(tf1, 0.5, epsilon = 1e-9);
 
-        let result2 = simulate_tf(&netlists[1]).unwrap();
+        let result2 = crate::test_support::tf(&netlists[1]).unwrap();
         let tf2 = tf_value(&result2, 0, "transfer_function");
         assert_abs_diff_eq!(tf2, 1.0, epsilon = 1e-9);
     }

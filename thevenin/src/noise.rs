@@ -1079,7 +1079,7 @@ R2 2 0 1k
         )
         .unwrap();
 
-        let result = simulate_noise(&netlist).unwrap();
+        let result = crate::test_support::noise(&netlist).unwrap();
         assert_eq!(result.plots.len(), 2);
         assert_eq!(result.plots[0].name, "noise1");
         assert_eq!(result.plots[1].name, "noise2");
@@ -1115,7 +1115,7 @@ R1 1 2 1k
         )
         .unwrap();
 
-        let result = simulate_noise(&netlist).unwrap();
+        let result = crate::test_support::noise(&netlist).unwrap();
         let plot = &result.plots[0];
         let onoise = plot
             .vecs
@@ -1165,7 +1165,7 @@ R2 2 0 1k
         )
         .unwrap();
 
-        let result = simulate_noise(&netlist).unwrap();
+        let result = crate::test_support::noise(&netlist).unwrap();
         let plot = &result.plots[0];
         let onoise = plot
             .vecs

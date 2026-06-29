@@ -2129,7 +2129,7 @@ C1 2 0 1u
         )
         .unwrap();
 
-        let result = simulate_ac(&netlist).unwrap();
+        let result = crate::test_support::ac(&netlist).unwrap();
         assert_eq!(result.plots.len(), 1);
         assert_eq!(result.plots[0].name, "ac1");
 
@@ -2206,7 +2206,7 @@ L1 2 0 0.1
         )
         .unwrap();
 
-        let result = simulate_ac(&netlist).unwrap();
+        let result = crate::test_support::ac(&netlist).unwrap();
         let plot = &result.plots[0];
         let v2_vec = plot.vecs.iter().find(|v| v.name == "v(2)").unwrap();
 

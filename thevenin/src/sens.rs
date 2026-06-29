@@ -1044,7 +1044,7 @@ r1 1 0 1k
         )
         .unwrap();
 
-        let result = simulate_sens(&netlist).unwrap();
+        let result = crate::test_support::sens(&netlist).unwrap();
 
         assert_abs_diff_eq!(sens_value(&result, "i1"), 1000.0, epsilon = 1e-6);
         assert_abs_diff_eq!(sens_value(&result, "i1_m"), 42.0, epsilon = 1e-6);
@@ -1072,7 +1072,7 @@ rx 2 4 2.7k
         )
         .unwrap();
 
-        let result = simulate_sens(&netlist).unwrap();
+        let result = crate::test_support::sens(&netlist).unwrap();
 
         // Golden values from ngspice
         assert_abs_diff_eq!(
@@ -1129,7 +1129,7 @@ r2 mid 0 1k
         )
         .unwrap();
 
-        let result = simulate_sens(&netlist).unwrap();
+        let result = crate::test_support::sens(&netlist).unwrap();
 
         assert_abs_diff_eq!(sens_value(&result, "v1"), 0.5, epsilon = 1e-9);
         assert_abs_diff_eq!(sens_value(&result, "r1"), -2.5e-3, epsilon = 1e-9);

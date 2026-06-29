@@ -774,7 +774,7 @@ c1 1 2 1.0e-12
         )
         .unwrap();
 
-        let result = simulate_pz(&netlist).unwrap();
+        let result = crate::test_support::pz(&netlist).unwrap();
         let poles = get_poles(&result);
         assert_eq!(poles.len(), 1);
         assert_relative_eq!(poles[0].0, -5.0e8, max_relative = 1e-6);
@@ -801,7 +801,7 @@ c1 2 0 10p
         )
         .unwrap();
 
-        let result = simulate_pz(&netlist).unwrap();
+        let result = crate::test_support::pz(&netlist).unwrap();
         let poles = get_poles(&result);
         assert_eq!(poles.len(), 1);
         assert_relative_eq!(poles[0].0, -1.0e8, max_relative = 1e-6);
@@ -828,7 +828,7 @@ R4 1 3 1K
         )
         .unwrap();
 
-        let result = simulate_pz(&netlist).unwrap();
+        let result = crate::test_support::pz(&netlist).unwrap();
         let poles = get_poles(&result);
         assert_eq!(poles.len(), 2);
 
@@ -867,7 +867,7 @@ c3 6 0 .02p
         )
         .unwrap();
 
-        let result = simulate_pz(&netlist).unwrap();
+        let result = crate::test_support::pz(&netlist).unwrap();
         let poles = get_poles(&result);
         assert_eq!(poles.len(), 3);
 
@@ -899,7 +899,7 @@ l3 3 0 0.05
         )
         .unwrap();
 
-        let result = simulate_pz(&netlist).unwrap();
+        let result = crate::test_support::pz(&netlist).unwrap();
         let poles = get_poles(&result);
         assert_eq!(poles.len(), 3);
 
@@ -930,7 +930,7 @@ R2 2 0 4k
         )
         .unwrap();
 
-        let result = simulate_pz(&netlist).unwrap();
+        let result = crate::test_support::pz(&netlist).unwrap();
         let poles = get_poles(&result);
         assert_eq!(poles.len(), 1);
         assert_relative_eq!(poles[0].0, -5.0e5, max_relative = 1e-6);

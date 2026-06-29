@@ -85,6 +85,8 @@ pub(crate) mod newton;
 pub(crate) mod physics;
 pub(crate) mod simulate;
 pub mod sparse;
+#[cfg(test)]
+mod test_support;
 pub(crate) mod waveform;
 
 // ── Analysis modules ────────────────────────────────────────────────────────

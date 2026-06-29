@@ -3653,7 +3653,7 @@ C1 out 0 1u IC=0
         )
         .unwrap();
 
-        let result = simulate_tran(&netlist).unwrap();
+        let result = crate::test_support::tran(&netlist).unwrap();
 
         assert_eq!(result.plots.len(), 1);
         assert_eq!(result.plots[0].name, "tran1");
@@ -3707,7 +3707,7 @@ L1 1 0 1u
         )
         .unwrap();
 
-        let result = simulate_tran(&netlist).unwrap();
+        let result = crate::test_support::tran(&netlist).unwrap();
 
         let time = tran_vector(&result, "time");
         let v1 = tran_vector(&result, "v(1)");
@@ -3798,7 +3798,7 @@ C1 out 0 1u IC=0
         )
         .unwrap();
 
-        let result = simulate_tran(&netlist).unwrap();
+        let result = crate::test_support::tran(&netlist).unwrap();
 
         let time = tran_vector(&result, "time");
         let v_out = tran_vector(&result, "v(out)");
@@ -3840,7 +3840,7 @@ R1 1 0 1k
         )
         .unwrap();
 
-        let result = simulate_tran(&netlist).unwrap();
+        let result = crate::test_support::tran(&netlist).unwrap();
 
         let time = tran_vector(&result, "time");
         let v1 = tran_vector(&result, "v(1)");
@@ -3872,7 +3872,7 @@ R1 1 0 1k
         )
         .unwrap();
 
-        let result = simulate_tran(&netlist).unwrap();
+        let result = crate::test_support::tran(&netlist).unwrap();
 
         let time = tran_vector(&result, "time");
         let v1 = tran_vector(&result, "v(1)");
@@ -3918,7 +3918,7 @@ R1 1 0 1k
         )
         .unwrap();
 
-        let result = simulate_tran(&netlist).unwrap();
+        let result = crate::test_support::tran(&netlist).unwrap();
 
         let time = tran_vector(&result, "time");
         let v1 = tran_vector(&result, "v(1)");
@@ -3958,7 +3958,7 @@ C1 out 0 1u IC=0
         )
         .unwrap();
 
-        let result = simulate_tran(&netlist).unwrap();
+        let result = crate::test_support::tran(&netlist).unwrap();
 
         let time = tran_vector(&result, "time");
         let v_out = tran_vector(&result, "v(out)");
@@ -4031,7 +4031,7 @@ C1 out 0 1u IC=0
 .end
 ";
         let default_netlist = Netlist::parse_single(circuit).unwrap();
-        let default_result = simulate_tran(&default_netlist).unwrap();
+        let default_result = crate::test_support::tran(&default_netlist).unwrap();
         let default_time = tran_vector(&default_result, "time");
         let default_v = tran_vector(&default_result, "v(out)");
 
@@ -4044,7 +4044,7 @@ C1 out 0 1u IC=0
 .end
 ";
         let tight_netlist = Netlist::parse_single(tight_circuit).unwrap();
-        let tight_result = simulate_tran(&tight_netlist).unwrap();
+        let tight_result = crate::test_support::tran(&tight_netlist).unwrap();
         let tight_time = tran_vector(&tight_result, "time");
         let tight_v = tran_vector(&tight_result, "v(out)");
 
@@ -4175,7 +4175,7 @@ D1 2 0 DMOD
 ",
         )
         .unwrap();
-        let result = simulate_tran(&netlist);
+        let result = crate::test_support::tran(&netlist);
         assert!(
             result.is_ok(),
             "ITL5=0 should not cap total iterations, got: {result:?}"
@@ -4199,7 +4199,7 @@ D1 2 0 DMOD
 ",
         )
         .unwrap();
-        let result = simulate_tran(&netlist);
+        let result = crate::test_support::tran(&netlist);
         assert!(
             result.is_err(),
             "ITL5=5 should abort before completing 5ms of nonlinear transient"

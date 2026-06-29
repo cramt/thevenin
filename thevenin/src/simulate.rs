@@ -1117,7 +1117,7 @@ R2 mid 0 1k
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         assert_eq!(result.plots.len(), 1);
         assert_eq!(result.plots[0].name, "op1");
@@ -1145,7 +1145,7 @@ R2 mid 0 2k
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         assert_abs_diff_eq!(op_voltage(&result, "1"), 3.0, epsilon = 1e-9);
         assert_abs_diff_eq!(op_voltage(&result, "mid"), 2.0, epsilon = 1e-9);
@@ -1176,7 +1176,7 @@ R1 1 0 1k
         )
         .unwrap();
 
-        let result = simulate_dc(&netlist).unwrap();
+        let result = crate::test_support::dc(&netlist).unwrap();
         assert_eq!(result.plots.len(), 1);
         assert_eq!(result.plots[0].name, "dc1");
 
@@ -1217,7 +1217,7 @@ R1 1 2 1k
         )
         .unwrap();
 
-        let result = simulate_dc(&netlist).unwrap();
+        let result = crate::test_support::dc(&netlist).unwrap();
 
         let v1_sweep = dc_vector(&result, "v-sweep");
         // 3 points for V1 * 2 points for V2 = 6 total
@@ -1257,7 +1257,7 @@ V1 1 0 DC 1
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         assert_abs_diff_eq!(op_voltage(&result, "1"), 1.0, epsilon = 1e-9);
 
@@ -1282,7 +1282,7 @@ D1 2 0 DMOD
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         let v1 = op_voltage(&result, "1");
         assert_abs_diff_eq!(v1, 1.0, epsilon = 1e-6);
@@ -1319,7 +1319,7 @@ D1 2 0 DMOD
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         let v_diode = op_voltage(&result, "2");
         // Higher IS and N means lower forward voltage
@@ -1346,7 +1346,7 @@ D1 2 0 DMOD
         )
         .unwrap();
 
-        let result = simulate_dc(&netlist).unwrap();
+        let result = crate::test_support::dc(&netlist).unwrap();
 
         let v1_sweep = dc_vector(&result, "v-sweep");
         assert_eq!(v1_sweep.len(), 5); // -1, -0.5, 0, 0.5, 1.0
@@ -1399,7 +1399,7 @@ D1 2 0 DMOD
         )
         .unwrap();
 
-        let result = simulate_dc(&netlist).unwrap();
+        let result = crate::test_support::dc(&netlist).unwrap();
 
         let v_diode = dc_vector(&result, "v(2)");
         let i_v1 = dc_vector(&result, "v1#branch");
@@ -1452,7 +1452,7 @@ Q1 col base 0 QMOD
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         let v_base = op_voltage(&result, "base");
         let v_col = op_voltage(&result, "col");
@@ -1496,7 +1496,7 @@ Q1 2 1 0 QMOD
         )
         .unwrap();
 
-        let result = simulate_dc(&netlist).unwrap();
+        let result = crate::test_support::dc(&netlist).unwrap();
         let v_be = dc_vector(&result, "v-sweep");
         let i_vce = dc_vector(&result, "vce#branch");
 
@@ -1544,7 +1544,7 @@ M1 3 2 0 0 NMOD W=10u L=1u
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         let v_drain = op_voltage(&result, "3");
         let v_gate = op_voltage(&result, "2");
@@ -1580,7 +1580,7 @@ M1 3 2 0 0 NMOD W=10u L=1u
         )
         .unwrap();
 
-        let result = simulate_dc(&netlist).unwrap();
+        let result = crate::test_support::dc(&netlist).unwrap();
         let vgs_sweep = dc_vector(&result, "v-sweep");
         let v_drain = dc_vector(&result, "v(3)");
 
@@ -1645,7 +1645,7 @@ M1 3 0 1 1 PMOD W=10u L=1u
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         let v_drain = op_voltage(&result, "3");
 
@@ -1675,7 +1675,7 @@ MN 3 2 0 0 NMOD W=10u L=1u
         )
         .unwrap();
 
-        let result_low = simulate_op(&netlist_low).unwrap();
+        let result_low = crate::test_support::op(&netlist_low).unwrap();
         let vout_low = op_voltage(&result_low, "3");
 
         // VIN=0: NMOS off, PMOS on → VOUT ≈ VDD=5V
@@ -1698,7 +1698,7 @@ MN 3 2 0 0 NMOD W=10u L=1u
         )
         .unwrap();
 
-        let result_high = simulate_op(&netlist_high).unwrap();
+        let result_high = crate::test_support::op(&netlist_high).unwrap();
         let vout_high = op_voltage(&result_high, "3");
 
         // VIN=5: NMOS on, PMOS off → VOUT ≈ 0V
@@ -1725,7 +1725,7 @@ VG 1 0 -2
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         let v1 = op_voltage(&result, "1");
         let v2 = op_voltage(&result, "2");
@@ -1755,7 +1755,7 @@ E1 out 0 0 inv 100000
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
 
         let v_out = op_voltage(&result, "out");
         assert_abs_diff_eq!(v_out, -2.0, epsilon = 1e-3);
@@ -1780,7 +1780,7 @@ R2 out 0 1k
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
         let v_out = op_voltage(&result, "out");
         assert_abs_diff_eq!(v_out, 6.0, epsilon = 1e-9);
     }
@@ -1802,7 +1802,7 @@ R2 out 0 500
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
         let v_out = op_voltage(&result, "out");
         assert_abs_diff_eq!(v_out, 5.0, epsilon = 1e-9);
     }
@@ -1824,7 +1824,7 @@ R2 out 0 10k
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
         let v_out = op_voltage(&result, "out");
         assert_abs_diff_eq!(v_out, 3.0, epsilon = 1e-9);
     }
@@ -1845,7 +1845,7 @@ VG 1 0 -2
         )
         .unwrap();
 
-        let result = simulate_dc(&netlist).unwrap();
+        let result = crate::test_support::dc(&netlist).unwrap();
         let i_vd = dc_vector(&result, "vd#branch");
 
         // At VDS=0: almost no current
@@ -1892,7 +1892,7 @@ vin 1 0 dc 5.0
         )
         .unwrap();
 
-        let result = simulate_op(&netlist).unwrap();
+        let result = crate::test_support::op(&netlist).unwrap();
         let v2 = op_voltage(&result, "2");
         // With gate=5V, VTO=0.8V, NMOS is on. V(2) should be pulled low.
         eprintln!("Spaced kv: V(2) = {v2:.6e}");

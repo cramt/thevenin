@@ -2800,7 +2800,7 @@ VDS 2 0 DC 1.0
 .end
 "#;
         let netlist = thevenin_types::Netlist::parse_single(netlist_str).expect("parse failed");
-        let result = crate::simulate_op(&netlist).expect("OP should converge");
+        let result = crate::test_support::op(&netlist).expect("OP should converge");
         assert!(!result.plots.is_empty(), "Should have at least one plot");
     }
 }

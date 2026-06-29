@@ -4166,7 +4166,7 @@ R2 mid 0 1k
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
 
         // 2 non-ground nodes (1, mid) + 1 voltage source = 3x3 system
         assert_eq!(mna.system.dim(), 3);
@@ -4199,7 +4199,7 @@ R1 1 0 1k
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         assert_eq!(mna.system.dim(), 1); // 1 node, 0 voltage sources
 
         let solution = mna.solve().unwrap();
@@ -4221,7 +4221,7 @@ R2 mid 0 3k
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         let solution = mna.solve().unwrap();
 
         assert_abs_diff_eq!(solution.voltage("in").unwrap(), 10.0, epsilon = 1e-12);
@@ -4241,7 +4241,7 @@ R1 1 0 330
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         // 1 node + 1 voltage source = 2x2
         assert_eq!(mna.system.dim(), 2);
         assert_eq!(mna.node_map.get("0"), None); // ground not in map
@@ -4270,7 +4270,7 @@ R1 1 0 1k
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         let solution = mna.solve().unwrap();
         assert_abs_diff_eq!(solution.voltage("1").unwrap(), 5.0, epsilon = 1e-12);
     }
@@ -4291,7 +4291,7 @@ C1 mid 0 1u
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         // 2 non-ground nodes (1, mid) + 1 voltage source = 3x3
         // Capacitor adds no branch equation
         assert_eq!(mna.system.dim(), 3);
@@ -4320,7 +4320,7 @@ L1 mid 0 1m
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         // 2 non-ground nodes (1, mid) + 1 voltage source + 1 inductor branch = 4x4
         assert_eq!(mna.system.dim(), 4);
 
@@ -4357,7 +4357,7 @@ R2 out 0 1k
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         // 2 nodes (in, out) + 2 branches (V1, E1)
         assert_eq!(mna.vsource_names.len(), 2);
 
@@ -4382,7 +4382,7 @@ R2 out 0 1k
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         let solution = mna.solve().unwrap();
         assert_abs_diff_eq!(solution.voltage("in").unwrap(), 1.0, epsilon = 1e-12);
         assert_abs_diff_eq!(solution.voltage("out").unwrap(), 10.0, epsilon = 1e-12);
@@ -4406,7 +4406,7 @@ E1 out 0 0 inv 100000
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         let solution = mna.solve().unwrap();
         // V(out) ≈ -2.0 (with high gain, very close to ideal)
         assert_abs_diff_eq!(solution.voltage("out").unwrap(), -2.0, epsilon = 1e-3);
@@ -4433,7 +4433,7 @@ R2 out 0 1k
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         // No branch for G — only V1 has a branch
         assert_eq!(mna.vsource_names.len(), 1);
 
@@ -4462,7 +4462,7 @@ R2 out 0 1k
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         let solution = mna.solve().unwrap();
         // I(Vsense) = 1mA, F1 gain=5 → 5mA into R2=1k
         assert_abs_diff_eq!(solution.voltage("out").unwrap(), 5.0, epsilon = 1e-9);
@@ -4486,7 +4486,7 @@ R2 out 0 10k
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         // V1, Vsense, H1 all have branches
         assert_eq!(mna.vsource_names.len(), 3);
 
@@ -4510,7 +4510,7 @@ R1 1 0 1k
         .unwrap();
 
         // MODEDCOP: should use DC=1
-        let mna_dc = assemble_mna(&netlist).unwrap();
+        let mna_dc = crate::test_support::assemble_ir(&netlist).unwrap();
         let sol_dc = mna_dc.solve().unwrap();
         assert_abs_diff_eq!(sol_dc.voltage("1").unwrap(), 1.0, epsilon = 1e-9);
 
@@ -4539,7 +4539,7 @@ K1 L1 L2 0.5
         )
         .unwrap();
 
-        let mna = assemble_mna(&netlist).unwrap();
+        let mna = crate::test_support::assemble_ir(&netlist).unwrap();
         assert_eq!(mna.mutual_couplings.len(), 1);
 
         let mc = &mna.mutual_couplings[0];
@@ -4567,7 +4567,7 @@ K1 L1 L99 0.5
         )
         .unwrap();
 
-        let result = assemble_mna(&netlist);
+        let result = crate::test_support::assemble_ir(&netlist);
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
         assert!(err_msg.contains("L99") || err_msg.contains("l99"));
