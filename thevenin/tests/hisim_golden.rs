@@ -138,7 +138,11 @@ fn idvgs_transfer_matches_ngspice() {
         pts.push((comp.cdrain, iref, vg));
     }
     let max_re = report("idvgs", &pts);
-    assert!(max_re < 0.05, "Id-Vgs transfer off by {:.1}%", max_re * 100.0);
+    assert!(
+        max_re < 0.05,
+        "Id-Vgs transfer off by {:.1}%",
+        max_re * 100.0
+    );
 }
 
 #[test]

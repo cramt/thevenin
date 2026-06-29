@@ -35,6 +35,8 @@ use crate::mosfet::{MosfetCompanion, MosfetType};
 use crate::physics::{EXP_LIMIT, safe_exp};
 
 const CHARGE: f64 = 1.602_176_634e-19;
+/// Boltzmann constant (J/K), ngspice `C_KB`.
+const BOLTZMANN: f64 = 1.380_649e-23;
 const EPSSIL: f64 = 11.70 * 8.854_214_871e-12;
 const EPSOX: f64 = 3.9 * 8.854_214_871e-12;
 /// Intrinsic carrier concentration at 300K in m⁻³ (ngspice constant).
@@ -107,6 +109,30 @@ pub struct HisimModel {
     pub phif2: f64,
     /// Flat-band voltage (after dopant/work-function corrections; V).
     pub vfb: f64,
+
+    // ── Faithful HiSIM2 constants (Phase 1, per hsm2temp.c) ──────────────
+    // These mirror ngspice's derived quantities exactly and feed the
+    // forthcoming faithful forward eval. They are computed alongside the
+    // legacy fields above so the existing companion keeps working until the
+    // new eval is wired in. See docs/archive/migration/hisim2-port-plan.md.
+    /// Thermal beta `q/(kB·T)` = 1/Vt (1/V). ngspice `HSM2_beta`.
+    pub beta: f64,
+    /// Intrinsic carrier concentration `Nin` at the sim temperature (m⁻³).
+    /// ngspice `HSM2_nin`.
+    pub nin: f64,
+    /// Effective channel doping used by the surface-potential core (m⁻³).
+    /// Long-channel approximation: ≈ NSUBC (pocket blend added in Phase 3).
+    pub nsub_eff: f64,
+    /// Body-charge constant `cnst0 = sqrt(2·εsi·q·Nsub/beta)`.
+    /// ngspice `HSM2_cnst0` (temp.c:645).
+    pub cnst0: f64,
+    /// Inversion-charge constant `cnst1 = (Nin/Nsub)²`.
+    /// ngspice `HSM2_cnst1` (temp.c:648).
+    pub cnst1: f64,
+    /// Twice the bulk Fermi potential `Pb2 = (2/beta)·ln(Nsub/Nin)` (V).
+    /// ngspice `HSM2_pb2` (temp.c:653). Equals 2φB; the faithful counterpart
+    /// of the legacy `phif2`.
+    pub pb2: f64,
 }
 
 impl HisimModel {
@@ -144,6 +170,12 @@ impl HisimModel {
             gamma: 0.0,
             phif2: 0.0,
             vfb: 0.0,
+            beta: 0.0,
+            nin: 0.0,
+            nsub_eff: 0.0,
+            cnst0: 0.0,
+            cnst1: 0.0,
+            pb2: 0.0,
         };
         m.compute_derived();
         m
@@ -204,6 +236,30 @@ impl HisimModel {
         // Flat-band: use VFBC directly if given (already negative for NMOS in
         // HiSIM convention); otherwise estimate from φF.
         self.vfb = self.vfbc;
+
+        // ── Faithful HiSIM2 constants (per hsm2temp.c) ──────────────────
+        // beta = q/(kB·T) at the nominal temperature (TNOM = 27°C). The
+        // temperature sweep multiplies this once a temp argument is threaded
+        // through; for now compute at 300.15 K to match the golden corpus.
+        let t_abs = 300.15;
+        self.beta = CHARGE / (BOLTZMANN * t_abs);
+        // Nin: intrinsic carrier concentration. At the reference 300.15 K this
+        // is essentially C_Nin0; the full Tratio^1.5·exp(...) scaling lands
+        // with the temperature port (Phase 1 follow-up).
+        self.nin = NI;
+        // Effective channel doping (long-channel ≈ NSUBC). Pocket-implant
+        // blend with NSUBP/LP is a Phase 3 correction.
+        let nsub = nsub_m3;
+        self.nsub_eff = nsub;
+        // cnst0 = sqrt(2·εsi·q·Nsub / beta)  (note the 1/beta factor: the
+        // residual's sqrt argument Chi = beta·(Ps0−Vbs) is dimensionless, so
+        // cnst0 carries the extra sqrt(Vt) vs the classic body-effect γ).
+        self.cnst0 = (2.0 * EPSSIL * CHARGE * nsub / self.beta).sqrt();
+        // cnst1 = (Nin/Nsub)²  (inversion-charge coefficient).
+        let nin_over_nsub = self.nin / nsub;
+        self.cnst1 = nin_over_nsub * nin_over_nsub;
+        // Pb2 = (2/beta)·ln(Nsub/Nin)  (= 2φB).
+        self.pb2 = (2.0 / self.beta) * (nsub / self.nin).ln();
     }
 
     /// Number of internal nodes added by series RD/RS (mirrors MOS3).
@@ -688,6 +744,38 @@ mod tests {
         assert!(m.gamma > 0.0);
         assert!(m.phif2 > 0.0 && m.phif2 < 2.0);
         assert_eq!(m.mos_type, MosfetType::Nmos);
+    }
+
+    #[test]
+    fn faithful_constants_match_hsm2temp() {
+        // Validate the Phase-1 HiSIM2 constants against hand-computed values
+        // from hsm2temp.c for the golden card's NSUBC=5e17 cm^-3, TOX=2nm.
+        let md = ModelParams {
+            name: "nch".into(),
+            kind: "NMOS".into(),
+            params: vec![
+                ("TOX".into(), 2.0e-9),
+                ("NSUBC".into(), 5.0e17),
+                ("VFBC".into(), -0.5),
+            ],
+        };
+        let m = HisimModel::from_params(&md);
+
+        // beta = q/(kB·T) at 300.15 K ≈ 38.66 /V.
+        assert!((m.beta - 38.66).abs() < 0.2, "beta = {}", m.beta);
+        // Nsub_eff = 5e17 cm^-3 → 5e23 m^-3.
+        assert!((m.nsub_eff - 5.0e23).abs() / 5.0e23 < 1e-9);
+        // cnst0 = sqrt(2·εsi·q·Nsub/beta).
+        let eps_si = 11.70 * 8.854_214_871e-12;
+        let expect_cnst0 = (2.0 * eps_si * 1.602_176_634e-19 * 5.0e23 / m.beta).sqrt();
+        assert!((m.cnst0 - expect_cnst0).abs() / expect_cnst0 < 1e-9);
+        // Pb2 = (2/beta)·ln(Nsub/Nin), with Nin = 1.45e16 m^-3.
+        let expect_pb2 = (2.0 / m.beta) * (5.0e23_f64 / 1.45e16).ln();
+        assert!((m.pb2 - expect_pb2).abs() < 1e-9, "pb2 = {}", m.pb2);
+        // Physically Pb2 (= 2φB) should sit around 0.9 V for this doping.
+        assert!(m.pb2 > 0.85 && m.pb2 < 1.0, "pb2 = {}", m.pb2);
+        // cnst1 = (Nin/Nsub)² — tiny.
+        assert!(m.cnst1 > 0.0 && m.cnst1 < 1e-12);
     }
 
     #[test]
