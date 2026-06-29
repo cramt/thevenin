@@ -4,8 +4,7 @@
 //! This is a physics-based short-channel MOSFET model with size-dependent
 //! parameters, multiple mobility models, and advanced capacitance models.
 
-use thevenin_types::{Expr, ModelDef};
-
+use crate::model_params::ModelParams;
 use crate::mosfet::MosfetType;
 use crate::physics::{
     CHARGE_Q, EPSOX, EPSSI, EXP_THRESHOLD, KBOQ, MAX_EXP, MIN_EXP, bsim_safe_exp as safe_exp,
@@ -1000,252 +999,250 @@ impl Bsim3Model {
 
     /// Parse BSIM3 model from a .model definition.
     #[expect(clippy::too_many_lines)]
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let mos_type = if model_def.kind.to_uppercase().contains("PMOS") {
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = if model.kind.to_uppercase().contains("PMOS") {
             MosfetType::Pmos
         } else {
             MosfetType::Nmos
         };
         let mut m = Self::new(mos_type);
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                let v = *v;
-                match p.name.to_uppercase().as_str() {
-                    "MOBMOD" => m.mob_mod = v as i32,
-                    "CAPMOD" => m.cap_mod = v as i32,
-                    "NOIMOD" => m.noi_mod = v as i32,
-                    "BINUNIT" => m.bin_unit = v as i32,
-                    "TOX" => m.tox = v,
-                    "TOXM" => m.toxm = v,
-                    "VTH0" | "VTNM" => {
-                        m.vth0 = v;
-                        m.vth0_given = true;
-                    }
-                    "K1" => {
-                        m.k1 = v;
-                        m.k1_given = true;
-                    }
-                    "K2" => {
-                        m.k2 = v;
-                        m.k2_given = true;
-                    }
-                    "K3" => m.k3 = v,
-                    "K3B" => m.k3b = v,
-                    "W0" => m.w0 = v,
-                    "NLX" => m.nlx = v,
-                    "DVT0" => m.dvt0 = v,
-                    "DVT1" => m.dvt1 = v,
-                    "DVT2" => m.dvt2 = v,
-                    "DVT0W" => m.dvt0w = v,
-                    "DVT1W" => m.dvt1w = v,
-                    "DVT2W" => m.dvt2w = v,
-                    "DSUB" => m.dsub = v,
-                    "ETA0" => m.eta0 = v,
-                    "ETAB" => m.etab = v,
-                    "VOFF" => m.voff = v,
-                    "NFACTOR" => m.nfactor = v,
-                    "CDSC" => m.cdsc = v,
-                    "CDSCB" => m.cdscb = v,
-                    "CDSCD" => m.cdscd = v,
-                    "CIT" => m.cit = v,
-                    "NCH" => {
-                        m.nch = v;
-                        if v > 1e20 {
-                            m.nch *= 1e-6;
-                        }
-                    }
-                    "NPEAK" | "NPEAM" => {
-                        m.npeak = v;
-                        m.npeak_given = true;
-                        if v > 1e20 {
-                            m.npeak *= 1e-6;
-                        }
-                    }
-                    "NGATE" => {
-                        m.ngate = v;
-                        if v > 1.000001e24 {
-                            m.ngate *= 1e-6;
-                        }
-                    }
-                    "NSUB" => m.nsub = v,
-                    "XJ" => m.xj = v,
-                    "VFB" => {
-                        m.vfb = v;
-                        m.vfb_given = true;
-                    }
-                    "VBX" => {
-                        m.vbx = v;
-                        m.vbx_given = true;
-                    }
-                    "VBM" => m.vbm = v,
-                    "XT" => m.xt = v,
-                    "GAMMA1" => {
-                        m.gamma1 = v;
-                        m.gamma1_given = true;
-                    }
-                    "GAMMA2" => {
-                        m.gamma2 = v;
-                        m.gamma2_given = true;
-                    }
-                    "U0" | "UO" => m.u0 = v,
-                    "UA" => m.ua = v,
-                    "UB" => m.ub = v,
-                    "UC" => m.uc = v,
-                    "UTE" => m.ute = v,
-                    "UA1" => m.ua1 = v,
-                    "UB1" => m.ub1 = v,
-                    "UC1" => m.uc1 = v,
-                    "VSAT" => m.vsat = v,
-                    "A0" => m.a0 = v,
-                    "AGS" => m.ags = v,
-                    "A1" => m.a1 = v,
-                    "A2" => m.a2 = v,
-                    "AT" => m.at = v,
-                    "KETA" => m.keta = v,
-                    "PCLM" => m.pclm = v,
-                    "PDIBLC1" | "PDIBL1" => m.pdibl1 = v,
-                    "PDIBLC2" | "PDIBL2" => m.pdibl2 = v,
-                    "PDIBLCB" | "PDIBLB" => m.pdiblb = v,
-                    "PSCBE1" => m.pscbe1 = v,
-                    "PSCBE2" => m.pscbe2 = v,
-                    "PVAG" => m.pvag = v,
-                    "DELTA" => m.delta = v,
-                    "RDSW" => m.rdsw = v,
-                    "RSH" => m.rsh = v,
-                    "PRWG" => m.prwg = v,
-                    "PRWB" => m.prwb = v,
-                    "PRT" => m.prt = v,
-                    "WR" => m.wr = v,
-                    "DWG" => m.dwg = v,
-                    "DWB" => m.dwb = v,
-                    "B0" => m.b0 = v,
-                    "B1" => m.b1 = v,
-                    "ALPHA0" => m.alpha0 = v,
-                    "ALPHA1" => m.alpha1 = v,
-                    "BETA0" => m.beta0 = v,
-                    "TNOM" => m.tnom = v,
-                    "KT1" => m.kt1 = v,
-                    "KT1L" => m.kt1l = v,
-                    "KT2" => m.kt2 = v,
-                    "JS" => m.js = v,
-                    "JSW" => m.jsw = v,
-                    "PB" | "TLEVM" => m.pb = v,
-                    "MJ" => m.mj = v,
-                    "PBSW" => m.pbsw = v,
-                    "MJSW" => m.mjsw = v,
-                    "CJ" => m.cj = v,
-                    "CJSW" => m.cjsw = v,
-                    "PBSWG" => m.pbswg = v,
-                    "MJSWG" => m.mjswg = v,
-                    "CJSWG" => m.cjswg = v,
-                    "NJ" => m.nj = v,
-                    "XTI" => m.xti = v,
-                    "IJTH" => m.ijth = v,
-                    "TPB" => m.tpb = v,
-                    "TCJ" => m.tcj = v,
-                    "TPBSW" => m.tpbsw = v,
-                    "TCJSW" => m.tcjsw = v,
-                    "TPBSWG" => m.tpbswg = v,
-                    "TCJSWG" => m.tcjswg = v,
-                    "CGSL" => m.cgsl = v,
-                    "CGDL" => m.cgdl = v,
-                    "CKAPPA" => m.ckappa = v,
-                    "CF" => m.cf = v,
-                    "CLC" => m.clc = v,
-                    "CLE" => m.cle = v,
-                    "ELM" => m.elm = v,
-                    "VFBCV" => m.vfbcv = v,
-                    "ACDE" => m.acde = v,
-                    "MOIN" => m.moin = v,
-                    "NOFF" => m.noff = v,
-                    "VOFFCV" => m.voffcv = v,
-                    "XPART" => m.xpart = v,
-                    "CGSO" => m.cgso = v,
-                    "CGDO" => m.cgdo = v,
-                    "CGBO" => m.cgbo = v,
-                    "LINT" => m.lint = v,
-                    "LL" => m.ll = v,
-                    "LLN" => m.lln = v,
-                    "LW" => m.lw = v,
-                    "LWN" => m.lwn = v,
-                    "LWL" => m.lwl = v,
-                    "WINT" => m.wint = v,
-                    "WL" => m.wl = v,
-                    "WLN" => m.wln = v,
-                    "WW" => m.ww = v,
-                    "WWN" => m.wwn = v,
-                    "WWL" => m.wwl = v,
-                    "XL" => m.xl = v,
-                    "XW" => m.xw = v,
-                    "DLC" => {
-                        m.dlc = v;
-                        m.dlc_given = true;
-                    }
-                    "DWC" => {
-                        m.dwc = v;
-                        m.dwc_given = true;
-                    }
-                    "KF" => m.kf = v,
-                    "AF" => m.af = v,
-                    "EF" => m.ef = v,
-                    "NOIA" => m.noia = v,
-                    "NOIB" => m.noib = v,
-                    "NOIC" => m.noic = v,
-                    "EM" => m.em = v,
-                    // L/W/P dependent params
-                    "LVTH0" => m.l_vth0 = v,
-                    "WVTH0" => m.w_vth0 = v,
-                    "PVTH0" => m.p_vth0 = v,
-                    "LK1" => m.l_k1 = v,
-                    "WK1" => m.w_k1 = v,
-                    "PK1" => m.p_k1 = v,
-                    "LK2" => m.l_k2 = v,
-                    "WK2" => m.w_k2 = v,
-                    "PK2" => m.p_k2 = v,
-                    "LK3" => m.l_k3 = v,
-                    "WK3" => m.w_k3 = v,
-                    "PK3" => m.p_k3 = v,
-                    "LK3B" => m.l_k3b = v,
-                    "WK3B" => m.w_k3b = v,
-                    "PK3B" => m.p_k3b = v,
-                    "LETA0" => m.l_eta0 = v,
-                    "WETA0" => m.w_eta0 = v,
-                    "PETA0" => m.p_eta0 = v,
-                    "LETAB" => m.l_etab = v,
-                    "WETAB" => m.w_etab = v,
-                    "PETAB" => m.p_etab = v,
-                    "LU0" => m.l_u0 = v,
-                    "WU0" => m.w_u0 = v,
-                    "PU0" => m.p_u0 = v,
-                    "LUA" => m.l_ua = v,
-                    "WUA" => m.w_ua = v,
-                    "PUA" => m.p_ua = v,
-                    "LUB" => m.l_ub = v,
-                    "WUB" => m.w_ub = v,
-                    "PUB" => m.p_ub = v,
-                    "LUC" => m.l_uc = v,
-                    "WUC" => m.w_uc = v,
-                    "PUC" => m.p_uc = v,
-                    "LVSAT" => m.l_vsat = v,
-                    "WVSAT" => m.w_vsat = v,
-                    "PVSAT" => m.p_vsat = v,
-                    "LVOFF" => m.l_voff = v,
-                    "WVOFF" => m.w_voff = v,
-                    "PVOFF" => m.p_voff = v,
-                    "LNFACTOR" => m.l_nfactor = v,
-                    "WNFACTOR" => m.w_nfactor = v,
-                    "PNFACTOR" => m.p_nfactor = v,
-                    "LRDSW" => m.l_rdsw = v,
-                    "WRDSW" => m.w_rdsw = v,
-                    "PRDSW" => m.p_rdsw = v,
-                    "LPCLM" => m.l_pclm = v,
-                    "WPCLM" => m.w_pclm = v,
-                    "PPCLM" => m.p_pclm = v,
-                    "LDELTA" => m.l_delta = v,
-                    "WDELTA" => m.w_delta = v,
-                    "PDELTA" => m.p_delta = v,
-                    _ => {} // ignore unknown params
+        for (name, v) in &model.params {
+            let v = *v;
+            match name.to_uppercase().as_str() {
+                "MOBMOD" => m.mob_mod = v as i32,
+                "CAPMOD" => m.cap_mod = v as i32,
+                "NOIMOD" => m.noi_mod = v as i32,
+                "BINUNIT" => m.bin_unit = v as i32,
+                "TOX" => m.tox = v,
+                "TOXM" => m.toxm = v,
+                "VTH0" | "VTNM" => {
+                    m.vth0 = v;
+                    m.vth0_given = true;
                 }
+                "K1" => {
+                    m.k1 = v;
+                    m.k1_given = true;
+                }
+                "K2" => {
+                    m.k2 = v;
+                    m.k2_given = true;
+                }
+                "K3" => m.k3 = v,
+                "K3B" => m.k3b = v,
+                "W0" => m.w0 = v,
+                "NLX" => m.nlx = v,
+                "DVT0" => m.dvt0 = v,
+                "DVT1" => m.dvt1 = v,
+                "DVT2" => m.dvt2 = v,
+                "DVT0W" => m.dvt0w = v,
+                "DVT1W" => m.dvt1w = v,
+                "DVT2W" => m.dvt2w = v,
+                "DSUB" => m.dsub = v,
+                "ETA0" => m.eta0 = v,
+                "ETAB" => m.etab = v,
+                "VOFF" => m.voff = v,
+                "NFACTOR" => m.nfactor = v,
+                "CDSC" => m.cdsc = v,
+                "CDSCB" => m.cdscb = v,
+                "CDSCD" => m.cdscd = v,
+                "CIT" => m.cit = v,
+                "NCH" => {
+                    m.nch = v;
+                    if v > 1e20 {
+                        m.nch *= 1e-6;
+                    }
+                }
+                "NPEAK" | "NPEAM" => {
+                    m.npeak = v;
+                    m.npeak_given = true;
+                    if v > 1e20 {
+                        m.npeak *= 1e-6;
+                    }
+                }
+                "NGATE" => {
+                    m.ngate = v;
+                    if v > 1.000001e24 {
+                        m.ngate *= 1e-6;
+                    }
+                }
+                "NSUB" => m.nsub = v,
+                "XJ" => m.xj = v,
+                "VFB" => {
+                    m.vfb = v;
+                    m.vfb_given = true;
+                }
+                "VBX" => {
+                    m.vbx = v;
+                    m.vbx_given = true;
+                }
+                "VBM" => m.vbm = v,
+                "XT" => m.xt = v,
+                "GAMMA1" => {
+                    m.gamma1 = v;
+                    m.gamma1_given = true;
+                }
+                "GAMMA2" => {
+                    m.gamma2 = v;
+                    m.gamma2_given = true;
+                }
+                "U0" | "UO" => m.u0 = v,
+                "UA" => m.ua = v,
+                "UB" => m.ub = v,
+                "UC" => m.uc = v,
+                "UTE" => m.ute = v,
+                "UA1" => m.ua1 = v,
+                "UB1" => m.ub1 = v,
+                "UC1" => m.uc1 = v,
+                "VSAT" => m.vsat = v,
+                "A0" => m.a0 = v,
+                "AGS" => m.ags = v,
+                "A1" => m.a1 = v,
+                "A2" => m.a2 = v,
+                "AT" => m.at = v,
+                "KETA" => m.keta = v,
+                "PCLM" => m.pclm = v,
+                "PDIBLC1" | "PDIBL1" => m.pdibl1 = v,
+                "PDIBLC2" | "PDIBL2" => m.pdibl2 = v,
+                "PDIBLCB" | "PDIBLB" => m.pdiblb = v,
+                "PSCBE1" => m.pscbe1 = v,
+                "PSCBE2" => m.pscbe2 = v,
+                "PVAG" => m.pvag = v,
+                "DELTA" => m.delta = v,
+                "RDSW" => m.rdsw = v,
+                "RSH" => m.rsh = v,
+                "PRWG" => m.prwg = v,
+                "PRWB" => m.prwb = v,
+                "PRT" => m.prt = v,
+                "WR" => m.wr = v,
+                "DWG" => m.dwg = v,
+                "DWB" => m.dwb = v,
+                "B0" => m.b0 = v,
+                "B1" => m.b1 = v,
+                "ALPHA0" => m.alpha0 = v,
+                "ALPHA1" => m.alpha1 = v,
+                "BETA0" => m.beta0 = v,
+                "TNOM" => m.tnom = v,
+                "KT1" => m.kt1 = v,
+                "KT1L" => m.kt1l = v,
+                "KT2" => m.kt2 = v,
+                "JS" => m.js = v,
+                "JSW" => m.jsw = v,
+                "PB" | "TLEVM" => m.pb = v,
+                "MJ" => m.mj = v,
+                "PBSW" => m.pbsw = v,
+                "MJSW" => m.mjsw = v,
+                "CJ" => m.cj = v,
+                "CJSW" => m.cjsw = v,
+                "PBSWG" => m.pbswg = v,
+                "MJSWG" => m.mjswg = v,
+                "CJSWG" => m.cjswg = v,
+                "NJ" => m.nj = v,
+                "XTI" => m.xti = v,
+                "IJTH" => m.ijth = v,
+                "TPB" => m.tpb = v,
+                "TCJ" => m.tcj = v,
+                "TPBSW" => m.tpbsw = v,
+                "TCJSW" => m.tcjsw = v,
+                "TPBSWG" => m.tpbswg = v,
+                "TCJSWG" => m.tcjswg = v,
+                "CGSL" => m.cgsl = v,
+                "CGDL" => m.cgdl = v,
+                "CKAPPA" => m.ckappa = v,
+                "CF" => m.cf = v,
+                "CLC" => m.clc = v,
+                "CLE" => m.cle = v,
+                "ELM" => m.elm = v,
+                "VFBCV" => m.vfbcv = v,
+                "ACDE" => m.acde = v,
+                "MOIN" => m.moin = v,
+                "NOFF" => m.noff = v,
+                "VOFFCV" => m.voffcv = v,
+                "XPART" => m.xpart = v,
+                "CGSO" => m.cgso = v,
+                "CGDO" => m.cgdo = v,
+                "CGBO" => m.cgbo = v,
+                "LINT" => m.lint = v,
+                "LL" => m.ll = v,
+                "LLN" => m.lln = v,
+                "LW" => m.lw = v,
+                "LWN" => m.lwn = v,
+                "LWL" => m.lwl = v,
+                "WINT" => m.wint = v,
+                "WL" => m.wl = v,
+                "WLN" => m.wln = v,
+                "WW" => m.ww = v,
+                "WWN" => m.wwn = v,
+                "WWL" => m.wwl = v,
+                "XL" => m.xl = v,
+                "XW" => m.xw = v,
+                "DLC" => {
+                    m.dlc = v;
+                    m.dlc_given = true;
+                }
+                "DWC" => {
+                    m.dwc = v;
+                    m.dwc_given = true;
+                }
+                "KF" => m.kf = v,
+                "AF" => m.af = v,
+                "EF" => m.ef = v,
+                "NOIA" => m.noia = v,
+                "NOIB" => m.noib = v,
+                "NOIC" => m.noic = v,
+                "EM" => m.em = v,
+                // L/W/P dependent params
+                "LVTH0" => m.l_vth0 = v,
+                "WVTH0" => m.w_vth0 = v,
+                "PVTH0" => m.p_vth0 = v,
+                "LK1" => m.l_k1 = v,
+                "WK1" => m.w_k1 = v,
+                "PK1" => m.p_k1 = v,
+                "LK2" => m.l_k2 = v,
+                "WK2" => m.w_k2 = v,
+                "PK2" => m.p_k2 = v,
+                "LK3" => m.l_k3 = v,
+                "WK3" => m.w_k3 = v,
+                "PK3" => m.p_k3 = v,
+                "LK3B" => m.l_k3b = v,
+                "WK3B" => m.w_k3b = v,
+                "PK3B" => m.p_k3b = v,
+                "LETA0" => m.l_eta0 = v,
+                "WETA0" => m.w_eta0 = v,
+                "PETA0" => m.p_eta0 = v,
+                "LETAB" => m.l_etab = v,
+                "WETAB" => m.w_etab = v,
+                "PETAB" => m.p_etab = v,
+                "LU0" => m.l_u0 = v,
+                "WU0" => m.w_u0 = v,
+                "PU0" => m.p_u0 = v,
+                "LUA" => m.l_ua = v,
+                "WUA" => m.w_ua = v,
+                "PUA" => m.p_ua = v,
+                "LUB" => m.l_ub = v,
+                "WUB" => m.w_ub = v,
+                "PUB" => m.p_ub = v,
+                "LUC" => m.l_uc = v,
+                "WUC" => m.w_uc = v,
+                "PUC" => m.p_uc = v,
+                "LVSAT" => m.l_vsat = v,
+                "WVSAT" => m.w_vsat = v,
+                "PVSAT" => m.p_vsat = v,
+                "LVOFF" => m.l_voff = v,
+                "WVOFF" => m.w_voff = v,
+                "PVOFF" => m.p_voff = v,
+                "LNFACTOR" => m.l_nfactor = v,
+                "WNFACTOR" => m.w_nfactor = v,
+                "PNFACTOR" => m.p_nfactor = v,
+                "LRDSW" => m.l_rdsw = v,
+                "WRDSW" => m.w_rdsw = v,
+                "PRDSW" => m.p_rdsw = v,
+                "LPCLM" => m.l_pclm = v,
+                "WPCLM" => m.w_pclm = v,
+                "PPCLM" => m.p_pclm = v,
+                "LDELTA" => m.l_delta = v,
+                "WDELTA" => m.w_delta = v,
+                "PDELTA" => m.p_delta = v,
+                _ => {} // ignore unknown params
             }
         }
 
@@ -3138,7 +3135,6 @@ pub(crate) use crate::device_stamp::fetlim;
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
-    use thevenin_types::{Expr, ModelDef, Param};
 
     #[test]
     fn test_bsim3_model_defaults() {
@@ -3152,33 +3148,18 @@ mod tests {
 
     #[test]
     fn test_bsim3_model_parse() {
-        let model_def = ModelDef {
+        let model = ModelParams {
             name: "NMOD".to_string(),
             kind: "NMOS".to_string(),
             params: vec![
-                Param {
-                    name: "VTH0".to_string(),
-                    value: Expr::Num(0.5),
-                },
-                Param {
-                    name: "TOX".to_string(),
-                    value: Expr::Num(1.5e-8),
-                },
-                Param {
-                    name: "U0".to_string(),
-                    value: Expr::Num(670.0),
-                },
-                Param {
-                    name: "VSAT".to_string(),
-                    value: Expr::Num(8e4),
-                },
-                Param {
-                    name: "K1".to_string(),
-                    value: Expr::Num(0.5),
-                },
+                ("VTH0".to_string(), 0.5),
+                ("TOX".to_string(), 1.5e-8),
+                ("U0".to_string(), 670.0),
+                ("VSAT".to_string(), 8e4),
+                ("K1".to_string(), 0.5),
             ],
         };
-        let m = Bsim3Model::from_model_def(&model_def);
+        let m = Bsim3Model::from_params(&model);
         assert_eq!(m.mos_type, MosfetType::Nmos);
         assert_abs_diff_eq!(m.vth0, 0.5, epsilon = 1e-15);
         assert_abs_diff_eq!(m.tox, 1.5e-8, epsilon = 1e-25);

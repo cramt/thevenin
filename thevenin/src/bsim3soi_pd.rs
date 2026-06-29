@@ -7,7 +7,7 @@
 
 #![allow(unused_variables, dead_code, clippy::too_many_arguments, unused_parens)]
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::mosfet::MosfetType;
 use crate::physics::{
@@ -543,21 +543,17 @@ impl Bsim3SoiPdModel {
         m
     }
 
-    pub fn from_model_def(def: &ModelDef) -> Self {
-        let mos_type = match def.kind.to_uppercase().as_str() {
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = match model.kind.to_uppercase().as_str() {
             "PMOS" => MosfetType::Pmos,
             _ => MosfetType::Nmos,
         };
         let mut m = Self::new(mos_type);
 
-        fn pf(def: &ModelDef, name: &str) -> Option<f64> {
-            def.params.iter().find_map(|p| {
-                if p.name.eq_ignore_ascii_case(name) {
-                    if let Expr::Num(v) = &p.value {
-                        Some(*v)
-                    } else {
-                        None
-                    }
+        fn pf(model: &ModelParams, name: &str) -> Option<f64> {
+            model.params.iter().find_map(|(n, v)| {
+                if n.eq_ignore_ascii_case(name) {
+                    Some(*v)
                 } else {
                     None
                 }
@@ -566,14 +562,14 @@ impl Bsim3SoiPdModel {
 
         macro_rules! set {
             ($field:ident, $name:expr) => {
-                if let Some(v) = pf(def, $name) {
+                if let Some(v) = pf(model, $name) {
                     m.$field = v;
                 }
             };
         }
         macro_rules! seti {
             ($field:ident, $name:expr) => {
-                if let Some(v) = pf(def, $name) {
+                if let Some(v) = pf(model, $name) {
                     m.$field = v as i32;
                 }
             };
@@ -635,10 +631,10 @@ impl Bsim3SoiPdModel {
         set!(keta, "KETA");
         set!(ketas, "KETAS");
         set!(pclm, "PCLM");
-        if let Some(v) = pf(def, "PDIBLC1") {
+        if let Some(v) = pf(model, "PDIBLC1") {
             m.pdiblc1 = v;
         }
-        if let Some(v) = pf(def, "PDIBLC2") {
+        if let Some(v) = pf(model, "PDIBLC2") {
             m.pdiblc2 = v;
         }
         set!(pdiblcb, "PDIBLCB");

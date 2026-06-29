@@ -6,7 +6,7 @@
 //!
 //! Reference: ngspice `src/spicelib/devices/txl/`
 
-use thevenin_types::ModelDef;
+use crate::model_params::ModelParams;
 
 // ---------------------------------------------------------------------------
 // Padé term: pole + residue + convolution accumulator
@@ -132,21 +132,20 @@ pub struct TxlModel {
 }
 
 impl TxlModel {
-    pub fn from_model_def(def: &ModelDef) -> Self {
+    pub fn from_params(model: &ModelParams) -> Self {
         let mut r = 0.0;
         let mut l = 0.0;
         let mut g = 0.0;
         let mut c = 0.0;
         let mut length = 0.0;
 
-        for p in &def.params {
-            let val = crate::expr_val_or(&p.value, 0.0);
-            match p.name.to_uppercase().as_str() {
-                "R" => r = val,
-                "L" => l = val,
-                "G" => g = val,
-                "C" => c = val,
-                "LENGTH" | "LEN" => length = val,
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "R" => r = *v,
+                "L" => l = *v,
+                "G" => g = *v,
+                "C" => c = *v,
+                "LENGTH" | "LEN" => length = *v,
                 _ => {}
             }
         }

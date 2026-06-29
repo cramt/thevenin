@@ -7,8 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use thevenin_types::{Expr, ModelDef};
-
+use crate::model_params::ModelParams;
 use crate::mosfet::MosfetType;
 use crate::physics::{
     CHARGE_Q, EPSSI, EXP_THRESHOLD, KBOQ, MAX_EXP, MIN_EXP, bsim_safe_exp as safe_exp,
@@ -969,8 +968,8 @@ impl Bsim4Model {
         base + self.get_l(name) * inv_l + self.get_w(name) * inv_w + self.get_p(name) * inv_lw
     }
 
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let mos_type = if model_def.kind.to_uppercase().contains("PMOS") {
+    pub fn from_params(src: &ModelParams) -> Self {
+        let mos_type = if src.kind.to_uppercase().contains("PMOS") {
             MosfetType::Pmos
         } else {
             MosfetType::Nmos
@@ -988,13 +987,9 @@ impl Bsim4Model {
         let mut toxp_given = false;
         let mut toxm_given = false;
 
-        for p in &model_def.params {
-            let v = if let Expr::Num(v) = &p.value {
-                *v
-            } else {
-                continue;
-            };
-            let key = p.name.to_lowercase();
+        for (name, v) in &src.params {
+            let v = *v;
+            let key = name.to_lowercase();
             let key_str = key.as_str();
 
             // Check for L/W/P prefixed binning params
@@ -2687,7 +2682,6 @@ pub fn bsim4_limit(
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
-    use thevenin_types::{Expr, ModelDef, Param};
 
     #[test]
     fn test_bsim4_model_defaults() {
@@ -2703,37 +2697,19 @@ mod tests {
 
     #[test]
     fn test_bsim4_model_parse() {
-        let model_def = ModelDef {
+        let model = ModelParams {
             name: "NMOD".to_string(),
             kind: "NMOS".to_string(),
             params: vec![
-                Param {
-                    name: "VTH0".to_string(),
-                    value: Expr::Num(0.423),
-                },
-                Param {
-                    name: "TOXE".to_string(),
-                    value: Expr::Num(1.85e-9),
-                },
-                Param {
-                    name: "U0".to_string(),
-                    value: Expr::Num(0.0491),
-                },
-                Param {
-                    name: "VSAT".to_string(),
-                    value: Expr::Num(124340.0),
-                },
-                Param {
-                    name: "MOBMOD".to_string(),
-                    value: Expr::Num(0.0),
-                },
-                Param {
-                    name: "CAPMOD".to_string(),
-                    value: Expr::Num(2.0),
-                },
+                ("VTH0".to_string(), 0.423),
+                ("TOXE".to_string(), 1.85e-9),
+                ("U0".to_string(), 0.0491),
+                ("VSAT".to_string(), 124340.0),
+                ("MOBMOD".to_string(), 0.0),
+                ("CAPMOD".to_string(), 2.0),
             ],
         };
-        let m = Bsim4Model::from_model_def(&model_def);
+        let m = Bsim4Model::from_params(&model);
         assert_eq!(m.mos_type, MosfetType::Nmos);
         assert_abs_diff_eq!(m.vth0, 0.423, epsilon = 1e-15);
         assert_abs_diff_eq!(m.toxe, 1.85e-9, epsilon = 1e-25);
@@ -2745,15 +2721,12 @@ mod tests {
 
     #[test]
     fn test_bsim4_pmos() {
-        let model_def = ModelDef {
+        let model = ModelParams {
             name: "PMOD".to_string(),
             kind: "PMOS".to_string(),
-            params: vec![Param {
-                name: "VTH0".to_string(),
-                value: Expr::Num(-0.4),
-            }],
+            params: vec![("VTH0".to_string(), -0.4)],
         };
-        let m = Bsim4Model::from_model_def(&model_def);
+        let m = Bsim4Model::from_params(&model);
         assert_eq!(m.mos_type, MosfetType::Pmos);
         assert_abs_diff_eq!(m.vth0, -0.4, epsilon = 1e-15);
     }

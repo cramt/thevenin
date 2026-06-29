@@ -1080,9 +1080,7 @@ fn three_terminal_mosfet_parses_as_vdmos_form() {
     let nls = Netlist::parse("T\nM1 d g s NMOD\n.end").expect("3-terminal M must parse");
     let n = &nls[0];
     match &n.elements().next().unwrap().kind {
-        thevenin_types::ElementKind::Mosfet {
-            s, bulk, model, ..
-        } => {
+        thevenin_types::ElementKind::Mosfet { s, bulk, model, .. } => {
             assert_eq!(bulk, s, "bulk defaults to the source node");
             assert_eq!(model, "NMOD");
         }

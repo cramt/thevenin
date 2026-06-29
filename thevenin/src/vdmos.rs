@@ -24,7 +24,7 @@
 //! in this port since the body diode's series R (`rb`) is folded into the
 //! source resistance for simplicity.
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::diode::VT_NOM;
 use crate::physics::{EXP_LIMIT, safe_exp};
@@ -156,8 +156,8 @@ impl VdmosModel {
     ///
     /// The kind string can also carry a `PCHAN` / `NCHAN` flag among the
     /// params, which ngspice recognises via `vdmospar.c`.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let upper_kind = model_def.kind.to_uppercase();
+    pub fn from_params(model: &ModelParams) -> Self {
+        let upper_kind = model.kind.to_uppercase();
         let mos_type = if upper_kind.contains("VDMOSP") || upper_kind == "PMOS" {
             VdmosType::Pmos
         } else {
@@ -166,9 +166,9 @@ impl VdmosModel {
 
         let mut m = Self::new(mos_type);
 
-        for p in &model_def.params {
+        for (name, v) in &model.params {
             // Bare flag parameters: PMOS/NMOS/PCHAN/NCHAN polarity hints.
-            let name_upper = p.name.to_uppercase();
+            let name_upper = name.to_uppercase();
             if matches!(name_upper.as_str(), "PCHAN" | "PMOS" | "VDMOSP") {
                 m.mos_type = VdmosType::Pmos;
                 continue;
@@ -178,40 +178,38 @@ impl VdmosModel {
                 continue;
             }
 
-            if let Expr::Num(v) = &p.value {
-                match name_upper.as_str() {
-                    "VTO" | "VT0" | "VTH" | "VTH0" => m.vto = *v,
-                    "KP" => m.kp = *v,
-                    "PHI" => m.phi = *v,
-                    "LAMBDA" => m.lambda = *v,
-                    "THETA" => m.theta = *v,
-                    "RD" => m.rd = *v,
-                    "RS" => m.rs = *v,
-                    "RG" => m.rg = *v,
-                    "RDS" => m.rds = *v,
-                    "MTRIODE" => m.mtr = *v,
-                    "KSUBTHRES" => m.ksubthres = *v,
-                    "SUBSHIFT" => m.subshift = *v,
-                    "TCVTH" | "VTOTC" => m.tcvth = *v,
-                    "TNOM" => m.tnom = *v + 273.15,
-                    "MU" | "BEX" => m.mu = *v,
-                    "CGDMIN" => m.cgdmin = *v,
-                    "CGDMAX" => m.cgdmax = *v,
-                    "A" => m.a = *v,
-                    "CGS" => m.cgs = *v,
-                    // Body diode
-                    "IS" => m.is_dio = *v,
-                    "N" => m.n_dio = *v,
-                    "BV" => m.bv = Some(*v),
-                    "IBV" => m.ibv = *v,
-                    "NBV" => m.nbv = *v,
-                    "CJO" | "CJ" | "CJ0" => m.cjo = *v,
-                    "MJ" => m.mj_dio = *v,
-                    "VJ" => m.vj_dio = *v,
-                    "FC" => m.fc_dio = *v,
-                    "TT" => m.tt_dio = *v,
-                    _ => {}
-                }
+            match name_upper.as_str() {
+                "VTO" | "VT0" | "VTH" | "VTH0" => m.vto = *v,
+                "KP" => m.kp = *v,
+                "PHI" => m.phi = *v,
+                "LAMBDA" => m.lambda = *v,
+                "THETA" => m.theta = *v,
+                "RD" => m.rd = *v,
+                "RS" => m.rs = *v,
+                "RG" => m.rg = *v,
+                "RDS" => m.rds = *v,
+                "MTRIODE" => m.mtr = *v,
+                "KSUBTHRES" => m.ksubthres = *v,
+                "SUBSHIFT" => m.subshift = *v,
+                "TCVTH" | "VTOTC" => m.tcvth = *v,
+                "TNOM" => m.tnom = *v + 273.15,
+                "MU" | "BEX" => m.mu = *v,
+                "CGDMIN" => m.cgdmin = *v,
+                "CGDMAX" => m.cgdmax = *v,
+                "A" => m.a = *v,
+                "CGS" => m.cgs = *v,
+                // Body diode
+                "IS" => m.is_dio = *v,
+                "N" => m.n_dio = *v,
+                "BV" => m.bv = Some(*v),
+                "IBV" => m.ibv = *v,
+                "NBV" => m.nbv = *v,
+                "CJO" | "CJ" | "CJ0" => m.cjo = *v,
+                "MJ" => m.mj_dio = *v,
+                "VJ" => m.vj_dio = *v,
+                "FC" => m.fc_dio = *v,
+                "TT" => m.tt_dio = *v,
+                _ => {}
             }
         }
         m
@@ -541,7 +539,6 @@ pub fn stamp_vdmos(
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
-    use thevenin_types::{Expr, Param};
     #[cfg(target_arch = "wasm32")]
     use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -573,31 +570,25 @@ mod tests {
     }
 
     #[test]
-    fn from_model_def_picks_pmos() {
-        let mdef = ModelDef {
+    fn from_params_picks_pmos() {
+        let mdef = ModelParams {
             name: "PWR".into(),
             kind: "VDMOSP".into(),
-            params: vec![Param {
-                name: "VTO".into(),
-                value: Expr::Num(-3.0),
-            }],
+            params: vec![("VTO".to_string(), -3.0)],
         };
-        let m = VdmosModel::from_model_def(&mdef);
+        let m = VdmosModel::from_params(&mdef);
         assert_eq!(m.mos_type, VdmosType::Pmos);
         assert_abs_diff_eq!(m.vto, -3.0, epsilon = 1e-15);
     }
 
     #[test]
-    fn from_model_def_pchan_flag() {
-        let mdef = ModelDef {
+    fn from_params_pchan_flag() {
+        let mdef = ModelParams {
             name: "PWR".into(),
             kind: "VDMOS".into(),
-            params: vec![Param {
-                name: "PCHAN".into(),
-                value: Expr::Num(1.0),
-            }],
+            params: vec![("PCHAN".to_string(), 1.0)],
         };
-        let m = VdmosModel::from_model_def(&mdef);
+        let m = VdmosModel::from_params(&mdef);
         assert_eq!(m.mos_type, VdmosType::Pmos);
     }
 

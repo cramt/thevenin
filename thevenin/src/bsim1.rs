@@ -19,7 +19,7 @@
 //! conductance stencil. AC capacitance modelling (small-signal `c**b` terms)
 //! is intentionally out of scope for the 1.0 DC + NR companion cut.
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::diode::VT_NOM;
 use crate::mosfet::{MosfetCompanion, MosfetType};
@@ -273,117 +273,115 @@ impl Bsim1Model {
     /// parameters with L/W sensitivities, junction parameters, overlap
     /// capacitances, and flicker noise. NMOS/PMOS is determined by the
     /// `.model` kind (case-insensitive).
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let mos_type = if model_def.kind.to_uppercase().contains("PMOS") {
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = if model.kind.to_uppercase().contains("PMOS") {
             MosfetType::Pmos
         } else {
             MosfetType::Nmos
         };
         let mut m = Self::new(mos_type);
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    // Vfb (X = baseline) — ngspice keyword: VFB, LVFB, WVFB
-                    "VFB" => m.vfb0 = *v,
-                    "LVFB" => m.vfb_l = *v,
-                    "WVFB" => m.vfb_w = *v,
-                    // Phi
-                    "PHI" => m.phi0 = *v,
-                    "LPHI" => m.phi_l = *v,
-                    "WPHI" => m.phi_w = *v,
-                    // K1
-                    "K1" => m.k1_0 = *v,
-                    "LK1" => m.k1_l = *v,
-                    "WK1" => m.k1_w = *v,
-                    // K2
-                    "K2" => m.k2_0 = *v,
-                    "LK2" => m.k2_l = *v,
-                    "WK2" => m.k2_w = *v,
-                    // Eta (DIBL)
-                    "ETA" => m.eta0 = *v,
-                    "LETA" => m.eta_l = *v,
-                    "WETA" => m.eta_w = *v,
-                    // X2E (Vbs dep of Eta)
-                    "X2E" => m.eta_b0 = *v,
-                    "LX2E" => m.eta_bl = *v,
-                    "WX2E" => m.eta_bw = *v,
-                    // X3E (Vds dep of Eta)
-                    "X3E" => m.eta_d0 = *v,
-                    "LX3E" => m.eta_dl = *v,
-                    "WX3E" => m.eta_dw = *v,
-                    // Δ length / width (µm)
-                    "DL" => m.delta_l = *v,
-                    "DW" => m.delta_w = *v,
-                    // MUZ + X2MZ (Vbs dep of MUZ)
-                    "MUZ" => m.mob_zero = *v,
-                    "X2MZ" => m.mob_zero_b0 = *v,
-                    "LX2MZ" => m.mob_zero_bl = *v,
-                    "WX2MZ" => m.mob_zero_bw = *v,
-                    // MUS + sensitivities
-                    "MUS" => m.mob_vdd0 = *v,
-                    "LMUS" => m.mob_vdd_l = *v,
-                    "WMUS" => m.mob_vdd_w = *v,
-                    "X2MS" => m.mob_vdd_b0 = *v,
-                    "LX2MS" => m.mob_vdd_bl = *v,
-                    "WX2MS" => m.mob_vdd_bw = *v,
-                    "X3MS" => m.mob_vdd_d0 = *v,
-                    "LX3MS" => m.mob_vdd_dl = *v,
-                    "WX3MS" => m.mob_vdd_dw = *v,
-                    // U0 (Vgs dep of mobility): ngspice keyword is U0
-                    "U0" => m.ugs0 = *v,
-                    "LU0" => m.ugs_l = *v,
-                    "WU0" => m.ugs_w = *v,
-                    "X2U0" => m.ugs_b0 = *v,
-                    "LX2U0" => m.ugs_bl = *v,
-                    "WX2U0" => m.ugs_bw = *v,
-                    // U1 (Vds dep / velocity sat): ngspice keyword is U1
-                    "U1" => m.uds0 = *v,
-                    "LU1" => m.uds_l = *v,
-                    "WU1" => m.uds_w = *v,
-                    "X2U1" => m.uds_b0 = *v,
-                    "LX2U1" => m.uds_bl = *v,
-                    "WX2U1" => m.uds_bw = *v,
-                    "X3U1" => m.uds_d0 = *v,
-                    "LX3U1" => m.uds_dl = *v,
-                    "WX3U1" => m.uds_dw = *v,
-                    // N0, NB, ND subthreshold
-                    "N0" => m.subth_slope0 = *v,
-                    "LN0" => m.subth_slope_l = *v,
-                    "WN0" => m.subth_slope_w = *v,
-                    "NB" => m.subth_slope_b0 = *v,
-                    "LNB" => m.subth_slope_bl = *v,
-                    "WNB" => m.subth_slope_bw = *v,
-                    "ND" => m.subth_slope_d0 = *v,
-                    "LND" => m.subth_slope_dl = *v,
-                    "WND" => m.subth_slope_dw = *v,
-                    // Process
-                    "TOX" => m.tox_um = *v,
-                    "TEMP" => m.temp_c = *v,
-                    "VDD" => m.vdd = *v,
-                    // Overlap caps
-                    "CGSO" => m.cgso = *v,
-                    "CGDO" => m.cgdo = *v,
-                    "CGBO" => m.cgbo = *v,
-                    // Channel-charge partitioning
-                    "XPART" => m.xpart = *v != 0.0,
-                    // Junction params
-                    "RSH" => m.rsh = *v,
-                    "JS" => m.js = *v,
-                    "PB" => m.pb = *v,
-                    "MJ" => m.mj = *v,
-                    "PBSW" => m.pbsw = *v,
-                    "MJSW" => m.mjsw = *v,
-                    "CJ" => m.cj = *v,
-                    "CJSW" => m.cjsw = *v,
-                    "WDF" => m.default_width_um = *v,
-                    "DELL" => m.delta_length_um = *v,
-                    // Flicker noise
-                    "KF" => m.kf = *v,
-                    "AF" => m.af = *v,
-                    // Recognised but no-op in this DC port
-                    "LEVEL" => {}
-                    _ => {} // ignore unknown
-                }
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                // Vfb (X = baseline) — ngspice keyword: VFB, LVFB, WVFB
+                "VFB" => m.vfb0 = *v,
+                "LVFB" => m.vfb_l = *v,
+                "WVFB" => m.vfb_w = *v,
+                // Phi
+                "PHI" => m.phi0 = *v,
+                "LPHI" => m.phi_l = *v,
+                "WPHI" => m.phi_w = *v,
+                // K1
+                "K1" => m.k1_0 = *v,
+                "LK1" => m.k1_l = *v,
+                "WK1" => m.k1_w = *v,
+                // K2
+                "K2" => m.k2_0 = *v,
+                "LK2" => m.k2_l = *v,
+                "WK2" => m.k2_w = *v,
+                // Eta (DIBL)
+                "ETA" => m.eta0 = *v,
+                "LETA" => m.eta_l = *v,
+                "WETA" => m.eta_w = *v,
+                // X2E (Vbs dep of Eta)
+                "X2E" => m.eta_b0 = *v,
+                "LX2E" => m.eta_bl = *v,
+                "WX2E" => m.eta_bw = *v,
+                // X3E (Vds dep of Eta)
+                "X3E" => m.eta_d0 = *v,
+                "LX3E" => m.eta_dl = *v,
+                "WX3E" => m.eta_dw = *v,
+                // Δ length / width (µm)
+                "DL" => m.delta_l = *v,
+                "DW" => m.delta_w = *v,
+                // MUZ + X2MZ (Vbs dep of MUZ)
+                "MUZ" => m.mob_zero = *v,
+                "X2MZ" => m.mob_zero_b0 = *v,
+                "LX2MZ" => m.mob_zero_bl = *v,
+                "WX2MZ" => m.mob_zero_bw = *v,
+                // MUS + sensitivities
+                "MUS" => m.mob_vdd0 = *v,
+                "LMUS" => m.mob_vdd_l = *v,
+                "WMUS" => m.mob_vdd_w = *v,
+                "X2MS" => m.mob_vdd_b0 = *v,
+                "LX2MS" => m.mob_vdd_bl = *v,
+                "WX2MS" => m.mob_vdd_bw = *v,
+                "X3MS" => m.mob_vdd_d0 = *v,
+                "LX3MS" => m.mob_vdd_dl = *v,
+                "WX3MS" => m.mob_vdd_dw = *v,
+                // U0 (Vgs dep of mobility): ngspice keyword is U0
+                "U0" => m.ugs0 = *v,
+                "LU0" => m.ugs_l = *v,
+                "WU0" => m.ugs_w = *v,
+                "X2U0" => m.ugs_b0 = *v,
+                "LX2U0" => m.ugs_bl = *v,
+                "WX2U0" => m.ugs_bw = *v,
+                // U1 (Vds dep / velocity sat): ngspice keyword is U1
+                "U1" => m.uds0 = *v,
+                "LU1" => m.uds_l = *v,
+                "WU1" => m.uds_w = *v,
+                "X2U1" => m.uds_b0 = *v,
+                "LX2U1" => m.uds_bl = *v,
+                "WX2U1" => m.uds_bw = *v,
+                "X3U1" => m.uds_d0 = *v,
+                "LX3U1" => m.uds_dl = *v,
+                "WX3U1" => m.uds_dw = *v,
+                // N0, NB, ND subthreshold
+                "N0" => m.subth_slope0 = *v,
+                "LN0" => m.subth_slope_l = *v,
+                "WN0" => m.subth_slope_w = *v,
+                "NB" => m.subth_slope_b0 = *v,
+                "LNB" => m.subth_slope_bl = *v,
+                "WNB" => m.subth_slope_bw = *v,
+                "ND" => m.subth_slope_d0 = *v,
+                "LND" => m.subth_slope_dl = *v,
+                "WND" => m.subth_slope_dw = *v,
+                // Process
+                "TOX" => m.tox_um = *v,
+                "TEMP" => m.temp_c = *v,
+                "VDD" => m.vdd = *v,
+                // Overlap caps
+                "CGSO" => m.cgso = *v,
+                "CGDO" => m.cgdo = *v,
+                "CGBO" => m.cgbo = *v,
+                // Channel-charge partitioning
+                "XPART" => m.xpart = *v != 0.0,
+                // Junction params
+                "RSH" => m.rsh = *v,
+                "JS" => m.js = *v,
+                "PB" => m.pb = *v,
+                "MJ" => m.mj = *v,
+                "PBSW" => m.pbsw = *v,
+                "MJSW" => m.mjsw = *v,
+                "CJ" => m.cj = *v,
+                "CJSW" => m.cjsw = *v,
+                "WDF" => m.default_width_um = *v,
+                "DELL" => m.delta_length_um = *v,
+                // Flicker noise
+                "KF" => m.kf = *v,
+                "AF" => m.af = *v,
+                // Recognised but no-op in this DC port
+                "LEVEL" => {}
+                _ => {} // ignore unknown
             }
         }
         // Limit junction potentials (ngspice b1temp.c lines 37-42).
@@ -1066,7 +1064,6 @@ pub fn stamp_bsim1(
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
-    use thevenin_types::Param;
 
     fn basic_nmos() -> Bsim1Model {
         let mut m = Bsim1Model::new(MosfetType::Nmos);
@@ -1126,49 +1123,22 @@ mod tests {
 
     #[test]
     fn from_model_def_recognises_bsim1_keywords() {
-        let md = ModelDef {
+        let md = ModelParams {
             name: "NCH".to_string(),
             kind: "NMOS".to_string(),
             params: vec![
-                Param {
-                    name: "LEVEL".to_string(),
-                    value: Expr::Num(4.0),
-                },
-                Param {
-                    name: "VFB".to_string(),
-                    value: Expr::Num(-1.0),
-                },
-                Param {
-                    name: "PHI".to_string(),
-                    value: Expr::Num(0.8),
-                },
-                Param {
-                    name: "K1".to_string(),
-                    value: Expr::Num(1.3),
-                },
-                Param {
-                    name: "ETA".to_string(),
-                    value: Expr::Num(0.01),
-                },
-                Param {
-                    name: "MUZ".to_string(),
-                    value: Expr::Num(500.0),
-                },
-                Param {
-                    name: "TOX".to_string(),
-                    value: Expr::Num(0.03),
-                },
-                Param {
-                    name: "VDD".to_string(),
-                    value: Expr::Num(5.0),
-                },
-                Param {
-                    name: "RSH".to_string(),
-                    value: Expr::Num(35.0),
-                },
+                ("LEVEL".to_string(), 4.0),
+                ("VFB".to_string(), -1.0),
+                ("PHI".to_string(), 0.8),
+                ("K1".to_string(), 1.3),
+                ("ETA".to_string(), 0.01),
+                ("MUZ".to_string(), 500.0),
+                ("TOX".to_string(), 0.03),
+                ("VDD".to_string(), 5.0),
+                ("RSH".to_string(), 35.0),
             ],
         };
-        let m = Bsim1Model::from_model_def(&md);
+        let m = Bsim1Model::from_params(&md);
         assert_eq!(m.mos_type, MosfetType::Nmos);
         assert_abs_diff_eq!(m.vfb0, -1.0);
         assert_abs_diff_eq!(m.phi0, 0.8);
@@ -1182,12 +1152,12 @@ mod tests {
 
     #[test]
     fn pmos_inferred_from_model_kind() {
-        let md = ModelDef {
+        let md = ModelParams {
             name: "PCH".to_string(),
             kind: "PMOS".to_string(),
             params: vec![],
         };
-        let m = Bsim1Model::from_model_def(&md);
+        let m = Bsim1Model::from_params(&md);
         assert_eq!(m.mos_type, MosfetType::Pmos);
     }
 

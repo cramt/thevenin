@@ -8,7 +8,7 @@
 //!
 //! Reference: ngspice mesa/ device directory.
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 /// Physical constants matching ngspice (const.h).
 const CHARGE: f64 = 1.602_176_620_8e-19;
@@ -17,13 +17,6 @@ pub const K_OVER_Q: f64 = BOLTZMANN / CHARGE;
 const C_TO_K: f64 = 273.15;
 const EPSI_GAAS: f64 = 12.244 * 8.85418e-12;
 const ROOT2: f64 = std::f64::consts::SQRT_2;
-
-fn expr_val(e: &Expr) -> f64 {
-    match e {
-        Expr::Num(v) => *v,
-        Expr::Param(_) | Expr::Brace(_) => 0.0,
-    }
-}
 
 /// MESA FET model parameters.
 #[derive(Debug, Clone)]
@@ -179,14 +172,14 @@ impl MesaModel {
         m
     }
 
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
+    pub fn from_params(model: &ModelParams) -> Self {
         let mut m = Self::new();
         let mut lambdahf_given = false;
         let mut tf_given = false;
 
-        for p in &model_def.params {
-            let val = expr_val(&p.value);
-            match p.name.to_uppercase().as_str() {
+        for (name, v) in &model.params {
+            let val = *v;
+            match name.to_uppercase().as_str() {
                 "VTO" => m.vto = val,
                 "LAMBDA" => m.lambda = val,
                 "LAMBDAHF" => {

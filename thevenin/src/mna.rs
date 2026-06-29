@@ -13,6 +13,7 @@ use crate::bsim3::{Bsim3Instance, Bsim3Model};
 use crate::bsim4::{Bsim4Instance, Bsim4Model};
 use crate::diode::DiodeModel;
 use crate::jfet::{JfetInstance, JfetModel};
+use crate::model_params::{ModelParams, resolved_params};
 use crate::mosfet::{MosfetInstance, MosfetModel};
 use crate::subckt::flatten_netlist;
 use crate::vbic::{VbicInstance, VbicModel};
@@ -1300,11 +1301,11 @@ fn assemble_mna_flat(
                 node_map.index(cathode);
                 // Check if RS > 0 — need an internal node.
                 let mut dm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    DiodeModel::from_model_def(mdef)
+                    DiodeModel::from_params(&ModelParams::from_model_def(mdef))
                 } else {
                     DiodeModel::default()
                 };
-                dm = dm.with_instance_params(params);
+                dm = dm.with_instance_params(&resolved_params(params));
                 if dm.has_series_resistance() {
                     internal_node_count += 1;
                 }
@@ -1328,14 +1329,14 @@ fn assemble_mna_flat(
                 if level == 4 {
                     // VBIC model
                     let vm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                        VbicModel::from_model_def(mdef)
+                        VbicModel::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         VbicModel::new(crate::vbic::VbicType::Npn)
                     };
                     internal_node_count += vm.internal_node_count();
                 } else {
                     let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                        BjtModel::from_model_def(mdef)
+                        BjtModel::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         BjtModel::new(crate::bjt::BjtType::Npn)
                     };
@@ -1365,7 +1366,7 @@ fn assemble_mna_flat(
                 if level == 8 || level == 49 {
                     // BSIM3
                     let bm = if let Some(mdef) = resolved {
-                        Bsim3Model::from_model_def(mdef)
+                        Bsim3Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         Bsim3Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1374,7 +1375,7 @@ fn assemble_mna_flat(
                 } else if level == 14 || level == 54 {
                     // BSIM4
                     let bm = if let Some(mdef) = resolved {
-                        Bsim4Model::from_model_def(mdef)
+                        Bsim4Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         Bsim4Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1383,7 +1384,9 @@ fn assemble_mna_flat(
                 } else if level == 56 {
                     // BSIM3SOI-DD
                     let bm = if let Some(mdef) = resolved {
-                        crate::bsim3soi_dd::Bsim3SoiDdModel::from_model_def(mdef)
+                        crate::bsim3soi_dd::Bsim3SoiDdModel::from_params(
+                            &ModelParams::from_model_def(mdef),
+                        )
                     } else {
                         crate::bsim3soi_dd::Bsim3SoiDdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1392,7 +1395,9 @@ fn assemble_mna_flat(
                 } else if level == 57 {
                     // BSIM3SOI-PD
                     let bm = if let Some(mdef) = resolved {
-                        crate::bsim3soi_pd::Bsim3SoiPdModel::from_model_def(mdef)
+                        crate::bsim3soi_pd::Bsim3SoiPdModel::from_params(
+                            &ModelParams::from_model_def(mdef),
+                        )
                     } else {
                         crate::bsim3soi_pd::Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1401,7 +1406,9 @@ fn assemble_mna_flat(
                 } else if level == 55 {
                     // BSIM3SOI-FD
                     let bm = if let Some(mdef) = resolved {
-                        crate::bsim3soi_fd::Bsim3SoiFdModel::from_model_def(mdef)
+                        crate::bsim3soi_fd::Bsim3SoiFdModel::from_params(
+                            &ModelParams::from_model_def(mdef),
+                        )
                     } else {
                         crate::bsim3soi_fd::Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1411,7 +1418,7 @@ fn assemble_mna_flat(
                 } else if level == 2 {
                     // MOS Level 2
                     let mm = if let Some(mdef) = resolved {
-                        crate::mos2::Mos2Model::from_model_def(mdef)
+                        crate::mos2::Mos2Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::mos2::Mos2Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1419,7 +1426,7 @@ fn assemble_mna_flat(
                 } else if level == 3 {
                     // MOS Level 3 (semi-empirical short-channel)
                     let mm = if let Some(mdef) = resolved {
-                        crate::mos3::Mos3Model::from_model_def(mdef)
+                        crate::mos3::Mos3Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::mos3::Mos3Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1427,7 +1434,7 @@ fn assemble_mna_flat(
                 } else if level == 4 {
                     // BSIM1 (Berkeley short-channel IGFET, LEVEL=4)
                     let bm = if let Some(mdef) = resolved {
-                        crate::bsim1::Bsim1Model::from_model_def(mdef)
+                        crate::bsim1::Bsim1Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::bsim1::Bsim1Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1438,7 +1445,7 @@ fn assemble_mna_flat(
                     // internal nodes when RSH·NRD or RSH·NRS are nonzero (same
                     // shape as bsim3/bsim4 series-resistance handling).
                     let mm = if let Some(mdef) = resolved {
-                        crate::bsim2::Bsim2Model::from_model_def(mdef)
+                        crate::bsim2::Bsim2Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1452,7 +1459,7 @@ fn assemble_mna_flat(
                 } else if level == 6 {
                     // MOS6
                     let mm = if let Some(mdef) = resolved {
-                        crate::mos6::Mos6Model::from_model_def(mdef)
+                        crate::mos6::Mos6Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::mos6::Mos6Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1460,14 +1467,14 @@ fn assemble_mna_flat(
                 } else if level == 68 {
                     // HiSIM2 (bulk surface-potential, simplified port)
                     let mm = if let Some(mdef) = resolved {
-                        crate::hisim::HisimModel::from_model_def(mdef)
+                        crate::hisim::HisimModel::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::hisim::HisimModel::new(crate::mosfet::MosfetType::Nmos)
                     };
                     internal_node_count += mm.internal_node_count();
                 } else {
                     let mm = if let Some(mdef) = resolved {
-                        MosfetModel::from_model_def(mdef)
+                        MosfetModel::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         MosfetModel::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -1486,7 +1493,7 @@ fn assemble_mna_flat(
                 node_map.index(s);
                 let _ = params;
                 let jm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    JfetModel::from_model_def(mdef)
+                    JfetModel::from_params(&ModelParams::from_model_def(mdef))
                 } else {
                     JfetModel::new(crate::jfet::JfetType::Njf)
                 };
@@ -1508,19 +1515,21 @@ fn assemble_mna_flat(
                 let level = get_mosfet_level(mdef_opt, params);
                 match model_kind.as_deref() {
                     Some("NMF" | "PMF") if level == 1 => {
-                        let mm = crate::mesfet::MesfetModel::from_model_def(mdef_opt.unwrap());
+                        let mm = crate::mesfet::MesfetModel::from_params(
+                            &ModelParams::from_model_def(mdef_opt.unwrap()),
+                        );
                         internal_node_count += mm.internal_node_count();
                     }
                     Some("NHFET" | "PHFET") => {
-                        let mm = crate::hfet::HfetModel::from_model_def_with_level(
-                            mdef_opt.unwrap(),
+                        let mm = crate::hfet::HfetModel::from_params_with_level(
+                            &ModelParams::from_model_def(mdef_opt.unwrap()),
                             level,
                         );
                         internal_node_count += mm.internal_node_count();
                     }
                     _ => {
                         let mm = if let Some(mdef) = mdef_opt {
-                            crate::mesa::MesaModel::from_model_def(mdef)
+                            crate::mesa::MesaModel::from_params(&ModelParams::from_model_def(mdef))
                         } else {
                             crate::mesa::MesaModel::new()
                         };
@@ -1723,11 +1732,11 @@ fn assemble_mna_flat(
                 params,
             } => {
                 let mut dm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    DiodeModel::from_model_def(mdef)
+                    DiodeModel::from_params(&ModelParams::from_model_def(mdef))
                 } else {
                     DiodeModel::default()
                 };
-                dm = dm.with_instance_params(params);
+                dm = dm.with_instance_params(&resolved_params(params));
 
                 let anode_idx = node_map.get(anode);
                 let cathode_idx = node_map.get(cathode);
@@ -1798,7 +1807,7 @@ fn assemble_mna_flat(
                 if level == 4 {
                     // VBIC model
                     let mut vm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                        VbicModel::from_model_def(mdef)
+                        VbicModel::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         VbicModel::new(crate::vbic::VbicType::Npn)
                     };
@@ -1888,11 +1897,11 @@ fn assemble_mna_flat(
                     });
                 } else {
                     let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                        BjtModel::from_model_def(mdef)
+                        BjtModel::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         BjtModel::new(crate::bjt::BjtType::Npn)
                     };
-                    let bm = bm.with_instance_params(params);
+                    let bm = bm.with_instance_params(&resolved_params(params));
 
                     let col_idx = node_map.get(c);
                     let base_idx = node_map.get(b);
@@ -2004,7 +2013,7 @@ fn assemble_mna_flat(
                 if level == 8 || level == 49 {
                     // BSIM3
                     let bm = if let Some(mdef) = resolved {
-                        Bsim3Model::from_model_def(mdef)
+                        Bsim3Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         Bsim3Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2053,7 +2062,7 @@ fn assemble_mna_flat(
                 } else if level == 14 || level == 54 {
                     // BSIM4
                     let bm = if let Some(mdef) = resolved {
-                        Bsim4Model::from_model_def(mdef)
+                        Bsim4Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         Bsim4Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2115,7 +2124,9 @@ fn assemble_mna_flat(
                 } else if level == 56 {
                     // BSIM3SOI-DD
                     let bm = if let Some(mdef) = resolved {
-                        crate::bsim3soi_dd::Bsim3SoiDdModel::from_model_def(mdef)
+                        crate::bsim3soi_dd::Bsim3SoiDdModel::from_params(
+                            &ModelParams::from_model_def(mdef),
+                        )
                     } else {
                         crate::bsim3soi_dd::Bsim3SoiDdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2178,7 +2189,9 @@ fn assemble_mna_flat(
                 } else if level == 57 {
                     // BSIM3SOI-PD
                     let bm = if let Some(mdef) = resolved {
-                        crate::bsim3soi_pd::Bsim3SoiPdModel::from_model_def(mdef)
+                        crate::bsim3soi_pd::Bsim3SoiPdModel::from_params(
+                            &ModelParams::from_model_def(mdef),
+                        )
                     } else {
                         crate::bsim3soi_pd::Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2241,7 +2254,9 @@ fn assemble_mna_flat(
                 } else if level == 55 {
                     // BSIM3SOI-FD
                     let bm = if let Some(mdef) = resolved {
-                        crate::bsim3soi_fd::Bsim3SoiFdModel::from_model_def(mdef)
+                        crate::bsim3soi_fd::Bsim3SoiFdModel::from_params(
+                            &ModelParams::from_model_def(mdef),
+                        )
                     } else {
                         crate::bsim3soi_fd::Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2313,7 +2328,7 @@ fn assemble_mna_flat(
                 } else if level == 2 {
                     // MOS Level 2
                     let mm = if let Some(mdef) = resolved {
-                        crate::mos2::Mos2Model::from_model_def(mdef)
+                        crate::mos2::Mos2Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::mos2::Mos2Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2379,7 +2394,7 @@ fn assemble_mna_flat(
                 } else if level == 3 {
                     // MOS Level 3 (semi-empirical short-channel)
                     let mm = if let Some(mdef) = resolved {
-                        crate::mos3::Mos3Model::from_model_def(mdef)
+                        crate::mos3::Mos3Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::mos3::Mos3Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2445,7 +2460,7 @@ fn assemble_mna_flat(
                 } else if level == 4 {
                     // BSIM1 (Berkeley short-channel IGFET, LEVEL=4)
                     let bm = if let Some(mdef) = resolved {
-                        crate::bsim1::Bsim1Model::from_model_def(mdef)
+                        crate::bsim1::Bsim1Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::bsim1::Bsim1Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2518,7 +2533,7 @@ fn assemble_mna_flat(
                 } else if level == 5 {
                     // BSIM2 (LEVEL=5)
                     let mm = if let Some(mdef) = resolved {
-                        crate::bsim2::Bsim2Model::from_model_def(mdef)
+                        crate::bsim2::Bsim2Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2598,7 +2613,7 @@ fn assemble_mna_flat(
                 } else if level == 6 {
                     // MOS6
                     let mm = if let Some(mdef) = resolved {
-                        crate::mos6::Mos6Model::from_model_def(mdef)
+                        crate::mos6::Mos6Model::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::mos6::Mos6Model::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2665,7 +2680,7 @@ fn assemble_mna_flat(
                 } else if level == 68 {
                     // HiSIM2 (bulk surface-potential, simplified port)
                     let mm = if let Some(mdef) = resolved {
-                        crate::hisim::HisimModel::from_model_def(mdef)
+                        crate::hisim::HisimModel::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         crate::hisim::HisimModel::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2727,7 +2742,7 @@ fn assemble_mna_flat(
                     );
                 } else {
                     let mm = if let Some(mdef) = resolved {
-                        MosfetModel::from_model_def(mdef)
+                        MosfetModel::from_params(&ModelParams::from_model_def(mdef))
                     } else {
                         MosfetModel::new(crate::mosfet::MosfetType::Nmos)
                     };
@@ -2802,7 +2817,7 @@ fn assemble_mna_flat(
                 params,
             } => {
                 let jm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    JfetModel::from_model_def(mdef)
+                    JfetModel::from_params(&ModelParams::from_model_def(mdef))
                 } else {
                     JfetModel::new(crate::jfet::JfetType::Njf)
                 };
@@ -2869,7 +2884,9 @@ fn assemble_mna_flat(
                 let level = get_mosfet_level(mdef_opt, params);
                 match model_kind.as_deref() {
                     Some("NMF" | "PMF") if level == 1 => {
-                        let mm = crate::mesfet::MesfetModel::from_model_def(mdef_opt.unwrap());
+                        let mm = crate::mesfet::MesfetModel::from_params(
+                            &ModelParams::from_model_def(mdef_opt.unwrap()),
+                        );
 
                         // Extract AREA and M from instance params
                         let mut area = 1.0;
@@ -2912,8 +2929,8 @@ fn assemble_mna_flat(
                         });
                     }
                     Some("NHFET" | "PHFET") => {
-                        let mm = crate::hfet::HfetModel::from_model_def_with_level(
-                            mdef_opt.unwrap(),
+                        let mm = crate::hfet::HfetModel::from_params_with_level(
+                            &ModelParams::from_model_def(mdef_opt.unwrap()),
                             level,
                         );
 
@@ -2985,7 +3002,7 @@ fn assemble_mna_flat(
                     }
                     _ => {
                         let mm = if let Some(mdef) = mdef_opt {
-                            crate::mesa::MesaModel::from_model_def(mdef)
+                            crate::mesa::MesaModel::from_params(&ModelParams::from_model_def(mdef))
                         } else {
                             crate::mesa::MesaModel::new()
                         };
@@ -3232,7 +3249,7 @@ fn assemble_mna_flat(
                 ..
             } => {
                 let ltra_model = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    crate::ltra::LtraModel::from_model_def(mdef)
+                    crate::ltra::LtraModel::from_params(&ModelParams::from_model_def(mdef))
                 } else {
                     return Err(MnaError::UnsupportedElement(format!(
                         "{}: unknown LTRA model '{}'",
@@ -3277,7 +3294,7 @@ fn assemble_mna_flat(
                 params,
             } => {
                 let txl_model = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    crate::txl::TxlModel::from_model_def(mdef)
+                    crate::txl::TxlModel::from_params(&ModelParams::from_model_def(mdef))
                 } else {
                     return Err(MnaError::UnsupportedElement(format!(
                         "{}: unknown TXL model '{}'",
@@ -3338,7 +3355,7 @@ fn assemble_mna_flat(
             } => {
                 let no_l = in_nodes.len();
                 let cpl_model = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    crate::cpl::CplModel::from_model_def(mdef, no_l)
+                    crate::cpl::CplModel::from_params(&ModelParams::from_model_def(mdef), no_l)
                 } else {
                     return Err(MnaError::UnsupportedElement(format!(
                         "{}: unknown CPL model '{}'",

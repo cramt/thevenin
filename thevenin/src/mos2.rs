@@ -4,7 +4,7 @@
 //! short/narrow channel effects, subthreshold conduction, and channel
 //! length modulation. Translated from ngspice mos2load.c / mos2temp.c.
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::diode::VT_NOM;
 use crate::mosfet::{MosfetCompanion, MosfetType};
@@ -146,9 +146,9 @@ impl Mos2Model {
         }
     }
 
-    /// Create a `Mos2Model` from a netlist `.model` definition.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let mos_type = if model_def.kind.to_uppercase().contains("PMOS") {
+    /// Create a `Mos2Model` from resolved `.model` parameters.
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = if model.kind.to_uppercase().contains("PMOS") {
             MosfetType::Pmos
         } else {
             MosfetType::Nmos
@@ -159,60 +159,58 @@ impl Mos2Model {
         let mut phi_given = false;
         let mut nsub_given = false;
         let mut kp_given = false;
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "VTO" | "VT0" => {
-                        m.vto = *v;
-                        vto_given = true;
-                    }
-                    "KP" => {
-                        m.kp = *v;
-                        kp_given = true;
-                    }
-                    "GAMMA" => {
-                        m.gamma = *v;
-                        gamma_given = true;
-                    }
-                    "PHI" => {
-                        m.phi = *v;
-                        phi_given = true;
-                    }
-                    "LAMBDA" => m.lambda = *v,
-                    "RD" => m.rd = *v,
-                    "RS" => m.rs = *v,
-                    "CBD" => m.cbd = *v,
-                    "CBS" => m.cbs = *v,
-                    "IS" => m.is = *v,
-                    "PB" => m.pb = *v,
-                    "CGSO" => m.cgso = *v,
-                    "CGDO" => m.cgdo = *v,
-                    "CGBO" => m.cgbo = *v,
-                    "CJ" => m.cj = *v,
-                    "MJ" => m.mj = *v,
-                    "CJSW" => m.cjsw = *v,
-                    "MJSW" => m.mjsw = *v,
-                    "TOX" => m.tox = *v,
-                    "LD" => m.ld = *v,
-                    "NSUB" => {
-                        m.nsub = *v;
-                        nsub_given = true;
-                    }
-                    "U0" | "UO" => m.u0 = *v,
-                    "FC" => m.fc = *v,
-                    "KF" => m.kf = *v,
-                    "AF" => m.af = *v,
-                    "NSS" => m.nss = *v,
-                    "TPG" => m.tpg = *v,
-                    "UCRIT" => m.ucrit = *v,
-                    "UEXP" => m.uexp = *v,
-                    "VMAX" => m.vmax = *v,
-                    "XJ" => m.xj = *v,
-                    "DELTA" => m.delta = *v,
-                    "NFS" => m.nfs = *v,
-                    "NEFF" => m.neff = *v,
-                    _ => {} // ignore unknown params (LEVEL, etc.)
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "VTO" | "VT0" => {
+                    m.vto = *v;
+                    vto_given = true;
                 }
+                "KP" => {
+                    m.kp = *v;
+                    kp_given = true;
+                }
+                "GAMMA" => {
+                    m.gamma = *v;
+                    gamma_given = true;
+                }
+                "PHI" => {
+                    m.phi = *v;
+                    phi_given = true;
+                }
+                "LAMBDA" => m.lambda = *v,
+                "RD" => m.rd = *v,
+                "RS" => m.rs = *v,
+                "CBD" => m.cbd = *v,
+                "CBS" => m.cbs = *v,
+                "IS" => m.is = *v,
+                "PB" => m.pb = *v,
+                "CGSO" => m.cgso = *v,
+                "CGDO" => m.cgdo = *v,
+                "CGBO" => m.cgbo = *v,
+                "CJ" => m.cj = *v,
+                "MJ" => m.mj = *v,
+                "CJSW" => m.cjsw = *v,
+                "MJSW" => m.mjsw = *v,
+                "TOX" => m.tox = *v,
+                "LD" => m.ld = *v,
+                "NSUB" => {
+                    m.nsub = *v;
+                    nsub_given = true;
+                }
+                "U0" | "UO" => m.u0 = *v,
+                "FC" => m.fc = *v,
+                "KF" => m.kf = *v,
+                "AF" => m.af = *v,
+                "NSS" => m.nss = *v,
+                "TPG" => m.tpg = *v,
+                "UCRIT" => m.ucrit = *v,
+                "UEXP" => m.uexp = *v,
+                "VMAX" => m.vmax = *v,
+                "XJ" => m.xj = *v,
+                "DELTA" => m.delta = *v,
+                "NFS" => m.nfs = *v,
+                "NEFF" => m.neff = *v,
+                _ => {} // ignore unknown params (LEVEL, etc.)
             }
         }
         m.compute_process_params(vto_given, gamma_given, phi_given, nsub_given, kp_given);
@@ -1049,7 +1047,6 @@ pub fn stamp_mos2(
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
-    use thevenin_types::Param;
 
     #[test]
     fn test_default_mos2_model() {
@@ -1066,57 +1063,24 @@ mod tests {
 
     #[test]
     fn test_from_model_def_with_level2_params() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "M".to_string(),
             kind: "NMOS".to_string(),
             params: vec![
-                Param {
-                    name: "NSUB".to_string(),
-                    value: Expr::Num(2.2e15),
-                },
-                Param {
-                    name: "UO".to_string(),
-                    value: Expr::Num(575.0),
-                },
-                Param {
-                    name: "UCRIT".to_string(),
-                    value: Expr::Num(49e3),
-                },
-                Param {
-                    name: "UEXP".to_string(),
-                    value: Expr::Num(0.1),
-                },
-                Param {
-                    name: "TOX".to_string(),
-                    value: Expr::Num(0.11e-6),
-                },
-                Param {
-                    name: "XJ".to_string(),
-                    value: Expr::Num(2.95e-6),
-                },
-                Param {
-                    name: "LEVEL".to_string(),
-                    value: Expr::Num(2.0),
-                },
-                Param {
-                    name: "LD".to_string(),
-                    value: Expr::Num(2.4485e-6),
-                },
-                Param {
-                    name: "NSS".to_string(),
-                    value: Expr::Num(3.2e10),
-                },
-                Param {
-                    name: "KP".to_string(),
-                    value: Expr::Num(2e-5),
-                },
-                Param {
-                    name: "PHI".to_string(),
-                    value: Expr::Num(0.6),
-                },
+                ("NSUB".to_string(), 2.2e15),
+                ("UO".to_string(), 575.0),
+                ("UCRIT".to_string(), 49e3),
+                ("UEXP".to_string(), 0.1),
+                ("TOX".to_string(), 0.11e-6),
+                ("XJ".to_string(), 2.95e-6),
+                ("LEVEL".to_string(), 2.0),
+                ("LD".to_string(), 2.4485e-6),
+                ("NSS".to_string(), 3.2e10),
+                ("KP".to_string(), 2e-5),
+                ("PHI".to_string(), 0.6),
             ],
         };
-        let m = Mos2Model::from_model_def(&model_def);
+        let m = Mos2Model::from_params(&model_def);
         assert_eq!(m.mos_type, MosfetType::Nmos);
         assert_abs_diff_eq!(m.ucrit, 49e3, epsilon = 1e-6);
         assert_abs_diff_eq!(m.uexp, 0.1, epsilon = 1e-15);

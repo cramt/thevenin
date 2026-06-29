@@ -7,21 +7,13 @@
 //! - HFET1: ngspice hfet1/ directory (hfetload.c, hfetdefs.h, hfetsetup.c)
 //! - HFET2: ngspice hfet2/ directory (hfet2load.c, hfet2defs.h, hfet2setup.c)
 
-use thevenin_types::{Expr, ModelDef};
-
 use crate::mna::stamp_conductance;
+use crate::model_params::ModelParams;
 use crate::sparse::SparseMatrix;
 
 const CHARGE: f64 = 1.602_176_634e-19;
 const BOLTZMANN: f64 = 1.380_649e-23;
 const K_OVER_Q: f64 = BOLTZMANN / CHARGE;
-
-fn expr_val(e: &Expr) -> f64 {
-    match e {
-        Expr::Num(v) => *v,
-        Expr::Param(_) | Expr::Brace(_) => 0.0,
-    }
-}
 
 /// HFET device type.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -214,12 +206,12 @@ impl HfetModel {
         }
     }
 
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        Self::from_model_def_with_level(model_def, 5)
+    pub fn from_params(model: &ModelParams) -> Self {
+        Self::from_params_with_level(model, 5)
     }
 
-    pub fn from_model_def_with_level(model_def: &ModelDef, level: i32) -> Self {
-        let kind = model_def.kind.to_uppercase();
+    pub fn from_params_with_level(model: &ModelParams, level: i32) -> Self {
+        let kind = model.kind.to_uppercase();
         let device_type = if kind == "PHFET" {
             HfetType::Phfet
         } else {
@@ -227,9 +219,9 @@ impl HfetModel {
         };
         let mut m = Self::new_with_level(device_type, level);
 
-        for p in &model_def.params {
-            let val = expr_val(&p.value);
-            match p.name.to_uppercase().as_str() {
+        for (name, v) in &model.params {
+            let val = *v;
+            match name.to_uppercase().as_str() {
                 "VTO" | "VT0" => m.vt0 = val,
                 "LAMBDA" => m.lambda = val,
                 "ETA" => m.eta = val,
@@ -924,29 +916,17 @@ mod tests {
 
     #[test]
     fn hfet_model_parse() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "hfet".to_string(),
             kind: "NHFET".to_string(),
             params: vec![
-                thevenin_types::Param {
-                    name: "VTO".to_string(),
-                    value: Expr::Num(0.3),
-                },
-                thevenin_types::Param {
-                    name: "MU".to_string(),
-                    value: Expr::Num(0.385),
-                },
-                thevenin_types::Param {
-                    name: "NMAX".to_string(),
-                    value: Expr::Num(6e15),
-                },
-                thevenin_types::Param {
-                    name: "LAMBDA".to_string(),
-                    value: Expr::Num(0.17),
-                },
+                ("VTO".to_string(), 0.3),
+                ("MU".to_string(), 0.385),
+                ("NMAX".to_string(), 6e15),
+                ("LAMBDA".to_string(), 0.17),
             ],
         };
-        let m = HfetModel::from_model_def(&model_def);
+        let m = HfetModel::from_params(&model_def);
         assert_eq!(m.device_type, HfetType::Nhfet);
         // vt0 is signed by device type in precompute
         assert!((m.vt0 - 0.3).abs() < 1e-10);
@@ -1019,135 +999,51 @@ mod tests {
     #[test]
     fn hfet_dcfl_initjct_companion_values() {
         // Build driver model (adrv): enhancement, vt0=0.3
-        let drv_def = ModelDef {
+        let drv_def = ModelParams {
             name: "adrv".to_string(),
             kind: "NHFET".to_string(),
             params: vec![
-                thevenin_types::Param {
-                    name: "RD".into(),
-                    value: Expr::Num(60.0),
-                },
-                thevenin_types::Param {
-                    name: "RS".into(),
-                    value: Expr::Num(60.0),
-                },
-                thevenin_types::Param {
-                    name: "M".into(),
-                    value: Expr::Num(2.57),
-                },
-                thevenin_types::Param {
-                    name: "LAMBDA".into(),
-                    value: Expr::Num(0.17),
-                },
-                thevenin_types::Param {
-                    name: "VS".into(),
-                    value: Expr::Num(1.5e5),
-                },
-                thevenin_types::Param {
-                    name: "MU".into(),
-                    value: Expr::Num(0.385),
-                },
-                thevenin_types::Param {
-                    name: "VTO".into(),
-                    value: Expr::Num(0.3),
-                },
-                thevenin_types::Param {
-                    name: "ETA".into(),
-                    value: Expr::Num(1.32),
-                },
-                thevenin_types::Param {
-                    name: "SIGMA0".into(),
-                    value: Expr::Num(0.04),
-                },
-                thevenin_types::Param {
-                    name: "VSIGMA".into(),
-                    value: Expr::Num(0.1),
-                },
-                thevenin_types::Param {
-                    name: "VSIGMAT".into(),
-                    value: Expr::Num(0.3),
-                },
-                thevenin_types::Param {
-                    name: "JS1S".into(),
-                    value: Expr::Num(1e-12),
-                },
-                thevenin_types::Param {
-                    name: "JS1D".into(),
-                    value: Expr::Num(1e-12),
-                },
-                thevenin_types::Param {
-                    name: "NMAX".into(),
-                    value: Expr::Num(6e15),
-                },
+                ("RD".into(), 60.0),
+                ("RS".into(), 60.0),
+                ("M".into(), 2.57),
+                ("LAMBDA".into(), 0.17),
+                ("VS".into(), 1.5e5),
+                ("MU".into(), 0.385),
+                ("VTO".into(), 0.3),
+                ("ETA".into(), 1.32),
+                ("SIGMA0".into(), 0.04),
+                ("VSIGMA".into(), 0.1),
+                ("VSIGMAT".into(), 0.3),
+                ("JS1S".into(), 1e-12),
+                ("JS1D".into(), 1e-12),
+                ("NMAX".into(), 6e15),
             ],
         };
-        let drv_model = HfetModel::from_model_def_with_level(&drv_def, 5);
+        let drv_model = HfetModel::from_params_with_level(&drv_def, 5);
         let drv_pre = HfetPrecomp::compute(&drv_model, 300.15, 300.15, 10e-6, 1e-6);
 
         // Build load model (aload): depletion, vt0=-0.3
-        let load_def = ModelDef {
+        let load_def = ModelParams {
             name: "aload".to_string(),
             kind: "NHFET".to_string(),
             params: vec![
-                thevenin_types::Param {
-                    name: "RD".into(),
-                    value: Expr::Num(60.0),
-                },
-                thevenin_types::Param {
-                    name: "RS".into(),
-                    value: Expr::Num(60.0),
-                },
-                thevenin_types::Param {
-                    name: "M".into(),
-                    value: Expr::Num(2.57),
-                },
-                thevenin_types::Param {
-                    name: "LAMBDA".into(),
-                    value: Expr::Num(0.17),
-                },
-                thevenin_types::Param {
-                    name: "VS".into(),
-                    value: Expr::Num(1.5e5),
-                },
-                thevenin_types::Param {
-                    name: "MU".into(),
-                    value: Expr::Num(0.385),
-                },
-                thevenin_types::Param {
-                    name: "VTO".into(),
-                    value: Expr::Num(-0.3),
-                },
-                thevenin_types::Param {
-                    name: "ETA".into(),
-                    value: Expr::Num(1.32),
-                },
-                thevenin_types::Param {
-                    name: "SIGMA0".into(),
-                    value: Expr::Num(0.04),
-                },
-                thevenin_types::Param {
-                    name: "VSIGMA".into(),
-                    value: Expr::Num(0.1),
-                },
-                thevenin_types::Param {
-                    name: "VSIGMAT".into(),
-                    value: Expr::Num(0.3),
-                },
-                thevenin_types::Param {
-                    name: "JS1S".into(),
-                    value: Expr::Num(1e-12),
-                },
-                thevenin_types::Param {
-                    name: "JS1D".into(),
-                    value: Expr::Num(1e-12),
-                },
-                thevenin_types::Param {
-                    name: "NMAX".into(),
-                    value: Expr::Num(6e15),
-                },
+                ("RD".into(), 60.0),
+                ("RS".into(), 60.0),
+                ("M".into(), 2.57),
+                ("LAMBDA".into(), 0.17),
+                ("VS".into(), 1.5e5),
+                ("MU".into(), 0.385),
+                ("VTO".into(), -0.3),
+                ("ETA".into(), 1.32),
+                ("SIGMA0".into(), 0.04),
+                ("VSIGMA".into(), 0.1),
+                ("VSIGMAT".into(), 0.3),
+                ("JS1S".into(), 1e-12),
+                ("JS1D".into(), 1e-12),
+                ("NMAX".into(), 6e15),
             ],
         };
-        let load_model = HfetModel::from_model_def_with_level(&load_def, 5);
+        let load_model = HfetModel::from_params_with_level(&load_def, 5);
         let load_pre = HfetPrecomp::compute(&load_model, 300.15, 300.15, 10e-6, 1e-6);
 
         let drv_inst = HfetInstance {

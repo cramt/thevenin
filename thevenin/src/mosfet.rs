@@ -4,7 +4,7 @@
 //! linearization. Supports NMOS and PMOS types with body effect (GAMMA),
 //! channel length modulation (LAMBDA), and bulk junction diodes.
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::diode::VT_NOM;
 use crate::physics::{EXP_LIMIT, safe_exp};
@@ -122,9 +122,9 @@ impl MosfetModel {
         }
     }
 
-    /// Create a `MosfetModel` from a netlist `.model` definition.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let mos_type = if model_def.kind.to_uppercase().contains("PMOS") {
+    /// Create a `MosfetModel` from resolved `.model` parameters.
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = if model.kind.to_uppercase().contains("PMOS") {
             MosfetType::Pmos
         } else {
             MosfetType::Nmos
@@ -135,53 +135,51 @@ impl MosfetModel {
         let mut phi_given = false;
         let mut nsub_given = false;
         let mut kp_given = false;
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "VTO" | "VT0" => {
-                        m.vto = *v;
-                        vto_given = true;
-                    }
-                    "KP" => {
-                        m.kp = *v;
-                        kp_given = true;
-                    }
-                    "GAMMA" => {
-                        m.gamma = *v;
-                        gamma_given = true;
-                    }
-                    "PHI" => {
-                        m.phi = *v;
-                        phi_given = true;
-                    }
-                    "LAMBDA" => m.lambda = *v,
-                    "RD" => m.rd = *v,
-                    "RS" => m.rs = *v,
-                    "CBD" => m.cbd = *v,
-                    "CBS" => m.cbs = *v,
-                    "IS" => m.is = *v,
-                    "PB" => m.pb = *v,
-                    "CGSO" => m.cgso = *v,
-                    "CGDO" => m.cgdo = *v,
-                    "CGBO" => m.cgbo = *v,
-                    "CJ" => m.cj = *v,
-                    "MJ" => m.mj = *v,
-                    "CJSW" => m.cjsw = *v,
-                    "MJSW" => m.mjsw = *v,
-                    "TOX" => m.tox = *v,
-                    "LD" => m.ld = *v,
-                    "NSUB" => {
-                        m.nsub = *v;
-                        nsub_given = true;
-                    }
-                    "U0" | "UO" => m.u0 = *v,
-                    "FC" => m.fc = *v,
-                    "KF" => m.kf = *v,
-                    "AF" => m.af = *v,
-                    "NSS" => m.nss = *v,
-                    "TPG" => m.tpg = *v,
-                    _ => {} // ignore unknown params (LEVEL, UCRIT, UEXP, XJ, etc.)
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "VTO" | "VT0" => {
+                    m.vto = *v;
+                    vto_given = true;
                 }
+                "KP" => {
+                    m.kp = *v;
+                    kp_given = true;
+                }
+                "GAMMA" => {
+                    m.gamma = *v;
+                    gamma_given = true;
+                }
+                "PHI" => {
+                    m.phi = *v;
+                    phi_given = true;
+                }
+                "LAMBDA" => m.lambda = *v,
+                "RD" => m.rd = *v,
+                "RS" => m.rs = *v,
+                "CBD" => m.cbd = *v,
+                "CBS" => m.cbs = *v,
+                "IS" => m.is = *v,
+                "PB" => m.pb = *v,
+                "CGSO" => m.cgso = *v,
+                "CGDO" => m.cgdo = *v,
+                "CGBO" => m.cgbo = *v,
+                "CJ" => m.cj = *v,
+                "MJ" => m.mj = *v,
+                "CJSW" => m.cjsw = *v,
+                "MJSW" => m.mjsw = *v,
+                "TOX" => m.tox = *v,
+                "LD" => m.ld = *v,
+                "NSUB" => {
+                    m.nsub = *v;
+                    nsub_given = true;
+                }
+                "U0" | "UO" => m.u0 = *v,
+                "FC" => m.fc = *v,
+                "KF" => m.kf = *v,
+                "AF" => m.af = *v,
+                "NSS" => m.nss = *v,
+                "TPG" => m.tpg = *v,
+                _ => {} // ignore unknown params (LEVEL, UCRIT, UEXP, XJ, etc.)
             }
         }
         // Derive parameters from process params, matching ngspice mos2temp.c
@@ -723,7 +721,6 @@ pub fn qmeyer(vgs: f64, vgd: f64, von: f64, vdsat: f64, phi: f64, cox: f64) -> (
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
-    use thevenin_types::Param;
     #[cfg(target_arch = "wasm32")]
     use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -741,29 +738,17 @@ mod tests {
 
     #[test]
     fn test_from_model_def_nmos() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "N1".to_string(),
             kind: "NMOS".to_string(),
             params: vec![
-                Param {
-                    name: "VTO".to_string(),
-                    value: Expr::Num(0.7),
-                },
-                Param {
-                    name: "KP".to_string(),
-                    value: Expr::Num(1.1e-4),
-                },
-                Param {
-                    name: "GAMMA".to_string(),
-                    value: Expr::Num(0.4),
-                },
-                Param {
-                    name: "LAMBDA".to_string(),
-                    value: Expr::Num(0.04),
-                },
+                ("VTO".to_string(), 0.7),
+                ("KP".to_string(), 1.1e-4),
+                ("GAMMA".to_string(), 0.4),
+                ("LAMBDA".to_string(), 0.04),
             ],
         };
-        let m = MosfetModel::from_model_def(&model_def);
+        let m = MosfetModel::from_params(&model_def);
         assert_eq!(m.mos_type, MosfetType::Nmos);
         assert_abs_diff_eq!(m.vto, 0.7, epsilon = 1e-15);
         assert_abs_diff_eq!(m.kp, 1.1e-4, epsilon = 1e-15);
@@ -773,15 +758,12 @@ mod tests {
 
     #[test]
     fn test_from_model_def_pmos() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "P1".to_string(),
             kind: "PMOS".to_string(),
-            params: vec![Param {
-                name: "VTO".to_string(),
-                value: Expr::Num(-0.7),
-            }],
+            params: vec![("VTO".to_string(), -0.7)],
         };
-        let m = MosfetModel::from_model_def(&model_def);
+        let m = MosfetModel::from_params(&model_def);
         assert_eq!(m.mos_type, MosfetType::Pmos);
         assert_abs_diff_eq!(m.vto, -0.7, epsilon = 1e-15);
     }

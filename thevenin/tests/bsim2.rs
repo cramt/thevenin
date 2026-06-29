@@ -170,38 +170,19 @@ fn bsim2_body_effect_reduces_current() {
 /// model struct (not silently ignored by the LEVEL=5 dispatch).
 #[test]
 fn bsim2_model_def_parameter_pickup() {
-    use thevenin_types::{Expr, ModelDef, Param};
-    let md = ModelDef {
+    let md = thevenin::model_params::ModelParams {
         name: "TST".to_string(),
         kind: "NMOS".to_string(),
         params: vec![
-            Param {
-                name: "LEVEL".to_string(),
-                value: Expr::Num(5.0),
-            },
-            Param {
-                name: "vfb".to_string(),
-                value: Expr::Num(-0.79),
-            },
-            Param {
-                name: "phi".to_string(),
-                value: Expr::Num(0.8),
-            },
-            Param {
-                name: "mu0".to_string(),
-                value: Expr::Num(453.0),
-            },
-            Param {
-                name: "tox".to_string(),
-                value: Expr::Num(0.015),
-            },
-            Param {
-                name: "n0".to_string(),
-                value: Expr::Num(0.8),
-            },
+            ("LEVEL".to_string(), 5.0),
+            ("vfb".to_string(), -0.79),
+            ("phi".to_string(), 0.8),
+            ("mu0".to_string(), 453.0),
+            ("tox".to_string(), 0.015),
+            ("n0".to_string(), 0.8),
         ],
     };
-    let m = Bsim2Model::from_model_def(&md);
+    let m = Bsim2Model::from_params(&md);
     assert_eq!(m.mos_type, MosfetType::Nmos);
     approx::assert_abs_diff_eq!(m.vfb0, -0.79);
     approx::assert_abs_diff_eq!(m.phi0, 0.8);

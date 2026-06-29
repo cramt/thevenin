@@ -7,7 +7,7 @@
 //!
 //! Reference: ngspice mos6load.c, mos6temp.c, mos6mpar.c
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::diode::VT_NOM;
 use crate::mosfet::{MosfetCompanion, MosfetType};
@@ -139,9 +139,9 @@ impl Mos6Model {
         }
     }
 
-    /// Create a `Mos6Model` from a netlist `.model` definition.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let mos_type = if model_def.kind.to_uppercase().contains("PMOS") {
+    /// Create a `Mos6Model` from resolved `.model` parameters.
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = if model.kind.to_uppercase().contains("PMOS") {
             MosfetType::Pmos
         } else {
             MosfetType::Nmos
@@ -151,62 +151,60 @@ impl Mos6Model {
         let mut gamma_given = false;
         let mut phi_given = false;
         let mut nsub_given = false;
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "VTO" | "VT0" => {
-                        m.vto = *v;
-                        vto_given = true;
-                    }
-                    "KC" => m.kc = *v,
-                    "NC" => m.nc = *v,
-                    "KV" => m.kv = *v,
-                    "NV" => m.nv = *v,
-                    "NVTH" => m.nvth = *v,
-                    "PS" => m.ps = *v,
-                    "GAMMA" => {
-                        m.gamma = *v;
-                        gamma_given = true;
-                    }
-                    "GAMMA1" => m.gamma1 = *v,
-                    "SIGMA" => m.sigma = *v,
-                    "PHI" => {
-                        m.phi = *v;
-                        phi_given = true;
-                    }
-                    "LAMBDA" => m.lambda = *v,
-                    "LAMBDA0" | "LAMDA0" => {
-                        m.lambda0 = *v;
-                        m.lambda0_given = true;
-                    }
-                    "LAMBDA1" | "LAMDA1" => m.lambda1 = *v,
-                    "RD" => m.rd = *v,
-                    "RS" => m.rs = *v,
-                    "CBD" => m.cbd = *v,
-                    "CBS" => m.cbs = *v,
-                    "IS" => m.is = *v,
-                    "PB" => m.pb = *v,
-                    "CGSO" => m.cgso = *v,
-                    "CGDO" => m.cgdo = *v,
-                    "CGBO" => m.cgbo = *v,
-                    "CJ" => m.cj = *v,
-                    "MJ" => m.mj = *v,
-                    "CJSW" => m.cjsw = *v,
-                    "MJSW" => m.mjsw = *v,
-                    "TOX" => m.tox = *v,
-                    "LD" => m.ld = *v,
-                    "NSUB" => {
-                        m.nsub = *v;
-                        nsub_given = true;
-                    }
-                    "U0" | "UO" => m.u0 = *v,
-                    "FC" => m.fc = *v,
-                    "KF" => m.kf = *v,
-                    "AF" => m.af = *v,
-                    "NSS" => m.nss = *v,
-                    "TPG" => m.tpg = *v,
-                    _ => {} // ignore unknown params (LEVEL, XJ, RSH, etc.)
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "VTO" | "VT0" => {
+                    m.vto = *v;
+                    vto_given = true;
                 }
+                "KC" => m.kc = *v,
+                "NC" => m.nc = *v,
+                "KV" => m.kv = *v,
+                "NV" => m.nv = *v,
+                "NVTH" => m.nvth = *v,
+                "PS" => m.ps = *v,
+                "GAMMA" => {
+                    m.gamma = *v;
+                    gamma_given = true;
+                }
+                "GAMMA1" => m.gamma1 = *v,
+                "SIGMA" => m.sigma = *v,
+                "PHI" => {
+                    m.phi = *v;
+                    phi_given = true;
+                }
+                "LAMBDA" => m.lambda = *v,
+                "LAMBDA0" | "LAMDA0" => {
+                    m.lambda0 = *v;
+                    m.lambda0_given = true;
+                }
+                "LAMBDA1" | "LAMDA1" => m.lambda1 = *v,
+                "RD" => m.rd = *v,
+                "RS" => m.rs = *v,
+                "CBD" => m.cbd = *v,
+                "CBS" => m.cbs = *v,
+                "IS" => m.is = *v,
+                "PB" => m.pb = *v,
+                "CGSO" => m.cgso = *v,
+                "CGDO" => m.cgdo = *v,
+                "CGBO" => m.cgbo = *v,
+                "CJ" => m.cj = *v,
+                "MJ" => m.mj = *v,
+                "CJSW" => m.cjsw = *v,
+                "MJSW" => m.mjsw = *v,
+                "TOX" => m.tox = *v,
+                "LD" => m.ld = *v,
+                "NSUB" => {
+                    m.nsub = *v;
+                    nsub_given = true;
+                }
+                "U0" | "UO" => m.u0 = *v,
+                "FC" => m.fc = *v,
+                "KF" => m.kf = *v,
+                "AF" => m.af = *v,
+                "NSS" => m.nss = *v,
+                "TPG" => m.tpg = *v,
+                _ => {} // ignore unknown params (LEVEL, XJ, RSH, etc.)
             }
         }
         // If lambda0 was not given, use lambda as fallback
@@ -590,58 +588,27 @@ pub fn stamp_mos6(
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
-    use thevenin_types::Param;
     #[cfg(target_arch = "wasm32")]
     use wasm_bindgen_test::wasm_bindgen_test as test;
 
     fn make_nmos_model() -> Mos6Model {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "N10L5".to_string(),
             kind: "NMOS".to_string(),
             params: vec![
-                Param {
-                    name: "LEVEL".to_string(),
-                    value: Expr::Num(6.0),
-                },
-                Param {
-                    name: "KC".to_string(),
-                    value: Expr::Num(3.8921e-05),
-                },
-                Param {
-                    name: "NC".to_string(),
-                    value: Expr::Num(1.1739),
-                },
-                Param {
-                    name: "KV".to_string(),
-                    value: Expr::Num(0.91602),
-                },
-                Param {
-                    name: "NV".to_string(),
-                    value: Expr::Num(0.87225),
-                },
-                Param {
-                    name: "LAMBDA0".to_string(),
-                    value: Expr::Num(0.013333),
-                },
-                Param {
-                    name: "LAMBDA1".to_string(),
-                    value: Expr::Num(0.0046901),
-                },
-                Param {
-                    name: "VT0".to_string(),
-                    value: Expr::Num(0.69486),
-                },
-                Param {
-                    name: "GAMMA".to_string(),
-                    value: Expr::Num(0.60309),
-                },
-                Param {
-                    name: "PHI".to_string(),
-                    value: Expr::Num(1.0),
-                },
+                ("LEVEL".to_string(), 6.0),
+                ("KC".to_string(), 3.8921e-05),
+                ("NC".to_string(), 1.1739),
+                ("KV".to_string(), 0.91602),
+                ("NV".to_string(), 0.87225),
+                ("LAMBDA0".to_string(), 0.013333),
+                ("LAMBDA1".to_string(), 0.0046901),
+                ("VT0".to_string(), 0.69486),
+                ("GAMMA".to_string(), 0.60309),
+                ("PHI".to_string(), 1.0),
             ],
         };
-        Mos6Model::from_model_def(&model_def)
+        Mos6Model::from_params(&model_def)
     }
 
     #[test]
@@ -675,15 +642,12 @@ mod tests {
 
     #[test]
     fn test_lambda_fallback() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "TEST".to_string(),
             kind: "NMOS".to_string(),
-            params: vec![Param {
-                name: "LAMBDA".to_string(),
-                value: Expr::Num(0.05),
-            }],
+            params: vec![("LAMBDA".to_string(), 0.05)],
         };
-        let m = Mos6Model::from_model_def(&model_def);
+        let m = Mos6Model::from_params(&model_def);
         assert_abs_diff_eq!(m.lambda0, 0.05, epsilon = 1e-15);
         assert!(!m.lambda0_given);
     }
@@ -736,49 +700,22 @@ mod tests {
 
     #[test]
     fn test_pmos_model() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "P12L5".to_string(),
             kind: "PMOS".to_string(),
             params: vec![
-                Param {
-                    name: "KC".to_string(),
-                    value: Expr::Num(6.42696e-06),
-                },
-                Param {
-                    name: "NC".to_string(),
-                    value: Expr::Num(1.6536),
-                },
-                Param {
-                    name: "KV".to_string(),
-                    value: Expr::Num(0.92145),
-                },
-                Param {
-                    name: "NV".to_string(),
-                    value: Expr::Num(0.88345),
-                },
-                Param {
-                    name: "LAMBDA0".to_string(),
-                    value: Expr::Num(0.018966),
-                },
-                Param {
-                    name: "LAMBDA1".to_string(),
-                    value: Expr::Num(0.0084012),
-                },
-                Param {
-                    name: "VT0".to_string(),
-                    value: Expr::Num(-0.60865),
-                },
-                Param {
-                    name: "GAMMA".to_string(),
-                    value: Expr::Num(0.89213),
-                },
-                Param {
-                    name: "PHI".to_string(),
-                    value: Expr::Num(1.0),
-                },
+                ("KC".to_string(), 6.42696e-06),
+                ("NC".to_string(), 1.6536),
+                ("KV".to_string(), 0.92145),
+                ("NV".to_string(), 0.88345),
+                ("LAMBDA0".to_string(), 0.018966),
+                ("LAMBDA1".to_string(), 0.0084012),
+                ("VT0".to_string(), -0.60865),
+                ("GAMMA".to_string(), 0.89213),
+                ("PHI".to_string(), 1.0),
             ],
         };
-        let m = Mos6Model::from_model_def(&model_def);
+        let m = Mos6Model::from_params(&model_def);
         assert_eq!(m.mos_type, MosfetType::Pmos);
         assert_abs_diff_eq!(m.vto, -0.60865, epsilon = 1e-15);
     }

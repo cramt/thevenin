@@ -11,6 +11,7 @@ use thevenin_types::{
 
 use crate::jfet::{JfetModel, JfetType};
 use crate::mesa::{MesaInstance, MesaModel, MesaPrecomp, mesa_companion};
+use crate::model_params::ModelParams;
 
 /// Parsed `.print` directive: analysis type keyword + list of output variable names.
 #[derive(Debug, Clone)]
@@ -631,7 +632,7 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         out.push_str("\n JFET models (Junction Field effect transistor)\n");
         for mname in &jfet_model_names {
             if let Some(mdef) = models.get(mname) {
-                let jm = JfetModel::from_model_def(mdef);
+                let jm = JfetModel::from_params(&ModelParams::from_model_def(mdef));
                 let type_str = if matches!(jm.jfet_type, JfetType::Pjf) {
                     "pjf"
                 } else {
@@ -681,7 +682,7 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             let mname = model_name.to_lowercase();
             let jm = models
                 .get(&mname)
-                .map(|md| JfetModel::from_model_def(md))
+                .map(|md| JfetModel::from_params(&ModelParams::from_model_def(md)))
                 .unwrap_or_else(|| JfetModel::new(JfetType::Njf));
             let sign = jm.jfet_type.sign();
 
@@ -905,7 +906,7 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         for mname in &mesa_model_names {
             let mm = models
                 .get(mname)
-                .map(|md| MesaModel::from_model_def(md))
+                .map(|md| MesaModel::from_params(&ModelParams::from_model_def(md)))
                 .unwrap_or_default();
 
             out.push_str(&format!("{:>12}{:>22}\n", "model", mname));
@@ -1243,7 +1244,7 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             let mname = model_name.to_lowercase();
             let mm = models
                 .get(&mname)
-                .map(|md| MesaModel::from_model_def(md))
+                .map(|md| MesaModel::from_params(&ModelParams::from_model_def(md)))
                 .unwrap_or_default();
 
             let mut w = 20e-6_f64;

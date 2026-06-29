@@ -13,7 +13,7 @@
 //! as the other MOSFET ports (companion-model `gm`/`gds`/`gmbs` + bulk
 //! junction diodes).
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::diode::VT_NOM;
 use crate::mosfet::{MosfetCompanion, MosfetType};
@@ -382,17 +382,16 @@ impl Bsim2Model {
 
     /// Build a `Bsim2Model` from a `.model` definition. Recognised keywords
     /// follow `b2.c::B2mPTable`. Unknown parameters are silently ignored.
-    pub fn from_model_def(mdef: &ModelDef) -> Self {
-        let mos_type = if mdef.kind.to_uppercase().contains("PMOS") {
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = if model.kind.to_uppercase().contains("PMOS") {
             MosfetType::Pmos
         } else {
             MosfetType::Nmos
         };
         let mut m = Self::new(mos_type);
-        for p in &mdef.params {
-            let Expr::Num(v) = &p.value else { continue };
+        for (name, v) in &model.params {
             let v = *v;
-            match p.name.to_lowercase().as_str() {
+            match name.to_lowercase().as_str() {
                 "vfb" => m.vfb0 = v,
                 "lvfb" => m.vfb_l = v,
                 "wvfb" => m.vfb_w = v,
@@ -1366,7 +1365,6 @@ pub fn stamp_bsim2(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thevenin_types::Param;
 
     fn make_test_model() -> Bsim2Model {
         let mut m = Bsim2Model::new(MosfetType::Nmos);
@@ -1428,37 +1426,19 @@ mod tests {
 
     #[test]
     fn from_model_def_picks_up_bsim2_params() {
-        let md = ModelDef {
+        let md = ModelParams {
             name: "M".to_string(),
             kind: "NMOS".to_string(),
             params: vec![
-                Param {
-                    name: "LEVEL".to_string(),
-                    value: Expr::Num(5.0),
-                },
-                Param {
-                    name: "vfb".to_string(),
-                    value: Expr::Num(-0.8),
-                },
-                Param {
-                    name: "phi".to_string(),
-                    value: Expr::Num(0.7),
-                },
-                Param {
-                    name: "k1".to_string(),
-                    value: Expr::Num(0.6),
-                },
-                Param {
-                    name: "mu0".to_string(),
-                    value: Expr::Num(450.0),
-                },
-                Param {
-                    name: "tox".to_string(),
-                    value: Expr::Num(0.02),
-                },
+                ("LEVEL".to_string(), 5.0),
+                ("vfb".to_string(), -0.8),
+                ("phi".to_string(), 0.7),
+                ("k1".to_string(), 0.6),
+                ("mu0".to_string(), 450.0),
+                ("tox".to_string(), 0.02),
             ],
         };
-        let m = Bsim2Model::from_model_def(&md);
+        let m = Bsim2Model::from_params(&md);
         assert_eq!(m.mos_type, MosfetType::Nmos);
         assert_eq!(m.vfb0, -0.8);
         assert_eq!(m.phi0, 0.7);
@@ -1528,12 +1508,12 @@ mod tests {
 
     #[test]
     fn pmos_type_from_kind() {
-        let md = ModelDef {
+        let md = ModelParams {
             name: "P".to_string(),
             kind: "PMOS".to_string(),
             params: vec![],
         };
-        let m = Bsim2Model::from_model_def(&md);
+        let m = Bsim2Model::from_params(&md);
         assert_eq!(m.mos_type, MosfetType::Pmos);
     }
 }

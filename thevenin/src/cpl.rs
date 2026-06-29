@@ -7,8 +7,8 @@
 //!
 //! Reference: ngspice `src/spicelib/devices/cpl/`
 
+use crate::model_params::ModelParams;
 use crate::txl::Term;
-use thevenin_types::ModelDef;
 
 // ---------------------------------------------------------------------------
 // Constants (matching ngspice multi_line.h / cplsetup.c)
@@ -134,23 +134,22 @@ pub struct CplModel {
 }
 
 impl CplModel {
-    /// Parse CPL model from a ModelDef.
+    /// Parse CPL model from resolved model parameters.
     /// R, L, G, C are upper-triangular packed matrices.
-    pub fn from_model_def(def: &ModelDef, dim: usize) -> Self {
+    pub fn from_params(model: &ModelParams, dim: usize) -> Self {
         let mut r_vals = Vec::new();
         let mut l_vals = Vec::new();
         let mut g_vals = Vec::new();
         let mut c_vals = Vec::new();
         let mut length = 0.0;
 
-        for p in &def.params {
-            let val = crate::expr_val_or(&p.value, 0.0);
-            match p.name.to_uppercase().as_str() {
-                "R" => r_vals.push(val),
-                "L" => l_vals.push(val),
-                "G" => g_vals.push(val),
-                "C" => c_vals.push(val),
-                "LENGTH" | "LEN" => length = val,
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "R" => r_vals.push(*v),
+                "L" => l_vals.push(*v),
+                "G" => g_vals.push(*v),
+                "C" => c_vals.push(*v),
+                "LENGTH" | "LEN" => length = *v,
                 _ => {}
             }
         }

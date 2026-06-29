@@ -140,61 +140,25 @@ vd d 0 dc 0
 /// the device direction (NMOS Id > 0 for Vds > 0, Vgs > Vt0).
 #[test]
 fn bsim1_companion_id_positive_saturation() {
-    let md = thevenin_types::ModelDef {
+    let md = thevenin::model_params::ModelParams {
         name: "NCH".to_string(),
         kind: "NMOS".to_string(),
         params: vec![
-            thevenin_types::Param {
-                name: "LEVEL".to_string(),
-                value: thevenin_types::Expr::Num(4.0),
-            },
-            thevenin_types::Param {
-                name: "TOX".to_string(),
-                value: thevenin_types::Expr::Num(0.03),
-            },
-            thevenin_types::Param {
-                name: "VDD".to_string(),
-                value: thevenin_types::Expr::Num(5.0),
-            },
-            thevenin_types::Param {
-                name: "VFB".to_string(),
-                value: thevenin_types::Expr::Num(-1.0),
-            },
-            thevenin_types::Param {
-                name: "PHI".to_string(),
-                value: thevenin_types::Expr::Num(0.8),
-            },
-            thevenin_types::Param {
-                name: "K1".to_string(),
-                value: thevenin_types::Expr::Num(1.3),
-            },
-            thevenin_types::Param {
-                name: "K2".to_string(),
-                value: thevenin_types::Expr::Num(0.15),
-            },
-            thevenin_types::Param {
-                name: "MUZ".to_string(),
-                value: thevenin_types::Expr::Num(500.0),
-            },
-            thevenin_types::Param {
-                name: "MUS".to_string(),
-                value: thevenin_types::Expr::Num(500.0),
-            },
-            thevenin_types::Param {
-                name: "U0".to_string(),
-                value: thevenin_types::Expr::Num(0.05),
-            },
-            thevenin_types::Param {
-                name: "U1".to_string(),
-                value: thevenin_types::Expr::Num(0.05),
-            },
-            thevenin_types::Param {
-                name: "N0".to_string(),
-                value: thevenin_types::Expr::Num(1.5),
-            },
+            ("LEVEL".to_string(), 4.0),
+            ("TOX".to_string(), 0.03),
+            ("VDD".to_string(), 5.0),
+            ("VFB".to_string(), -1.0),
+            ("PHI".to_string(), 0.8),
+            ("K1".to_string(), 1.3),
+            ("K2".to_string(), 0.15),
+            ("MUZ".to_string(), 500.0),
+            ("MUS".to_string(), 500.0),
+            ("U0".to_string(), 0.05),
+            ("U1".to_string(), 0.05),
+            ("N0".to_string(), 1.5),
         ],
     };
-    let model = Bsim1Model::from_model_def(&md);
+    let model = Bsim1Model::from_params(&md);
     assert_eq!(model.mos_type, MosfetType::Nmos);
     let sized = compute_sized(&model, 50e-6, 10e-6, 1.0, 1.0).unwrap();
 

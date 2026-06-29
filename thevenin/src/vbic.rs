@@ -4,7 +4,7 @@
 //! This pass covers DC load (companion model) and NR stamps.
 //! Self-heating (Vrth) and excess phase (NQS) are NOT implemented.
 
-use thevenin_types::{Expr, ModelDef, Param};
+use crate::model_params::ModelParams;
 
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::physics::safe_exp;
@@ -416,141 +416,137 @@ impl VbicModel {
         m
     }
 
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let vbic_type = if model_def.kind.to_uppercase() == "PNP" {
+    pub fn from_params(model: &ModelParams) -> Self {
+        let vbic_type = if model.kind.to_uppercase() == "PNP" {
             VbicType::Pnp
         } else {
             VbicType::Npn
         };
         let mut m = Self::new(vbic_type);
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "TNOM" => m.tnom = *v,
-                    "RCX" => m.rcx = *v,
-                    "RCI" => m.rci = *v,
-                    "VO" => m.vo = *v,
-                    "GAMM" => m.gamm = *v,
-                    "HRCF" => m.hrcf = *v,
-                    "RBX" => m.rbx = *v,
-                    "RBI" => m.rbi = *v,
-                    "RE" => m.re = *v,
-                    "RS" => m.rs = *v,
-                    "RBP" => m.rbp = *v,
-                    "IS" => m.is = *v,
-                    "NF" => m.nf = *v,
-                    "NR" => m.nr = *v,
-                    "FC" => m.fc = *v,
-                    "CBEO" => m.cbeo = *v,
-                    "CJE" => m.cje = *v,
-                    "PE" => m.pe = *v,
-                    "ME" => m.me = *v,
-                    "AJE" => m.aje = *v,
-                    "CBCO" => m.cbco = *v,
-                    "CJC" => m.cjc = *v,
-                    "QCO" => m.qco = *v,
-                    "CJEP" => m.cjep = *v,
-                    "PC" => m.pc = *v,
-                    "MC" => m.mc = *v,
-                    "AJC" => m.ajc = *v,
-                    "CJCP" => m.cjcp = *v,
-                    "PS" => m.ps = *v,
-                    "MS" => m.ms = *v,
-                    "AJS" => m.ajs = *v,
-                    "IBEI" => m.ibei = *v,
-                    "WBE" => m.wbe = *v,
-                    "NEI" => m.nei = *v,
-                    "IBEN" => m.iben = *v,
-                    "NEN" => m.nen = *v,
-                    "IBCI" => m.ibci = *v,
-                    "NCI" => m.nci = *v,
-                    "IBCN" => m.ibcn = *v,
-                    "NCN" => m.ncn = *v,
-                    "AVC1" => m.avc1 = *v,
-                    "AVC2" => m.avc2 = *v,
-                    "ISP" => m.isp = *v,
-                    "WSP" => m.wsp = *v,
-                    "NFP" => m.nfp = *v,
-                    "IBEIP" => m.ibeip = *v,
-                    "IBENP" => m.ibenp = *v,
-                    "IBCIP" => m.ibcip = *v,
-                    "NCIP" => m.ncip = *v,
-                    "IBCNP" => m.ibcnp = *v,
-                    "NCNP" => m.ncnp = *v,
-                    "VEF" => m.vef = *v,
-                    "VER" => m.ver = *v,
-                    "IKF" => m.ikf = *v,
-                    "IKR" => m.ikr = *v,
-                    "IKP" => m.ikp = *v,
-                    "TF" => m.tf = *v,
-                    "QTF" => m.qtf = *v,
-                    "XTF" => m.xtf = *v,
-                    "VTF" => m.vtf = *v,
-                    "ITF" => m.itf = *v,
-                    "TR" => m.tr = *v,
-                    "TD" => m.td = *v,
-                    "KFN" => m.kfn = *v,
-                    "AFN" => m.afn = *v,
-                    "BFN" => m.bfn = *v,
-                    "XRE" => m.xre = *v,
-                    "XRBI" => m.xrbi = *v,
-                    "XRCI" => m.xrci = *v,
-                    "XRS" => m.xrs = *v,
-                    "XVO" => m.xvo = *v,
-                    "EA" => m.ea = *v,
-                    "EAIE" => m.eaie = *v,
-                    "EAIC" => m.eaic = *v,
-                    "EAIS" => m.eais = *v,
-                    "EANE" => m.eane = *v,
-                    "EANC" => m.eanc = *v,
-                    "EANS" => m.eans = *v,
-                    "XIS" => m.xis = *v,
-                    "XII" => m.xii = *v,
-                    "XIN" => m.xin = *v,
-                    "TNF" => m.tnf = *v,
-                    "TAVC" => m.tavc = *v,
-                    "RTH" => m.rth = *v,
-                    "CTH" => m.cth = *v,
-                    "VRT" => m.vrt = *v,
-                    "ART" => m.art = *v,
-                    "CCSO" => m.ccso = *v,
-                    "QBM" => m.qbm = *v,
-                    "NKF" => m.nkf = *v,
-                    "XIKF" => m.xikf = *v,
-                    "XRCX" => m.xrcx = *v,
-                    "XRBX" => m.xrbx = *v,
-                    "XRBP" => m.xrbp = *v,
-                    "ISRR" => m.isrr = *v,
-                    "XISR" => m.xisr = *v,
-                    "DEAR" => m.dear = *v,
-                    "EAP" => m.eap = *v,
-                    "VBBE" => m.vbbe = *v,
-                    "NBBE" => m.nbbe = *v,
-                    "IBBE" => m.ibbe = *v,
-                    "TVBBE1" => m.tvbbe1 = *v,
-                    "TVBBE2" => m.tvbbe2 = *v,
-                    "TNBBE" => m.tnbbe = *v,
-                    _ => {}
-                }
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "TNOM" => m.tnom = *v,
+                "RCX" => m.rcx = *v,
+                "RCI" => m.rci = *v,
+                "VO" => m.vo = *v,
+                "GAMM" => m.gamm = *v,
+                "HRCF" => m.hrcf = *v,
+                "RBX" => m.rbx = *v,
+                "RBI" => m.rbi = *v,
+                "RE" => m.re = *v,
+                "RS" => m.rs = *v,
+                "RBP" => m.rbp = *v,
+                "IS" => m.is = *v,
+                "NF" => m.nf = *v,
+                "NR" => m.nr = *v,
+                "FC" => m.fc = *v,
+                "CBEO" => m.cbeo = *v,
+                "CJE" => m.cje = *v,
+                "PE" => m.pe = *v,
+                "ME" => m.me = *v,
+                "AJE" => m.aje = *v,
+                "CBCO" => m.cbco = *v,
+                "CJC" => m.cjc = *v,
+                "QCO" => m.qco = *v,
+                "CJEP" => m.cjep = *v,
+                "PC" => m.pc = *v,
+                "MC" => m.mc = *v,
+                "AJC" => m.ajc = *v,
+                "CJCP" => m.cjcp = *v,
+                "PS" => m.ps = *v,
+                "MS" => m.ms = *v,
+                "AJS" => m.ajs = *v,
+                "IBEI" => m.ibei = *v,
+                "WBE" => m.wbe = *v,
+                "NEI" => m.nei = *v,
+                "IBEN" => m.iben = *v,
+                "NEN" => m.nen = *v,
+                "IBCI" => m.ibci = *v,
+                "NCI" => m.nci = *v,
+                "IBCN" => m.ibcn = *v,
+                "NCN" => m.ncn = *v,
+                "AVC1" => m.avc1 = *v,
+                "AVC2" => m.avc2 = *v,
+                "ISP" => m.isp = *v,
+                "WSP" => m.wsp = *v,
+                "NFP" => m.nfp = *v,
+                "IBEIP" => m.ibeip = *v,
+                "IBENP" => m.ibenp = *v,
+                "IBCIP" => m.ibcip = *v,
+                "NCIP" => m.ncip = *v,
+                "IBCNP" => m.ibcnp = *v,
+                "NCNP" => m.ncnp = *v,
+                "VEF" => m.vef = *v,
+                "VER" => m.ver = *v,
+                "IKF" => m.ikf = *v,
+                "IKR" => m.ikr = *v,
+                "IKP" => m.ikp = *v,
+                "TF" => m.tf = *v,
+                "QTF" => m.qtf = *v,
+                "XTF" => m.xtf = *v,
+                "VTF" => m.vtf = *v,
+                "ITF" => m.itf = *v,
+                "TR" => m.tr = *v,
+                "TD" => m.td = *v,
+                "KFN" => m.kfn = *v,
+                "AFN" => m.afn = *v,
+                "BFN" => m.bfn = *v,
+                "XRE" => m.xre = *v,
+                "XRBI" => m.xrbi = *v,
+                "XRCI" => m.xrci = *v,
+                "XRS" => m.xrs = *v,
+                "XVO" => m.xvo = *v,
+                "EA" => m.ea = *v,
+                "EAIE" => m.eaie = *v,
+                "EAIC" => m.eaic = *v,
+                "EAIS" => m.eais = *v,
+                "EANE" => m.eane = *v,
+                "EANC" => m.eanc = *v,
+                "EANS" => m.eans = *v,
+                "XIS" => m.xis = *v,
+                "XII" => m.xii = *v,
+                "XIN" => m.xin = *v,
+                "TNF" => m.tnf = *v,
+                "TAVC" => m.tavc = *v,
+                "RTH" => m.rth = *v,
+                "CTH" => m.cth = *v,
+                "VRT" => m.vrt = *v,
+                "ART" => m.art = *v,
+                "CCSO" => m.ccso = *v,
+                "QBM" => m.qbm = *v,
+                "NKF" => m.nkf = *v,
+                "XIKF" => m.xikf = *v,
+                "XRCX" => m.xrcx = *v,
+                "XRBX" => m.xrbx = *v,
+                "XRBP" => m.xrbp = *v,
+                "ISRR" => m.isrr = *v,
+                "XISR" => m.xisr = *v,
+                "DEAR" => m.dear = *v,
+                "EAP" => m.eap = *v,
+                "VBBE" => m.vbbe = *v,
+                "NBBE" => m.nbbe = *v,
+                "IBBE" => m.ibbe = *v,
+                "TVBBE1" => m.tvbbe1 = *v,
+                "TVBBE2" => m.tvbbe2 = *v,
+                "TNBBE" => m.tnbbe = *v,
+                _ => {}
             }
         }
         m.temperature_adjust(27.0);
         m
     }
 
-    pub fn with_instance_params(mut self, params: &[Param]) -> Self {
-        for p in params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "IS" => self.is = *v,
-                    "RCX" => self.rcx = *v,
-                    "RCI" => self.rci = *v,
-                    "RBX" => self.rbx = *v,
-                    "RBI" => self.rbi = *v,
-                    "RE" => self.re = *v,
-                    "RS" => self.rs = *v,
-                    _ => {}
-                }
+    pub fn with_instance_params(mut self, params: &[(String, f64)]) -> Self {
+        for (name, v) in params {
+            match name.to_uppercase().as_str() {
+                "IS" => self.is = *v,
+                "RCX" => self.rcx = *v,
+                "RCI" => self.rci = *v,
+                "RBX" => self.rbx = *v,
+                "RBI" => self.rbi = *v,
+                "RE" => self.re = *v,
+                "RS" => self.rs = *v,
+                _ => {}
             }
         }
         self
@@ -2164,29 +2160,17 @@ mod tests {
 
     #[test]
     fn test_from_model_def_npn() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "QVBIC".to_string(),
             kind: "NPN".to_string(),
             params: vec![
-                Param {
-                    name: "IS".to_string(),
-                    value: Expr::Num(1e-15),
-                },
-                Param {
-                    name: "NF".to_string(),
-                    value: Expr::Num(1.02),
-                },
-                Param {
-                    name: "RCI".to_string(),
-                    value: Expr::Num(10.0),
-                },
-                Param {
-                    name: "VEF".to_string(),
-                    value: Expr::Num(100.0),
-                },
+                ("IS".to_string(), 1e-15),
+                ("NF".to_string(), 1.02),
+                ("RCI".to_string(), 10.0),
+                ("VEF".to_string(), 100.0),
             ],
         };
-        let m = VbicModel::from_model_def(&model_def);
+        let m = VbicModel::from_params(&model_def);
         assert_eq!(m.vbic_type, VbicType::Npn);
         assert_abs_diff_eq!(m.is, 1e-15, epsilon = 1e-30);
         assert_abs_diff_eq!(m.nf, 1.02, epsilon = 1e-15);
@@ -2196,15 +2180,12 @@ mod tests {
 
     #[test]
     fn test_from_model_def_pnp() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "QP1".to_string(),
             kind: "PNP".to_string(),
-            params: vec![Param {
-                name: "IS".to_string(),
-                value: Expr::Num(5e-16),
-            }],
+            params: vec![("IS".to_string(), 5e-16)],
         };
-        let m = VbicModel::from_model_def(&model_def);
+        let m = VbicModel::from_params(&model_def);
         assert_eq!(m.vbic_type, VbicType::Pnp);
         assert_abs_diff_eq!(m.is, 5e-16, epsilon = 1e-30);
     }
@@ -2358,141 +2339,45 @@ mod tests {
     #[test]
     fn test_companion_pnp_gummel_low_bias() {
         // Test the companion at the exact FG Gummel parameters at Vbe=0.2V
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "P1".to_string(),
             kind: "PNP".to_string(),
             params: vec![
-                Param {
-                    name: "IS".into(),
-                    value: Expr::Num(1e-16),
-                },
-                Param {
-                    name: "IBEI".into(),
-                    value: Expr::Num(1e-18),
-                },
-                Param {
-                    name: "IBEN".into(),
-                    value: Expr::Num(5e-15),
-                },
-                Param {
-                    name: "IBCI".into(),
-                    value: Expr::Num(2e-17),
-                },
-                Param {
-                    name: "IBCN".into(),
-                    value: Expr::Num(5e-15),
-                },
-                Param {
-                    name: "ISP".into(),
-                    value: Expr::Num(1e-15),
-                },
-                Param {
-                    name: "RCX".into(),
-                    value: Expr::Num(10.0),
-                },
-                Param {
-                    name: "RCI".into(),
-                    value: Expr::Num(60.0),
-                },
-                Param {
-                    name: "RBX".into(),
-                    value: Expr::Num(10.0),
-                },
-                Param {
-                    name: "RBI".into(),
-                    value: Expr::Num(40.0),
-                },
-                Param {
-                    name: "RE".into(),
-                    value: Expr::Num(2.0),
-                },
-                Param {
-                    name: "RS".into(),
-                    value: Expr::Num(20.0),
-                },
-                Param {
-                    name: "RBP".into(),
-                    value: Expr::Num(40.0),
-                },
-                Param {
-                    name: "VEF".into(),
-                    value: Expr::Num(10.0),
-                },
-                Param {
-                    name: "VER".into(),
-                    value: Expr::Num(4.0),
-                },
-                Param {
-                    name: "IKF".into(),
-                    value: Expr::Num(2e-3),
-                },
-                Param {
-                    name: "IKR".into(),
-                    value: Expr::Num(2e-4),
-                },
-                Param {
-                    name: "IKP".into(),
-                    value: Expr::Num(2e-4),
-                },
-                Param {
-                    name: "CJE".into(),
-                    value: Expr::Num(1e-13),
-                },
-                Param {
-                    name: "CJC".into(),
-                    value: Expr::Num(2e-14),
-                },
-                Param {
-                    name: "CJEP".into(),
-                    value: Expr::Num(1e-13),
-                },
-                Param {
-                    name: "CJCP".into(),
-                    value: Expr::Num(4e-13),
-                },
-                Param {
-                    name: "VO".into(),
-                    value: Expr::Num(2.0),
-                },
-                Param {
-                    name: "GAMM".into(),
-                    value: Expr::Num(2e-11),
-                },
-                Param {
-                    name: "HRCF".into(),
-                    value: Expr::Num(2.0),
-                },
-                Param {
-                    name: "QCO".into(),
-                    value: Expr::Num(1e-12),
-                },
-                Param {
-                    name: "AVC1".into(),
-                    value: Expr::Num(2.0),
-                },
-                Param {
-                    name: "AVC2".into(),
-                    value: Expr::Num(15.0),
-                },
-                Param {
-                    name: "TF".into(),
-                    value: Expr::Num(10e-12),
-                },
-                Param {
-                    name: "TR".into(),
-                    value: Expr::Num(100e-12),
-                },
-                Param {
-                    name: "TD".into(),
-                    value: Expr::Num(2e-11),
-                },
-                Param {
-                    name: "RTH".into(),
-                    value: Expr::Num(300.0),
-                },
+                ("IS".into(), 1e-16),
+                ("IBEI".into(), 1e-18),
+                ("IBEN".into(), 5e-15),
+                ("IBCI".into(), 2e-17),
+                ("IBCN".into(), 5e-15),
+                ("ISP".into(), 1e-15),
+                ("RCX".into(), 10.0),
+                ("RCI".into(), 60.0),
+                ("RBX".into(), 10.0),
+                ("RBI".into(), 40.0),
+                ("RE".into(), 2.0),
+                ("RS".into(), 20.0),
+                ("RBP".into(), 40.0),
+                ("VEF".into(), 10.0),
+                ("VER".into(), 4.0),
+                ("IKF".into(), 2e-3),
+                ("IKR".into(), 2e-4),
+                ("IKP".into(), 2e-4),
+                ("CJE".into(), 1e-13),
+                ("CJC".into(), 2e-14),
+                ("CJEP".into(), 1e-13),
+                ("CJCP".into(), 4e-13),
+                ("VO".into(), 2.0),
+                ("GAMM".into(), 2e-11),
+                ("HRCF".into(), 2.0),
+                ("QCO".into(), 1e-12),
+                ("AVC1".into(), 2.0),
+                ("AVC2".into(), 15.0),
+                ("TF".into(), 10e-12),
+                ("TR".into(), 100e-12),
+                ("TD".into(), 2e-11),
+                ("RTH".into(), 300.0),
             ],
         };
-        let mut m = VbicModel::from_model_def(&model_def);
+        let mut m = VbicModel::from_params(&model_def);
         m.temperature_adjust(27.0);
 
         // At Vbei=0.2V (forward bias for PNP), all other junctions at 0V

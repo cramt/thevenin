@@ -31,7 +31,7 @@
 //! control trajectory that enters and leaves the window without crossing
 //! the far threshold returns to its starting state.
 
-use thevenin_types::{Expr, ModelDef, Param};
+use crate::model_params::ModelParams;
 
 /// Whether this model variant reads a node-voltage difference (`S`) or a
 /// branch current (`W`) as its control variable.
@@ -76,21 +76,19 @@ impl SwitchModel {
     /// determined from the model's kind string (`SW` → voltage,
     /// `CSW` → current); anything else is treated as `SW`. Unknown
     /// parameters are silently ignored.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let kind = match model_def.kind.to_ascii_uppercase().as_str() {
+    pub fn from_params(model: &ModelParams) -> Self {
+        let kind = match model.kind.to_ascii_uppercase().as_str() {
             "CSW" | "ISWITCH" => SwitchKind::Current,
             _ => SwitchKind::Voltage,
         };
         let mut m = Self::new(kind);
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_ascii_uppercase().as_str() {
-                    "VT" | "IT" => m.threshold = *v,
-                    "VH" | "IH" => m.hysteresis = v.abs(),
-                    "RON" => m.ron = *v,
-                    "ROFF" => m.roff = *v,
-                    _ => {}
-                }
+        for (name, v) in &model.params {
+            match name.to_ascii_uppercase().as_str() {
+                "VT" | "IT" => m.threshold = *v,
+                "VH" | "IH" => m.hysteresis = v.abs(),
+                "RON" => m.ron = *v,
+                "ROFF" => m.roff = *v,
+                _ => {}
             }
         }
         // Guard against zero/negative resistances — ngspice clamps these
@@ -109,7 +107,7 @@ impl SwitchModel {
     /// parameter overrides beyond the optional ON/OFF flag, which is
     /// handled at stamping time), but kept for parity with other devices
     /// in case future ngspice variants add one.
-    pub fn with_instance_params(self, _params: &[Param]) -> Self {
+    pub fn with_instance_params(self, _params: &[(String, f64)]) -> Self {
         self
     }
 
@@ -307,29 +305,17 @@ mod tests {
 
     #[test]
     fn model_from_def_parses_params() {
-        let md = ModelDef {
+        let md = ModelParams {
             name: "SW1".to_string(),
             kind: "SW".to_string(),
             params: vec![
-                Param {
-                    name: "VT".to_string(),
-                    value: Expr::Num(1.5),
-                },
-                Param {
-                    name: "VH".to_string(),
-                    value: Expr::Num(0.2),
-                },
-                Param {
-                    name: "RON".to_string(),
-                    value: Expr::Num(0.5),
-                },
-                Param {
-                    name: "ROFF".to_string(),
-                    value: Expr::Num(1.0e9),
-                },
+                ("VT".to_string(), 1.5),
+                ("VH".to_string(), 0.2),
+                ("RON".to_string(), 0.5),
+                ("ROFF".to_string(), 1.0e9),
             ],
         };
-        let m = SwitchModel::from_model_def(&md);
+        let m = SwitchModel::from_params(&md);
         assert_eq!(m.kind, SwitchKind::Voltage);
         assert_abs_diff_eq!(m.threshold, 1.5, epsilon = 1e-15);
         assert_abs_diff_eq!(m.hysteresis, 0.2, epsilon = 1e-15);
@@ -339,15 +325,12 @@ mod tests {
 
     #[test]
     fn csw_model_kind_recognised() {
-        let md = ModelDef {
+        let md = ModelParams {
             name: "CSW1".to_string(),
             kind: "CSW".to_string(),
-            params: vec![Param {
-                name: "IT".to_string(),
-                value: Expr::Num(1e-3),
-            }],
+            params: vec![("IT".to_string(), 1e-3)],
         };
-        let m = SwitchModel::from_model_def(&md);
+        let m = SwitchModel::from_params(&md);
         assert_eq!(m.kind, SwitchKind::Current);
         assert_abs_diff_eq!(m.threshold, 1e-3, epsilon = 1e-18);
     }

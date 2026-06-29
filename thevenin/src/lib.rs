@@ -80,6 +80,7 @@ pub(crate) fn expr_val_or(expr: &Expr, default: f64) -> f64 {
 pub(crate) mod device_stamp;
 pub mod mna;
 pub mod mna_ir;
+pub mod model_params;
 pub(crate) mod newton;
 pub(crate) mod physics;
 pub(crate) mod simulate;

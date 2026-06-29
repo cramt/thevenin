@@ -8,7 +8,7 @@
 
 #![allow(unused_variables, dead_code, clippy::too_many_arguments, unused_parens)]
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::mosfet::MosfetType;
 use crate::physics::{
@@ -648,21 +648,17 @@ impl Bsim3SoiDdModel {
         m
     }
 
-    pub fn from_model_def(def: &ModelDef) -> Self {
-        let mos_type = match def.kind.to_uppercase().as_str() {
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = match model.kind.to_uppercase().as_str() {
             "PMOS" => MosfetType::Pmos,
             _ => MosfetType::Nmos,
         };
         let mut m = Self::new(mos_type);
 
-        fn pf(def: &ModelDef, name: &str) -> Option<f64> {
-            def.params.iter().find_map(|p| {
-                if p.name.eq_ignore_ascii_case(name) {
-                    if let Expr::Num(v) = &p.value {
-                        Some(*v)
-                    } else {
-                        None
-                    }
+        fn pf(model: &ModelParams, name: &str) -> Option<f64> {
+            model.params.iter().find_map(|(n, v)| {
+                if n.eq_ignore_ascii_case(name) {
+                    Some(*v)
                 } else {
                     None
                 }
@@ -671,14 +667,14 @@ impl Bsim3SoiDdModel {
 
         macro_rules! set {
             ($field:ident, $name:expr) => {
-                if let Some(v) = pf(def, $name) {
+                if let Some(v) = pf(model, $name) {
                     m.$field = v;
                 }
             };
         }
         macro_rules! seti {
             ($field:ident, $name:expr) => {
-                if let Some(v) = pf(def, $name) {
+                if let Some(v) = pf(model, $name) {
                     m.$field = v as i32;
                 }
             };

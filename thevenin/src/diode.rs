@@ -3,8 +3,7 @@
 //! Implements the standard SPICE diode: I = IS * (exp(V / (N * Vt)) - 1)
 //! with optional series resistance RS and breakdown voltage BV.
 
-use thevenin_types::{Expr, ModelDef, Param};
-
+use crate::model_params::ModelParams;
 use crate::physics::{KBOQ, safe_exp};
 
 /// Thermal voltage at nominal temperature (27°C = 300.15K).
@@ -58,40 +57,37 @@ impl Default for DiodeModel {
 }
 
 impl DiodeModel {
-    /// Create a `DiodeModel` from a netlist `.model` definition.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
+    /// Create a `DiodeModel` from resolved `.model` parameters.
+    pub fn from_params(model: &ModelParams) -> Self {
         let mut m = Self::default();
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "IS" => m.is = *v,
-                    "N" => m.n = *v,
-                    "RS" => m.rs = *v,
-                    "BV" => m.bv = Some(*v),
-                    "IBV" => m.ibv = *v,
-                    "CJO" | "CJ0" => m.cjo = *v,
-                    "VJ" => m.vj = *v,
-                    "M" => m.m = *v,
-                    "TT" => m.tt = *v,
-                    "KF" => m.kf = *v,
-                    "AF" => m.af = *v,
-                    _ => {} // ignore unknown params
-                }
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "IS" => m.is = *v,
+                "N" => m.n = *v,
+                "RS" => m.rs = *v,
+                "BV" => m.bv = Some(*v),
+                "IBV" => m.ibv = *v,
+                "CJO" | "CJ0" => m.cjo = *v,
+                "VJ" => m.vj = *v,
+                "M" => m.m = *v,
+                "TT" => m.tt = *v,
+                "KF" => m.kf = *v,
+                "AF" => m.af = *v,
+                _ => {} // ignore unknown params
             }
         }
         m
     }
 
-    /// Create a `DiodeModel` from instance parameters (on the D element line).
-    pub fn with_instance_params(mut self, params: &[Param]) -> Self {
-        for p in params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "IS" => self.is = *v,
-                    "N" => self.n = *v,
-                    "RS" => self.rs = *v,
-                    _ => {}
-                }
+    /// Create a `DiodeModel` from resolved instance parameters (on the D
+    /// element line).
+    pub fn with_instance_params(mut self, params: &[(String, f64)]) -> Self {
+        for (name, v) in params {
+            match name.to_uppercase().as_str() {
+                "IS" => self.is = *v,
+                "N" => self.n = *v,
+                "RS" => self.rs = *v,
+                _ => {}
             }
         }
         self
@@ -266,30 +262,18 @@ mod tests {
     }
 
     #[test]
-    fn test_from_model_def() {
-        let model = ModelDef {
+    fn test_from_params() {
+        let model = ModelParams {
             name: "D1N4148".to_string(),
             kind: "D".to_string(),
             params: vec![
-                Param {
-                    name: "IS".to_string(),
-                    value: Expr::Num(2.52e-9),
-                },
-                Param {
-                    name: "RS".to_string(),
-                    value: Expr::Num(0.568),
-                },
-                Param {
-                    name: "N".to_string(),
-                    value: Expr::Num(1.752),
-                },
-                Param {
-                    name: "BV".to_string(),
-                    value: Expr::Num(100.0),
-                },
+                ("IS".to_string(), 2.52e-9),
+                ("RS".to_string(), 0.568),
+                ("N".to_string(), 1.752),
+                ("BV".to_string(), 100.0),
             ],
         };
-        let d = DiodeModel::from_model_def(&model);
+        let d = DiodeModel::from_params(&model);
         assert_abs_diff_eq!(d.is, 2.52e-9, epsilon = 1e-15);
         assert_abs_diff_eq!(d.rs, 0.568, epsilon = 1e-15);
         assert_abs_diff_eq!(d.n, 1.752, epsilon = 1e-15);

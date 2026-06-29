@@ -28,7 +28,7 @@
 //! that, port the upstream eval function in earnest.  See
 //! `docs/devices.md` and the commit message for the deferral list.
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::diode::VT_NOM;
 use crate::mosfet::{MosfetCompanion, MosfetType};
@@ -154,40 +154,38 @@ impl HisimModel {
     /// model cards from foundry PDKs import without errors even though only
     /// a subset of parameters affect simulation results in this simplified
     /// port.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let mos_type = if model_def.kind.to_uppercase().contains("PMOS") {
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = if model.kind.to_uppercase().contains("PMOS") {
             MosfetType::Pmos
         } else {
             MosfetType::Nmos
         };
         let mut m = Self::new(mos_type);
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "TOX" => m.tox = *v,
-                    "NSUBC" => m.nsubc = *v,
-                    "VFBC" => m.vfbc = *v,
-                    "MUECB0" => m.muecb0 = *v,
-                    "VMAX" => m.vmax = *v,
-                    "XLD" => m.xld = *v,
-                    "CLM1" => m.clm1 = *v,
-                    "THETA" | "MUEPH0" => m.theta = *v,
-                    "JS0" | "IS" => m.js0 = *v,
-                    "PB" | "PBSW" => m.pb = *v,
-                    "CBD" => m.cbd = *v,
-                    "CBS" => m.cbs = *v,
-                    "CGSO" => m.cgso = *v,
-                    "CGDO" => m.cgdo = *v,
-                    "CGBO" => m.cgbo = *v,
-                    "CJ" => m.cj = *v,
-                    "MJ" => m.mj = *v,
-                    "CJSW" => m.cjsw = *v,
-                    "MJSW" => m.mjsw = *v,
-                    "FC" => m.fc = *v,
-                    "RD" => m.rd = *v,
-                    "RS" => m.rs = *v,
-                    _ => {}
-                }
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "TOX" => m.tox = *v,
+                "NSUBC" => m.nsubc = *v,
+                "VFBC" => m.vfbc = *v,
+                "MUECB0" => m.muecb0 = *v,
+                "VMAX" => m.vmax = *v,
+                "XLD" => m.xld = *v,
+                "CLM1" => m.clm1 = *v,
+                "THETA" | "MUEPH0" => m.theta = *v,
+                "JS0" | "IS" => m.js0 = *v,
+                "PB" | "PBSW" => m.pb = *v,
+                "CBD" => m.cbd = *v,
+                "CBS" => m.cbs = *v,
+                "CGSO" => m.cgso = *v,
+                "CGDO" => m.cgdo = *v,
+                "CGBO" => m.cgbo = *v,
+                "CJ" => m.cj = *v,
+                "MJ" => m.mj = *v,
+                "CJSW" => m.cjsw = *v,
+                "MJSW" => m.mjsw = *v,
+                "FC" => m.fc = *v,
+                "RD" => m.rd = *v,
+                "RS" => m.rs = *v,
+                _ => {}
             }
         }
         m.compute_derived();
@@ -678,7 +676,6 @@ pub fn stamp_hisim(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thevenin_types::Param;
 
     fn nmos_basic() -> HisimModel {
         HisimModel::new(MosfetType::Nmos)
@@ -694,43 +691,22 @@ mod tests {
     }
 
     #[test]
-    fn from_model_def_parses_subset() {
-        let md = ModelDef {
+    fn from_params_parses_subset() {
+        let md = ModelParams {
             name: "M".to_string(),
             kind: "NMOS".to_string(),
             params: vec![
-                Param {
-                    name: "LEVEL".to_string(),
-                    value: Expr::Num(68.0),
-                },
-                Param {
-                    name: "TOX".to_string(),
-                    value: Expr::Num(5e-9),
-                },
-                Param {
-                    name: "NSUBC".to_string(),
-                    value: Expr::Num(2e17),
-                },
-                Param {
-                    name: "VFBC".to_string(),
-                    value: Expr::Num(-1.0),
-                },
-                Param {
-                    name: "MUECB0".to_string(),
-                    value: Expr::Num(350.0),
-                },
-                Param {
-                    name: "RD".to_string(),
-                    value: Expr::Num(2.0),
-                },
+                ("LEVEL".to_string(), 68.0),
+                ("TOX".to_string(), 5e-9),
+                ("NSUBC".to_string(), 2e17),
+                ("VFBC".to_string(), -1.0),
+                ("MUECB0".to_string(), 350.0),
+                ("RD".to_string(), 2.0),
                 // Unknown HiSIM param — must not crash.
-                Param {
-                    name: "COSYM".to_string(),
-                    value: Expr::Num(1.0),
-                },
+                ("COSYM".to_string(), 1.0),
             ],
         };
-        let m = HisimModel::from_model_def(&md);
+        let m = HisimModel::from_params(&md);
         assert!((m.tox - 5e-9).abs() < 1e-20);
         assert!((m.muecb0 - 350.0).abs() < 1e-9);
         assert!((m.rd - 2.0).abs() < 1e-9);

@@ -5,8 +5,8 @@
 //!
 //! Reference: ngspice `src/spicelib/devices/ltra/`
 
+use crate::model_params::ModelParams;
 use std::f64::consts::PI;
-use thevenin_types::ModelDef;
 
 // ---------------------------------------------------------------------------
 // Special case types
@@ -74,7 +74,7 @@ pub struct LtraModel {
 }
 
 impl LtraModel {
-    pub fn from_model_def(def: &ModelDef) -> Self {
+    pub fn from_params(model: &ModelParams) -> Self {
         let mut r = 0.0;
         let mut l = 0.0;
         let mut g = 0.0;
@@ -92,33 +92,32 @@ impl LtraModel {
         let mut c_given = false;
         let mut length_given = false;
 
-        for p in &def.params {
-            let val = crate::expr_val_or(&p.value, 0.0);
-            match p.name.to_uppercase().as_str() {
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
                 "R" => {
-                    r = val;
+                    r = *v;
                     r_given = true;
                 }
                 "L" => {
-                    l = val;
+                    l = *v;
                     l_given = true;
                 }
                 "G" => {
-                    g = val;
+                    g = *v;
                     g_given = true;
                 }
                 "C" => {
-                    c = val;
+                    c = *v;
                     c_given = true;
                 }
                 "LEN" => {
-                    length = val;
+                    length = *v;
                     length_given = true;
                 }
-                "REL" | "RELTOL" => reltol = val,
-                "ABS" | "ABSTOL" => abstol = val,
-                "COMPACTREL" => chop_reltol = val,
-                "COMPACTABS" => chop_abstol = val,
+                "REL" | "RELTOL" => reltol = *v,
+                "ABS" | "ABSTOL" => abstol = *v,
+                "COMPACTREL" => chop_reltol = *v,
+                "COMPACTABS" => chop_abstol = *v,
                 "STEPLIMIT" => step_limit = true,
                 "NOSTEPLIMIT" => step_limit = false,
                 _ => {}

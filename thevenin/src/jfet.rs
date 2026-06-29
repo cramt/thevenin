@@ -4,7 +4,7 @@
 //! Supports N-channel (NJF) and P-channel (PJF) devices.
 //! Gate junctions are modeled as PN diodes with leakage current.
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::diode::VT_NOM;
 use crate::physics::safe_exp;
@@ -83,33 +83,31 @@ impl JfetModel {
         }
     }
 
-    /// Create a `JfetModel` from a netlist `.model` definition.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let jfet_type = if model_def.kind.to_uppercase().contains("PJF") {
+    /// Create a `JfetModel` from resolved `.model` parameters.
+    pub fn from_params(model: &ModelParams) -> Self {
+        let jfet_type = if model.kind.to_uppercase().contains("PJF") {
             JfetType::Pjf
         } else {
             JfetType::Njf
         };
         let mut m = Self::new(jfet_type);
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "VTO" | "VT0" => m.vto = *v,
-                    "BETA" => m.beta = *v,
-                    "LAMBDA" => m.lambda = *v,
-                    "RD" => m.rd = *v,
-                    "RS" => m.rs = *v,
-                    "CGS" => m.cgs = *v,
-                    "CGD" => m.cgd = *v,
-                    "PB" => m.pb = *v,
-                    "IS" => m.is = *v,
-                    "N" => m.n = *v,
-                    "FC" => m.fc = *v,
-                    "B" => m.b = *v,
-                    "KF" => m.kf = *v,
-                    "AF" => m.af = *v,
-                    _ => {} // ignore unknown params (LEVEL, etc.)
-                }
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "VTO" | "VT0" => m.vto = *v,
+                "BETA" => m.beta = *v,
+                "LAMBDA" => m.lambda = *v,
+                "RD" => m.rd = *v,
+                "RS" => m.rs = *v,
+                "CGS" => m.cgs = *v,
+                "CGD" => m.cgd = *v,
+                "PB" => m.pb = *v,
+                "IS" => m.is = *v,
+                "N" => m.n = *v,
+                "FC" => m.fc = *v,
+                "B" => m.b = *v,
+                "KF" => m.kf = *v,
+                "AF" => m.af = *v,
+                _ => {} // ignore unknown params (LEVEL, etc.)
             }
         }
         m
@@ -434,7 +432,6 @@ pub fn jfet_limit(
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
-    use thevenin_types::Param;
     #[cfg(target_arch = "wasm32")]
     use wasm_bindgen_test::wasm_bindgen_test as test;
 
@@ -454,29 +451,17 @@ mod tests {
 
     #[test]
     fn test_from_model_def() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "MODJ".to_string(),
             kind: "NJF".to_string(),
             params: vec![
-                Param {
-                    name: "VTO".to_string(),
-                    value: Expr::Num(-3.5),
-                },
-                Param {
-                    name: "BETA".to_string(),
-                    value: Expr::Num(4.1e-4),
-                },
-                Param {
-                    name: "LAMBDA".to_string(),
-                    value: Expr::Num(0.002),
-                },
-                Param {
-                    name: "RD".to_string(),
-                    value: Expr::Num(200.0),
-                },
+                ("VTO".to_string(), -3.5),
+                ("BETA".to_string(), 4.1e-4),
+                ("LAMBDA".to_string(), 0.002),
+                ("RD".to_string(), 200.0),
             ],
         };
-        let m = JfetModel::from_model_def(&model_def);
+        let m = JfetModel::from_params(&model_def);
         assert_eq!(m.jfet_type, JfetType::Njf);
         assert_abs_diff_eq!(m.vto, -3.5, epsilon = 1e-15);
         assert_abs_diff_eq!(m.beta, 4.1e-4, epsilon = 1e-15);
@@ -486,15 +471,12 @@ mod tests {
 
     #[test]
     fn test_from_model_def_pjf() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "PMOD".to_string(),
             kind: "PJF".to_string(),
-            params: vec![Param {
-                name: "VTO".to_string(),
-                value: Expr::Num(2.0),
-            }],
+            params: vec![("VTO".to_string(), 2.0)],
         };
-        let m = JfetModel::from_model_def(&model_def);
+        let m = JfetModel::from_params(&model_def);
         assert_eq!(m.jfet_type, JfetType::Pjf);
         assert_abs_diff_eq!(m.vto, 2.0, epsilon = 1e-15);
     }

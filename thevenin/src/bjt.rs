@@ -4,7 +4,7 @@
 //! Supports NPN and PNP types with Early effect (VAF/VAR) and high-injection
 //! rolloff (IKF/IKR).
 
-use thevenin_types::{Expr, ModelDef, Param};
+use crate::model_params::ModelParams;
 
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::physics::{KBOQ, safe_exp};
@@ -143,56 +143,54 @@ impl BjtModel {
         }
     }
 
-    /// Create a `BjtModel` from a netlist `.model` definition.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let bjt_type = if model_def.kind.to_uppercase() == "PNP" {
+    /// Create a `BjtModel` from resolved `.model` parameters.
+    pub fn from_params(model: &ModelParams) -> Self {
+        let bjt_type = if model.kind.to_uppercase() == "PNP" {
             BjtType::Pnp
         } else {
             BjtType::Npn
         };
         let mut m = Self::new(bjt_type);
         let mut rbm_given = false;
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "IS" => m.is = *v,
-                    "BF" => m.bf = *v,
-                    "BR" => m.br = *v,
-                    "NF" => m.nf = *v,
-                    "NR" => m.nr = *v,
-                    "ISE" => m.ise = *v,
-                    "NE" => m.ne = *v,
-                    "ISC" => m.isc = *v,
-                    "NC" => m.nc = *v,
-                    "VAF" | "VA" => m.vaf = *v,
-                    "VAR" => m.var = *v,
-                    "IKF" | "JBF" => m.ikf = *v,
-                    "IKR" | "JBR" => m.ikr = *v,
-                    "RB" => m.rb = *v,
-                    "RBM" => {
-                        m.rbm = *v;
-                        rbm_given = true;
-                    }
-                    "RC" => m.rc = *v,
-                    "RE" => m.re = *v,
-                    "CJE" => m.cje = *v,
-                    "VJE" | "PE" => m.vje = *v,
-                    "MJE" | "ME" => m.mje = *v,
-                    "CJC" => m.cjc = *v,
-                    "VJC" | "PC" => m.vjc = *v,
-                    "MJC" | "MC" => m.mjc = *v,
-                    "CJS" | "CCS" => m.cjs = *v,
-                    "TF" => m.tf = *v,
-                    "TR" => m.tr = *v,
-                    "XCJC" => m.xcjc = *v,
-                    "KF" => m.kf = *v,
-                    "AF" => m.af = *v,
-                    "EG" => m.eg = *v,
-                    "XTI" => m.xti = *v,
-                    "FC" => m.fc = *v,
-                    "TNOM" => m.tnom = *v,
-                    _ => {} // ignore unknown params (LEVEL, etc.)
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "IS" => m.is = *v,
+                "BF" => m.bf = *v,
+                "BR" => m.br = *v,
+                "NF" => m.nf = *v,
+                "NR" => m.nr = *v,
+                "ISE" => m.ise = *v,
+                "NE" => m.ne = *v,
+                "ISC" => m.isc = *v,
+                "NC" => m.nc = *v,
+                "VAF" | "VA" => m.vaf = *v,
+                "VAR" => m.var = *v,
+                "IKF" | "JBF" => m.ikf = *v,
+                "IKR" | "JBR" => m.ikr = *v,
+                "RB" => m.rb = *v,
+                "RBM" => {
+                    m.rbm = *v;
+                    rbm_given = true;
                 }
+                "RC" => m.rc = *v,
+                "RE" => m.re = *v,
+                "CJE" => m.cje = *v,
+                "VJE" | "PE" => m.vje = *v,
+                "MJE" | "ME" => m.mje = *v,
+                "CJC" => m.cjc = *v,
+                "VJC" | "PC" => m.vjc = *v,
+                "MJC" | "MC" => m.mjc = *v,
+                "CJS" | "CCS" => m.cjs = *v,
+                "TF" => m.tf = *v,
+                "TR" => m.tr = *v,
+                "XCJC" => m.xcjc = *v,
+                "KF" => m.kf = *v,
+                "AF" => m.af = *v,
+                "EG" => m.eg = *v,
+                "XTI" => m.xti = *v,
+                "FC" => m.fc = *v,
+                "TNOM" => m.tnom = *v,
+                _ => {} // ignore unknown params (LEVEL, etc.)
             }
         }
         // RBM defaults to RB if not explicitly given (SPICE convention).
@@ -203,15 +201,13 @@ impl BjtModel {
     }
 
     /// Apply instance-level parameter overrides.
-    pub fn with_instance_params(mut self, params: &[Param]) -> Self {
-        for p in params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "IS" => self.is = *v,
-                    "BF" => self.bf = *v,
-                    "BR" => self.br = *v,
-                    _ => {}
-                }
+    pub fn with_instance_params(mut self, params: &[(String, f64)]) -> Self {
+        for (name, v) in params {
+            match name.to_uppercase().as_str() {
+                "IS" => self.is = *v,
+                "BF" => self.bf = *v,
+                "BR" => self.br = *v,
+                _ => {}
             }
         }
         self
@@ -658,29 +654,17 @@ mod tests {
 
     #[test]
     fn test_from_model_def_npn() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "QND".to_string(),
             kind: "NPN".to_string(),
             params: vec![
-                Param {
-                    name: "BF".to_string(),
-                    value: Expr::Num(50.0),
-                },
-                Param {
-                    name: "RB".to_string(),
-                    value: Expr::Num(70.0),
-                },
-                Param {
-                    name: "VA".to_string(),
-                    value: Expr::Num(50.0),
-                },
-                Param {
-                    name: "IS".to_string(),
-                    value: Expr::Num(1e-15),
-                },
+                ("BF".to_string(), 50.0),
+                ("RB".to_string(), 70.0),
+                ("VA".to_string(), 50.0),
+                ("IS".to_string(), 1e-15),
             ],
         };
-        let m = BjtModel::from_model_def(&model_def);
+        let m = BjtModel::from_params(&model_def);
         assert_eq!(m.bjt_type, BjtType::Npn);
         assert_abs_diff_eq!(m.bf, 50.0, epsilon = 1e-15);
         assert_abs_diff_eq!(m.rb, 70.0, epsilon = 1e-15);
@@ -690,15 +674,12 @@ mod tests {
 
     #[test]
     fn test_from_model_def_pnp() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "P1".to_string(),
             kind: "PNP".to_string(),
-            params: vec![Param {
-                name: "BF".to_string(),
-                value: Expr::Num(80.0),
-            }],
+            params: vec![("BF".to_string(), 80.0)],
         };
-        let m = BjtModel::from_model_def(&model_def);
+        let m = BjtModel::from_params(&model_def);
         assert_eq!(m.bjt_type, BjtType::Pnp);
         assert_abs_diff_eq!(m.bf, 80.0, epsilon = 1e-15);
     }

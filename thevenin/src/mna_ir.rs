@@ -53,6 +53,7 @@ use crate::mna::{
     push_bjt_caps, push_mosfet_caps, resolve_model_with_bins, resolve_resistor_value,
     stamp_conductance,
 };
+use crate::model_params::{ModelParams, resolved_params};
 use crate::mos2::{Mos2Instance, Mos2Model};
 use crate::mos3::{Mos3Instance, Mos3Model};
 use crate::mos6::{Mos6Instance, Mos6Model};
@@ -453,9 +454,9 @@ fn lookup_model_by_string_param<'a>(circuit: &'a Circuit, elem: &IrElement) -> O
 /// Netlist path's behaviour for "naked" diodes.
 fn load_diode_model(circuit: &Circuit, elem: &IrElement) -> DiodeModel {
     let base = lookup_model(circuit, elem)
-        .map(|m| DiodeModel::from_model_def(&convert_model(m)))
+        .map(|m| DiodeModel::from_params(&ModelParams::from_model_def(&convert_model(m))))
         .unwrap_or_default();
-    base.with_instance_params(&extra_params(elem, &["value"]))
+    base.with_instance_params(&resolved_params(&extra_params(elem, &["value"])))
 }
 
 /// Circuit-side analogue of `crate::netlist_temp(&Netlist) -> f64`.
@@ -1005,9 +1006,9 @@ fn numeric_value(v: &Value) -> Option<f64> {
 /// "default to NPN when no model is linked" behaviour exactly.
 fn load_bjt_model(circuit: &Circuit, elem: &IrElement) -> BjtModel {
     let base = lookup_model(circuit, elem)
-        .map(|m| BjtModel::from_model_def(&convert_model(m)))
+        .map(|m| BjtModel::from_params(&ModelParams::from_model_def(&convert_model(m))))
         .unwrap_or_else(|| BjtModel::new(crate::bjt::BjtType::Npn));
-    base.with_instance_params(&extra_params(elem, &["value"]))
+    base.with_instance_params(&resolved_params(&extra_params(elem, &["value"])))
 }
 
 /// Owning storage for Netlist-shaped [`ModelDef`] values converted from the
@@ -1088,7 +1089,7 @@ impl ModelTables {
 /// exists).
 fn load_vbic_model(circuit: &Circuit, elem: &IrElement) -> VbicModel {
     let mut vm = lookup_model(circuit, elem)
-        .map(|m| VbicModel::from_model_def(&convert_model(m)))
+        .map(|m| VbicModel::from_params(&ModelParams::from_model_def(&convert_model(m))))
         .unwrap_or_else(|| VbicModel::new(crate::vbic::VbicType::Npn));
     vm.temperature_adjust(circuit_temp(circuit));
     vm
@@ -1197,7 +1198,9 @@ fn stamp_circuit(
                 let level = bjt_level(model, &elem.params);
                 if level == 4 {
                     let vm = model
-                        .map(|m| VbicModel::from_model_def(&convert_model(m)))
+                        .map(|m| {
+                            VbicModel::from_params(&ModelParams::from_model_def(&convert_model(m)))
+                        })
                         .unwrap_or_else(|| VbicModel::new(crate::vbic::VbicType::Npn));
                     // Mirror mna::assemble_mna_flat: it uses the substrate-
                     // present variant unconditionally, and the second pass
@@ -1208,7 +1211,9 @@ fn stamp_circuit(
                     internal_node_count += vm.internal_node_count();
                 } else {
                     let bm = model
-                        .map(|m| BjtModel::from_model_def(&convert_model(m)))
+                        .map(|m| {
+                            BjtModel::from_params(&ModelParams::from_model_def(&convert_model(m)))
+                        })
                         .unwrap_or_else(|| BjtModel::new(crate::bjt::BjtType::Npn));
                     internal_node_count += bm.internal_node_count();
                 }
@@ -1221,7 +1226,9 @@ fn stamp_circuit(
                 node_map.index(g);
                 node_map.index(s);
                 let jm = lookup_model(circuit, elem)
-                    .map(|m| JfetModel::from_model_def(&convert_model(m)))
+                    .map(|m| {
+                        JfetModel::from_params(&ModelParams::from_model_def(&convert_model(m)))
+                    })
                     .unwrap_or_else(|| JfetModel::new(crate::jfet::JfetType::Njf));
                 internal_node_count += jm.internal_node_count();
             }
@@ -1350,18 +1357,22 @@ fn stamp_circuit(
                 let level = get_mosfet_level(mdef.as_ref().as_ref(), &params_nl);
                 match kind.as_deref() {
                     Some("NMF" | "PMF") if level == 1 => {
-                        let mm = MesfetModel::from_model_def(mdef.as_ref().unwrap());
+                        let mm = MesfetModel::from_params(&ModelParams::from_model_def(
+                            mdef.as_ref().unwrap(),
+                        ));
                         internal_node_count += mm.internal_node_count();
                     }
                     Some("NHFET" | "PHFET") => {
-                        let mm =
-                            HfetModel::from_model_def_with_level(mdef.as_ref().unwrap(), level);
+                        let mm = HfetModel::from_params_with_level(
+                            &ModelParams::from_model_def(mdef.as_ref().unwrap()),
+                            level,
+                        );
                         internal_node_count += mm.internal_node_count();
                     }
                     _ => {
                         let mm = mdef
                             .as_ref()
-                            .map(MesaModel::from_model_def)
+                            .map(|mdef| MesaModel::from_params(&ModelParams::from_model_def(mdef)))
                             .unwrap_or_default();
                         internal_node_count += mm.internal_node_count();
                     }
@@ -1414,55 +1425,69 @@ fn stamp_circuit(
 
                 if is_vdmos {
                     let vm = resolved
-                        .map(crate::vdmos::VdmosModel::from_model_def)
+                        .map(|mdef| {
+                            crate::vdmos::VdmosModel::from_params(&ModelParams::from_model_def(
+                                mdef,
+                            ))
+                        })
                         .unwrap_or_else(|| {
                             crate::vdmos::VdmosModel::new(crate::vdmos::VdmosType::Nmos)
                         });
                     internal_node_count += vm.internal_node_count();
                 } else if level == 8 || level == 49 {
                     let bm = resolved
-                        .map(Bsim3Model::from_model_def)
+                        .map(|mdef| Bsim3Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Bsim3Model::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else if level == 14 || level == 54 {
                     let bm = resolved
-                        .map(Bsim4Model::from_model_def)
+                        .map(|mdef| Bsim4Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Bsim4Model::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else if level == 56 {
                     let bm = resolved
-                        .map(Bsim3SoiDdModel::from_model_def)
+                        .map(|mdef| {
+                            Bsim3SoiDdModel::from_params(&ModelParams::from_model_def(mdef))
+                        })
                         .unwrap_or_else(|| Bsim3SoiDdModel::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else if level == 57 {
                     let bm = resolved
-                        .map(Bsim3SoiPdModel::from_model_def)
+                        .map(|mdef| {
+                            Bsim3SoiPdModel::from_params(&ModelParams::from_model_def(mdef))
+                        })
                         .unwrap_or_else(|| Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else if level == 55 {
                     let bm = resolved
-                        .map(Bsim3SoiFdModel::from_model_def)
+                        .map(|mdef| {
+                            Bsim3SoiFdModel::from_params(&ModelParams::from_model_def(mdef))
+                        })
                         .unwrap_or_else(|| Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += bm.internal_node_count_fd(nrd, nrs, has_body);
                 } else if level == 2 {
                     let mm = resolved
-                        .map(Mos2Model::from_model_def)
+                        .map(|mdef| Mos2Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Mos2Model::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += mm.internal_node_count();
                 } else if level == 3 {
                     let mm = resolved
-                        .map(Mos3Model::from_model_def)
+                        .map(|mdef| Mos3Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Mos3Model::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += mm.internal_node_count();
                 } else if level == 4 {
                     let bm = resolved
-                        .map(Bsim1Model::from_model_def)
+                        .map(|mdef| Bsim1Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Bsim1Model::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else if level == 5 {
                     // BSIM2 series resistance via rsh*NRD/NRS.
                     let mm = resolved
-                        .map(crate::bsim2::Bsim2Model::from_model_def)
+                        .map(|mdef| {
+                            crate::bsim2::Bsim2Model::from_params(&ModelParams::from_model_def(
+                                mdef,
+                            ))
+                        })
                         .unwrap_or_else(|| {
                             crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
                         });
@@ -1474,17 +1499,17 @@ fn stamp_circuit(
                     }
                 } else if level == 6 {
                     let mm = resolved
-                        .map(Mos6Model::from_model_def)
+                        .map(|mdef| Mos6Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Mos6Model::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += mm.internal_node_count();
                 } else if level == 68 || level == 73 {
                     let mm = resolved
-                        .map(HisimModel::from_model_def)
+                        .map(|mdef| HisimModel::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| HisimModel::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += mm.internal_node_count();
                 } else {
                     let mm = resolved
-                        .map(MosfetModel::from_model_def)
+                        .map(|mdef| MosfetModel::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| MosfetModel::new(crate::mosfet::MosfetType::Nmos));
                     internal_node_count += mm.internal_node_count();
                 }
@@ -1914,7 +1939,8 @@ fn stamp_circuit(
                         elem.name
                     ))
                 })?;
-                let ltra_model = LtraModel::from_model_def(&convert_model(model));
+                let ltra_model =
+                    LtraModel::from_params(&ModelParams::from_model_def(&convert_model(model)));
 
                 let pos1_idx = mna.node_map.get(terminal_name(elem, "in_pos", &net_name)?);
                 let neg1_idx = mna.node_map.get(terminal_name(elem, "in_neg", &net_name)?);
@@ -1949,7 +1975,8 @@ fn stamp_circuit(
                         elem.name
                     ))
                 })?;
-                let txl_model = TxlModel::from_model_def(&convert_model(model));
+                let txl_model =
+                    TxlModel::from_params(&ModelParams::from_model_def(&convert_model(model)));
 
                 // Y-element uses (n1+, n2+) — the n1-/n2- terminals are
                 // typically ground (ignored by the TXL stamps).
@@ -2048,7 +2075,10 @@ fn stamp_circuit(
                         ))
                     })?;
                 let no_l = *width;
-                let cpl_model = CplModel::from_model_def(&convert_model(model), no_l);
+                let cpl_model = CplModel::from_params(
+                    &ModelParams::from_model_def(&convert_model(model)),
+                    no_l,
+                );
 
                 let mut pos_nodes = Vec::with_capacity(no_l);
                 let mut neg_nodes = Vec::with_capacity(no_l);
@@ -2221,7 +2251,9 @@ fn stamp_circuit(
                 let source_idx = mna.node_map.get(terminal_name(elem, "source", &net_name)?);
 
                 let jm = lookup_model(circuit, elem)
-                    .map(|m| JfetModel::from_model_def(&convert_model(m)))
+                    .map(|m| {
+                        JfetModel::from_params(&ModelParams::from_model_def(&convert_model(m)))
+                    })
                     .unwrap_or_else(|| JfetModel::new(crate::jfet::JfetType::Njf));
 
                 let drain_prime_idx = if jm.rd > 0.0 {
@@ -2276,7 +2308,9 @@ fn stamp_circuit(
 
                 match kind.as_deref() {
                     Some("NMF" | "PMF") if level == 1 => {
-                        let mm = MesfetModel::from_model_def(mdef.as_ref().unwrap());
+                        let mm = MesfetModel::from_params(&ModelParams::from_model_def(
+                            mdef.as_ref().unwrap(),
+                        ));
 
                         let mut area = 1.0;
                         let mut m_mult = 1.0;
@@ -2318,8 +2352,10 @@ fn stamp_circuit(
                         });
                     }
                     Some("NHFET" | "PHFET") => {
-                        let mm =
-                            HfetModel::from_model_def_with_level(mdef.as_ref().unwrap(), level);
+                        let mm = HfetModel::from_params_with_level(
+                            &ModelParams::from_model_def(mdef.as_ref().unwrap()),
+                            level,
+                        );
 
                         let mut w = 10e-6;
                         let mut l = 1e-6;
@@ -2390,7 +2426,7 @@ fn stamp_circuit(
                         // Generic MESA.
                         let mm = mdef
                             .as_ref()
-                            .map(MesaModel::from_model_def)
+                            .map(|mdef| MesaModel::from_params(&ModelParams::from_model_def(mdef)))
                             .unwrap_or_default();
 
                         let mut w = 20e-6;
@@ -2530,7 +2566,7 @@ fn stamp_circuit(
 
                 if is_vdmos {
                     // VDMOS power MOSFET. Use the model's polarity tag to pick
-                    // the NMOS / PMOS default for `from_model_def` fallback.
+                    // the NMOS / PMOS default for `from_params` fallback.
                     let pvdmos = matches!(
                         model_ref.map(|m| &m.device_type),
                         Some(cirq_ir::DeviceType::Pvdmos)
@@ -2541,7 +2577,11 @@ fn stamp_circuit(
                         crate::vdmos::VdmosType::Nmos
                     };
                     let vm = resolved
-                        .map(crate::vdmos::VdmosModel::from_model_def)
+                        .map(|mdef| {
+                            crate::vdmos::VdmosModel::from_params(&ModelParams::from_model_def(
+                                mdef,
+                            ))
+                        })
                         .unwrap_or_else(|| crate::vdmos::VdmosModel::new(default_type));
                     let drain_prime_idx = if vm.rd > 0.0 {
                         let idx = internal_idx;
@@ -2579,7 +2619,7 @@ fn stamp_circuit(
                 } else if level == 8 || level == 49 {
                     // BSIM3.
                     let bm = resolved
-                        .map(Bsim3Model::from_model_def)
+                        .map(|mdef| Bsim3Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Bsim3Model::new(crate::mosfet::MosfetType::Nmos));
 
                     let drain_prime_idx = if bm.rsh > 0.0 && nrd > 0.0 {
@@ -2628,7 +2668,7 @@ fn stamp_circuit(
                 } else if level == 14 || level == 54 {
                     // BSIM4.
                     let bm = resolved
-                        .map(Bsim4Model::from_model_def)
+                        .map(|mdef| Bsim4Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Bsim4Model::new(crate::mosfet::MosfetType::Nmos));
 
                     let drain_prime_idx = if (bm.rsh > 0.0 && nrd > 0.0) || bm.rdsmod != 0 {
@@ -2687,7 +2727,9 @@ fn stamp_circuit(
                 } else if level == 56 {
                     // BSIM3SOI-DD.
                     let bm = resolved
-                        .map(Bsim3SoiDdModel::from_model_def)
+                        .map(|mdef| {
+                            Bsim3SoiDdModel::from_params(&ModelParams::from_model_def(mdef))
+                        })
                         .unwrap_or_else(|| Bsim3SoiDdModel::new(crate::mosfet::MosfetType::Nmos));
 
                     let drain_prime_idx = if bm.rbsh > 0.0 && nrd > 0.0 {
@@ -2743,7 +2785,9 @@ fn stamp_circuit(
                 } else if level == 57 {
                     // BSIM3SOI-PD.
                     let bm = resolved
-                        .map(Bsim3SoiPdModel::from_model_def)
+                        .map(|mdef| {
+                            Bsim3SoiPdModel::from_params(&ModelParams::from_model_def(mdef))
+                        })
                         .unwrap_or_else(|| Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos));
 
                     let drain_prime_idx = if bm.rbsh > 0.0 && nrd > 0.0 {
@@ -2801,7 +2845,9 @@ fn stamp_circuit(
                     // contact exists (floating-body sets bNode = ground in
                     // ngspice b3soifdset.c).
                     let bm = resolved
-                        .map(Bsim3SoiFdModel::from_model_def)
+                        .map(|mdef| {
+                            Bsim3SoiFdModel::from_params(&ModelParams::from_model_def(mdef))
+                        })
                         .unwrap_or_else(|| Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos));
 
                     let has_ext_rd = nrd > 0.0 && bm.rbsh > 0.0;
@@ -2861,7 +2907,7 @@ fn stamp_circuit(
                 } else if level == 2 {
                     // MOS Level 2.
                     let mm = resolved
-                        .map(Mos2Model::from_model_def)
+                        .map(|mdef| Mos2Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Mos2Model::new(crate::mosfet::MosfetType::Nmos));
                     let drain_prime_idx = if mm.rd > 0.0 {
                         let idx = internal_idx;
@@ -2922,7 +2968,7 @@ fn stamp_circuit(
                 } else if level == 3 {
                     // MOS Level 3 (semi-empirical short-channel).
                     let mm = resolved
-                        .map(Mos3Model::from_model_def)
+                        .map(|mdef| Mos3Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Mos3Model::new(crate::mosfet::MosfetType::Nmos));
                     let drain_prime_idx = if mm.rd > 0.0 {
                         let idx = internal_idx;
@@ -2983,7 +3029,7 @@ fn stamp_circuit(
                 } else if level == 4 {
                     // BSIM1 (Berkeley short-channel IGFET, LEVEL=4).
                     let bm = resolved
-                        .map(Bsim1Model::from_model_def)
+                        .map(|mdef| Bsim1Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Bsim1Model::new(crate::mosfet::MosfetType::Nmos));
                     let drain_prime_idx = if bm.rsh > 0.0 && nrd > 0.0 {
                         let idx = internal_idx;
@@ -3051,7 +3097,11 @@ fn stamp_circuit(
                 } else if level == 5 {
                     // BSIM2 (LEVEL=5).
                     let mm = resolved
-                        .map(crate::bsim2::Bsim2Model::from_model_def)
+                        .map(|mdef| {
+                            crate::bsim2::Bsim2Model::from_params(&ModelParams::from_model_def(
+                                mdef,
+                            ))
+                        })
                         .unwrap_or_else(|| {
                             crate::bsim2::Bsim2Model::new(crate::mosfet::MosfetType::Nmos)
                         });
@@ -3131,7 +3181,7 @@ fn stamp_circuit(
                 } else if level == 6 {
                     // MOS6.
                     let mm = resolved
-                        .map(Mos6Model::from_model_def)
+                        .map(|mdef| Mos6Model::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| Mos6Model::new(crate::mosfet::MosfetType::Nmos));
                     let drain_prime_idx = if mm.rd > 0.0 {
                         let idx = internal_idx;
@@ -3195,7 +3245,7 @@ fn stamp_circuit(
                     // here; the HV-specific drift / breakdown extensions are
                     // routed through a separate code path once HiSIMHV2 lands.
                     let mm = resolved
-                        .map(HisimModel::from_model_def)
+                        .map(|mdef| HisimModel::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| HisimModel::new(crate::mosfet::MosfetType::Nmos));
                     let drain_prime_idx = if mm.rd > 0.0 {
                         let idx = internal_idx;
@@ -3256,7 +3306,7 @@ fn stamp_circuit(
                 } else {
                     // MOS Level 1 (default).
                     let mm = resolved
-                        .map(MosfetModel::from_model_def)
+                        .map(|mdef| MosfetModel::from_params(&ModelParams::from_model_def(mdef)))
                         .unwrap_or_else(|| MosfetModel::new(crate::mosfet::MosfetType::Nmos));
                     let drain_prime_idx = if mm.rd > 0.0 {
                         let idx = internal_idx;
@@ -3501,9 +3551,14 @@ fn stamp_circuit(
                     cirq_ir::SwitchKind::Current => crate::switch::SwitchKind::Current,
                 };
                 let base = lookup_model(circuit, elem)
-                    .map(|m| crate::switch::SwitchModel::from_model_def(&convert_model(m)))
+                    .map(|m| {
+                        crate::switch::SwitchModel::from_params(&ModelParams::from_model_def(
+                            &convert_model(m),
+                        ))
+                    })
                     .unwrap_or_else(|| crate::switch::SwitchModel::new(kind_for_default));
-                let model = base.with_instance_params(&extra_params(elem, &["value", "on"]));
+                let model = base
+                    .with_instance_params(&resolved_params(&extra_params(elem, &["value", "on"])));
 
                 let latched_state = std::cell::Cell::new({
                     let on_flag = elem.params.iter().find_map(|(k, v)| {

@@ -5,9 +5,8 @@
 //!
 //! Reference: ngspice mes/ device directory.
 
-use thevenin_types::{Expr, ModelDef};
-
 use crate::mna::stamp_conductance;
+use crate::model_params::ModelParams;
 use crate::sparse::SparseMatrix;
 
 /// Thermal voltage at 300.15K.
@@ -15,13 +14,6 @@ const VT_NOM: f64 = 0.025864186;
 
 /// Euler's number.
 const E: f64 = std::f64::consts::E;
-
-fn expr_val(e: &Expr) -> f64 {
-    match e {
-        Expr::Num(v) => *v,
-        Expr::Param(_) | Expr::Brace(_) => 0.0,
-    }
-}
 
 /// MESFET device type.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -86,8 +78,8 @@ impl MesfetModel {
         }
     }
 
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let kind = model_def.kind.to_uppercase();
+    pub fn from_params(model: &ModelParams) -> Self {
+        let kind = model.kind.to_uppercase();
         let device_type = if kind == "PMF" {
             MesfetType::Pmf
         } else {
@@ -95,9 +87,9 @@ impl MesfetModel {
         };
         let mut m = Self::new(device_type);
 
-        for p in &model_def.params {
-            let val = expr_val(&p.value);
-            match p.name.to_uppercase().as_str() {
+        for (name, v) in &model.params {
+            let val = *v;
+            match name.to_uppercase().as_str() {
                 "VTO" | "VT0" => m.vt0 = val,
                 "ALPHA" => m.alpha = val,
                 "BETA" => m.beta = val,
@@ -489,29 +481,17 @@ mod tests {
 
     #[test]
     fn mesfet_model_from_model_def() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "mesmod".to_string(),
             kind: "NMF".to_string(),
             params: vec![
-                thevenin_types::Param {
-                    name: "VT0".to_string(),
-                    value: Expr::Num(-1.3),
-                },
-                thevenin_types::Param {
-                    name: "BETA".to_string(),
-                    value: Expr::Num(1.4e-3),
-                },
-                thevenin_types::Param {
-                    name: "RD".to_string(),
-                    value: Expr::Num(46.0),
-                },
-                thevenin_types::Param {
-                    name: "RS".to_string(),
-                    value: Expr::Num(46.0),
-                },
+                ("VT0".to_string(), -1.3),
+                ("BETA".to_string(), 1.4e-3),
+                ("RD".to_string(), 46.0),
+                ("RS".to_string(), 46.0),
             ],
         };
-        let m = MesfetModel::from_model_def(&model_def);
+        let m = MesfetModel::from_params(&model_def);
         assert_eq!(m.device_type, MesfetType::Nmf);
         assert_eq!(m.vt0, -1.3);
         assert_eq!(m.beta, 1.4e-3);
@@ -521,12 +501,12 @@ mod tests {
 
     #[test]
     fn mesfet_pmf_type() {
-        let model_def = ModelDef {
+        let model_def = ModelParams {
             name: "pmod".to_string(),
             kind: "PMF".to_string(),
             params: vec![],
         };
-        let m = MesfetModel::from_model_def(&model_def);
+        let m = MesfetModel::from_params(&model_def);
         assert_eq!(m.device_type, MesfetType::Pmf);
     }
 }

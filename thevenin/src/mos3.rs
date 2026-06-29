@@ -11,7 +11,7 @@
 //! Companion-model shape (`gm`, `gds`, `gmbs`, bulk diodes, `mode`) and the
 //! stamping logic mirror Level 2 — only the device-equation core differs.
 
-use thevenin_types::{Expr, ModelDef};
+use crate::model_params::ModelParams;
 
 use crate::diode::VT_NOM;
 use crate::mosfet::{MosfetCompanion, MosfetType};
@@ -163,9 +163,9 @@ impl Mos3Model {
         }
     }
 
-    /// Build a `Mos3Model` from a netlist `.model` definition.
-    pub fn from_model_def(model_def: &ModelDef) -> Self {
-        let mos_type = if model_def.kind.to_uppercase().contains("PMOS") {
+    /// Build a `Mos3Model` from resolved `.model` parameters.
+    pub fn from_params(model: &ModelParams) -> Self {
+        let mos_type = if model.kind.to_uppercase().contains("PMOS") {
             MosfetType::Pmos
         } else {
             MosfetType::Nmos
@@ -176,61 +176,59 @@ impl Mos3Model {
         let mut phi_given = false;
         let mut nsub_given = false;
         let mut kp_given = false;
-        for p in &model_def.params {
-            if let Expr::Num(v) = &p.value {
-                match p.name.to_uppercase().as_str() {
-                    "VTO" | "VT0" => {
-                        m.vto = *v;
-                        vto_given = true;
-                    }
-                    "KP" => {
-                        m.kp = *v;
-                        kp_given = true;
-                    }
-                    "GAMMA" => {
-                        m.gamma = *v;
-                        gamma_given = true;
-                    }
-                    "PHI" => {
-                        m.phi = *v;
-                        phi_given = true;
-                    }
-                    // LAMBDA is not used by Level 3 — ngspice silently ignores it.
-                    "LAMBDA" => {}
-                    "RD" => m.rd = *v,
-                    "RS" => m.rs = *v,
-                    "CBD" => m.cbd = *v,
-                    "CBS" => m.cbs = *v,
-                    "IS" => m.is = *v,
-                    "PB" => m.pb = *v,
-                    "CGSO" => m.cgso = *v,
-                    "CGDO" => m.cgdo = *v,
-                    "CGBO" => m.cgbo = *v,
-                    "CJ" => m.cj = *v,
-                    "MJ" => m.mj = *v,
-                    "CJSW" => m.cjsw = *v,
-                    "MJSW" => m.mjsw = *v,
-                    "TOX" => m.tox = *v,
-                    "LD" => m.ld = *v,
-                    "NSUB" => {
-                        m.nsub = *v;
-                        nsub_given = true;
-                    }
-                    "U0" | "UO" => m.u0 = *v,
-                    "FC" => m.fc = *v,
-                    "KF" => m.kf = *v,
-                    "AF" => m.af = *v,
-                    "NSS" => m.nss = *v,
-                    "TPG" => m.tpg = *v,
-                    "XJ" => m.xj = *v,
-                    "DELTA" => m.delta = *v,
-                    "THETA" => m.theta = *v,
-                    "ETA" => m.eta = *v,
-                    "KAPPA" => m.kappa = *v,
-                    "VMAX" => m.vmax = *v,
-                    "NFS" => m.nfs = *v,
-                    _ => {} // ignore unknown params (LEVEL, etc.)
+        for (name, v) in &model.params {
+            match name.to_uppercase().as_str() {
+                "VTO" | "VT0" => {
+                    m.vto = *v;
+                    vto_given = true;
                 }
+                "KP" => {
+                    m.kp = *v;
+                    kp_given = true;
+                }
+                "GAMMA" => {
+                    m.gamma = *v;
+                    gamma_given = true;
+                }
+                "PHI" => {
+                    m.phi = *v;
+                    phi_given = true;
+                }
+                // LAMBDA is not used by Level 3 — ngspice silently ignores it.
+                "LAMBDA" => {}
+                "RD" => m.rd = *v,
+                "RS" => m.rs = *v,
+                "CBD" => m.cbd = *v,
+                "CBS" => m.cbs = *v,
+                "IS" => m.is = *v,
+                "PB" => m.pb = *v,
+                "CGSO" => m.cgso = *v,
+                "CGDO" => m.cgdo = *v,
+                "CGBO" => m.cgbo = *v,
+                "CJ" => m.cj = *v,
+                "MJ" => m.mj = *v,
+                "CJSW" => m.cjsw = *v,
+                "MJSW" => m.mjsw = *v,
+                "TOX" => m.tox = *v,
+                "LD" => m.ld = *v,
+                "NSUB" => {
+                    m.nsub = *v;
+                    nsub_given = true;
+                }
+                "U0" | "UO" => m.u0 = *v,
+                "FC" => m.fc = *v,
+                "KF" => m.kf = *v,
+                "AF" => m.af = *v,
+                "NSS" => m.nss = *v,
+                "TPG" => m.tpg = *v,
+                "XJ" => m.xj = *v,
+                "DELTA" => m.delta = *v,
+                "THETA" => m.theta = *v,
+                "ETA" => m.eta = *v,
+                "KAPPA" => m.kappa = *v,
+                "VMAX" => m.vmax = *v,
+                "NFS" => m.nfs = *v,
+                _ => {} // ignore unknown params (LEVEL, etc.)
             }
         }
         m.compute_process_params(vto_given, gamma_given, phi_given, nsub_given, kp_given);
@@ -939,7 +937,6 @@ pub fn stamp_mos3(
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
-    use thevenin_types::Param;
 
     fn nmos_basic() -> Mos3Model {
         let mut m = Mos3Model::new(MosfetType::Nmos);
@@ -971,61 +968,25 @@ mod tests {
 
     #[test]
     fn from_model_def_picks_up_level3_params() {
-        let md = ModelDef {
+        let md = ModelParams {
             name: "M".to_string(),
             kind: "NMOS".to_string(),
             params: vec![
-                Param {
-                    name: "LEVEL".to_string(),
-                    value: Expr::Num(3.0),
-                },
-                Param {
-                    name: "VTO".to_string(),
-                    value: Expr::Num(0.7),
-                },
-                Param {
-                    name: "KP".to_string(),
-                    value: Expr::Num(200e-6),
-                },
-                Param {
-                    name: "GAMMA".to_string(),
-                    value: Expr::Num(0.5),
-                },
-                Param {
-                    name: "PHI".to_string(),
-                    value: Expr::Num(0.7),
-                },
-                Param {
-                    name: "THETA".to_string(),
-                    value: Expr::Num(0.05),
-                },
-                Param {
-                    name: "ETA".to_string(),
-                    value: Expr::Num(0.05),
-                },
-                Param {
-                    name: "KAPPA".to_string(),
-                    value: Expr::Num(0.3),
-                },
-                Param {
-                    name: "VMAX".to_string(),
-                    value: Expr::Num(5e4),
-                },
-                Param {
-                    name: "NFS".to_string(),
-                    value: Expr::Num(1e11),
-                },
-                Param {
-                    name: "XJ".to_string(),
-                    value: Expr::Num(0.5e-6),
-                },
-                Param {
-                    name: "DELTA".to_string(),
-                    value: Expr::Num(0.2),
-                },
+                ("LEVEL".to_string(), 3.0),
+                ("VTO".to_string(), 0.7),
+                ("KP".to_string(), 200e-6),
+                ("GAMMA".to_string(), 0.5),
+                ("PHI".to_string(), 0.7),
+                ("THETA".to_string(), 0.05),
+                ("ETA".to_string(), 0.05),
+                ("KAPPA".to_string(), 0.3),
+                ("VMAX".to_string(), 5e4),
+                ("NFS".to_string(), 1e11),
+                ("XJ".to_string(), 0.5e-6),
+                ("DELTA".to_string(), 0.2),
             ],
         };
-        let m = Mos3Model::from_model_def(&md);
+        let m = Mos3Model::from_params(&md);
         assert_eq!(m.mos_type, MosfetType::Nmos);
         assert_abs_diff_eq!(m.vto, 0.7);
         assert_abs_diff_eq!(m.theta, 0.05);
