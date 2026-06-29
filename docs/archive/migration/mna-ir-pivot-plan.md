@@ -532,9 +532,44 @@ retirement (`docs/1.0-checklist.md` Cross-cutting):
 Remaining `convert_model` in `mna_ir`: the MOSFET binning
 (`ModelTables`/`resolve_model_with_bins`), `get_mosfet_level`, and the
 switch-param `Vec<Param>` collection — all lean on `ModelDef`-shaped helpers
-shared with the (dead-but-test-compiled) Netlist path. Converting them is
-gated on deleting that path first, so the shared helpers can go IR-native
-without dual maintenance.
+shared with the Netlist path. Converting them was gated on deleting that path
+first (done in Session L), so the shared helpers can now go IR-native without
+dual maintenance.
+
+#### Session L — Netlist stamping path deleted (landed 2026-06-29)
+
+The legacy Netlist stamping path is gone. The simulator assembles MNA
+exclusively from the IR via `mna_ir::assemble_mna_from_circuit`.
+
+- Prerequisite: the ~67 in-crate unit tests that exercised `assemble_mna(&Netlist)`
+  / `simulate_*(&Netlist)` were rerouted through a new `#[cfg(test)]`
+  `thevenin/src/test_support.rs` (the in-crate twin of `tests/common/mod.rs`):
+  it lifts a `Netlist` fixture to `cirq_ir::Circuit` and runs the public
+  Circuit path, mapping errors back to `MnaError` so the tests kept their shape.
+- Deleted: `mna.rs` `assemble_mna`/`assemble_mna_inner`/`assemble_mna_flat`
+  (~2.5 kLOC) + the Netlist element stampers (`stamp_element`,
+  `stamp_vcvs/vccs/cccs/ccvs`, `stamp_inductor_topology`, `extract_ic_param`)
+  + now-dead helpers (`get_bjt_level`, `resolve_resistor_tc_legacy`);
+  `circuit.rs` `lower`/`pick`/`simulate_op_direct`/`has_op_analysis` + the dead
+  `CircuitSimError::{Convert,Flatten,WrongAnalysis}` variants; the
+  `simulate_*(&Netlist)` wrappers + `simulate_*_with_mna` bridges + Netlist
+  param-extractors (`nr_options_from_netlist`, `resolve_nodeset`,
+  `collect_ac_excitations_from_netlist`, `tran_run_params_from_netlist`,
+  `sens_ac_from_tokens`, …) across the analysis modules; and the obsolete
+  Netlist-path unit tests. Net **−4022 lines** across 10 files.
+- Kept: `MnaSystem` + device-instance types, the `run_X`/`run_X_sweep` cores,
+  `simulate_op_with_mna`, and the shared stamping helpers (`resolve_model_with_bins`,
+  `get_mosfet_level`, `push_*_caps`, `parse_bsrc_params`, `stamp_conductance`,
+  `resolve_resistor_value`, `extract_resistor_noise_params`) — `mna_ir` is now
+  their sole caller.
+
+Verification: 1463 workspace tests pass (7 skipped); harness 100/0/7;
+`cargo clippy --workspace -- -D warnings`, `cargo fmt`, and the wasm build clean.
+
+Next (now unblocked): convert the single-caller shared helpers from
+`&[Param]`/`&ModelDef` to IR-native `ModelParams`/`Value`, drop `convert_model`
++ `extra_params` from `mna_ir`, and retire `thevenin_types::Expr` from the
+simulator (the `cirq-spice-import` ↔ `to_netlist` boundary keeps it).
 
 ### Risk register
 

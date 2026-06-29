@@ -49,10 +49,14 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
   *Progress (2026-06-29):* the device layer is `Expr`-free — all ~25 model
   loaders consume a numeric `ModelParams` boundary, and the Circuit path loads
   non-binned devices natively via `ModelParams::from_ir(&cirq_ir::Model)`. The
-  remaining `Expr`/`ModelDef` use is the MOSFET binning + shared helpers
-  (`resolve_model_with_bins`, `get_mosfet_level`) tied to the dead-but-test-
-  compiled `assemble_mna(&Netlist)` path, plus the import/export boundary. See
-  Session K in `mna-ir-pivot-plan.md`.
+  **legacy `assemble_mna(&Netlist)` stamping path is now deleted** (~4 kLOC);
+  the simulator assembles MNA only from the IR. Remaining `Expr`/`ModelDef`
+  use: the shared device-param helpers (`resolve_model_with_bins`,
+  `get_mosfet_level`, `resolve_resistor_value`, …) which `mna_ir` now feeds via
+  `convert_model`/`extra_params` shims as their **sole** caller, the `output.rs`
+  `@device[param]` scan, and the import/export boundary. Next: make those
+  single-caller helpers IR-native and drop `convert_model` from `mna_ir`. See
+  Sessions K–L in `mna-ir-pivot-plan.md`.
 
 - [x] **Passive element param naming mismatch**
   The SPICE importer normalizes passive values to `"value"`. The Netlist
