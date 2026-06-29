@@ -571,6 +571,35 @@ Next (now unblocked): convert the single-caller shared helpers from
 + `extra_params` from `mna_ir`, and retire `thevenin_types::Expr` from the
 simulator (the `cirq-spice-import` ↔ `to_netlist` boundary keeps it).
 
+#### Session M — `mna_ir` device loading goes IR-native (landed 2026-06-29)
+
+The shared device-param helpers (single-caller after Session L) were converted
+off the SPICE `Expr`/`Param`/`ModelDef` shapes:
+
+- `mna.rs`: `resolve_resistor_value(&cirq_ir::Value, …)`,
+  `extract_resistor_noise_params(model_name: Option<&str>, &[(String,f64)], &…ModelParams…)`,
+  `resolve_model_with_bins`/`extract_bin_bounds` over `&ModelParams`, and
+  `get_mosfet_level`/`get_mosfet_lw`/`get_nrd_nrs`/`apply_multipliers` over
+  `&[(String, f64)]`. `expr_value` + `use thevenin_types::Expr` deleted.
+- `mna_ir.rs`: `ModelTables` holds `ModelParams` (built via `ModelParams::from_ir`,
+  no `convert_model`); new `ir_numeric_params(elem, exclude) -> Vec<(String, f64)>`
+  replaces `resolved_params(&extra_params(...))`; the resistor path passes
+  `&cirq_ir::Value` directly (no `value_to_expr`); the XSPICE param collection
+  (numeric-only by construction) and the mesfet/mesa/hfet/switch dispatch build
+  `ModelParams` natively. The `convert_model` / `extra_params` / `value_to_expr`
+  imports are removed (only `convert_source_spec` remains). `crate::expr_val_or`
+  is deleted (its last callers were the TXL/CPL length overrides).
+
+Behaviour is pinned byte-identical by the `model_params` `from_ir`-vs-`convert_model`
+unit test and the ngspice harness. Net −114 lines; 1463 workspace tests pass
+(7 skipped); clippy/fmt/wasm clean.
+
+`Expr` now survives in the simulator only outside the device-stamping layer:
+source-waveform specs (`evaluate_source_dc`/`convert_source_spec`), `output.rs`'s
+`@device[param]` scan, `lib.rs`'s `netlist_temp*` helpers, and the SPICE import
+boundary. Retiring those is a smaller, separate cleanup (the import boundary keeps
+`Expr` by design).
+
 ### Risk register
 
 | Risk                                                       | Mitigation                                                                                                          |
