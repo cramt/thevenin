@@ -8,15 +8,14 @@
 //! estimation using the difference between BE and Trap results for
 //! capacitor/inductor charges/fluxes.
 
-use thevenin_types::{Analysis, Item, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{Item, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
 use crate::device_stamp::{DeviceVoltageState, stamp_current_source};
-use crate::expr_val;
 use crate::ltra::{LtraCoeffs, LtraState};
-use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
+use crate::mna::{MnaError, MnaSystem, stamp_conductance};
 use crate::newton::{NrMode, NrOptions, transient_nr_solve_with_cache};
-use crate::simulate::{nr_options_from_netlist, solve_op_raw_with_opts};
+use crate::simulate::solve_op_raw_with_opts;
 use crate::tline::TlineState;
 use crate::txl::TxlTransientStamp;
 use crate::waveform::{self, TranParams};
@@ -616,106 +615,6 @@ fn estimate_new_timestep(
     }
 
     new_h
-}
-
-/// Perform transient analysis on a circuit.
-///
-/// Parses the `.tran` command from the netlist, computes the DC operating point
-/// as initial conditions, then steps through time using numerical integration.
-/// Uses adaptive timestep control with LTE estimation when reactive elements
-/// are present, falling back to fixed timestep for purely resistive circuits.
-pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let mna = assemble_mna(netlist)?;
-    simulate_tran_with_mna(mna, netlist)
-}
-
-/// Run a `.tran` analysis on an already-assembled [`MnaSystem`].
-///
-/// Shared between the Netlist path (`simulate_tran` above) and the Stage 4
-/// IR-direct path (`thevenin::circuit::simulate_tran` via `mna_ir`). The
-/// Netlist is still needed for `.tran` analysis params, `.ic` overrides,
-/// nodeset resolution, and `.OPTIONS` lookups.
-pub fn simulate_tran_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let params = tran_run_params_from_netlist(netlist, &mna)?;
-    run_tran(mna, params).map(TranOutcome::into_result)
-}
-
-/// Build a [`TranRunParams`] from a `.tran`-declaring [`Netlist`]. Returned
-/// params have `t_pause = None` and `start_state = None`; callers that want
-/// pause/resume semantics overwrite those fields before invoking
-/// [`run_tran`].
-pub fn tran_run_params_from_netlist(
-    netlist: &Netlist,
-    mna: &MnaSystem,
-) -> Result<TranRunParams, MnaError> {
-    let (tstep, tstop, tstart, tmax, uic) = match &netlist.analysis {
-        Analysis::Tran {
-            tstep,
-            tstop,
-            tstart,
-            tmax,
-            uic,
-        } => (
-            tstep.clone(),
-            tstop.clone(),
-            tstart.clone(),
-            tmax.clone(),
-            *uic,
-        ),
-        _ => {
-            return Err(MnaError::UnsupportedElement(
-                "no .tran analysis found".to_string(),
-            ));
-        }
-    };
-
-    let h_print = expr_val(&tstep, ".tran tstep")?;
-    let t_stop = expr_val(&tstop, ".tran tstop")?;
-    let t_start = tstart
-        .as_ref()
-        .map(|e| expr_val(e, ".tran tstart"))
-        .transpose()?
-        .unwrap_or(0.0);
-    let t_max = tmax
-        .as_ref()
-        .map(|e| expr_val(e, ".tran tmax"))
-        .transpose()?;
-
-    let circuit_nr_opts = nr_options_from_netlist(netlist);
-    let nodeset = crate::simulate::resolve_nodeset(netlist, mna);
-
-    // Apply node-level .ic overrides from the netlist — pre-resolve them to
-    // MnaSystem matrix indices so `run_tran` doesn't need to walk netlist.items.
-    let mut ic_overrides: Vec<(usize, f64)> = Vec::new();
-    for item in &netlist.items {
-        if let Item::Ic(pairs) = item {
-            for (node_name, val) in pairs {
-                if let Some(idx) = mna.node_map.get(node_name) {
-                    ic_overrides.push((idx, *val));
-                }
-            }
-        }
-    }
-
-    let device_param_queries = collect_device_param_queries(netlist.source.lines(), mna);
-
-    let method = integration_method_from_netlist(netlist);
-
-    Ok(TranRunParams {
-        t_step: h_print,
-        t_stop,
-        t_start,
-        t_max,
-        uic,
-        temperature_c: crate::netlist_temp(netlist),
-        nr_opts: circuit_nr_opts,
-        nodeset,
-        ic_overrides,
-        device_param_queries,
-        t_pause: None,
-        start_state: None,
-        method,
-    })
 }
 
 /// Pick the user's preferred integration method from `.options METHOD=`,
@@ -4104,7 +4003,7 @@ K1 L1 L2 0.5
         )
         .unwrap();
 
-        let result = crate::simulate(&netlist).unwrap();
+        let result = crate::test_support::tran(&netlist).unwrap();
         let time = tran_vector(&result, "time");
         let v_sec = tran_vector(&result, "v(sec)");
 
@@ -4143,7 +4042,7 @@ K1 L1 L2 {k}
 "
             ))
             .unwrap();
-            let result = crate::simulate(&netlist).unwrap();
+            let result = crate::test_support::tran(&netlist).unwrap();
             let v_sec = tran_vector(&result, "v(sec)");
             v_sec.iter().copied().fold(0.0_f64, |a, b| a.max(b.abs()))
         };

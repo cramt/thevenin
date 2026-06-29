@@ -11,15 +11,14 @@
 
 use std::f64::consts::PI;
 
-use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{SimPlot, SimResult, SimVector};
 
 use crate::ac::generate_ac_sweep;
-use crate::expr_val;
-use crate::mna::{MnaError, MnaSystem, assemble_mna};
-use crate::simulate::{
-    nr_options_from_netlist, resolve_nodeset, solve_nonlinear_op, solve_nonlinear_op_with_nodeset,
-};
+use crate::mna::{MnaError, MnaSystem};
+use crate::simulate::{solve_nonlinear_op, solve_nonlinear_op_with_nodeset};
 use crate::sparse::ComplexLinearSystem;
+#[cfg(test)]
+use thevenin_types::Netlist;
 
 /// Boltzmann constant (J/K).
 const K_BOLTZ: f64 = 1.380649e-23;
@@ -27,68 +26,6 @@ const K_BOLTZ: f64 = 1.380649e-23;
 const Q_CHARGE: f64 = 1.602176634e-19;
 /// Nominal temperature (27°C in Kelvin).
 const T_NOM: f64 = 300.15;
-
-/// Perform noise analysis.
-pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let mna = assemble_mna(netlist)?;
-    simulate_noise_with_mna(mna, netlist)
-}
-
-/// Run `.noise` analysis on an already-assembled [`MnaSystem`].
-///
-/// Shared between the Netlist path (`simulate_noise` above) and the
-/// Stage 4 IR-direct path. The Netlist is still needed for `.noise`
-/// analysis params and source resolution.
-pub fn simulate_noise_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let (output, ref_node, src_name, variation, n, fstart, fstop) = match &netlist.analysis {
-        Analysis::Noise {
-            output,
-            ref_node,
-            src,
-            variation,
-            n,
-            fstart,
-            fstop,
-        } => (
-            output.clone(),
-            ref_node.clone(),
-            src.clone(),
-            *variation,
-            *n,
-            fstart.clone(),
-            fstop.clone(),
-        ),
-        _ => {
-            return Err(MnaError::UnsupportedElement(
-                "no .noise analysis found".to_string(),
-            ));
-        }
-    };
-
-    let fstart_val = expr_val(&fstart, ".noise")?;
-    let fstop_val = expr_val(&fstop, ".noise")?;
-    let num_nodes_pre = mna.total_num_nodes();
-    let excitations = crate::ac::collect_ac_excitations_from_netlist(netlist, &mna, num_nodes_pre);
-    let nr_opts = nr_options_from_netlist(netlist);
-    let nodeset = resolve_nodeset(netlist, &mna);
-
-    run_noise(
-        mna,
-        NoiseRunParams {
-            output,
-            ref_node,
-            src_name,
-            variation,
-            n,
-            fstart: fstart_val,
-            fstop: fstop_val,
-            nr_opts,
-            nodeset,
-            excitations,
-            temperature_c: crate::netlist_temp(netlist),
-        },
-    )
-}
 
 /// Fully-resolved `.noise` analysis parameters, shared between Netlist and
 /// Circuit input paths.

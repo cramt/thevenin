@@ -2,12 +2,14 @@ use faer::Mat;
 use faer::linalg::solvers::FullPivLu;
 use faer::prelude::Solve;
 
-use thevenin_types::{Analysis, Netlist, SimPlot, SimResult, SimVector};
+#[cfg(test)]
+use thevenin_types::Netlist;
+use thevenin_types::{SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
 use crate::jfet::stamp_jfet;
-use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
+use crate::mna::{MnaError, MnaSystem, stamp_conductance};
 use crate::mosfet::stamp_mosfet;
 use crate::simulate::solve_op_raw;
 
@@ -160,40 +162,6 @@ fn solve_dense(jacobian: &Mat<f64>, rhs: &[f64]) -> Vec<f64> {
     }
     let x = lu.solve(&b);
     (0..dim).map(|i| x[(i, 0)]).collect()
-}
-
-/// Compute transfer function analysis (.tf).
-///
-/// For each `.tf output input` command, computes:
-/// 1. Transfer function (output/input gain)
-/// 2. Output impedance at the output port
-/// 3. Input impedance at the input source
-///
-/// Algorithm follows ngspice tfanal.c:
-/// - Compute DC operating point
-/// - Build linearized Jacobian Y at the OP
-/// - Inject unit excitation at input, solve Y*x = rhs, extract TF + input Z
-/// - Inject unit excitation at output, solve Y*x = rhs, extract output Z
-pub fn simulate_tf(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let mna = assemble_mna(netlist)?;
-    simulate_tf_with_mna(mna, netlist)
-}
-
-/// Run `.tf` analysis on an already-assembled [`MnaSystem`].
-///
-/// Shared between the Netlist path (`simulate_tf` above) and the Stage 4
-/// IR-direct path. The Netlist is still needed for `.tf` output / input
-/// spec lookups.
-pub fn simulate_tf_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let (output, input) = match &netlist.analysis {
-        Analysis::Tf { output, input } => (output.clone(), input.clone()),
-        _ => {
-            return Err(MnaError::UnsupportedElement(
-                "no .tf analysis found".to_string(),
-            ));
-        }
-    };
-    run_tf(mna, &output, &input)
 }
 
 /// Run a `.tf` analysis with pre-extracted output / input spec strings.

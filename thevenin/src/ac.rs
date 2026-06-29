@@ -1,69 +1,12 @@
 use std::f64::consts::PI;
 
-use thevenin_types::{AcVariation, Analysis, Complex, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{AcVariation, Complex, SimPlot, SimResult, SimVector};
 
-use crate::expr_val;
-use crate::expr_val_or;
-use crate::mna::{MnaError, MnaSystem, assemble_mna};
-use crate::simulate::{
-    nr_options_from_netlist, resolve_nodeset, solve_nonlinear_op, solve_nonlinear_op_with_nodeset,
-};
+use crate::mna::{MnaError, MnaSystem};
+use crate::simulate::{solve_nonlinear_op, solve_nonlinear_op_with_nodeset};
 use crate::sparse::ComplexLinearSystem;
-
-/// Perform AC small-signal analysis.
-///
-/// 1. Compute DC operating point to linearize nonlinear devices.
-/// 2. Build the complex MNA matrix (G + jωC) at each frequency.
-/// 3. Apply AC source excitation.
-/// 4. Solve for complex node voltages.
-pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let mna = assemble_mna(netlist)?;
-    simulate_ac_with_mna(mna, netlist)
-}
-
-/// Run a `.ac` sweep on an already-assembled [`MnaSystem`].
-///
-/// Shared between the Netlist path (`simulate_ac` above) and the Stage 4
-/// IR-direct path (`thevenin::circuit::simulate_ac` via `mna_ir`). The
-/// Netlist is still needed for `.ac` analysis params, nodeset resolution,
-/// and AC source excitation lookups.
-pub fn simulate_ac_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let (variation, n, fstart, fstop) = match &netlist.analysis {
-        Analysis::Ac {
-            variation,
-            n,
-            fstart,
-            fstop,
-        } => (*variation, *n, fstart.clone(), fstop.clone()),
-        _ => {
-            return Err(MnaError::UnsupportedElement(
-                "no .ac analysis found".to_string(),
-            ));
-        }
-    };
-
-    let fstart_val = expr_val(&fstart, ".ac")?;
-    let fstop_val = expr_val(&fstop, ".ac")?;
-
-    let nr_opts = nr_options_from_netlist(netlist);
-    let nodeset = resolve_nodeset(netlist, &mna);
-    let num_nodes_pre = mna.total_num_nodes();
-    let excitations = collect_ac_excitations_from_netlist(netlist, &mna, num_nodes_pre);
-
-    run_ac_sweep(
-        mna,
-        AcSweepRunParams {
-            variation,
-            n,
-            fstart: fstart_val,
-            fstop: fstop_val,
-            nr_opts,
-            nodeset,
-            excitations,
-            temperature_c: crate::netlist_temp(netlist),
-        },
-    )
-}
+#[cfg(test)]
+use thevenin_types::Netlist;
 
 /// Fully-resolved `.ac` sweep parameters, shared between Netlist and
 /// Circuit input paths.
@@ -1745,59 +1688,6 @@ pub enum AcTarget {
     },
 }
 
-/// Collect AC source excitations from a Netlist, resolved against the
-/// already-assembled `MnaSystem`. Voltage sources land on
-/// [`AcTarget::VoltageBranch`]; current sources on
-/// [`AcTarget::CurrentInjection`].
-pub fn collect_ac_excitations_from_netlist(
-    netlist: &Netlist,
-    mna: &MnaSystem,
-    num_nodes: usize,
-) -> Vec<AcExcitation> {
-    let mut out = Vec::new();
-    for element in netlist.elements() {
-        match &element.kind {
-            thevenin_types::ElementKind::VoltageSource { source, .. } => {
-                if let Some(ac_spec) = &source.ac
-                    && let Some(branch_pos) = mna
-                        .vsource_names
-                        .iter()
-                        .position(|n| n.to_lowercase() == element.name.to_lowercase())
-                {
-                    let (real, imag) = ac_complex(ac_spec.mag.clone(), ac_spec.phase.clone());
-                    out.push(AcExcitation {
-                        target: AcTarget::VoltageBranch(num_nodes + branch_pos),
-                        real,
-                        imag,
-                    });
-                }
-            }
-            thevenin_types::ElementKind::CurrentSource { pos, neg, source } => {
-                if let Some(ac_spec) = &source.ac {
-                    let (real, imag) = ac_complex(ac_spec.mag.clone(), ac_spec.phase.clone());
-                    out.push(AcExcitation {
-                        target: AcTarget::CurrentInjection {
-                            ni: mna.node_map.get(pos),
-                            nj: mna.node_map.get(neg),
-                        },
-                        real,
-                        imag,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
-fn ac_complex(mag: thevenin_types::Expr, phase: Option<thevenin_types::Expr>) -> (f64, f64) {
-    let mag_v = expr_val_or(&mag, 0.0);
-    let phase_deg = phase.map(|e| expr_val_or(&e, 0.0)).unwrap_or(0.0);
-    let phase_rad = phase_deg * PI / 180.0;
-    (mag_v * phase_rad.cos(), mag_v * phase_rad.sin())
-}
-
 /// Stamp pre-resolved AC source excitations into the complex MNA system.
 pub fn apply_ac_excitation(sys: &mut ComplexLinearSystem, excitations: &[AcExcitation]) {
     for exc in excitations {
@@ -2261,7 +2151,7 @@ K1 L1 L2 0.999
         )
         .unwrap();
 
-        let result = crate::simulate(&netlist).unwrap();
+        let result = crate::test_support::ac(&netlist).unwrap();
         let plot = &result.plots[0];
 
         let freq_vec = plot.vecs.iter().find(|v| v.name == "frequency").unwrap();

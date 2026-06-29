@@ -1,66 +1,13 @@
 use faer::Mat;
 use faer::linalg::solvers::Solve as _;
 
-use thevenin_types::{
-    Analysis, Complex, Netlist, PzAnalysisType, PzInputType, SimPlot, SimResult, SimVector,
-};
+#[cfg(test)]
+use thevenin_types::Netlist;
+use thevenin_types::{Complex, PzAnalysisType, PzInputType, SimPlot, SimResult, SimVector};
 
-use crate::mna::{MnaError, MnaSystem, assemble_mna};
+use crate::mna::{MnaError, MnaSystem};
 use crate::simulate::solve_op_raw;
 use crate::tf::build_jacobian;
-
-/// Perform pole-zero analysis (.pz).
-///
-/// Computes poles and/or zeros of the transfer function between specified
-/// input and output ports. Uses the eigenvalue approach:
-/// - Build G (conductance Jacobian) and C (capacitance) matrices
-/// - Poles = -1/eigenvalues of G^{-1}*C (for non-zero eigenvalues)
-/// - Zeros via cofactor submatrix eigenvalues
-pub fn simulate_pz(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let mna = assemble_mna(netlist)?;
-    simulate_pz_with_mna(mna, netlist)
-}
-
-/// Run `.pz` (pole-zero) analysis on an already-assembled [`MnaSystem`].
-///
-/// Shared between the Netlist path (`simulate_pz` above) and the Stage 4
-/// IR-direct path. The Netlist is still needed for `.pz` port-spec lookups.
-pub fn simulate_pz_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let (node_i, node_g, node_j, node_k, input_type, analysis_type) = match &netlist.analysis {
-        Analysis::Pz {
-            node_i,
-            node_g,
-            node_j,
-            node_k,
-            input_type,
-            analysis_type,
-        } => (
-            node_i.clone(),
-            node_g.clone(),
-            node_j.clone(),
-            node_k.clone(),
-            *input_type,
-            *analysis_type,
-        ),
-        _ => {
-            return Err(MnaError::UnsupportedElement(
-                "no .pz analysis found".to_string(),
-            ));
-        }
-    };
-
-    run_pz(
-        mna,
-        PzRunParams {
-            node_i,
-            node_g,
-            node_j,
-            node_k,
-            input_type,
-            analysis_type,
-        },
-    )
-}
 
 /// Fully-resolved `.pz` analysis parameters, shared between Netlist and
 /// Circuit input paths.

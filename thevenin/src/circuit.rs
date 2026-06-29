@@ -19,14 +19,11 @@
 //!
 //! # How it runs
 //!
-//! On the happy path the MNA system is assembled **directly from the IR** via
-//! [`crate::mna_ir::assemble_mna_from_circuit`], with no SPICE netlist in the
-//! loop. For device kinds that path does not yet cover (see
-//! [`crate::mna_ir`]), the circuit is lowered to a
-//! [`thevenin_types::Netlist`] through
-//! [`cirq_frontend::to_netlist::circuit_to_netlists`] and dispatched to the
-//! netlist-shaped solver. Both paths are numerically identical; callers never
-//! observe the difference.
+//! The MNA system is assembled **directly from the IR** via
+//! [`crate::mna_ir::assemble_mna_from_circuit`] — there is no SPICE netlist in
+//! the loop. Every `IrElementKind` is supported, so assembly never falls back
+//! to a netlist-shaped path (the legacy `assemble_mna(&Netlist)` stamper has
+//! been removed).
 //!
 //! # Example
 //!
@@ -50,9 +47,8 @@
 
 use std::sync::Arc;
 
-use cirq_frontend::to_netlist::{ConvertError, circuit_to_netlists};
 use cirq_ir::Circuit;
-use thevenin_types::{Analysis, Netlist, SimPlot, SimResult};
+use thevenin_types::{SimPlot, SimResult};
 use thevenin_xspice::CodeModelRegistry;
 
 use crate::MnaError;
@@ -62,49 +58,20 @@ use crate::mna_ir;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CircuitSimError {
-    #[error("failed to lower Cirq IR to Netlist: {0}")]
-    Convert(#[from] ConvertError),
-
     #[error("simulation failed: {0}")]
     Mna(#[from] MnaError),
-
-    #[error("subcircuit flattening failed: {0}")]
-    Flatten(String),
-
-    #[error(
-        "circuit has no `{expected}` analysis (it has {found} declared); call the \
-         matching simulate_* for one of the declared analyses, or add the right \
-         Analysis variant to the circuit"
-    )]
-    WrongAnalysis {
-        expected: &'static str,
-        found: usize,
-    },
 }
 
-/// Lower a [`Circuit`] into per-analysis [`Netlist`]s, flattening subcircuits.
-/// The flatten step is idempotent on the netlists produced by
-/// [`circuit_to_netlists`] (which emits already-flat netlists), so this is
-/// cheap when there's nothing to flatten.
-fn lower(circuit: &Circuit) -> Result<Vec<Netlist>, CircuitSimError> {
-    let nls = circuit_to_netlists(circuit)?;
-    nls.into_iter()
-        .map(|nl| crate::flatten_netlist(&nl).map_err(|e| CircuitSimError::Flatten(e.to_string())))
-        .collect()
-}
-
-/// Pick the first netlist whose analysis matches the predicate.
-fn pick<'a>(
-    nls: &'a [Netlist],
-    expected: &'static str,
-    matches: impl Fn(&Analysis) -> bool,
-) -> Result<&'a Netlist, CircuitSimError> {
-    nls.iter()
-        .find(|nl| matches(&nl.analysis))
-        .ok_or(CircuitSimError::WrongAnalysis {
-            expected,
-            found: nls.len(),
-        })
+/// Assemble an [`MnaSystem`] directly from the IR via
+/// [`mna_ir::assemble_mna_from_circuit`]. Every `IrElementKind` is supported,
+/// so `Ok(None)` is unreachable in practice and is surfaced as an error rather
+/// than silently falling back.
+fn assemble(circuit: &Circuit) -> Result<crate::mna::MnaSystem, CircuitSimError> {
+    mna_ir::assemble_mna_from_circuit(circuit, false, None)?.ok_or_else(|| {
+        CircuitSimError::Mna(MnaError::UnsupportedElement(
+            "circuit contains an element the IR assembler cannot stamp".to_string(),
+        ))
+    })
 }
 
 /// Compute the DC operating point with an XSPICE code model registry.
@@ -134,124 +101,62 @@ pub fn simulate_op_with_xspice(
 
 /// Run a DC operating-point analysis on the circuit.
 ///
-/// If the circuit contains only linear elements (R, V, I, C, L), the assembly
-/// is performed directly from the IR without going through the Netlist
-/// adapter — this is the first Stage 4 direct-stamping case. For circuits
-/// with any nonlinear / unsupported element, the implementation falls back
-/// to lowering via `circuit_to_netlists`. Either path is observably
-/// equivalent (the direct path matches the Netlist path bit-for-bit by
-/// construction — it uses the same `LinearSystem::solve`).
+/// The MNA system is assembled directly from the IR; the solve and result
+/// formatting route through [`crate::simulate::simulate_op_with_mna`] so the
+/// output shape is canonical.
 pub fn simulate_op(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    if has_op_analysis(circuit)
-        && let Some(result) = simulate_op_direct(circuit)
-    {
-        return Ok(result);
-    }
-    let nls = lower(circuit)?;
-    let nl = pick(&nls, "op", |a| matches!(a, Analysis::Op))?;
-    Ok(crate::simulate_op(nl)?)
-}
-
-/// Whether the circuit either declares an `.op` analysis or has no analyses
-/// (in which case the simulator defaults to OP).
-fn has_op_analysis(circuit: &Circuit) -> bool {
-    circuit.analyses.is_empty()
-        || circuit
-            .analyses
-            .iter()
-            .any(|a| matches!(a, cirq_ir::Analysis::Op))
-}
-
-/// Direct IR → MNA path for the DC operating point.
-///
-/// Returns `Some(result)` if [`mna_ir::assemble_mna_from_circuit`] accepts
-/// the circuit (currently the linear subset R / V / I / C / L / E / G / H /
-/// F; future sessions extend to nonlinear devices per
-/// `docs/archive/migration/mna-ir-pivot-plan.md`). Otherwise returns `None` and the
-/// caller falls back to the lowering path.
-///
-/// The solve and SimResult formatting route through
-/// [`crate::simulate::simulate_op_with_mna`] so output shape is identical
-/// to the Netlist path regardless of how the MNA was assembled.
-fn simulate_op_direct(circuit: &Circuit) -> Option<SimResult> {
-    let mna = mna_ir::assemble_mna_from_circuit(circuit, false, None).ok()??;
+    let mna = assemble(circuit)?;
     let opts = mna_ir::nr_options_from_circuit(circuit);
     let nodeset = mna_ir::resolve_nodeset_from_circuit(circuit, &mna);
-    crate::simulate::simulate_op_with_mna(&mna, &opts, &nodeset).ok()
+    Ok(crate::simulate::simulate_op_with_mna(
+        &mna, &opts, &nodeset,
+    )?)
 }
 
 /// Run a DC sweep on the circuit's first declared `.dc` analysis.
 ///
-/// When [`mna_ir::assemble_mna_from_circuit`] accepts the circuit (always
-/// — every existing `IrElementKind` is supported), this is fully
-/// Circuit-driven: NR options come from `circuit.options`, sweep params
+/// Fully Circuit-driven: NR options come from `circuit.options`, sweep params
 /// from `circuit.analyses`, and the MnaSystem is built directly from IR.
-/// No lowered Netlist is constructed at all on the happy path.
-///
-/// For the fallback (a future `IrElementKind` not yet handled by mna_ir
-/// would land here), the lowered Netlist + the existing
-/// `crate::simulate_dc` Netlist path is used.
 pub fn simulate_dc(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        let mut nr_opts = mna_ir::nr_options_from_circuit(circuit);
-        nr_opts.diag_gmin = 0.0;
-        let params = mna_ir::dc_sweep_params_from_circuit(circuit)?;
-        return Ok(crate::simulate::run_dc_sweep(mna, nr_opts, params)?);
-    }
-    let nls = lower(circuit)?;
-    let nl = pick(&nls, "dc", |a| matches!(a, Analysis::Dc { .. }))?;
-    Ok(crate::simulate_dc(nl)?)
+    let mna = assemble(circuit)?;
+    let mut nr_opts = mna_ir::nr_options_from_circuit(circuit);
+    nr_opts.diag_gmin = 0.0;
+    let params = mna_ir::dc_sweep_params_from_circuit(circuit)?;
+    Ok(crate::simulate::run_dc_sweep(mna, nr_opts, params)?)
 }
 
 /// Run a transient analysis on the circuit's first declared `.tran` analysis.
 ///
 /// As with the harness, an operating-point solve is prepended so the
-/// transient starts from a valid steady state. Fully Circuit-driven on
-/// the happy path: NR options, nodeset, `.ic` overrides, `.print`
-/// queries, and `.tran` analysis params all come from the IR Circuit.
-/// The lowered Netlist is only used for the fallback path.
+/// transient starts from a valid steady state. Fully Circuit-driven: NR
+/// options, nodeset, `.ic` overrides, `.print` queries, and `.tran` analysis
+/// params all come from the IR Circuit.
 pub fn simulate_tran(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    if let Some(mna_op) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        let opts = mna_ir::nr_options_from_circuit(circuit);
-        let nodeset = mna_ir::resolve_nodeset_from_circuit(circuit, &mna_op);
-        let mut plots: Vec<SimPlot> = Vec::new();
-        if let Ok(op) = crate::simulate::simulate_op_with_mna(&mna_op, &opts, &nodeset) {
-            plots.extend(op.plots);
-        }
-        let mna_tran = mna_ir::assemble_mna_from_circuit(circuit, false, None)?
-            .expect("mna_ir already accepted this circuit");
-        let params = mna_ir::tran_params_from_circuit(circuit, &mna_tran)?;
-        plots.extend(
-            crate::transient::run_tran(mna_tran, params)?
-                .into_result()
-                .plots,
-        );
-        return Ok(SimResult { plots });
-    }
-    let nls = lower(circuit)?;
-    let nl = pick(&nls, "tran", |a| matches!(a, Analysis::Tran { .. }))?;
+    let mna_op = assemble(circuit)?;
+    let opts = mna_ir::nr_options_from_circuit(circuit);
+    let nodeset = mna_ir::resolve_nodeset_from_circuit(circuit, &mna_op);
     let mut plots: Vec<SimPlot> = Vec::new();
-    if let Ok(op) = crate::simulate_op(nl) {
+    if let Ok(op) = crate::simulate::simulate_op_with_mna(&mna_op, &opts, &nodeset) {
         plots.extend(op.plots);
     }
-    plots.extend(crate::simulate_tran(nl)?.plots);
+    let mna_tran = assemble(circuit)?;
+    let params = mna_ir::tran_params_from_circuit(circuit, &mna_tran)?;
+    plots.extend(
+        crate::transient::run_tran(mna_tran, params)?
+            .into_result()
+            .plots,
+    );
     Ok(SimResult { plots })
 }
 
 /// Run an AC small-signal analysis on the circuit's first declared `.ac`.
 ///
-/// Fully Circuit-driven on the happy path: NR options, nodeset, AC source
-/// excitations, and `.ac` sweep params all come from the IR Circuit. The
-/// lowered Netlist is only constructed for the fallback (a future
-/// IrElementKind not yet handled by mna_ir).
+/// Fully Circuit-driven: NR options, nodeset, AC source excitations, and
+/// `.ac` sweep params all come from the IR Circuit.
 pub fn simulate_ac(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        let params = mna_ir::ac_sweep_params_from_circuit(circuit, &mna)?;
-        return Ok(crate::ac::run_ac_sweep(mna, params)?);
-    }
-    let nls = lower(circuit)?;
-    let nl = pick(&nls, "ac", |a| matches!(a, Analysis::Ac { .. }))?;
-    Ok(crate::simulate_ac(nl)?)
+    let mna = assemble(circuit)?;
+    let params = mna_ir::ac_sweep_params_from_circuit(circuit, &mna)?;
+    Ok(crate::ac::run_ac_sweep(mna, params)?)
 }
 
 /// Top-level dispatcher: run every analysis declared on `circuit.analyses`
@@ -455,40 +360,28 @@ fn simulate_multi_temp(circuit: &Circuit, temps: &[f64]) -> Result<SimResult, Ci
     Ok(SimResult { plots })
 }
 
-/// Run a transfer function (`.tf`) analysis on a Circuit. Fully
-/// Netlist-free on the happy path.
+/// Run a transfer function (`.tf`) analysis on a Circuit, assembled directly
+/// from the IR.
 pub fn simulate_tf(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        let (output, input) = mna_ir::tf_spec_from_circuit(circuit)?;
-        return Ok(crate::tf::run_tf(mna, &output, &input)?);
-    }
-    let nls = lower(circuit)?;
-    let nl = pick(&nls, "tf", |a| matches!(a, Analysis::Tf { .. }))?;
-    Ok(crate::simulate_tf(nl)?)
+    let mna = assemble(circuit)?;
+    let (output, input) = mna_ir::tf_spec_from_circuit(circuit)?;
+    Ok(crate::tf::run_tf(mna, &output, &input)?)
 }
 
 /// Run a pole-zero (`.pz`) analysis on a Circuit. Fully Netlist-free on
 /// the happy path.
 pub fn simulate_pz(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        let params = mna_ir::pz_params_from_circuit(circuit)?;
-        return Ok(crate::pz::run_pz(mna, params)?);
-    }
-    let nls = lower(circuit)?;
-    let nl = pick(&nls, "pz", |a| matches!(a, Analysis::Pz { .. }))?;
-    Ok(crate::simulate_pz(nl)?)
+    let mna = assemble(circuit)?;
+    let params = mna_ir::pz_params_from_circuit(circuit)?;
+    Ok(crate::pz::run_pz(mna, params)?)
 }
 
 /// Run a noise analysis (`.noise`) on a Circuit. Fully Netlist-free on
 /// the happy path.
 pub fn simulate_noise(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        let params = mna_ir::noise_params_from_circuit(circuit, &mna)?;
-        return Ok(crate::noise::run_noise(mna, params)?);
-    }
-    let nls = lower(circuit)?;
-    let nl = pick(&nls, "noise", |a| matches!(a, Analysis::Noise { .. }))?;
-    Ok(crate::simulate_noise(nl)?)
+    let mna = assemble(circuit)?;
+    let params = mna_ir::noise_params_from_circuit(circuit, &mna)?;
+    Ok(crate::noise::run_noise(mna, params)?)
 }
 
 /// Run a sensitivity (`.sens`) analysis on a Circuit. Fully Netlist-free on
@@ -499,13 +392,9 @@ pub fn simulate_noise(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
 /// the Netlist's tokenized `Vec<String>` is reconstructed by the emitter
 /// only when the Netlist path is taken.
 pub fn simulate_sens(circuit: &Circuit) -> Result<SimResult, CircuitSimError> {
-    if let Some(mna) = mna_ir::assemble_mna_from_circuit(circuit, false, None)? {
-        let params = mna_ir::sens_params_from_circuit(circuit, &mna)?;
-        return Ok(crate::sens::run_sens(mna, params)?);
-    }
-    let nls = lower(circuit)?;
-    let nl = pick(&nls, "sens", |a| matches!(a, Analysis::Sens { .. }))?;
-    Ok(crate::simulate_sens(nl)?)
+    let mna = assemble(circuit)?;
+    let params = mna_ir::sens_params_from_circuit(circuit, &mna)?;
+    Ok(crate::sens::run_sens(mna, params)?)
 }
 
 #[cfg(test)]
@@ -625,53 +514,5 @@ mod tests {
             _ => panic!(),
         };
         assert!((v - 2.0 / 3.0).abs() < 1e-6, "v(mid) = {v}");
-    }
-
-    #[test]
-    fn wrong_analysis_returns_error() {
-        let mut c = voltage_divider();
-        c.analyses = vec![IrAnalysis::Tran(TranAnalysis {
-            step: 1e-9,
-            stop: 1e-6,
-            start: 0.0,
-            uic: false,
-            tmax: None,
-        })];
-        let err = simulate_op(&c).unwrap_err();
-        assert!(matches!(
-            err,
-            CircuitSimError::WrongAnalysis { expected: "op", .. }
-        ));
-    }
-
-    /// The direct path must produce a `SimResult` whose v(node) and branch
-    /// vectors match the Netlist-routed path bit-for-bit. This is the
-    /// equivalence contract for Stage 4 incremental direct stamping.
-    #[test]
-    fn direct_path_matches_lowered_path_voltage_divider() {
-        let c = voltage_divider();
-        let direct = simulate_op_direct(&c).expect("direct path accepts linear circuit");
-
-        let nls = lower(&c).unwrap();
-        let nl = pick(&nls, "op", |a| matches!(a, Analysis::Op)).unwrap();
-        let lowered = crate::simulate_op(nl).unwrap();
-
-        assert_eq!(direct.plots.len(), lowered.plots.len());
-        for (a, b) in direct.plots[0]
-            .vecs
-            .iter()
-            .zip(lowered.plots[0].vecs.iter())
-        {
-            assert_eq!(a.name, b.name, "vec name mismatch");
-            let av = match &a.data {
-                thevenin_types::VectorData::Real(r) => r[0],
-                _ => panic!(),
-            };
-            let bv = match &b.data {
-                thevenin_types::VectorData::Real(r) => r[0],
-                _ => panic!(),
-            };
-            assert_eq!(av, bv, "drift in {}: direct={av} lowered={bv}", a.name);
-        }
     }
 }

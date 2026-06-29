@@ -52,21 +52,12 @@
 //! # Module map
 //!
 //! - [`circuit`] — the public simulation surface (start here).
-//! - [`mna`] / [`mna_ir`] — Modified Nodal Analysis assembly (Netlist- and
-//!   IR-input).
+//! - [`mna_ir`] — Modified Nodal Analysis assembly from the IR `Circuit`.
+//!   [`mna`] holds the shared `MnaSystem` / device-instance types and stamping
+//!   helpers it builds on.
 //! - [`raw_output`] — ngspice raw-file / CSV result writers.
 
 use thevenin_types::{Expr, Item, Netlist};
-
-/// Parse a numeric expression value, returning an error if it's not a literal number.
-pub(crate) fn expr_val(expr: &Expr, context: &str) -> Result<f64, mna::MnaError> {
-    match expr {
-        Expr::Num(v) => Ok(*v),
-        _ => Err(MnaError::NonNumericValue {
-            element: context.to_string(),
-        }),
-    }
-}
 
 /// Parse a numeric expression value, returning a default if it's not a literal number.
 pub(crate) fn expr_val_or(expr: &Expr, default: f64) -> f64 {
@@ -140,27 +131,13 @@ pub(crate) use sparse::{LinearSystem, SparseMatrix, SparseMatrixError};
 
 // ── Public API ──────────────────────────────────────────────────────────────
 //
-// Stage 4 of the Cirq adoption plan retired the Netlist-shaped simulator
-// surface; the public entry points now live under [`thevenin::circuit`]
-// and operate on `cirq_ir::Circuit`. The Netlist-shaped `simulate_*` and
-// `simulate_*_with_mna` helpers stay `pub(crate)` so internal modules
-// (notably `mna_ir`, `noise`, and `circuit`) can still dispatch through
-// them. New callers should use `thevenin::circuit::simulate_*` directly.
-
-// Analysis functions — Netlist-shaped, crate-internal.
-//
-// `_with_mna` variants stay accessible to their sibling modules via
-// `crate::ac::simulate_ac_with_mna` etc., so we don't re-export them here.
-// Only the bare `simulate_*` Netlist entrypoints are re-exported because
-// they're called from within the crate (notably by `circuit::*` as the
-// post-IR-stamp fallback path).
-pub(crate) use ac::simulate_ac;
-pub(crate) use noise::simulate_noise;
-pub(crate) use pz::simulate_pz;
-pub(crate) use sens::simulate_sens;
-pub(crate) use simulate::{simulate_dc, simulate_op};
-pub(crate) use tf::simulate_tf;
-pub(crate) use transient::simulate_tran;
+// The simulator's only input is `cirq_ir::Circuit`; the public entry points
+// live under [`thevenin::circuit`]. The legacy Netlist stamping path
+// (`assemble_mna(&Netlist)` + the `simulate_*(&Netlist)` wrappers) has been
+// removed — every analysis assembles MNA directly from the IR via
+// [`mna_ir::assemble_mna_from_circuit`]. The `simulate_*_with_mna` helpers
+// (which take a pre-assembled `MnaSystem`) remain accessible to sibling
+// modules via their defining module (`crate::ac::simulate_ac_with_mna`, …).
 pub use transient::{
     IntegrationMethod, TranOutcome, TranPauseSnapshot, TranRunParams, TranStartState,
     integration_method_from_netlist, parse_integration_method, run_tran,
@@ -229,86 +206,4 @@ pub fn netlist_tnom(netlist: &Netlist) -> f64 {
         }
     }
     tnom_c + 273.15
-}
-
-/// Run the single analysis in the netlist and return the result.
-///
-/// Each `Netlist` contains exactly one analysis command. This function
-/// dispatches to the appropriate simulator based on that analysis.
-///
-/// When multiple `.temp` directives are present, the simulation is run once
-/// per temperature and results are collected into a single `SimResult` with
-/// a `"temperature"` sweep variable.
-///
-/// Test-only post Stage 4 — kept around so internal unit tests in `ac.rs`
-/// and `transient.rs` can keep calling the Netlist-shaped flow. Public
-/// callers should use [`thevenin::circuit::simulate`].
-#[cfg(test)]
-pub(crate) fn simulate(netlist: &Netlist) -> Result<thevenin_types::SimResult, MnaError> {
-    let temps = netlist_temps(netlist);
-    let mut result = if temps.len() > 1 {
-        simulate_multi_temp(netlist, &temps)?
-    } else {
-        simulate_single(netlist)?
-    };
-
-    // Evaluate .meas directives against the simulation results.
-    measure::evaluate_measurements(netlist, &mut result);
-
-    Ok(result)
-}
-
-/// Dispatch to the appropriate simulator for a single analysis run.
-#[cfg(test)]
-fn simulate_single(netlist: &Netlist) -> Result<thevenin_types::SimResult, MnaError> {
-    use thevenin_types::Analysis;
-    match &netlist.analysis {
-        Analysis::Op => simulate_op(netlist),
-        Analysis::Dc { .. } => simulate_dc(netlist),
-        Analysis::Ac { .. } => simulate_ac(netlist),
-        Analysis::Tran { .. } => simulate_tran(netlist),
-        Analysis::Noise { .. } => simulate_noise(netlist),
-        Analysis::Sens { .. } => simulate_sens(netlist),
-        Analysis::Tf { .. } => simulate_tf(netlist),
-        Analysis::Pz { .. } => simulate_pz(netlist),
-        // Fourier post-processing has no Netlist-shape simulator entry —
-        // the Netlist-side dispatch is test-only and dropped after Stage 4.
-        // Callers exercising .four/.fft should use the Circuit-based API.
-        Analysis::Four { .. } | Analysis::Fft { .. } => Err(MnaError::UnsupportedElement(
-            ".four/.fft are only supported via thevenin::circuit::simulate".to_string(),
-        )),
-    }
-}
-
-/// Run the analysis at each temperature, collecting results.
-///
-/// Creates a modified netlist for each temperature (stripping all `.temp`
-/// items and inserting a single one), runs the simulation, and produces one
-/// plot per temperature in the result.
-#[cfg(test)]
-fn simulate_multi_temp(
-    netlist: &Netlist,
-    temps: &[f64],
-) -> Result<thevenin_types::SimResult, MnaError> {
-    use thevenin_types::SimResult;
-    let mut plots = Vec::with_capacity(temps.len());
-
-    for (i, &temp) in temps.iter().enumerate() {
-        // Build a netlist with only this temperature.
-        let mut single_temp_netlist = netlist.clone();
-        single_temp_netlist
-            .items
-            .retain(|item| !matches!(item, Item::Temp(_)));
-        single_temp_netlist.items.push(Item::Temp(temp));
-
-        let result = simulate_single(&single_temp_netlist)?;
-
-        // Rename each plot to include the temperature and index.
-        for mut plot in result.plots {
-            plot.name = format!("{}_temp{}_{}", plot.name, i + 1, temp);
-            plots.push(plot);
-        }
-    }
-
-    Ok(SimResult { plots })
 }

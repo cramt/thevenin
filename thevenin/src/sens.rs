@@ -5,7 +5,9 @@ use faer::c64;
 use faer::linalg::solvers::FullPivLu;
 use faer::prelude::Solve;
 
-use thevenin_types::{AcVariation, Analysis, Complex, Netlist, SimPlot, SimResult, SimVector};
+#[cfg(test)]
+use thevenin_types::Netlist;
+use thevenin_types::{AcVariation, Complex, SimPlot, SimResult, SimVector};
 
 use cirq_ir::FrequencyScale;
 
@@ -13,7 +15,7 @@ use crate::LinearSystem;
 use crate::ac::{AcExcitation, generate_ac_sweep, stamp_ac_devices};
 use crate::bjt::stamp_bjt;
 use crate::jfet::stamp_jfet;
-use crate::mna::{MnaError, MnaSystem, assemble_mna};
+use crate::mna::{MnaError, MnaSystem};
 use crate::mosfet::stamp_mosfet;
 use crate::newton::NrOptions;
 use crate::simulate::solve_op_raw;
@@ -164,26 +166,6 @@ fn parse_sens_output(
     }
 }
 
-/// Compute DC sensitivity analysis (.sens).
-///
-/// Computes d(output)/d(parameter) for each element parameter using the direct method
-/// (matching ngspice's cktsens.c approach):
-/// 1. Solve Y*x = b (DC operating point)
-/// 2. Build Jacobian Y and factor it (LU decomposition)
-/// 3. For each parameter p:
-///    a. Compute z = delta_b - delta_Y*x (perturbation of companion stamps)
-///    b. Solve Y * delta_E = z (forward solve with same LU)
-///    c. S(p) = (delta_E\[out_pos\] - delta_E\[out_neg\]) / delta_p
-///
-/// The direct method is numerically more stable than the adjoint method for
-/// circuits where the sensitivity is a small difference of large contributions,
-/// because the near-cancellation happens inside the sparse linear solve rather
-/// than in a dot product with a potentially-inaccurate adjoint vector.
-pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let mna = assemble_mna(netlist)?;
-    simulate_sens_with_mna(mna, netlist)
-}
-
 /// Pre-resolved `.sens` analysis parameters, shared between the Netlist and
 /// Circuit input paths.
 pub struct SensRunParams {
@@ -227,87 +209,6 @@ impl SensAcSpec {
 
 /// Run `.sens` analysis on an already-assembled [`MnaSystem`].
 ///
-/// Shared between the Netlist path (`simulate_sens` above) and the Stage 4
-/// IR-direct path. Extracts params from the netlist and delegates to
-/// [`run_sens`], which is Netlist-free.
-pub fn simulate_sens_with_mna(mna: MnaSystem, netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let sens_output = match &netlist.analysis {
-        Analysis::Sens { output } => output.clone(),
-        _ => {
-            return Err(MnaError::UnsupportedElement(
-                "no .sens analysis found".to_string(),
-            ));
-        }
-    };
-
-    let output_var = sens_output[0].clone();
-    let ac = sens_ac_from_tokens(&sens_output[1..])?;
-
-    let nr_opts = crate::simulate::nr_options_from_netlist(netlist);
-    let num_nodes_pre = mna.total_num_nodes();
-    let excitations = if ac.is_some() {
-        crate::ac::collect_ac_excitations_from_netlist(netlist, &mna, num_nodes_pre)
-    } else {
-        Vec::new()
-    };
-    let ckt_temp_k = crate::netlist_temp(netlist) + 273.15;
-
-    run_sens(
-        mna,
-        SensRunParams {
-            output: output_var,
-            ac,
-            nr_opts,
-            excitations,
-            ckt_temp_k,
-        },
-    )
-}
-
-/// Parse the optional AC tail of `.sens <output> [AC DEC|OCT|LIN n fstart fstop]`.
-///
-/// Mirrors the SPICE importer's parser in `cirq-spice-import` so the
-/// legacy Netlist-shaped path produces the same typed [`SensAcSpec`] the IR
-/// path already carries.
-fn sens_ac_from_tokens(tail: &[String]) -> Result<Option<SensAcSpec>, MnaError> {
-    if tail.is_empty() {
-        return Ok(None);
-    }
-    if tail[0].eq_ignore_ascii_case("dc") {
-        return Ok(None);
-    }
-    if !tail[0].eq_ignore_ascii_case("ac") {
-        return Err(MnaError::UnsupportedElement(format!(
-            ".sens: expected AC|DC marker after output, got `{}`",
-            tail[0]
-        )));
-    }
-    if tail.len() < 5 {
-        return Err(MnaError::UnsupportedElement(
-            "sens AC needs: variation n fstart fstop".to_string(),
-        ));
-    }
-    let variation = match tail[1].to_lowercase().as_str() {
-        "dec" => AcVariation::Dec,
-        "oct" => AcVariation::Oct,
-        "lin" => AcVariation::Lin,
-        other => {
-            return Err(MnaError::UnsupportedElement(format!(
-                "sens AC: unknown variation: {other}"
-            )));
-        }
-    };
-    let n = parse_spice_num(&tail[2])? as u32;
-    let fstart = parse_spice_num(&tail[3])?;
-    let fstop = parse_spice_num(&tail[4])?;
-    Ok(Some(SensAcSpec {
-        variation,
-        n,
-        fstart,
-        fstop,
-    }))
-}
-
 /// Execute `.sens` analysis with pre-resolved params on a prebuilt
 /// [`MnaSystem`].
 ///
@@ -702,12 +603,6 @@ pub fn run_sens(mna: MnaSystem, params: SensRunParams) -> Result<SimResult, MnaE
 }
 
 // ── AC sensitivity ──────────────────────────────────────────────────────────
-
-/// Parse a numeric literal from AC sweep parameters (e.g. "1e6", "1.1e6").
-fn parse_spice_num(s: &str) -> Result<f64, MnaError> {
-    s.parse::<f64>()
-        .map_err(|_| MnaError::UnsupportedElement(format!("bad number in AC sens sweep: {s}")))
-}
 
 /// Solve a complex system Y * x = rhs using a pre-factored complex LU.
 fn solve_complex_forward(lu: &FullPivLu<c64>, rhs: &[(f64, f64)]) -> Vec<(f64, f64)> {
