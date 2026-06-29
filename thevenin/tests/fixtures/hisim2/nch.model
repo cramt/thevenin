@@ -1,0 +1,8 @@
+* HiSIM2 NMOS model card used for thevenin's golden-reference tests.
+* Deliberately a small, valid subset of HiSIM2 (LEVEL=68) parameters that
+* exercises strong inversion, saturation, and body effect on a W=10u/L=1u
+* device. Generated golden data lives alongside in *.csv; see
+* scripts/gen-hisim-golden.sh to regenerate with ngspice.
+.model nch nmos level=68 version=2.80
++ tox=2.0e-9 nsubc=5.0e17 nsubp=1.0e18 vfbc=-0.5
++ muecb0=130.0 muecb1=600.0 mueph1=2.5e4 muesr1=2.0e15 vmax=7.0e6
