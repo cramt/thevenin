@@ -597,8 +597,35 @@ unit test and the ngspice harness. Net −114 lines; 1463 workspace tests pass
 `Expr` now survives in the simulator only outside the device-stamping layer:
 source-waveform specs (`evaluate_source_dc`/`convert_source_spec`), `output.rs`'s
 `@device[param]` scan, `lib.rs`'s `netlist_temp*` helpers, and the SPICE import
-boundary. Retiring those is a smaller, separate cleanup (the import boundary keeps
-`Expr` by design).
+boundary. (Source waveforms are addressed in Session N below; the import boundary
+keeps `Expr` by design.)
+
+#### Session N — IR-native source DC + waveforms (landed 2026-06-29)
+
+Independent V/I sources no longer convert to `thevenin_types::Source`:
+
+- `waveform.rs`: `evaluate` / `breakpoints` operate on `cirq_ir::Waveform`
+  (f64 fields) instead of `thevenin_types::Waveform` (`Expr` fields); the
+  `val`/`opt` `Expr`-unwrapping helpers are deleted, and a `_` arm covers the
+  `#[non_exhaustive]` enum.
+- `mna.rs`: `VoltageSourceInstance.waveform` / `CurrentSourceInstance.waveform`
+  are now `Option<cirq_ir::Waveform>`.
+- `mna_ir.rs`: `evaluate_source_dc(&SourceSpec, modedc)` reads `spec.dc` /
+  `spec.waveform` directly; the two source-stamping sites store
+  `spec.waveform.clone()`. `convert_source_spec` + `use thevenin_types::{Expr,
+  Source}` removed. `transient.rs` needed no change (the instance waveform flows
+  straight to `waveform::evaluate`).
+
+With this, the simulator's **entire MNA assembly + transient/AC path is
+`Expr`-free**. The only remaining `thevenin_types::Expr` in the `thevenin` crate
+is in `output.rs` (the harness-only ngspice-text formatter — the CLI uses
+`print_plots`), its `lib.rs` `netlist_temp*` helpers, and the import boundary
+(`expr.rs`, `subckt.rs::flatten_netlist`, and `convert_source_spec`/`convert_model`
+in `cirq-frontend::to_netlist`, which keep `Expr` by design). `convert_source_spec`
+itself stays — it's still used by the Netlist emitter (`circuit_to_netlists`) and
+`cirq-spice-import`.
+
+Net −55 lines; 1463 workspace tests pass (7 skipped); clippy/fmt/wasm clean.
 
 ### Risk register
 
