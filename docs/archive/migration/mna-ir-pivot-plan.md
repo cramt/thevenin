@@ -492,16 +492,49 @@ is waiting on.
 
 Open follow-ups (no longer Stage-4 blockers):
 
-- `crate::mna::assemble_mna(&Netlist)` is still `pub`, used by the
-  Netlist-shaped `thevenin::simulate*` wrappers that ~50 internal
-  integration tests consume. Demoting to `pub(crate)` and rewriting
-  those tests to construct circuits via `cirq_spice_import::import_spice`
-  is mechanical but voluminous; punted unless someone has an external
-  use case.
+- `crate::mna::assemble_mna(&Netlist)` is already `pub(crate)` and the
+  Netlist-shaped `simulate::simulate_*(&Netlist)` entry points live under a
+  `pub(crate) mod` — none are public API. The integration tests in
+  `thevenin/tests/` already route through the Circuit path via
+  `tests/common/mod.rs` (`import_netlist → circuit::simulate_*`). The Netlist
+  stamping path is therefore unreachable from production — `circuit::simulate_*`
+  assemble via `mna_ir` first and the Netlist branch is a dead defensive
+  fallback — and is kept compiled only by ~67 in-crate unit tests (mna 16,
+  simulate 23, transient 9, pz 6, tf 5, sens 3, noise 3, ac 2). Retiring it is
+  the remaining work for full `Expr`/`Netlist` removal (see Session K).
 - TEMPER expression eval and `@device[param]` lookups still consume
   the internal cached Netlist inside `thevenin-control`. Lifting them
   onto IR-typed `Value` is its own slice (Slice 3b in session
   shorthand) and is gated on the IR not having typed expressions yet.
+
+#### Session K — `Expr`-free device layer + native `from_ir` (landed 2026-06-29)
+
+Two follow-on commits after Stage 4, advancing the `thevenin_types::Expr`
+retirement (`docs/1.0-checklist.md` Cross-cutting):
+
+1. **Neutral `ModelParams` boundary.** New `thevenin/src/model_params.rs`:
+   `ModelParams { name, kind, params: Vec<(String, f64)> }` — the
+   post-resolution numeric shape every device loader actually consumes. All
+   ~25 device-model loaders moved off `thevenin_types::{Expr, ModelDef, Param}`
+   to `from_params(&ModelParams)` / `with_instance_params(&[(String, f64)])`;
+   the `Expr::Num` extraction is concentrated in `ModelParams::from_model_def`
+   / `resolved_params`, fed by both stamping paths. Value-less SPICE flags
+   parse to `Expr::Num(1.0)` and survive the projection, so behaviour is
+   unchanged.
+2. **Native `from_ir`.** `cirq_ir::DeviceType::spice_kind()` is now the single
+   source of truth for the SPICE kind token (`convert_model` delegates to it),
+   and `ModelParams::from_ir(&cirq_ir::Model)` projects IR models straight to
+   numerics — mirroring `value_to_expr` + the `Expr::Num` filter, pinned
+   byte-identical by a unit test + `direct_path_equivalence`. `mna_ir` loads
+   the non-binned families (diode/bjt/vbic/jfet/ltra/txl/cpl) via `from_ir`,
+   dropping the `convert_model → ModelDef → ModelParams` round-trip there.
+
+Remaining `convert_model` in `mna_ir`: the MOSFET binning
+(`ModelTables`/`resolve_model_with_bins`), `get_mosfet_level`, and the
+switch-param `Vec<Param>` collection — all lean on `ModelDef`-shaped helpers
+shared with the (dead-but-test-compiled) Netlist path. Converting them is
+gated on deleting that path first, so the shared helpers can go IR-native
+without dual maintenance.
 
 ### Risk register
 

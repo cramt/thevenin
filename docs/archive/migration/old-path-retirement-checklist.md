@@ -40,12 +40,19 @@ eventually be replaced or removed once the Cirq IR path fully subsumes it.
 
 ## Parameter Representation
 
-- [ ] **`thevenin_types::Expr` for parameter values**
+- [~] **`thevenin_types::Expr` for parameter values**
   The Netlist uses `Expr` (Num/Param/Brace variants) for all parameter values.
   The Cirq IR uses `Value` (Real/Integer/Bool/String), which is more precise
   and already constant-folded. The `Expr` type can be retired once the
   simulator reads `Value` directly.
   *Depends on:* Stage 4.
+  *Progress (2026-06-29):* the device layer is `Expr`-free — all ~25 model
+  loaders consume a numeric `ModelParams` boundary, and the Circuit path loads
+  non-binned devices natively via `ModelParams::from_ir(&cirq_ir::Model)`. The
+  remaining `Expr`/`ModelDef` use is the MOSFET binning + shared helpers
+  (`resolve_model_with_bins`, `get_mosfet_level`) tied to the dead-but-test-
+  compiled `assemble_mna(&Netlist)` path, plus the import/export boundary. See
+  Session K in `mna-ir-pivot-plan.md`.
 
 - [x] **Passive element param naming mismatch**
   The SPICE importer normalizes passive values to `"value"`. The Netlist
