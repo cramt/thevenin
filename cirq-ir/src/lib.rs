@@ -302,6 +302,32 @@ pub enum DeviceType {
     Other(String),
 }
 
+impl DeviceType {
+    /// The canonical SPICE `.model` kind token for this device type
+    /// (e.g. `NPN`, `NMOS`, `VDMOS`, `SW`). Single source of truth shared by
+    /// the Netlist emitter (`cirq_frontend::to_netlist::convert_model`) and the
+    /// IR-native MNA assembler (`thevenin::model_params::ModelParams::from_ir`)
+    /// so model-kind dispatch stays consistent across both paths.
+    pub fn spice_kind(&self) -> String {
+        match self {
+            DeviceType::Diode => "D".into(),
+            DeviceType::Npn => "NPN".into(),
+            DeviceType::Pnp => "PNP".into(),
+            DeviceType::Nmos => "NMOS".into(),
+            DeviceType::Pmos => "PMOS".into(),
+            DeviceType::NJfet => "NJF".into(),
+            DeviceType::PJfet => "PJF".into(),
+            DeviceType::NMesfet => "NMF".into(),
+            DeviceType::PMesfet => "PMF".into(),
+            DeviceType::Vdmos => "VDMOS".into(),
+            DeviceType::Pvdmos => "VDMOSP".into(),
+            DeviceType::VSwitch => "SW".into(),
+            DeviceType::ISwitch => "CSW".into(),
+            DeviceType::Other(s) => s.clone(),
+        }
+    }
+}
+
 /// A resolved parameter value.
 ///
 /// `#[non_exhaustive]` — new typed variants (e.g. `Complex`, `Net`) may

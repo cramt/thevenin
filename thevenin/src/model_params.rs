@@ -41,12 +41,48 @@ impl ModelParams {
         }
     }
 
+    /// Project a Cirq IR [`cirq_ir::Model`] directly to resolved numeric
+    /// params — the native Circuit-path counterpart to [`Self::from_model_def`]
+    /// that skips the `Expr`-shaped `ModelDef` round-trip
+    /// (`cirq_frontend::to_netlist::convert_model`). Numeric equivalence with
+    /// that path is exact: this mirrors `value_to_expr` + the `Expr::Num`
+    /// filter — `Real`/`Integer`/`Bool` become numbers; `String` (brace/param)
+    /// values are dropped. The kind string comes from the same
+    /// [`cirq_ir::DeviceType::spice_kind`] source of truth `convert_model` uses.
+    pub fn from_ir(model: &cirq_ir::Model) -> Self {
+        let params = model
+            .params
+            .iter()
+            .filter_map(|(name, value)| ir_value_to_f64(value).map(|v| (name.clone(), v)))
+            .collect();
+        Self {
+            name: model.name.clone(),
+            kind: model.device_type.spice_kind(),
+            params,
+        }
+    }
+
     /// Look up a single parameter by name, case-insensitively.
     pub fn get(&self, name: &str) -> Option<f64> {
         self.params
             .iter()
             .find(|(n, _)| n.eq_ignore_ascii_case(name))
             .map(|(_, v)| *v)
+    }
+}
+
+/// Numeric projection of a single IR [`cirq_ir::Value`], matching
+/// `cirq_frontend::to_netlist::value_to_expr` followed by the device loaders'
+/// `Expr::Num` filter: `Real`/`Integer`/`Bool` yield a number, `String`
+/// (brace/param) is dropped, and any future non-exhaustive variant folds to
+/// `0.0` (the `value_to_expr` fallback) so the two paths never diverge.
+fn ir_value_to_f64(value: &cirq_ir::Value) -> Option<f64> {
+    match value {
+        cirq_ir::Value::Real(f) => Some(*f),
+        cirq_ir::Value::Integer(i) => Some(*i as f64),
+        cirq_ir::Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        cirq_ir::Value::String(_) => None,
+        _ => Some(0.0),
     }
 }
 
@@ -90,6 +126,35 @@ mod tests {
         assert_eq!(mp.params, vec![("IS".to_string(), 1e-14)]);
         assert_eq!(mp.get("is"), Some(1e-14));
         assert_eq!(mp.get("RS"), None);
+    }
+
+    #[test]
+    fn from_ir_matches_convert_model_round_trip() {
+        // `from_ir` must be numerically identical to the legacy
+        // `from_model_def(&convert_model(..))` path it replaces.
+        let model = cirq_ir::Model {
+            id: cirq_ir::Id(7),
+            name: "qnpn".to_string(),
+            device_type: cirq_ir::DeviceType::Npn,
+            params: vec![
+                ("BF".to_string(), cirq_ir::Value::Real(120.0)),
+                ("IS".to_string(), cirq_ir::Value::Integer(2)),
+                // String (brace/param) values are dropped, matching the
+                // device loaders' `Expr::Num` filter.
+                (
+                    "RB".to_string(),
+                    cirq_ir::Value::String("{rb0}".to_string()),
+                ),
+            ],
+        };
+        let native = ModelParams::from_ir(&model);
+        let via_netlist =
+            ModelParams::from_model_def(&cirq_frontend::to_netlist::convert_model(&model));
+        assert_eq!(native, via_netlist);
+        assert_eq!(native.kind, "NPN");
+        assert_eq!(native.get("BF"), Some(120.0));
+        assert_eq!(native.get("IS"), Some(2.0));
+        assert_eq!(native.get("RB"), None);
     }
 
     #[test]

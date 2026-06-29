@@ -454,7 +454,7 @@ fn lookup_model_by_string_param<'a>(circuit: &'a Circuit, elem: &IrElement) -> O
 /// Netlist path's behaviour for "naked" diodes.
 fn load_diode_model(circuit: &Circuit, elem: &IrElement) -> DiodeModel {
     let base = lookup_model(circuit, elem)
-        .map(|m| DiodeModel::from_params(&ModelParams::from_model_def(&convert_model(m))))
+        .map(|m| DiodeModel::from_params(&ModelParams::from_ir(m)))
         .unwrap_or_default();
     base.with_instance_params(&resolved_params(&extra_params(elem, &["value"])))
 }
@@ -1006,7 +1006,7 @@ fn numeric_value(v: &Value) -> Option<f64> {
 /// "default to NPN when no model is linked" behaviour exactly.
 fn load_bjt_model(circuit: &Circuit, elem: &IrElement) -> BjtModel {
     let base = lookup_model(circuit, elem)
-        .map(|m| BjtModel::from_params(&ModelParams::from_model_def(&convert_model(m))))
+        .map(|m| BjtModel::from_params(&ModelParams::from_ir(m)))
         .unwrap_or_else(|| BjtModel::new(crate::bjt::BjtType::Npn));
     base.with_instance_params(&resolved_params(&extra_params(elem, &["value"])))
 }
@@ -1089,7 +1089,7 @@ impl ModelTables {
 /// exists).
 fn load_vbic_model(circuit: &Circuit, elem: &IrElement) -> VbicModel {
     let mut vm = lookup_model(circuit, elem)
-        .map(|m| VbicModel::from_params(&ModelParams::from_model_def(&convert_model(m))))
+        .map(|m| VbicModel::from_params(&ModelParams::from_ir(m)))
         .unwrap_or_else(|| VbicModel::new(crate::vbic::VbicType::Npn));
     vm.temperature_adjust(circuit_temp(circuit));
     vm
@@ -1198,9 +1198,7 @@ fn stamp_circuit(
                 let level = bjt_level(model, &elem.params);
                 if level == 4 {
                     let vm = model
-                        .map(|m| {
-                            VbicModel::from_params(&ModelParams::from_model_def(&convert_model(m)))
-                        })
+                        .map(|m| VbicModel::from_params(&ModelParams::from_ir(m)))
                         .unwrap_or_else(|| VbicModel::new(crate::vbic::VbicType::Npn));
                     // Mirror mna::assemble_mna_flat: it uses the substrate-
                     // present variant unconditionally, and the second pass
@@ -1211,9 +1209,7 @@ fn stamp_circuit(
                     internal_node_count += vm.internal_node_count();
                 } else {
                     let bm = model
-                        .map(|m| {
-                            BjtModel::from_params(&ModelParams::from_model_def(&convert_model(m)))
-                        })
+                        .map(|m| BjtModel::from_params(&ModelParams::from_ir(m)))
                         .unwrap_or_else(|| BjtModel::new(crate::bjt::BjtType::Npn));
                     internal_node_count += bm.internal_node_count();
                 }
@@ -1226,9 +1222,7 @@ fn stamp_circuit(
                 node_map.index(g);
                 node_map.index(s);
                 let jm = lookup_model(circuit, elem)
-                    .map(|m| {
-                        JfetModel::from_params(&ModelParams::from_model_def(&convert_model(m)))
-                    })
+                    .map(|m| JfetModel::from_params(&ModelParams::from_ir(m)))
                     .unwrap_or_else(|| JfetModel::new(crate::jfet::JfetType::Njf));
                 internal_node_count += jm.internal_node_count();
             }
@@ -1297,7 +1291,7 @@ fn stamp_circuit(
                 };
                 let model_type = lookup_model_by_string_param(circuit, elem)
                     .or_else(|| lookup_model(circuit, elem))
-                    .map(|m| convert_model(m).kind.to_uppercase())
+                    .map(|m| m.device_type.spice_kind().to_uppercase())
                     .unwrap_or_default();
                 let Some(cm_def) = registry.get(&model_type) else {
                     // Defer the error to the second pass so unknown
@@ -1939,8 +1933,7 @@ fn stamp_circuit(
                         elem.name
                     ))
                 })?;
-                let ltra_model =
-                    LtraModel::from_params(&ModelParams::from_model_def(&convert_model(model)));
+                let ltra_model = LtraModel::from_params(&ModelParams::from_ir(model));
 
                 let pos1_idx = mna.node_map.get(terminal_name(elem, "in_pos", &net_name)?);
                 let neg1_idx = mna.node_map.get(terminal_name(elem, "in_neg", &net_name)?);
@@ -1975,8 +1968,7 @@ fn stamp_circuit(
                         elem.name
                     ))
                 })?;
-                let txl_model =
-                    TxlModel::from_params(&ModelParams::from_model_def(&convert_model(model)));
+                let txl_model = TxlModel::from_params(&ModelParams::from_ir(model));
 
                 // Y-element uses (n1+, n2+) — the n1-/n2- terminals are
                 // typically ground (ignored by the TXL stamps).
@@ -2075,10 +2067,7 @@ fn stamp_circuit(
                         ))
                     })?;
                 let no_l = *width;
-                let cpl_model = CplModel::from_params(
-                    &ModelParams::from_model_def(&convert_model(model)),
-                    no_l,
-                );
+                let cpl_model = CplModel::from_params(&ModelParams::from_ir(model), no_l);
 
                 let mut pos_nodes = Vec::with_capacity(no_l);
                 let mut neg_nodes = Vec::with_capacity(no_l);
@@ -2251,9 +2240,7 @@ fn stamp_circuit(
                 let source_idx = mna.node_map.get(terminal_name(elem, "source", &net_name)?);
 
                 let jm = lookup_model(circuit, elem)
-                    .map(|m| {
-                        JfetModel::from_params(&ModelParams::from_model_def(&convert_model(m)))
-                    })
+                    .map(|m| JfetModel::from_params(&ModelParams::from_ir(m)))
                     .unwrap_or_else(|| JfetModel::new(crate::jfet::JfetType::Njf));
 
                 let drain_prime_idx = if jm.rd > 0.0 {

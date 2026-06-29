@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use cirq_ir::{
-    AcSpec as IrAcSpec, BehavioralMode, Circuit, DeviceType, Element as IrElement,
+    AcSpec as IrAcSpec, BehavioralMode, Circuit, Element as IrElement,
     ElementKind as IrElementKind, FrequencyScale, Id, Value, Waveform as IrWaveform,
     XspiceConnection as IrXspiceConnection,
 };
@@ -1093,37 +1093,15 @@ fn resolve_inductor_spice_name(
 
 /// Convert a Cirq IR [`cirq_ir::Model`] into a Netlist-shaped [`ModelDef`].
 ///
-/// Maps the typed `DeviceType` enum to the SPICE-shaped kind string
-/// (`"D"`, `"NPN"`, `"NMOS"`, …; `DeviceType::Other(s)` passes through
-/// verbatim) and translates each `(String, Value)` param via
-/// [`value_to_expr`].
+/// Maps the typed `DeviceType` to its SPICE kind string via
+/// [`cirq_ir::DeviceType::spice_kind`] and translates each `(String, Value)`
+/// param via [`value_to_expr`].
 ///
 /// Public so the MNA-on-IR pivot (`docs/archive/migration/mna-ir-pivot-plan.md`) can
 /// reuse it to feed `thevenin`'s existing `*Model::from_model_def` loaders
 /// without rewriting them per device family.
 pub fn convert_model(model: &cirq_ir::Model) -> ModelDef {
-    let kind: String = match &model.device_type {
-        DeviceType::Diode => "D".into(),
-        DeviceType::Npn => "NPN".into(),
-        DeviceType::Pnp => "PNP".into(),
-        DeviceType::Nmos => "NMOS".into(),
-        DeviceType::Pmos => "PMOS".into(),
-        DeviceType::NJfet => "NJF".into(),
-        DeviceType::PJfet => "PJF".into(),
-        DeviceType::NMesfet => "NMF".into(),
-        DeviceType::PMesfet => "PMF".into(),
-        DeviceType::Vdmos => "VDMOS".into(),
-        DeviceType::Pvdmos => "VDMOSP".into(),
-        DeviceType::VSwitch => "SW".into(),
-        DeviceType::ISwitch => "CSW".into(),
-        DeviceType::Other(s) => s.clone(),
-        // `DeviceType` is `#[non_exhaustive]`; new variants land in cirq-ir
-        // and need a Netlist-kind string here. Fall back to the Debug name
-        // so round-tripping keeps working (the resulting kind won't be the
-        // canonical SPICE letter, but the simulator's `Other` fallback
-        // accepts it).
-        other => format!("{other:?}").to_uppercase(),
-    };
+    let kind: String = model.device_type.spice_kind();
 
     let params = model
         .params
