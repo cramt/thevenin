@@ -84,6 +84,17 @@ pub struct NrOptions {
     /// current behaviour byte-for-byte; a finite value (e.g. 1MΩ) regularizes
     /// the matrix without materially affecting the solution.
     pub rshunt: f64,
+    /// Node-to-ground shunt *conductance* (ngspice GSHUNT, default 0 =
+    /// disabled). The conductance-valued twin of RSHUNT: when non-zero it
+    /// adds `gshunt` to every non-ground diagonal entry of the NR Jacobian,
+    /// regularizing ill-conditioned matrices (floating nodes, dangling
+    /// subcircuits) the same way RSHUNT does with `1/rshunt`. In ngspice
+    /// GSHUNT also seeds `CKTdiagGmin` and the Gmin-stepping target
+    /// (`MAX(gmin, gshunt)`); we model the dominant load-time effect (the
+    /// fixed diagonal conductance). RSHUNT and GSHUNT compose additively
+    /// when both are set. A 0 value preserves current behaviour
+    /// byte-for-byte. See ngspice `cktop.c` / `cktload.c`.
+    pub gshunt: f64,
     /// Maximum number of Gmin-stepping iterations (ngspice GMINSTEPS,
     /// default 10). Sentinel value `0` ⇒ skip Gmin stepping entirely and
     /// fall straight through to the next convergence fallback. Our Gmin
@@ -176,6 +187,10 @@ impl Default for NrOptions {
             // value adds `1/rshunt` to every non-ground diagonal entry of
             // the NR Jacobian, matching ngspice CKTrshunt.
             rshunt: 0.0,
+            // GSHUNT sentinel: 0 = disabled (no shunt added). A finite value
+            // adds `gshunt` to every non-ground diagonal entry, the
+            // conductance-valued mirror of RSHUNT.
+            gshunt: 0.0,
             // GMINSTEPS: default 10 matches ngspice CKTnumGminSteps. The
             // sentinel 0 disables Gmin stepping (the OP solver skips that
             // fallback). Our stepping is adaptive, so a positive value
@@ -347,15 +362,21 @@ where
         for i in 0..num_nodes {
             system.matrix.add(i, i, attempt.diag_gmin);
         }
-        // RSHUNT: when enabled (> 0), add `1/rshunt` to every non-ground
-        // diagonal entry. ngspice's safety net for ill-conditioned matrices
-        // caused by floating nodes or dangling subcircuits. With the default
-        // 0 sentinel this loop is a no-op, preserving current behaviour
-        // byte-for-byte. See ngspice `cktrshun.c`.
-        if options.rshunt > 0.0 {
-            let gshunt = 1.0 / options.rshunt;
+        // RSHUNT / GSHUNT: when enabled (> 0), add a fixed conductance to
+        // every non-ground diagonal entry. ngspice's safety net for
+        // ill-conditioned matrices caused by floating nodes or dangling
+        // subcircuits. RSHUNT contributes `1/rshunt`; GSHUNT contributes its
+        // value directly; the two compose additively. With both at the
+        // default 0 sentinel this loop is a no-op, preserving current
+        // behaviour byte-for-byte. See ngspice `cktrshun.c` / `cktload.c`.
+        let shunt_g = if options.rshunt > 0.0 {
+            1.0 / options.rshunt
+        } else {
+            0.0
+        } + options.gshunt.max(0.0);
+        if shunt_g > 0.0 {
             for i in 0..num_nodes {
-                system.matrix.add(i, i, gshunt);
+                system.matrix.add(i, i, shunt_g);
             }
         }
         crate::sparse::record_stamp_nanos(stamp_t0.elapsed().as_nanos() as u64);

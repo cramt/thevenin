@@ -96,12 +96,14 @@ pub(crate) fn warn_unhandled_mosfet_level(model_name: Option<&str>, level: i32) 
 
 /// Extract Newton-Raphson options from a circuit's `options` field.
 ///
-/// Circuit-side equivalent of `crate::simulate::nr_options_from_netlist`.
-/// Recognises the same `.OPTIONS` keys (GMIN, ABSTOL, RELTOL, VNTOL,
-/// ITL1/ITL2/ITL4/ITL5/ITL6, SRCSTEPS, CHGTOL, RSHUNT, GMINSTEPS,
-/// NOOPITER, NOOPALTER, GMINPRIORITY, DEFAD/DEFAS/DEFL/DEFW) and ignores
-/// non-numeric values silently (except for the boolean flag keys, which
-/// also accept `Value::Bool`).
+/// Build `NrOptions` from a circuit's `.OPTIONS`. This is the single parse
+/// site (the legacy Netlist path is gone). Recognises GMIN, ABSTOL, RELTOL,
+/// VNTOL, ITL1/ITL2/ITL4/ITL5/ITL6, SRCSTEPS, CHGTOL, TRTOL, PIVTOL/PIVREL,
+/// RSHUNT, GSHUNT, GMINSTEPS, NOOPITER, NOOPALTER, GMINPRIORITY,
+/// ITERATIVE_REFINEMENT, and DEFAD/DEFAS/DEFL/DEFW. Unrecognised keys are
+/// ignored silently (some — TEMP/TNOM/SCALE — are handled on other paths, so
+/// warning here would produce false positives). Non-numeric values are
+/// ignored except for the boolean flag keys, which also accept `Value::Bool`.
 pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
     let mut opts = NrOptions::default();
     for (name, value) in &circuit.options {
@@ -137,6 +139,7 @@ pub fn nr_options_from_circuit(circuit: &Circuit) -> NrOptions {
             "ITL6" | "SRCSTEPS" => opts.itl6 = v as usize,
             "CHGTOL" => opts.chgtol = v,
             "RSHUNT" => opts.rshunt = v,
+            "GSHUNT" => opts.gshunt = v,
             "GMINSTEPS" => opts.gminsteps = (v as i64).max(0) as u32,
             "NOOPITER" => opts.noopiter = v != 0.0,
             "TRTOL" => opts.trtol = v,
@@ -3887,6 +3890,19 @@ mod tests {
         assert_eq!(opts.rshunt, 1.0e6);
         assert_eq!(opts.gminsteps, 5);
         assert!(opts.noopiter);
+    }
+
+    /// GSHUNT — the conductance-valued twin of RSHUNT — lands on its own
+    /// field and defaults to 0 (disabled).
+    #[test]
+    fn nr_options_from_circuit_parses_gshunt() {
+        let opts = nr_options_from_circuit(&divider());
+        assert_eq!(opts.gshunt, 0.0);
+
+        let mut c = divider();
+        c.options.push(("GSHUNT".into(), Value::Real(1e-9)));
+        let opts = nr_options_from_circuit(&c);
+        assert!((opts.gshunt - 1e-9).abs() < 1e-30);
     }
 
     /// `Value::Bool` form for NOOPITER lands on the same field — the IR
