@@ -59,14 +59,6 @@
 
 use thevenin_types::{Expr, Item, Netlist};
 
-/// Parse a numeric expression value, returning a default if it's not a literal number.
-pub(crate) fn expr_val_or(expr: &Expr, default: f64) -> f64 {
-    match expr {
-        Expr::Num(v) => *v,
-        _ => default,
-    }
-}
-
 // ── Solver internals ────────────────────────────────────────────────────────
 pub(crate) mod device_stamp;
 pub mod mna;

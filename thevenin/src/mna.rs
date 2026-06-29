@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use thevenin_types::Expr;
+use crate::model_params::ModelParams;
 use thevenin_xspice::{CodeModelRegistry, XspiceInstance};
 use thiserror::Error;
 
@@ -656,16 +656,6 @@ impl MnaSolution<'_> {
     }
 }
 
-/// Extract a numeric value from an `Expr`, or return an error.
-fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
-    match expr {
-        Expr::Num(v) => Ok(*v),
-        _ => Err(MnaError::NonNumericValue {
-            element: element_name.to_string(),
-        }),
-    }
-}
-
 /// Resolve a resistor value, supporting model-referenced resistors.
 ///
 /// When the value is a model name (e.g. `r1 2 0 my` where `.model my r r=2k`),
@@ -674,47 +664,36 @@ fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
 /// Handles: numeric value, model-name reference (with RSH+L/W or R= params),
 /// `m` (multiplicity) and `scale` instance parameters.
 pub(crate) fn resolve_resistor_value(
-    value: &Expr,
+    value: &cirq_ir::Value,
     element_name: &str,
-    params: &[thevenin_types::Param],
-    models: &std::collections::BTreeMap<String, &thevenin_types::ModelDef>,
+    params: &[(String, f64)],
+    models: &BTreeMap<String, &ModelParams>,
 ) -> Result<f64, MnaError> {
     // Helper: extract a numeric param by name from a list
-    fn get_num(list: &[thevenin_types::Param], name: &str) -> Option<f64> {
+    fn get_num(list: &[(String, f64)], name: &str) -> Option<f64> {
         list.iter()
-            .find(|p| p.name.eq_ignore_ascii_case(name))
-            .and_then(|p| {
-                if let Expr::Num(v) = &p.value {
-                    Some(*v)
-                } else {
-                    None
-                }
-            })
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| *v)
     }
 
     let base_r = match value {
-        Expr::Num(v) => *v,
-        Expr::Param(name) => {
+        cirq_ir::Value::Real(v) => *v,
+        cirq_ir::Value::Integer(i) => *i as f64,
+        cirq_ir::Value::String(name) => {
             // Try to look up as a resistor model
             if let Some(mdef) = models.get(&name.to_uppercase())
                 && mdef.kind.eq_ignore_ascii_case("r")
             {
                 // Look for explicit r= or resistance= in model
-                for p in &mdef.params {
-                    if p.name.eq_ignore_ascii_case("r") || p.name.eq_ignore_ascii_case("resistance")
-                    {
-                        return Ok(apply_multipliers(
-                            expr_value(&p.value, element_name)?,
-                            params,
-                        ));
-                    }
+                if let Some(r_val) = mdef.get("r").or_else(|| mdef.get("resistance")) {
+                    return Ok(apply_multipliers(r_val, params));
                 }
                 // Compute from RSH + L/W (sheet resistance model)
-                let rsh = get_num(&mdef.params, "rsh").unwrap_or(0.0);
+                let rsh = mdef.get("rsh").unwrap_or(0.0);
                 if rsh != 0.0 {
                     let l = get_num(params, "l").unwrap_or(0.0);
                     let w = get_num(params, "w").unwrap_or(1.0);
-                    let narrow = get_num(&mdef.params, "narrow").unwrap_or(0.0);
+                    let narrow = mdef.get("narrow").unwrap_or(0.0);
                     let w_eff = (w - narrow).max(1e-30);
                     if l > 0.0 {
                         let r = rsh * l / w_eff;
@@ -743,53 +722,27 @@ pub(crate) fn resolve_resistor_value(
 /// Extract resistor flicker noise parameters (KF, AF, EF, effective noise area)
 /// from the resistor model definition and instance parameters.
 pub(crate) fn extract_resistor_noise_params(
-    value: &Expr,
-    params: &[thevenin_types::Param],
-    models: &std::collections::BTreeMap<String, &thevenin_types::ModelDef>,
+    model_name: Option<&str>,
+    params: &[(String, f64)],
+    models: &BTreeMap<String, &ModelParams>,
 ) -> (f64, f64, f64, f64) {
-    fn get_num(list: &[thevenin_types::Param], name: &str) -> Option<f64> {
+    fn get_num(list: &[(String, f64)], name: &str) -> Option<f64> {
         list.iter()
-            .find(|p| p.name.eq_ignore_ascii_case(name))
-            .and_then(|p| {
-                if let Expr::Num(v) = &p.value {
-                    Some(*v)
-                } else {
-                    None
-                }
-            })
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| *v)
     }
 
-    // Model name is either the value itself (when it's a model reference) or
-    // a separate "model" param (when a numeric value + model name are both given).
-    let model_name = match value {
-        Expr::Param(name) => Some(name.to_uppercase()),
-        _ => params
-            .iter()
-            .find(|p| p.name.eq_ignore_ascii_case("model"))
-            .and_then(|p| {
-                if let Expr::Param(name) = &p.value {
-                    Some(name.to_uppercase())
-                } else {
-                    None
-                }
-            }),
-    };
-
-    let mdef = model_name.and_then(|n| models.get(&n));
+    let mdef = model_name.and_then(|n| models.get(&n.to_uppercase()).copied());
 
     if let Some(mdef) = mdef {
-        let kf = get_num(&mdef.params, "kf").unwrap_or(0.0);
-        let af = get_num(&mdef.params, "af").unwrap_or(1.0);
-        let ef = get_num(&mdef.params, "ef").unwrap_or(1.0);
+        let kf = mdef.get("kf").unwrap_or(0.0);
+        let af = mdef.get("af").unwrap_or(1.0);
+        let ef = mdef.get("ef").unwrap_or(1.0);
         // Length/width corrections for noise area (short=dlr, narrow=dw).
-        let short = get_num(&mdef.params, "short")
-            .or_else(|| get_num(&mdef.params, "dlr"))
-            .unwrap_or(0.0);
-        let narrow = get_num(&mdef.params, "narrow")
-            .or_else(|| get_num(&mdef.params, "dw"))
-            .unwrap_or(0.0);
-        let lf = get_num(&mdef.params, "lf").unwrap_or(1.0);
-        let wf = get_num(&mdef.params, "wf").unwrap_or(1.0);
+        let short = mdef.get("short").or_else(|| mdef.get("dlr")).unwrap_or(0.0);
+        let narrow = mdef.get("narrow").or_else(|| mdef.get("dw")).unwrap_or(0.0);
+        let lf = mdef.get("lf").unwrap_or(1.0);
+        let wf = mdef.get("wf").unwrap_or(1.0);
         // Instance dimensions.
         let l_inst = get_num(params, "l").unwrap_or(0.0);
         let w_inst = get_num(params, "w").unwrap_or(0.0);
@@ -807,28 +760,16 @@ pub(crate) fn extract_resistor_noise_params(
 }
 
 /// Apply `m` (multiplicity) and `scale` instance parameters to a resistance.
-fn apply_multipliers(r: f64, params: &[thevenin_types::Param]) -> f64 {
+fn apply_multipliers(r: f64, params: &[(String, f64)]) -> f64 {
     let m = params
         .iter()
-        .find(|p| p.name.eq_ignore_ascii_case("m"))
-        .and_then(|p| {
-            if let Expr::Num(v) = &p.value {
-                Some(*v)
-            } else {
-                None
-            }
-        })
+        .find(|(name, _)| name.eq_ignore_ascii_case("m"))
+        .map(|(_, v)| *v)
         .unwrap_or(1.0);
     let scale = params
         .iter()
-        .find(|p| p.name.eq_ignore_ascii_case("scale"))
-        .and_then(|p| {
-            if let Expr::Num(v) = &p.value {
-                Some(*v)
-            } else {
-                None
-            }
-        })
+        .find(|(name, _)| name.eq_ignore_ascii_case("scale"))
+        .map(|(_, v)| *v)
         .unwrap_or(1.0);
     // m parallel resistors: R_eff = R / m; scale multiplies the resistance
     r * scale / m
@@ -837,41 +778,33 @@ fn apply_multipliers(r: f64, params: &[thevenin_types::Param]) -> f64 {
 /// Extract the MOSFET LEVEL parameter from model definition and instance params.
 /// Checks instance params first (override), then model params. Default is 1.
 pub(crate) fn get_mosfet_level(
-    model_def: Option<&&thevenin_types::ModelDef>,
-    instance_params: &[thevenin_types::Param],
+    model: Option<&ModelParams>,
+    instance_params: &[(String, f64)],
 ) -> i32 {
     // Check instance params first
-    for p in instance_params {
-        if p.name.eq_ignore_ascii_case("LEVEL")
-            && let Expr::Num(v) = &p.value
-        {
+    for (name, v) in instance_params {
+        if name.eq_ignore_ascii_case("LEVEL") {
             return *v as i32;
         }
     }
     // Then model params
-    if let Some(mdef) = model_def {
-        for p in &mdef.params {
-            if p.name.eq_ignore_ascii_case("LEVEL")
-                && let Expr::Num(v) = &p.value
-            {
-                return *v as i32;
-            }
-        }
+    if let Some(model) = model
+        && let Some(v) = model.get("LEVEL")
+    {
+        return v as i32;
     }
     1 // default level
 }
 
 /// Extract NRD and NRS from instance params.
-pub(crate) fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
+pub(crate) fn get_nrd_nrs(params: &[(String, f64)]) -> (f64, f64) {
     let mut nrd = 0.0;
     let mut nrs = 0.0;
-    for p in params {
-        if let Expr::Num(v) = &p.value {
-            match p.name.to_uppercase().as_str() {
-                "NRD" => nrd = *v,
-                "NRS" => nrs = *v,
-                _ => {}
-            }
+    for (name, v) in params {
+        match name.to_uppercase().as_str() {
+            "NRD" => nrd = *v,
+            "NRS" => nrs = *v,
+            _ => {}
         }
     }
     (nrd, nrs)
@@ -881,40 +814,32 @@ pub(crate) fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
 /// `def_l` and `def_w` when the instance omits them. Callers should pass
 /// the `.options DEFL / DEFW` values (defaults 1e-4 / 1e-4, matching
 /// ngspice cktinit.c).
-pub(crate) fn get_mosfet_lw(
-    params: &[thevenin_types::Param],
-    def_l: f64,
-    def_w: f64,
-) -> (f64, f64) {
+pub(crate) fn get_mosfet_lw(params: &[(String, f64)], def_l: f64, def_w: f64) -> (f64, f64) {
     let mut l = def_l;
     let mut w = def_w;
-    for p in params {
-        if let Expr::Num(v) = &p.value {
-            match p.name.to_uppercase().as_str() {
-                "L" => l = *v,
-                "W" => w = *v,
-                _ => {}
-            }
+    for (name, v) in params {
+        match name.to_uppercase().as_str() {
+            "L" => l = *v,
+            "W" => w = *v,
+            _ => {}
         }
     }
     (l, w)
 }
 
 /// Extract bin boundary parameters (LMIN, LMAX, WMIN, WMAX) from a model definition.
-fn extract_bin_bounds(mdef: &thevenin_types::ModelDef) -> (f64, f64, f64, f64) {
+fn extract_bin_bounds(model: &ModelParams) -> (f64, f64, f64, f64) {
     let mut lmin = f64::NEG_INFINITY;
     let mut lmax = f64::INFINITY;
     let mut wmin = f64::NEG_INFINITY;
     let mut wmax = f64::INFINITY;
-    for p in &mdef.params {
-        if let Expr::Num(v) = &p.value {
-            match p.name.to_uppercase().as_str() {
-                "LMIN" => lmin = *v,
-                "LMAX" => lmax = *v,
-                "WMIN" => wmin = *v,
-                "WMAX" => wmax = *v,
-                _ => {}
-            }
+    for (name, v) in &model.params {
+        match name.to_uppercase().as_str() {
+            "LMIN" => lmin = *v,
+            "LMAX" => lmax = *v,
+            "WMIN" => wmin = *v,
+            "WMAX" => wmax = *v,
+            _ => {}
         }
     }
     (lmin, lmax, wmin, wmax)
@@ -926,12 +851,12 @@ fn extract_bin_bounds(mdef: &thevenin_types::ModelDef) -> (f64, f64, f64, f64) {
 /// (`name.1`, `name.2`, etc.) in `model_bins` and picks the bin whose
 /// LMIN/LMAX/WMIN/WMAX range includes the given device L and W.
 pub(crate) fn resolve_model_with_bins<'a>(
-    models: &BTreeMap<String, &'a thevenin_types::ModelDef>,
-    model_bins: &BTreeMap<String, Vec<&'a thevenin_types::ModelDef>>,
+    models: &BTreeMap<String, &'a ModelParams>,
+    model_bins: &BTreeMap<String, Vec<&'a ModelParams>>,
     name: &str,
     l: f64,
     w: f64,
-) -> Option<&'a thevenin_types::ModelDef> {
+) -> Option<&'a ModelParams> {
     let upper = name.to_uppercase();
     // Exact match first.
     if let Some(m) = models.get(&upper) {
