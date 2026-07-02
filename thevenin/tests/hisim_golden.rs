@@ -9,15 +9,9 @@
 //!
 //! These tests compare `HisimModel::companion(...).cdrain` directly against the
 //! reference current — a device-level check that isolates the I-V physics from
-//! the MNA/import path. They are the TDD anchor for the full hsm2eval.c port
-//! (checklist A1): currently `#[ignore]`'d because the simplified surface-
-//! potential core does not yet match ngspice. Run progress with:
-//!
-//! ```text
-//! cargo test -p thevenin --test hisim_golden -- --ignored --nocapture
-//! ```
-//!
-//! Un-ignore each test as the corresponding port phase lands.
+//! the MNA/import path. They were the TDD anchor for the full hsm2eval.c port
+//! (checklist A1); the faithful I-V core matches ngspice-45 to ~0.001%
+//! relative on all three sweeps, so they now run unconditionally.
 
 use std::path::PathBuf;
 
@@ -105,7 +99,6 @@ fn report(label: &str, pts: &[(f64, f64, f64)]) -> f64 {
 }
 
 #[test]
-#[ignore = "HiSIM2 full-port target (checklist A1); un-ignore as hsm2eval I-V port lands"]
 fn idvds_family_matches_ngspice() {
     let m = nch_model();
     let golden = load_golden("idvds.csv");
@@ -123,7 +116,6 @@ fn idvds_family_matches_ngspice() {
 }
 
 #[test]
-#[ignore = "HiSIM2 full-port target (checklist A1); un-ignore as hsm2eval I-V port lands"]
 fn idvgs_transfer_matches_ngspice() {
     let m = nch_model();
     let golden = load_golden("idvgs.csv");
@@ -146,7 +138,6 @@ fn idvgs_transfer_matches_ngspice() {
 }
 
 #[test]
-#[ignore = "HiSIM2 body-effect port target (checklist A1, Phase 3/5)"]
 fn body_effect_matches_ngspice() {
     let m = nch_model();
     let golden = load_golden("idvbs.csv");

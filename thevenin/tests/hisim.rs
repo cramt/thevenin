@@ -1,9 +1,9 @@
 //! Integration tests for HiSIM2 / HiSIMHV2 MOSFETs (LEVEL=68 / LEVEL=73).
 //!
-//! This is a partial port: the surface-potential solver is implemented for
-//! the DC + NR companion path, but the high-voltage extensions in
-//! HiSIMHV (RDRIFT region, body resistance, breakdown) are not modelled.
-//! Both LEVEL=68 and LEVEL=73 dispatch into the same simplified path.
+//! The LEVEL=68 DC I-V core is a faithful hsm2eval.c port (validated against
+//! ngspice-45 golden data in `hisim_golden.rs`), but the high-voltage
+//! extensions in HiSIMHV (RDRIFT region, body resistance, breakdown) are not
+//! modelled. Both LEVEL=68 and LEVEL=73 dispatch into the same bulk path.
 //! AC small-signal capacitances and noise are out of scope for the 1.0 cut.
 
 use thevenin_types::Netlist;
