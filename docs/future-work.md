@@ -1,7 +1,7 @@
 # Future Work: Remaining Ignored Tests
 
-After resume-1 landed (101/0/6), **6 tests remain skipped**. Each maps to a
-missing subsystem or architectural limitation.
+After the BSIM1/BSIM2 un-ignores landed (103/0/4), **4 tests remain skipped**.
+Each maps to a missing subsystem or architectural limitation.
 
 ## Status Summary
 
@@ -11,9 +11,9 @@ missing subsystem or architectural limitation.
 | ~~general/mosamp.cir~~ | ~~Level 2 MOSFET~~ | ~~DONE~~ | ~~1~~ |
 | general/rtlinv.cir | Transient timing cascade | Architectural | 1 |
 | general/schmitt.cir | Transient timing cascade | Architectural | 1 |
-| hfet/inverter.cir | NR wrong basin (bistable) | 200-500 LOC | 1 |
-| bsim1/test.cir | BSIM1 not implemented | ~3,500 LOC | 1 |
-| bsim2/test.cir | BSIM2 not implemented | ~2,500 LOC | 1 |
+| hfet/inverter.cir | ngspice reference bug (inverse flag leak) | CLOSED | — |
+| ~~bsim1/test.cir~~ | ~~NRD/NRS=1 default missing~~ | ~~DONE~~ | ~~1~~ |
+| ~~bsim2/test.cir~~ | ~~BSIM2 verification~~ | ~~DONE~~ | ~~1~~ |
 | ~~regression/misc/resume-1.cir~~ | ~~.control resumable transient~~ | ~~DONE~~ | ~~1~~ |
 
 ## 1. CAPMOD=3 Body-Floating Coupling (RampVg2)
@@ -147,10 +147,25 @@ settling at t=293ns.
 
 **Priority:** Low. Intractable without matching ngspice's exact numerical path.
 
-## 4. HFET Inverter Wrong Basin
+## 4. HFET Inverter — CLOSED (ngspice reference bug)
 
 **Test:** `hfet/inverter.cir`
-**Root cause:** The circuit is genuinely bistable with two stable DC operating points:
+
+**Superseded conclusion (sessions 110-145):** ngspice's reference output is
+WRONG. `hfetload.c` line 83 declares `int inverse=FALSE;` outside the device
+iteration loop and never resets it between instances, so a driver HFET with
+vds < 0 leaks `inverse=TRUE` into subsequently-processed load HFETs, negating
+their drain current. ngspice's V(3)=-0.275V is physically impossible (it
+requires current from ground into the output with the driver off); our
+V(3)=+1.956V is the correct DC OP, locked in by the assertion test
+`test_hfet_inverter_dc_op` in `tests/hfet.rs`. Full writeup in
+`tests/ignore.toml` and `100-percent-plan.md`. The harness fixture stays
+ignored permanently — the reference waveform starts from the wrong DC OP.
+
+The earlier analysis below (bistability / NR basin) predates that finding and
+is kept only as investigation history:
+
+**Root cause (superseded):** The circuit is genuinely bistable with two stable DC operating points:
 V(3)=-0.275V (correct, ngspice finds) and V(3)=+1.956V (wrong, thevenin finds). The HFET
 model is verified 100% correct -- this is a Newton-Raphson iteration path issue.
 
@@ -187,20 +202,17 @@ negative first, which ngspice achieves accidentally through Markowitz pivot orde
 
 **Priority:** Medium-low. Only 1 test, fix requires Markowitz solver implementation.
 
-## 5. BSIM1 and BSIM2 Models
+## 5. BSIM1 and BSIM2 Models — DONE
 
-**Tests:** `bsim1/test.cir`, `bsim2/test.cir`
-**Root cause:** These models are not implemented at all. Both are DC transfer curve tests
-(5 NMOS, Vgs sweep 0-5V).
+**Tests:** `bsim1/test.cir`, `bsim2/test.cir` — both un-ignored 2026-07-02.
 
-- BSIM1: 19 C files, 6,996 lines in ngspice. Estimated ~3,500 LOC Rust.
-- BSIM2: 17 C files, 4,692 lines in ngspice. Estimated ~2,500 LOC Rust.
-
-Both are obsolete models superseded by BSIM3/BSIM4 (already implemented). They exist in
-ngspice for backward compatibility with legacy process libraries.
-
-**Priority:** Low. Obsolete models, large effort, only 2 tests. Implement only if users
-need legacy PDK compatibility.
+Both models were ported (`thevenin/src/bsim1.rs`, `thevenin/src/bsim2.rs`,
+DC + companion-model NR). BSIM2 passed the harness comparison as soon as it
+was numerically verified. BSIM1 was a ~1.4% strong-inversion near-miss whose
+root cause was a missing instance default, not model math: ngspice's
+`b1set.c` defaults NRD/NRS to 1 when omitted, so `RSH=35` implies 35Ω
+drain/source series resistors on every device in the fixture; our IR
+lowering defaulted them to 0. Fixed in `mna_ir.rs` (BSIM1 branch only).
 
 ## 6. .control Interpreter ✓ resume-1 IMPLEMENTED
 
@@ -231,9 +243,10 @@ on the LHS, `compose` with full ngspice semantics.
 
 ## Recommended Tackle Order
 
-1. RampVg2 transient convergence (solver improvements)
+1. RampVg2 — audit the body-junction current balance (Iii/Ibs/Ibd) that sets
+   the floating-body DC OP, then the cap-coupling slope during the ramp
 2. ~~Level 2 MOSFET~~ -- **DONE**
-3. ~~HFET perturbation fallback~~ -- **RULED OUT** (requires Markowitz solver, ~500-800 LOC)
-4. BSIM1/BSIM2 -- only if legacy PDK support needed
+3. ~~HFET~~ -- **CLOSED** (ngspice reference bug; ours is correct)
+4. ~~BSIM1/BSIM2~~ -- **DONE** (103/0/4)
 5. rtlinv/schmitt -- accept as intractable
 6. ~~resume-1 .control~~ -- **DONE** (101/0/6)
