@@ -3201,10 +3201,11 @@ fn stamp_circuit(
                         m_mult,
                     );
                 } else if level == 68 || level == 73 {
-                    // HiSIM2 (LEVEL=68) / HiSIMHV2 (LEVEL=73) — simplified
-                    // surface-potential port.  Both LEVELs currently land
-                    // here; the HV-specific drift / breakdown extensions are
-                    // routed through a separate code path once HiSIMHV2 lands.
+                    // HiSIM2 (LEVEL=68) / HiSIMHV2 (LEVEL=73) — faithful
+                    // surface-potential DC I-V port.  Both LEVELs currently
+                    // land here; the HV-specific drift / breakdown extensions
+                    // are routed through a separate code path once HiSIMHV2
+                    // lands.
                     let mm = resolved
                         .map(HisimModel::from_params)
                         .unwrap_or_else(|| HisimModel::new(crate::mosfet::MosfetType::Nmos));

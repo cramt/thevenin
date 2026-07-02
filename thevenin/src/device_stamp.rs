@@ -1111,9 +1111,10 @@ impl DeviceVoltageState {
             }
         }
 
-        // HiSIM2 (LEVEL=68) — surface-potential bulk MOSFET (simplified port).
-        // HiSIMHV2 (LEVEL=73) also lands here; HV-specific extensions live in
-        // a separate code path once the HV port is wired in.
+        // HiSIM2 (LEVEL=68) — surface-potential bulk MOSFET (faithful
+        // hsm2eval.c DC I-V port). HiSIMHV2 (LEVEL=73) also lands here;
+        // HV-specific extensions live in a separate code path once the HV
+        // port is wired in.
         {
             let mut prev = self.prev_hisim.borrow_mut();
             let mut cache = self.cached_hisim_companion.borrow_mut();
