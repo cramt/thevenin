@@ -1,6 +1,6 @@
 # Plan: 100% ngspice Test Coverage
 
-Current state: **101 harness tests passing, 6 skipped** (1416 total tests passing across
+Current state: **102 harness tests passing, 5 skipped** (1417 total tests passing across
 all test binaries). Goal: eliminate as many skips as possible.
 
 ## Phase 1: RampVg2 Charge Coupling (bsim3soidd/RampVg2.cir)
@@ -135,10 +135,17 @@ Chaotic switching cascades where ~100ps timing shift at first edge grows to 89% 
 Every reasonable approach exhaustively tried (sessions 97-103). Would require matching
 ngspice's exact numerical integration path. **Accept as-is.**
 
-### BSIM1 + BSIM2 (bsim1/test.cir, bsim2/test.cir)
+### BSIM1 (bsim1/test.cir)
 
-~6,000 LOC combined for obsolete models superseded by BSIM3/BSIM4 (already
+~3,000 LOC for an obsolete model superseded by BSIM3/BSIM4 (already
 implemented). **Skip unless users need legacy PDK compatibility.**
+
+### BSIM2 — DONE
+
+**Status: PASSING.** The BSIM2 port (`thevenin/src/bsim2.rs`) landed on
+feat/bsim2-r5 and sat ignored pending numerical verification. Verified
+2026-07-02: `bsim2/test.cir` passes the harness comparison against ngspice's
+reference `.out` with default tolerances. Un-ignored.
 
 ### HFET inverter (hfet/inverter.cir)
 
@@ -153,11 +160,12 @@ code produces the correct result. **Not a thevenin bug — ngspice bug.**
 |-------|------------|---------------|-----------|
 | Baseline (pre-resume-1) | — | 100/107 | 93.5% |
 | Phase 3 (resume-1) | +1 (DONE) | 101/107 | 94.4% |
-| Phase 1 (RampVg2) | +1 | 102/107 | 95.3% |
-| Phase 2 | — (ngspice bug) | 102/107 | 95.3% |
-| Intractable | — | 102/107 | 95.3% |
+| BSIM2 verification | +1 (DONE) | 102/107 | 95.3% |
+| Phase 1 (RampVg2) | +1 | 103/107 | 96.3% |
+| Phase 2 | — (ngspice bug) | 103/107 | 96.3% |
+| Intractable | — | 103/107 | 96.3% |
 
-Best realistic outcome: **102/107 harness tests (95.3%)**. The remaining 5 tests are:
-- 2 obsolete models (BSIM1, BSIM2) — not worth implementing
+Best realistic outcome: **103/107 harness tests (96.3%)**. The remaining 4 tests are:
+- 1 obsolete model (BSIM1) — not worth implementing
 - 2 chaotic timing cascades (rtlinv, schmitt) — would require exact numerical path matching
 - 1 ngspice bug (HFET inverter) — our code is correct, ngspice is wrong
