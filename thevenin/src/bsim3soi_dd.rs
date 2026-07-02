@@ -2871,12 +2871,44 @@ pub fn bsim3soi_dd_companion(
         let dphisc_dvc = dvcs_cv3_dvc;
         let sqrt_phisc = phisc.abs().max(1e-30).sqrt();
 
+        // Numerically stable surface-potential power differences.
+        //
+        // ngspice computes Phisd^1.5 - Phis^1.5 (and Phisc^2.5 - Phis^2.5)
+        // as literal differences (b3soiddld.c lines 3040-3043, 3105-3111).
+        // In deep subthreshold VdsCV/VcsCV ~ -1e-7, so these subtract two
+        // ~0.7 values agreeing to 7 digits; the result is then cancelled
+        // AGAIN against T1*VdsCV down to ~1e-15, leaving ~0.5-2.5% FP dust
+        // that re-rolls whenever any terminal voltage moves by 1 ULP. ngspice
+        // tolerates this only because its bypass/NR keeps node voltages
+        // bit-frozen between evaluations; our transient re-evaluates and the
+        // dust becomes dQ/dt noise that pumps the floating body.
+        //
+        // Since phisd = phis + vds_cv_m and phisc = phis + vcs_cv3 EXACTLY
+        // (by construction above), the differences are computed with the
+        // increment factored out, using
+        //   a^1.5 - b^1.5 = (a-b) * (a + sqrt(a*b) + b) / (sqrt(a) + sqrt(b))
+        //   a^2.5 - b^2.5 = (a-b) * (u^4 + u^3 v + u^2 v^2 + u v^3 + v^4)
+        //                          / (u + v),   u = sqrt(a), v = sqrt(b)
+        // which are algebraically identical to ngspice's expressions but
+        // carry full relative precision.
+        let pow15_diff_d =
+            vds_cv_m * (phisd + sqrt_phisd * sqrt_phis + phis) / (sqrt_phisd + sqrt_phis);
+        let pow15_diff_c =
+            vcs_cv3 * (phisc + sqrt_phisc * sqrt_phis + phis) / (sqrt_phisc + sqrt_phis);
+        let pow25_diff_c = {
+            let u = sqrt_phisc;
+            let v = sqrt_phis;
+            let u2 = u * u;
+            let v2 = v * v;
+            vcs_cv3 * (u2 * u2 + u2 * u * v + u2 * v2 + u * v2 * v + v2 * v2) / (u + v)
+        };
+
         // Xc for CAPMOD=3 (ngspice lines 3038-3099)
         // Uses surface-potential-based charge partition instead of simple voltage ratios
         let xc_t1 = vgsteff + sp.k1 * sqrt_phis - 0.5 * vds_cv_m;
-        let xc_t2 = CONST_2OV3 * sp.k1 * (phisd * sqrt_phisd - phis * sqrt_phis);
+        let xc_t2 = CONST_2OV3 * sp.k1 * pow15_diff_d;
         let xc_t3 = vgsteff + sp.k1 * sqrt_phis - 0.5 * vcs_cv3;
-        let xc_t4 = CONST_2OV3 * sp.k1 * (phisc * sqrt_phisc - phis * sqrt_phis);
+        let xc_t4 = CONST_2OV3 * sp.k1 * pow15_diff_c;
         let xc_t5 = xc_t1 * vds_cv_m - xc_t2; // Denominator
         let xc_t6 = xc_t3 * vcs_cv3 - xc_t4; // Numerator
         // Xc = T6/T5 (ngspice line 3045).  No floor — matching ngspice exactly.
@@ -2937,11 +2969,13 @@ pub fn bsim3soi_dd_companion(
         // Uses Nomi/Denomi formulation with surface potentials
         let phis_cubed = phis * sqrt_phis; // Phis^(3/2)
         let phisc_cubed = phisc * sqrt_phisc; // Phisc^(3/2)
-        let phisd_cubed = phisd * sqrt_phisd; // Phisd^(3/2)
 
-        let qs_t0 = phisc_cubed - phis_cubed;
+        // qs_t0/qs_t2 use the numerically stable power differences (see the
+        // Xc comment above); algebraically identical to ngspice's
+        // Phisc^1.5 - Phis^1.5 and Phisc^2.5 - Phis^2.5.
+        let qs_t0 = pow15_diff_c;
         let qs_t1 = vgsteff + sp.k1 * sqrt_phis + phis;
-        let qs_t2 = phisc * phisc_cubed - phis * phis_cubed; // Phi^(5/2) terms
+        let qs_t2 = pow25_diff_c; // Phi^(5/2) terms
         let qs_t3 = sp.k1 * vcs_cv3 * (phis + 0.5 * vcs_cv3);
 
         let dqs_t0_dvb = 1.5 * (sqrt_phisc * dphisc_dvb - sqrt_phis * dphis_dvb);
@@ -2974,9 +3008,10 @@ pub fn bsim3soi_dd_companion(
             sp.k1 * (CONST_2OV3 * (qs_t1 * dqs_t0_dvg + qs_t0) - 0.4 * dqs_t2_dvg - dqs_t3_dvg);
         let dnomi_dvc = sp.k1 * (CONST_2OV3 * qs_t1 * dqs_t0_dvc - 0.4 * dqs_t2_dvc - dqs_t3_dvc);
 
-        // Denomi (ngspice lines 3155-3184)
+        // Denomi (ngspice lines 3155-3184).  den_t5 uses the stable
+        // Phisd^1.5 - Phis^1.5 difference (identical value to xc_t2).
         let den_t4 = vgsteff + sp.k1 * sqrt_phis - 0.5 * vds_cv_m;
-        let den_t5 = CONST_2OV3 * sp.k1 * (phisd * sqrt_phisd - phis_cubed);
+        let den_t5 = CONST_2OV3 * sp.k1 * pow15_diff_d;
 
         let dden_t4_dvb = sp.k1 * dsqrt_phis_dvb - 0.5 * dvds_cv_dvb_m;
         let dden_t5_dvb = sp.k1 * (sqrt_phisd * dphisd_dvb - sqrt_phis * dphis_dvb);
