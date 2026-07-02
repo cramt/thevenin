@@ -2644,6 +2644,13 @@ fn compare_with_interpolation(
         return Err(format_diff(norm_expected, norm_actual));
     }
 
+    // With THEVENIN_HARNESS_PROFILE set, don't stop at the first mismatch:
+    // collect every out-of-tolerance point and report a summary. Used to
+    // triage how a failing fixture's error is distributed (bounded vs
+    // cascading) without editing the harness.
+    let profile_all = std::env::var("THEVENIN_HARNESS_PROFILE").is_ok();
+    let mut profile: Vec<(f64, usize, f64, f64)> = Vec::new();
+
     for (exp_grp, act_grp) in exp_groups.iter().zip(act_groups.iter()) {
         let n_deps = exp_grp[0].2.len();
         if act_grp[0].2.len() != n_deps {
@@ -2717,6 +2724,10 @@ fn compare_with_interpolation(
                     // Matches ngspice NR convergence: |delta| < reltol*|V| + abstol.
                     let combined_tol = (rel_tol + abs_tol).max(slope_tol);
                     if abs_diff > combined_tol {
+                        if profile_all {
+                            profile.push((exp_x[i], col, exp_val, act_val));
+                            continue;
+                        }
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],
@@ -2760,6 +2771,10 @@ fn compare_with_interpolation(
 
                     let combined_tol = (rel_tol + abs_tol).max(slope_tol);
                     if abs_diff > combined_tol {
+                        if profile_all {
+                            profile.push((exp_x[i], col, exp_val, interp_val));
+                            continue;
+                        }
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],
@@ -2773,6 +2788,30 @@ fn compare_with_interpolation(
                 }
             }
         }
+    }
+
+    if !profile.is_empty() {
+        let total = profile.len();
+        let worst = profile
+            .iter()
+            .max_by(|a, b| {
+                let ra = (a.2 - a.3).abs() / a.2.abs().max(a.3.abs()).max(1e-30);
+                let rb = (b.2 - b.3).abs() / b.2.abs().max(b.3.abs()).max(1e-30);
+                ra.total_cmp(&rb)
+            })
+            .unwrap();
+        let worst_rel = (worst.2 - worst.3).abs() / worst.2.abs().max(worst.3.abs()).max(1e-30);
+        let mut lines = String::new();
+        for (x, col, exp, act) in &profile {
+            let rel = (exp - act).abs() / exp.abs().max(act.abs()).max(1e-30);
+            lines.push_str(&format!(
+                "PROFILE x={x:.6e} col={col} expected={exp:.6e} got={act:.6e} rel={rel:.3e}\n"
+            ));
+        }
+        return Err(format!(
+            "{total} points out of tolerance; worst rel={worst_rel:.3e} at x={:.6e} col {} (expected {:.6e}, got {:.6e})\n{lines}",
+            worst.0, worst.1, worst.2, worst.3,
+        ));
     }
 
     Ok(())

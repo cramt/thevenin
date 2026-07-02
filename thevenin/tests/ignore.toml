@@ -30,8 +30,14 @@
 "bsim3soidd/RampVg2.cir" = "Two layers remaining: (a) DC OP off by 0.4% from body-junction current balance, (b) gate-ramp cap response slope ~3.5x short; cap_mod==3 charge block AND body-floating chain both verified clean (see docs/future-work.md item 1)"
 
 # === General circuits ===
-"general/rtlinv.cir" = "~4.3% at first edge, grows to 89% by t=118ns: BJT transient timing shift cascades through multi-edge switching (exhaustively investigated sessions 97-103)"
-"general/schmitt.cir" = "~31% error at t=293ns settling: output oscillation during switching (DC OP fixed by BJT OFF flag; timing shift in BJT voltage-dependent cap model)"
+# After the CONSTKoverQ thermal-voltage fix (2026-07-02), rtlinv's first edge
+# moved from 4.3%@t=9ns to 6.8%@t=15ns — but the edge-timing lag still
+# cascades: by t=200ns our output is in the opposite logic state (5.0V vs
+# ngspice's 0.27V). Still a trajectory divergence through multi-edge
+# switching (originally investigated sessions 97-103).
+"general/rtlinv.cir" = "first-edge timing lag cascades to opposite logic state by t=200ns; improved but not fixed by the CONSTKoverQ vt fix (see comment)"
+# schmitt: un-ignored 2026-07-02 — the CONSTKoverQ fix dropped the error from
+# 31% to a bounded 3.4% worst-case; covered by a tolerances.toml override.
 
 # === Transmission lines ===
 # cpl_ibm2: moved to tolerances.toml (abs_tol=1e-4 for bounded ~70µV FP accumulation)
