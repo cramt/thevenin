@@ -1,25 +1,32 @@
 # Future Work: Remaining Ignored Tests
 
-After the BSIM1/BSIM2 un-ignores landed (103/0/4), **4 tests remain skipped**.
-Each maps to a missing subsystem or architectural limitation.
+As of 2026-07-02, **1 test remains skipped**: `general/rtlinv.cir`.
+The harness stands at 106 passing / 1 ignored.
 
 ## Status Summary
 
 | Test | Category | Effort | Tests Unlocked |
 |------|----------|--------|----------------|
-| bsim3soidd/RampVg2.cir | CAPMOD=3 charge coupling | Model-internal | 1 |
+| ~~bsim3soidd/RampVg2.cir~~ | ~~debug=-1 quasi-static semantics~~ | ~~DONE~~ | ~~1~~ |
 | ~~general/mosamp.cir~~ | ~~Level 2 MOSFET~~ | ~~DONE~~ | ~~1~~ |
-| general/rtlinv.cir | Transient timing cascade | Architectural | 1 |
-| general/schmitt.cir | Transient timing cascade | Architectural | 1 |
-| hfet/inverter.cir | ngspice reference bug (inverse flag leak) | CLOSED | — |
+| general/rtlinv.cir | BJT saturation-recovery timing | In progress | 1 |
+| ~~general/schmitt.cir~~ | ~~KoverQ + CJS + abs charge, tol override~~ | ~~DONE~~ | ~~1~~ |
+| ~~hfet/inverter.cir~~ | ~~regenerated reference (ngspice bug)~~ | ~~DONE~~ | ~~1~~ |
 | ~~bsim1/test.cir~~ | ~~NRD/NRS=1 default missing~~ | ~~DONE~~ | ~~1~~ |
 | ~~bsim2/test.cir~~ | ~~BSIM2 verification~~ | ~~DONE~~ | ~~1~~ |
 | ~~regression/misc/resume-1.cir~~ | ~~.control resumable transient~~ | ~~DONE~~ | ~~1~~ |
 
-## 1. CAPMOD=3 Body-Floating Coupling (RampVg2)
+## 1. CAPMOD=3 Body-Floating Coupling (RampVg2) — DONE
 
-**Test:** `bsim3soidd/RampVg2.cir`
-**Status:** CAPMOD=3 charge block is now verified faithful to ngspice (audit
+**Test:** `bsim3soidd/RampVg2.cir` — **PASSING (2026-07-02)** after three
+stacked fixes: (a) XJ:=TSI set-time default resolution, (b) numerically
+stable Phi^1.5/Phi^2.5 differences in the CAPMOD=3 block, and (c) honoring
+the deck's `debug=-1`, which in ngspice's b3soiddld.c forces
+ChargeComputationNeeded=0 after the charge block — the reference waveform
+is the quasi-static body response with no capacitive currents at all.
+Full story in `100-percent-plan.md` Phase 1. Investigation history below.
+
+**Old status:** CAPMOD=3 charge block is now verified faithful to ngspice (audit
 complete 2026-05-20). The remaining gap is in the body-floating bias chain
 (Vbs0t / Vbs0 / Vbs0mos / Vthfd / Vbs0eff), not in the cap_mod==3 charge
 formulas. The failure starts at t=0 as a DC operating-point offset (~0.04%
@@ -117,10 +124,25 @@ Level 2 MOSFET model implemented in `mos2.rs` (~700 LOC). Features:
 - Channel length modulation (Grove-Frohman + Baum quartic solver for vmax)
 - Derived process parameters (VTO, gamma, phi from NSUB)
 
-## 3. Transient Timing Cascade (rtlinv, schmitt)
+## 3. Transient Timing Cascade (rtlinv, schmitt) — schmitt DONE, rtlinv in progress
 
-**Tests:** `general/rtlinv.cir`, `general/schmitt.cir`
-**Root cause:** Accumulated timestep sequencing differences between thevenin and ngspice's
+**Update 2026-07-02:** the "chaotic cascade" diagnosis was wrong. Four real
+bugs were found and fixed: the CONSTKoverQ thermal voltage (we used legacy
+KboQ), the PULSE PER default (we retriggered at tr+pw+tf; ngspice uses
+TSTOP — this alone was rtlinv's entire 89% tail), the never-stamped BJT
+substrate cap (rtlinv sets ccs=2pf), and incremental-vs-absolute charge
+integration (absolute matches ngspice CKTstate0 semantics and wins the A/B).
+
+- **schmitt: PASSING** with a bounded-ringing tolerance override
+  (8 points, ≤28mV absolute on a 1.6V swing).
+- **rtlinv: still ignored** — 94 points, worst 26%: Q1 exits saturation
+  several ns late on the recovery edge (t≈86-100ns). TR·cbc storage
+  magnitude verified identical to ngspice. Next step: per-iteration
+  device-level diff (vbe/vbc/cc/cb/qbc) against an instrumented ngspice
+  around the recovery edge; nixpkgs ngspice-45 reproduces the reference,
+  so a live comparison target exists.
+
+**Original root cause (superseded):** Accumulated timestep sequencing differences between thevenin and ngspice's
 transient integration.
 
 rtlinv is a cascaded RTL inverter (2 NPN BJTs). The error starts at 4.3% at the first
@@ -147,11 +169,14 @@ settling at t=293ns.
 
 **Priority:** Low. Intractable without matching ngspice's exact numerical path.
 
-## 4. HFET Inverter — CLOSED (ngspice reference bug)
+## 4. HFET Inverter — DONE (regenerated reference)
 
-**Test:** `hfet/inverter.cir`
+**Test:** `hfet/inverter.cir` — **PASSING (2026-07-02)**: reference
+regenerated from an ngspice build with the inverse-flag bug patched,
+installed as the fixture override `thevenin/tests/fixtures/hfet/inverter.out`.
+The test now runs for real and matches end-to-end at default tolerances.
 
-**Superseded conclusion (sessions 110-145):** ngspice's reference output is
+**Root cause (sessions 110-145):** ngspice's reference output is
 WRONG. `hfetload.c` line 83 declares `int inverse=FALSE;` outside the device
 iteration loop and never resets it between instances, so a driver HFET with
 vds < 0 leaks `inverse=TRUE` into subsequently-processed load HFETs, negating
@@ -243,10 +268,11 @@ on the LHS, `compose` with full ngspice semantics.
 
 ## Recommended Tackle Order
 
-1. RampVg2 — audit the body-junction current balance (Iii/Ibs/Ibd) that sets
-   the floating-body DC OP, then the cap-coupling slope during the ramp
-2. ~~Level 2 MOSFET~~ -- **DONE**
-3. ~~HFET~~ -- **CLOSED** (ngspice reference bug; ours is correct)
-4. ~~BSIM1/BSIM2~~ -- **DONE** (103/0/4)
-5. rtlinv/schmitt -- accept as intractable
-6. ~~resume-1 .control~~ -- **DONE** (101/0/6)
+1. rtlinv — per-iteration BJT device diff against instrumented ngspice-45
+   around the saturation-recovery edge (the ONLY remaining ignored test)
+2. ~~RampVg2~~ -- **DONE** (debug=-1 quasi-static semantics)
+3. ~~Level 2 MOSFET~~ -- **DONE**
+4. ~~HFET~~ -- **DONE** (regenerated reference; ngspice bug)
+5. ~~BSIM1/BSIM2~~ -- **DONE**
+6. ~~schmitt~~ -- **DONE** (KoverQ/CJS/abs-charge + bounded-ringing override)
+7. ~~resume-1 .control~~ -- **DONE**
