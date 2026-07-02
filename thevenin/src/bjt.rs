@@ -6,11 +6,20 @@
 
 use crate::model_params::ModelParams;
 
-use crate::diode::{VT_NOM, pnjlim, vcrit};
-use crate::physics::{KBOQ, safe_exp};
+use crate::diode::{pnjlim, vcrit};
+use crate::physics::{KOVERQ, safe_exp};
 
 /// Default nominal temperature (°C) matching SPICE TNOM.
 const TNOM_DEFAULT_C: f64 = 27.0;
+
+/// Thermal voltage at the SPICE reference temperature (27 °C).
+///
+/// ngspice's BJT uses `CONSTKoverQ` (see [`KOVERQ`]) for its thermal voltage,
+/// NOT the legacy SPICE3 `KboQ` that the BSIM models hardcode. The ~2.8e-5
+/// relative difference matters: it shifts every forward-biased vbe by ~23 µV,
+/// which is enough to move switching-edge timing in cascaded BJT circuits
+/// (general/rtlinv.cir, general/schmitt.cir).
+const VT_NOM: f64 = KOVERQ * (TNOM_DEFAULT_C + 273.15);
 
 /// BJT polarity: NPN or PNP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,14 +368,14 @@ impl BjtModel {
     /// `IS_t = IS * (T/Tnom)^(xti/nf) * exp(eg/(nf*KB) * (1/Tnom - 1/T))`
     /// and uses temperature-scaled thermal voltage `VT = KB * T`.
     pub fn companion_at(&self, vbe: f64, vbc: f64, temp_k: f64) -> BjtCompanion {
-        let vt = KBOQ * temp_k;
+        let vt = KOVERQ * temp_k;
         let tnom_k = self.tnom + 273.15;
         let ratio = temp_k / tnom_k;
         let is_t = if (ratio - 1.0).abs() < 1e-9 {
             self.is
         } else {
             let xti_nf = self.xti / self.nf;
-            let eg_arg = (self.eg / (self.nf * KBOQ)) * (1.0 / tnom_k - 1.0 / temp_k);
+            let eg_arg = (self.eg / (self.nf * KOVERQ)) * (1.0 / tnom_k - 1.0 / temp_k);
             self.is * ratio.powf(xti_nf) * eg_arg.exp()
         };
         self.companion_impl(vbe, vbc, vt, is_t)

@@ -14,8 +14,21 @@ pub const EPSSI: f64 = 1.03594e-10;
 /// Elementary charge (C)
 pub const CHARGE_Q: f64 = 1.60219e-19;
 
-/// Boltzmann constant / elementary charge (V/K): k_B / q
+/// Boltzmann constant / elementary charge (V/K): k_B / q — SPICE3 legacy value.
+///
+/// ngspice keeps this exact value hardcoded inside the BSIM-family models
+/// (`#define KboQ 8.617087e-5` in b3temp.c, b4temp.c, ...), so the BSIM
+/// models here must keep using it for bit-faithful agreement.
 pub const KBOQ: f64 = 8.617087e-5;
+
+/// Boltzmann constant / elementary charge (V/K) — ngspice-45 `CONSTKoverQ`.
+///
+/// ngspice computes `CONSTKoverQ = CONSTboltz / CHARGE` from the 2014 CODATA
+/// constants in const.h (`CONSTboltz 1.38064852e-23`, `CHARGE 1.6021766208e-19`)
+/// and uses it for the SPICE3-core devices (BJT, diode, JFET, MOS1-3/6, MESA,
+/// HFET, VDMOS, VBIC). This differs from the legacy [`KBOQ`] by ~2.8e-5
+/// relative, which is visible as a ~23 µV vbe shift on a forward-biased BJT.
+pub const KOVERQ: f64 = 1.38064852e-23 / 1.6021766208e-19;
 
 /// Silicon bandgap at 300 K (eV)
 pub const EG300: f64 = 1.115;
