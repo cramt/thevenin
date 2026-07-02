@@ -40,6 +40,7 @@ pub fn evaluate(wf: &Waveform, t: f64, tran: &TranParams) -> f64 {
             *per,
             t,
             tran.tstep,
+            tran.tstop,
         ),
         Waveform::Sin {
             v0,
@@ -122,13 +123,16 @@ fn eval_pulse(
     per: Option<f64>,
     t: f64,
     tstep: f64,
+    tstop: f64,
 ) -> f64 {
     if t < td {
         return v1;
     }
 
-    // Compute the period.
-    let period = per.unwrap_or(tr + pw + tf).max(tr + pw + tf).max(tstep);
+    // Compute the period. ngspice defaults PER to TSTOP (single pulse within
+    // the simulation window), NOT to tr+pw+tf — an omitted PER must not make
+    // the pulse retrigger as soon as it completes.
+    let period = per.unwrap_or(tstop).max(tr + pw + tf).max(tstep);
 
     // Fold time into the current period.
     let mut time = t - td;
@@ -267,8 +271,9 @@ pub fn breakpoints(wf: &Waveform, tran: &TranParams) -> Vec<f64> {
             let tr_val = tr.unwrap_or(tran.tstep).max(tran.tstep);
             let tf_val = tf.unwrap_or(tran.tstep).max(tran.tstep);
             let pw_val = pw.unwrap_or(tran.tstop).max(0.0);
+            // PER defaults to TSTOP, matching ngspice (see eval_pulse).
             let period = per
-                .unwrap_or(tr_val + pw_val + tf_val)
+                .unwrap_or(tran.tstop)
                 .max(tr_val + pw_val + tf_val)
                 .max(tran.tstep);
 

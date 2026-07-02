@@ -72,18 +72,23 @@ struct BjtChargeHistory {
     qbe: f64,
     /// B-E charge current at previous timestep (for trapezoidal).
     cqbe: f64,
-    /// B-E junction voltage at previous timestep.
-    vbe: f64,
     /// B-C junction charge at previous timestep (depletion + diffusion).
     qbc: f64,
     /// B-C charge current at previous timestep (for trapezoidal).
     cqbc: f64,
-    /// B-C junction voltage at previous timestep.
-    vbc: f64,
     /// B-E charge at two timesteps ago (for divided-difference LTE).
     qbe_prev: f64,
     /// B-C charge at two timesteps ago (for divided-difference LTE).
     qbc_prev: f64,
+    /// Collector-substrate charge at previous timestep (ngspice BJTqsub).
+    /// With the SPICE MJS default of 0 this is the linear charge CJS·vsub,
+    /// where vsub = type·(V(substrate) − V(collector')) and the substrate
+    /// node is ground for 3-terminal instances.
+    qsub: f64,
+    /// C-S charge current at previous timestep (for trapezoidal).
+    cqsub: f64,
+    /// C-S charge at two timesteps ago (for divided-difference LTE).
+    qsub_prev: f64,
 }
 
 /// History state for a MESA junction charge at the previous timestep.
@@ -525,6 +530,30 @@ fn estimate_new_timestep(
                 new_h = new_h.min(h_new);
             }
         }
+
+        // C-S substrate charge LTE (ngspice BJTtrunc includes BJTqsub).
+        if bjt.model.cjs > 0.0 {
+            let sign = bjt.model.bjt_type.sign();
+            let vsub = -sign * bjt.col_prime_idx.map_or(0.0, |i| solution[i]);
+            let q0 = bjt.model.cjs * vsub;
+            let q1 = hist.qsub;
+            let q2 = hist.qsub_prev;
+
+            let vol_tol = abstol + reltol * hist.cqsub.abs().max((q0 - q1).abs() / h);
+            let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
+            let tol = trtol * vol_tol.max(chg_tol);
+
+            let diff1_0 = (q0 - q1) / h;
+            let diff1_1 = (q1 - q2) / h_prev;
+            let diff2 = (diff1_0 - diff1_1) / (h + h_prev);
+            let lte_est = TRAP_COEFF * diff2.abs() * m;
+
+            if lte_est > 1e-30 {
+                let del = tol / lte_est.max(abstol);
+                let h_new = del.sqrt();
+                new_h = new_h.min(h_new);
+            }
+        }
     }
 
     // LTE for BSIM3SOI-DD intrinsic charges using divided differences.
@@ -906,15 +935,22 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let comp = bjt.model.companion(vbe, vbc);
             // Full charge: depletion integral + diffusion charge.
             let (qbe, _, qbc, _) = bjt.model.compute_charges(vbe, vbc, &comp);
+            // C-S substrate cap (ngspice bjtload.c BJTqsub): with the SPICE
+            // MJS default of 0 the junction charge reduces to linear CJS·vsub
+            // in both branches. Substrate node is ground (3-terminal Q).
+            let sign = bjt.model.bjt_type.sign();
+            let vsub = -sign * bjt.col_prime_idx.map_or(0.0, |i| solution[i]);
+            let qsub = bjt.model.cjs * vsub;
             BjtChargeHistory {
                 qbe,
                 cqbe: 0.0, // DC steady state: no charge current
-                vbe,
                 qbc,
                 cqbc: 0.0,
-                vbc,
                 qbe_prev: qbe, // No previous history at DC init.
                 qbc_prev: qbc, // No previous history at DC init.
+                qsub,
+                cqsub: 0.0,
+                qsub_prev: qsub,
             }
         })
         .collect();
@@ -1766,14 +1802,9 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
         for (bi, bjt) in mna.bjts.iter().enumerate() {
             let (vbe, vbc) = bjt.junction_voltages(&solution);
             let comp = bjt.model.companion(vbe, vbc);
-            // Full voltage-dependent depletion cap + qb-normalized diffusion cap.
-            // Matches ngspice bjtload.c: cbe_mod=cbe/qb, gbe_mod=(gbe-cbe_mod*dqbdve)/qb
-            let cbe_mod = comp.cbe_raw / comp.qb;
-            let gbe_mod = (comp.gbe_raw - cbe_mod * comp.dqbdve) / comp.qb;
-            let capbe = bjt.model.cap_be(vbe) + bjt.model.tf * gbe_mod;
-            let capbc = bjt.model.cap_bc(vbc) + bjt.model.tr * comp.gbc_raw;
-            let qbe = bjt_charge_histories[bi].qbe + capbe * (vbe - bjt_charge_histories[bi].vbe);
-            let qbc = bjt_charge_histories[bi].qbc + capbc * (vbc - bjt_charge_histories[bi].vbc);
+            // Absolute charges at the current solution, matching ngspice
+            // bjtload.c CKTstate0 semantics (see the stamp-side comment).
+            let (qbe, _capbe, qbc, _capbc) = bjt.model.compute_charges(vbe, vbc, &comp);
 
             let cqbe = match method {
                 IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
@@ -1794,17 +1825,33 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                 }
             };
 
+            // C-S substrate cap (linear for MJS=0; see BjtChargeHistory).
+            let sign = bjt.model.bjt_type.sign();
+            let vsub = -sign * bjt.col_prime_idx.map_or(0.0, |i| solution[i]);
+            let qsub = bjt.model.cjs * vsub;
+            let cqsub = match method {
+                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                    (qsub - bjt_charge_histories[bi].qsub) / step_h
+                }
+                IntegrationMethod::Trapezoidal => {
+                    2.0 * (qsub - bjt_charge_histories[bi].qsub) / step_h
+                        - bjt_charge_histories[bi].cqsub
+                }
+            };
+
             let qbe_prev = bjt_charge_histories[bi].qbe;
             let qbc_prev = bjt_charge_histories[bi].qbc;
+            let qsub_prev = bjt_charge_histories[bi].qsub;
             bjt_charge_histories[bi] = BjtChargeHistory {
                 qbe,
                 cqbe,
-                vbe,
                 qbc,
                 cqbc,
-                vbc,
                 qbe_prev,
                 qbc_prev,
+                qsub,
+                cqsub,
+                qsub_prev,
             };
         }
 
@@ -2661,11 +2708,14 @@ fn solve_timestep(
 
                 let hist = &bjt_charge_histories[bi];
 
-                // Incremental charge: Q = Q_prev + dQ/dVbe * ΔVbe + dQ/dVbc * ΔVbc
-                // The geqcb_unscaled term accounts for Vbc's effect on the BE charge
-                // (ngspice computes qbe = tf*cbe_norm which implicitly includes this).
-                let qbe = hist.qbe + capbe * (vbe - hist.vbe) + geqcb_unscaled * (vbc - hist.vbc);
-                let qbc = hist.qbc + capbc * (vbc - hist.vbc);
+                // Absolute charges at the limited operating point, matching
+                // ngspice bjtload.c which stores Q(v) into CKTstate0 each NR
+                // iteration and lets NIintegrate differentiate the state.
+                // (An incremental Q += C·ΔV update under-releases the TR
+                // diffusion charge on large saturation-recovery swings — A/B
+                // measured on rtlinv: worst error 26% absolute vs 41%
+                // incremental at the recovery edge.)
+                let (qbe, _, qbc, _) = bjt.model.compute_charges(vbe, vbc, &comp);
 
                 // Integration coefficient: ag[0] = 1/h (BE) or 2/h (trap).
                 let ag0 = match method {
@@ -2717,6 +2767,27 @@ fn solve_timestep(
                 stamp_conductance(&mut system.matrix, bp, cp, m * geq_bc);
                 let ieq_bc = sign * m * (cqbc - geq_bc * vbc);
                 stamp_current_source(&mut system.rhs, bp, cp, ieq_bc);
+
+                // Stamp C-S substrate charge (ngspice bjtload.c NIintegrate on
+                // BJTqsub, matrix stamps at the substrate/collector' nodes).
+                // Substrate node is ground for 3-terminal instances; with the
+                // SPICE MJS default of 0 the cap is linear CJS.
+                if bjt.model.cjs > 0.0 {
+                    let capsub = bjt.model.cjs;
+                    let vsub = -sign * cp.map_or(0.0, |i| solution[i]);
+                    let qsub = capsub * vsub;
+                    let (geq_sub, cqsub) = match method {
+                        IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
+                            (capsub / h, (qsub - hist.qsub) / h)
+                        }
+                        IntegrationMethod::Trapezoidal => {
+                            (2.0 * capsub / h, 2.0 * (qsub - hist.qsub) / h - hist.cqsub)
+                        }
+                    };
+                    stamp_conductance(&mut system.matrix, None, cp, m * geq_sub);
+                    let ieq_sub = sign * m * (cqsub - geq_sub * vsub);
+                    stamp_current_source(&mut system.rhs, None, cp, ieq_sub);
+                }
 
                 // Stamp geqcb: BE charge cross-coupling from Vbc (ngspice bjtload.c
                 // lines 914, 923, 926, 927). This is a VCCS: current I = geqcb * Vbc
