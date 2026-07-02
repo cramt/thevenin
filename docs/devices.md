@@ -63,7 +63,7 @@ Transient waveforms supported on V and I (all six from
 | BSIM1 | 4 | implemented | [bsim1.rs](../thevenin/src/bsim1.rs) | Berkeley short-channel IGFET (LEVEL=4). Vds-dependent Vth (DIBL via Eta), mobility degradation (Ugs / Uds), velocity saturation, subthreshold (N0/NB/ND), W/L binning via `_L`/`_W` sensitivities on every process parameter, source-drain series resistance via `RSH × NRD/NRS` (NRD/NRS default to 1 per ngspice `b1set.c`). AC charge/noise not modelled in this DC + NR companion port. Harness-verified against ngspice's `bsim1/test.cir` reference output. |
 | BSIM2 | 5 | implemented | [bsim2.rs](../thevenin/src/bsim2.rs) | Berkeley Short-Channel IGFET Model v2. Vds-dependent threshold (eta), mobility degradation (Ua/Ub/U1), subthreshold conduction (n0/nb/nd), impact-ionisation Ai/Bi, cubic-spline smoothing between strong and weak inversion. DC + companion-model NR; charge equations deferred. Harness-verified against ngspice's `bsim2/test.cir` reference output. |
 | VDMOS | — (separate model kind, no LEVEL) | implemented | [vdmos.rs](../thevenin/src/vdmos.rs) | Vertical-DMOS power MOSFET. `.model NAME VDMOS (…)` / `VDMOSN` / `VDMOSP` — dispatched off the model kind string in `mna_ir.rs`, not via LEVEL. Built-in body diode, Vgd-dependent Miller cap, smooth triode/saturation blend with `mtr`/`theta`/`lambda`/`ksubthres`. |
-| HiSIM (bulk) | 68 | implemented (DC) | [hisim.rs](../thevenin/src/hisim.rs) | Surface-potential-based compact MOSFET. Inner NR solves ψs(Vgs, Vbs) from the implicit Pao-Sah equation; outer NR uses the resulting `gm/gds/gmbs`. DC + companion-model stamping only — AC small-signal caps, noise, and intrinsic Cgg/Cgd/Cgs equations deferred. |
+| HiSIM (bulk) | 68 | implemented (DC, faithful I-V) | [hisim.rs](../thevenin/src/hisim.rs) | Surface-potential-based compact MOSFET, faithful hsm2eval.c port: Ps0/Psl Newton solves (zone D1/D2/D3), Vdseff DDLT clamp, drift+diffusion Idd, universal mobility + velocity saturation, SCE loop, pocket-implant dVth, CLM Lred. Golden-verified vs ngspice-45 to ≤0.0011%. `gm/gds/gmbs` by finite differences of the forward eval. Terminal charges/AC caps, Isub/GIDL, noise deferred. |
 | HiSIMHV | 73 | partial (shares HiSIM DC path) | [hisim.rs](../thevenin/src/hisim.rs) | `LEVEL=73` dispatches into the same simplified DC core as HiSIM2. The high-voltage extensions (RDRIFT region, body resistance, breakdown) are **not** modelled; users requiring those should use VDMOS instead until the HV core lands. |
 
 ## JFETs / MESFETs / HFETs
@@ -121,8 +121,10 @@ object) loading is explicitly out of scope for 1.0 per the checklist.
 Models that are in-scope but only **partially** ported (DC works; AC
 small-signal caps / noise / advanced physics deferred):
 
-- **HiSIM** (LEVEL=68) and **HiSIMHV** (LEVEL=73) — DC core only; numerical
-  agreement against ngspice not yet verified. See checklist A1.
+- **HiSIM** (LEVEL=68) — faithful DC I-V core, golden-verified against real
+  ngspice-45 (≤0.0011% max rel-err); terminal charges/AC, Isub/GIDL, and
+  noise still deferred. **HiSIMHV** (LEVEL=73) — dispatches into the HiSIM
+  bulk core; HV extensions not yet modelled. See checklist A1.
 
 The full device enumeration pass (checklist A1, 2026-06-29) confirmed there
 are no other in-scope models missing — BSIM1/BSIM2/VDMOS/URC and HFET1/HFET2

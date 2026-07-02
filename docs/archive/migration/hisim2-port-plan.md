@@ -34,7 +34,7 @@ pocket-implant blend can start as `Nsub ≈ NSUBC`; add the blend in Phase 3.
 |---|---|---|
 | `beta` | `q/(kB·T)` (≈38.68 /V at 300.15K) | temp.c:564 |
 | `beta_inv` | `1/beta` (= Vt) | |
-| `Nin` | `C_Nin0·Tratio^1.5·exp(...)`, `C_Nin0=1.45e16` m⁻³ | temp.c:572 |
+| `Nin` | `C_Nin0·Tratio^1.5·exp(...)`, `C_Nin0=1.04e16` m⁻³ (hsm2evalenv.h — an earlier revision of this table wrongly said 1.45e16) | temp.c:572 |
 | `Cox` | `εox/TOX` (`εox=3.9·ε0`) | |
 | `Nsub` (long-ch) | pocket blend `(NSUBC·(Lg−LP)+Nsubps·LP)/Lg`; start ≈NSUBC | temp.c:363 |
 | `cnst0` | `sqrt(2·εsi·q·Nsub/beta)` (εsi=11.7·ε0) | temp.c:645 |
@@ -43,7 +43,12 @@ pocket-implant blend can start as `Nsub ≈ NSUBC`; add the blend in Phase 3.
 | `Vfb` | `VFBC` (param, directly) | temp.c:1136 |
 | `fac1` | `cnst0/Cox` (the body-charge coefficient) | eval.c:1548 |
 
-## Surface potentials (Phase 2 — `hsm2eval.c`)
+## Surface potentials (Phase 2 — `hsm2eval.c`) — DONE 2026-07-02
+
+> Phases 2 and 3 landed together (commit `f8995ec`): the CORECIP=1 default
+> for VERSION=2.80 makes the SCE loop, pocket dVth, and CLM Lred mandatory
+> for golden agreement. Result: ≤0.0011% max rel-err on all three golden
+> sweeps. Phases 4 (charges/AC) and 5 (HiSIMHV) remain.
 
 `Vgp = Vgs − Vfb − dVth` (long-channel: `dVth≈0`; SCE/pocket in Phase 3).
 

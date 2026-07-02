@@ -47,7 +47,7 @@ Every analysis above takes a `cirq_ir::Circuit` directly; `thevenin-types::Netli
 | Behavioural | B `V=expr` / `I=expr` with full expression engine |
 | Diodes | SPICE Shockley (IS, N, RS, BV, CJO, TT, KF/AF, pnjlim) |
 | BJTs | Gummel-Poon (LEVEL=1), VBIC95 (LEVEL=4) |
-| MOSFETs | Shichman-Hodges (1), Grove-Frohman (2), MOS3 short-channel (3), Sakurai-Newton (6), BSIM1 (4), BSIM2 (5), BSIM3v3 (8/49), BSIM4 (14/54), BSIM3SOI FD/DD/PD (55/56/57), HiSIM2 (68 — partial, DC only), HiSIMHV (73 — partial, no HV extensions yet), VDMOS power MOSFET |
+| MOSFETs | Shichman-Hodges (1), Grove-Frohman (2), MOS3 short-channel (3), Sakurai-Newton (6), BSIM1 (4), BSIM2 (5), BSIM3v3 (8/49), BSIM4 (14/54), BSIM3SOI FD/DD/PD (55/56/57), HiSIM2 (68 — faithful DC I-V, golden-verified; charges/AC deferred), HiSIMHV (73 — partial, no HV extensions yet), VDMOS power MOSFET |
 | Other FETs | JFET, MESFET (Statz/Curtice), MESA (Ytterdal/Lee/Shur/Fjeldly), HFET1, HFET2 |
 | Transmission lines | LTRA (O), TXL (Y), CPL (P), ideal lossless line (T) |
 | Switches | S (voltage-controlled), W (current-controlled) — hysteretic |
