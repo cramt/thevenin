@@ -687,7 +687,13 @@ fn parse_waveform(tok: &str) -> Option<Waveform> {
             tau2: g(5),
         })
     } else if let Some(inner) = find_inner("PWL(") {
-        let nums: Vec<Expr> = inner.split_whitespace().map(parse_expr).collect();
+        // ngspice treats commas as whitespace in PWL point lists, so
+        // `PWL(0,0V 1ns,0V 1.005ns,1V)` is the same as `PWL(0 0V 1ns 0V ...)`.
+        let nums: Vec<Expr> = inner
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|s| !s.is_empty())
+            .map(parse_expr)
+            .collect();
         let points = nums
             .chunks(2)
             .filter_map(|c| {

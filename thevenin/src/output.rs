@@ -1978,24 +1978,46 @@ fn resolve_print_vars(plot: &SimPlot, var_names: &[String]) -> Vec<(String, Vec<
 
     for var in var_names {
         if var == "all" {
+            // ngspice's `print <an> all` expands to every vector in the plot
+            // in dvec order: node voltages in matrix-insertion (ascending)
+            // order, then the scale vector itself (so e.g. `time` appears
+            // again as a data column), then branch currents. Our plots store
+            // node voltages in *descending* matrix order (LIFO, matching
+            // ngspice's `.op` node table), so reverse the voltage group here.
+            // Verified against ngspice batch output for hfet/inverter.cir:
+            // pages are [v(1) v(2) v(3)], [v(4) time vdd#branch], [vin#branch].
+            let mut voltages: Vec<(String, Vec<f64>)> = Vec::new();
+            let mut others: Vec<(String, Vec<f64>)> = Vec::new();
             for v in &plot.vecs {
                 if sweep_vec.as_ref().is_some_and(|sv| sv.name == v.name) {
                     continue;
                 }
-                if let Some(real) = v.data.try_real()
+                let data = if let Some(real) = v.data.try_real()
                     && !real.is_empty()
                 {
-                    result.push((v.name.clone(), real.to_vec()));
+                    real.to_vec()
                 } else if let Some(complex) = v.data.try_complex()
                     && !complex.is_empty()
                 {
-                    let mags: Vec<f64> = complex
+                    complex
                         .iter()
                         .map(|c| (c.re * c.re + c.im * c.im).sqrt())
-                        .collect();
-                    result.push((v.name.clone(), mags));
+                        .collect()
+                } else {
+                    continue;
+                };
+                if v.name.starts_with("v(") {
+                    voltages.push((v.name.clone(), data));
+                } else {
+                    others.push((v.name.clone(), data));
                 }
             }
+            voltages.reverse();
+            result.extend(voltages);
+            if let Some(sv) = &sweep_vec {
+                result.push((sv.name.clone(), sv.data.as_real().to_vec()));
+            }
+            result.extend(others);
             return result;
         }
 

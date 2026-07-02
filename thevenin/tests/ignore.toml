@@ -39,39 +39,14 @@
 # cpl3_4_line: moved to tolerances.toml (abs_tol=0.06 for bounded ~40mV FP accumulation)
 
 # === HFET ===
-#
-# ngspice's reference output for this circuit is WRONG due to a confirmed bug
-# in hfetload.c.
-#
-# The bug: on line 83, `int inverse=FALSE;` is declared OUTSIDE the device
-# iteration loop and is never reset between device instances. When a driver
-# HFET with vds < 0 sets `inverse = TRUE` (line 298), this flag leaks to all
-# subsequently processed load HFETs. The leaked flag causes the load devices'
-# cdrain to be wrongly negated (line 305: `cdrain = -cdrain`), which flips the
-# sign of their drain current RHS contributions.
-#
-# Circuit analysis proving ngspice is wrong:
-#
-#   The DCFL inverter subcircuit has a depletion load (VT0=-0.3, always ON at
-#   VGS=0) and an enhancement driver (VT0=0.3, OFF when VGS < 0.3V).
-#   With VIN=0V:
-#     - Driver VGS = 0V < VT0 = 0.3V → driver is OFF, no current to ground
-#     - Load VGS = 0V > VT0 = -0.3V → load is ON, pulls output toward VDD
-#     - Therefore V(3) must be close to VDD = 2V
-#
-#   ngspice reports V(3) = -0.275V, which is physically impossible: it would
-#   require current flowing from ground to the output node with the driver off.
-#   The only explanation is the leaked inverse flag flipping the load's drain
-#   current, effectively making it push the output negative instead of pulling
-#   it toward VDD.
-#
-# Our code handles inverse correctly per-device and produces V(3) ≈ 1.956V,
-# V(4) ≈ 0.206V — the physically correct DC operating point. This is verified
-# by the assertion test `test_hfet_inverter_dc_op` in tests/hfet.rs.
-#
-# Since the entire transient waveform in the .out reference file starts from
-# the wrong DC OP, the harness comparison must be skipped.
-"hfet/inverter.cir" = "ngspice reference output wrong: inverse flag bug in hfetload.c line 83 leaks between devices, producing spurious V(3)=-0.275V; correct answer is V(3)=1.956V (see comment above)"
+# hfet/inverter.cir: un-ignored 2026-07-02. ngspice's upstream reference .out
+# is wrong: in hfetload.c, `int inverse=FALSE;` is declared outside the device
+# iteration loop and never reset per instance, so a driver HFET with vds<0
+# leaks inverse=TRUE into subsequently-processed load HFETs, wrongly negating
+# their cdrain (spurious V(3)=-0.275V; the correct DC OP is V(3)≈1.956V, see
+# `test_hfet_inverter_dc_op` in tests/hfet.rs). Reference regenerated from an
+# ngspice build patched to reset `inverse = FALSE;` per instance; the fixture
+# override lives at thevenin/tests/fixtures/hfet/inverter.out.
 
 # === VBIC ===
 # FO: moved to tolerances.toml (FP eval order amplified by avalanche; rel_tol=4e-1)
