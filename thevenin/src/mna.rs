@@ -796,14 +796,16 @@ pub(crate) fn get_mosfet_level(
     1 // default level
 }
 
-/// Extract NRD and NRS from instance params.
-pub(crate) fn get_nrd_nrs(params: &[(String, f64)]) -> (f64, f64) {
-    let mut nrd = 0.0;
-    let mut nrs = 0.0;
+/// Extract NRD and NRS from instance params. Returns `None` for a
+/// parameter the instance omits so callers can apply the device-specific
+/// ngspice default (e.g. BSIM1 `b1set.c` defaults omitted NRD/NRS to 1).
+pub(crate) fn get_nrd_nrs(params: &[(String, f64)]) -> (Option<f64>, Option<f64>) {
+    let mut nrd = None;
+    let mut nrs = None;
     for (name, v) in params {
         match name.to_uppercase().as_str() {
-            "NRD" => nrd = *v,
-            "NRS" => nrs = *v,
+            "NRD" => nrd = Some(*v),
+            "NRS" => nrs = Some(*v),
             _ => {}
         }
     }

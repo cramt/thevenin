@@ -1399,7 +1399,9 @@ fn stamp_circuit(
 
                 let params_nl = ir_numeric_params(elem, &["value"]);
                 let (inst_l, inst_w) = get_mosfet_lw(&params_nl, def_l, def_w);
-                let (nrd, nrs) = get_nrd_nrs(&params_nl);
+                let (nrd_opt, nrs_opt) = get_nrd_nrs(&params_nl);
+                let nrd = nrd_opt.unwrap_or(0.0);
+                let nrs = nrs_opt.unwrap_or(0.0);
                 let model_ref = lookup_model(circuit, elem);
                 let model_name = model_ref.map(|m| m.name.clone());
                 let is_vdmos = matches!(
@@ -1460,7 +1462,9 @@ fn stamp_circuit(
                     let bm = resolved
                         .map(Bsim1Model::from_params)
                         .unwrap_or_else(|| Bsim1Model::new(crate::mosfet::MosfetType::Nmos));
-                    internal_node_count += bm.internal_node_count(nrd, nrs);
+                    // ngspice b1set.c defaults omitted NRD/NRS to 1.
+                    internal_node_count +=
+                        bm.internal_node_count(nrd_opt.unwrap_or(1.0), nrs_opt.unwrap_or(1.0));
                 } else if level == 5 {
                     // BSIM2 series resistance via rsh*NRD/NRS.
                     let mm = resolved
@@ -2495,8 +2499,8 @@ fn stamp_circuit(
                 let mut pd = 0.0;
                 let mut ps = 0.0;
                 let mut m_mult = 1.0;
-                let mut nrd = 0.0;
-                let mut nrs = 0.0;
+                let mut nrd_opt: Option<f64> = None;
+                let mut nrs_opt: Option<f64> = None;
                 for (name, value) in &elem.params {
                     if let Some(v) = numeric_value(value) {
                         match name.to_uppercase().as_str() {
@@ -2507,12 +2511,14 @@ fn stamp_circuit(
                             "PD" => pd = v,
                             "PS" => ps = v,
                             "M" => m_mult = v,
-                            "NRD" => nrd = v,
-                            "NRS" => nrs = v,
+                            "NRD" => nrd_opt = Some(v),
+                            "NRS" => nrs_opt = Some(v),
                             _ => {}
                         }
                     }
                 }
+                let nrd = nrd_opt.unwrap_or(0.0);
+                let nrs = nrs_opt.unwrap_or(0.0);
 
                 let params_nl = ir_numeric_params(elem, &["value"]);
                 let model_ref = lookup_model(circuit, elem);
@@ -2986,6 +2992,10 @@ fn stamp_circuit(
                     let bm = resolved
                         .map(Bsim1Model::from_params)
                         .unwrap_or_else(|| Bsim1Model::new(crate::mosfet::MosfetType::Nmos));
+                    // ngspice b1set.c defaults omitted NRD/NRS to 1, so a
+                    // model RSH alone yields drain/source series resistors.
+                    let nrd = nrd_opt.unwrap_or(1.0);
+                    let nrs = nrs_opt.unwrap_or(1.0);
                     let drain_prime_idx = if bm.rsh > 0.0 && nrd > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;

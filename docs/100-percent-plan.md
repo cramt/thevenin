@@ -1,6 +1,6 @@
 # Plan: 100% ngspice Test Coverage
 
-Current state: **102 harness tests passing, 5 skipped** (1417 total tests passing across
+Current state: **103 harness tests passing, 4 skipped** (1467 total tests passing across
 all test binaries). Goal: eliminate as many skips as possible.
 
 ## Phase 1: RampVg2 Charge Coupling (bsim3soidd/RampVg2.cir)
@@ -135,10 +135,15 @@ Chaotic switching cascades where ~100ps timing shift at first edge grows to 89% 
 Every reasonable approach exhaustively tried (sessions 97-103). Would require matching
 ngspice's exact numerical integration path. **Accept as-is.**
 
-### BSIM1 (bsim1/test.cir)
+### BSIM1 — DONE
 
-~3,000 LOC for an obsolete model superseded by BSIM3/BSIM4 (already
-implemented). **Skip unless users need legacy PDK compatibility.**
+**Status: PASSING.** The BSIM1 port (`thevenin/src/bsim1.rs`) was already
+implemented; the harness failure was a ~1.4% strong-inversion near-miss.
+Root cause (found 2026-07-02): ngspice's `b1set.c` defaults `NRD`/`NRS` to 1
+when omitted, so with `RSH=35` every device gets 35Ω drain/source series
+resistors; our IR lowering defaulted them to 0. The missing IR drop
+(`gds·2·Id·35Ω ≈ 1.556e-7 A`) matched the observed error exactly. Fixed in
+`mna_ir.rs` (BSIM1 branch only). Un-ignored.
 
 ### BSIM2 — DONE
 
@@ -161,11 +166,11 @@ code produces the correct result. **Not a thevenin bug — ngspice bug.**
 | Baseline (pre-resume-1) | — | 100/107 | 93.5% |
 | Phase 3 (resume-1) | +1 (DONE) | 101/107 | 94.4% |
 | BSIM2 verification | +1 (DONE) | 102/107 | 95.3% |
-| Phase 1 (RampVg2) | +1 | 103/107 | 96.3% |
-| Phase 2 | — (ngspice bug) | 103/107 | 96.3% |
-| Intractable | — | 103/107 | 96.3% |
+| BSIM1 NRD/NRS fix | +1 (DONE) | 103/107 | 96.3% |
+| Phase 1 (RampVg2) | +1 | 104/107 | 97.2% |
+| Phase 2 | — (ngspice bug) | 104/107 | 97.2% |
+| Intractable | — | 104/107 | 97.2% |
 
-Best realistic outcome: **103/107 harness tests (96.3%)**. The remaining 4 tests are:
-- 1 obsolete model (BSIM1) — not worth implementing
+Best realistic outcome: **104/107 harness tests (97.2%)**. The remaining 3 tests are:
 - 2 chaotic timing cascades (rtlinv, schmitt) — would require exact numerical path matching
 - 1 ngspice bug (HFET inverter) — our code is correct, ngspice is wrong
