@@ -654,6 +654,12 @@ impl Bsim3SoiDdModel {
             _ => MosfetType::Nmos,
         };
         let mut m = Self::new(mos_type);
+        // Self::new() ran precompute() against the *default* tsi, resolving the
+        // xj sentinel to that tsi (1e-7). Restore the sentinel so the final
+        // precompute() below re-resolves XJ against the model card's TSI,
+        // matching ngspice b3soiddset.c:215 (xj defaults to tsi at set time).
+        // set!(xj, "XJ") overwrites the sentinel when XJ is given explicitly.
+        m.xj = -1.0;
 
         fn pf(model: &ModelParams, name: &str) -> Option<f64> {
             model.params.iter().find_map(|(n, v)| {
