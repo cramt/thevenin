@@ -380,6 +380,13 @@ pub struct Bsim3SoiDdInstance {
     pub size_params: Bsim3SoiDdSizeParam,
     pub vth0_inst: f64,
     pub nbc: f64,
+    /// Instance `debug` parameter. ngspice's b3soiddld.c gives `debug=-1`
+    /// load-bearing semantics: charges are computed for output but
+    /// `ChargeComputationNeeded` is forced back to 0 before the overlap-cap
+    /// block and the `NIintegrate` calls (`goto line850`), so the device
+    /// contributes NO capacitive currents to the matrix/RHS. The upstream
+    /// RampVg2 fixture relies on this quasi-static mode.
+    pub debug_mod: i32,
 }
 
 /// NR companion result for BSIM3SOI-DD.

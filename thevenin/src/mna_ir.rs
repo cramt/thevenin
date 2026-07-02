@@ -2717,11 +2717,19 @@ fn stamp_circuit(
                         idx
                     });
                     let mut nbc = 0.0;
+                    let mut debug_mod = 0i32;
                     for (name, value) in &elem.params {
                         if name.eq_ignore_ascii_case("NBC")
                             && let Some(v) = numeric_value(value)
                         {
                             nbc = v;
+                        }
+                        // ngspice b3soiddld.c gives debug=-1 numeric semantics
+                        // (quasi-static mode: no capacitive currents).
+                        if name.eq_ignore_ascii_case("DEBUG")
+                            && let Some(v) = numeric_value(value)
+                        {
+                            debug_mod = v as i32;
                         }
                     }
 
@@ -2746,6 +2754,7 @@ fn stamp_circuit(
                         size_params,
                         vth0_inst,
                         nbc,
+                        debug_mod,
                     });
                 } else if level == 57 {
                     // BSIM3SOI-PD.

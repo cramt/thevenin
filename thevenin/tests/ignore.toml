@@ -9,25 +9,17 @@
 # reference .out now passes with default tolerances.
 
 # === BSIM3SOI-DD ===
-# RampVg2: TWO clean audits done 2026-05-20.
-# (1) cap_mod==3 charge block (bsim3soi_dd.rs:2741-3040) is faithful to
-#     ngspice b3soiddld.c:2888-3224. One real bug found: DELTA_VCSCV was
-#     1e-5 vs ngspice's 0.0004 — fixed.
-# (2) body-floating bias chain (Vbs0t/Vbs0/Vbs0mos/Vthfd/Vbs0eff/Vbsdio)
-#     in bsim3soi_dd.rs:1269-1454 matches ngspice b3soiddld.c:921-1193
-#     to 4-5 sig digits at the DC OP (verified by side-by-side dump
-#     against `b3soiddn.log` with debug=4).
-# Remaining failure has two layers:
-# (a) DC OP Vbs converges to 0.092 (ours) vs 0.0917 (ngspice) — a 0.4%
-#     offset driven by body-junction current balance (Iii/Ibs/Ibd, all
-#     sub-femtoamp) not the chain math.
-# (b) During gate ramp 20-120ps the response slope is ~3.5x short of
-#     ngspice — larger than the DC OP offset can explain alone, so
-#     there's a separate cap-coupling issue downstream of the audited
-#     charge formulas (likely in transient integration / matrix
-#     stamping). See docs/future-work.md item 1 for what to instrument
-#     next.
-"bsim3soidd/RampVg2.cir" = "Two layers remaining: (a) DC OP off by 0.4% from body-junction current balance, (b) gate-ramp cap response slope ~3.5x short; cap_mod==3 charge block AND body-floating chain both verified clean (see docs/future-work.md item 1)"
+# RampVg2: un-ignored 2026-07-02 after three stacked fixes:
+# (a) XJ sentinel re-resolved against the model card's TSI (set-time
+#     default, b3soiddset.c:215) — fixed the DC OP Vbs to 7 digits.
+# (b) Numerically stable Phi^1.5/Phi^2.5 differences in the CAPMOD=3
+#     charge block — fixed the pre-ramp floating-body drift.
+# (c) The decisive one: the deck sets `debug=-1`, which in ngspice's
+#     b3soiddld.c is LOAD-BEARING — it forces ChargeComputationNeeded=0
+#     after the charge block (`goto line850`), skipping overlap caps and
+#     all NIintegrate calls. The reference waveform is the quasi-static
+#     body response with NO capacitive currents. Our port now honors
+#     debug=-1 the same way (Bsim3SoiDdInstance::debug_mod).
 
 # === General circuits ===
 # After the CONSTKoverQ thermal-voltage fix (2026-07-02), rtlinv's first edge

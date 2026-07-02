@@ -531,6 +531,11 @@ fn estimate_new_timestep(
     // Matches ngspice's b3soiddtrunc.c → CKTterr: only qb, qg, qd are
     // included (not qsub).
     for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
+        if inst.debug_mod == -1 {
+            // Quasi-static mode: no capacitive currents, so no charge LTE
+            // (ngspice skips NIintegrate entirely for debug=-1 devices).
+            continue;
+        }
         let hist = &soidd_charge_histories[di];
         // Direct terminal charges from the model at the current solution.
         let (vgs_t, vds_t, vbs_t, ves_t) = inst.terminal_voltages(solution);
@@ -2050,6 +2055,12 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
 
         // Update BSIM3SOI-DD charge histories (intrinsic + CboxWL).
         for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
+            if inst.debug_mod == -1 {
+                // Quasi-static mode (ngspice b3soiddld.c debug=-1): the
+                // device carries no capacitive currents, so its charge
+                // history never accumulates.
+                continue;
+            }
             let sign = inst.model.mos_type.sign();
             let vb = inst.body_int_idx.map_or(0.0, |i| solution[i]);
             let ve = inst.e_idx.map_or(0.0, |i| solution[i]);
@@ -3127,6 +3138,13 @@ fn solve_timestep(
         {
             let prev_dd = dev_state.prev_bsim3soi_dd_voltages();
             for (di, inst) in mna.bsim3soi_dds.iter().enumerate() {
+                if inst.debug_mod == -1 {
+                    // Quasi-static mode (ngspice b3soiddld.c debug=-1):
+                    // ChargeComputationNeeded is forced to 0 after the charge
+                    // block (`goto line850`), so the device stamps no gc
+                    // matrix entries and no capacitive Norton currents.
+                    continue;
+                }
                 let sign = inst.model.mos_type.sign();
                 let m = inst.m;
                 let sp_dd = &inst.size_params;
