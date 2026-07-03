@@ -260,6 +260,10 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ExprError> {
 }
 
 fn spice_suffix(s: &str) -> Option<f64> {
+    // Unicode micro sign / Greek mu (both uppercase to Greek Μ, not ASCII M).
+    if s == "µ" || s == "μ" {
+        return Some(1e-6);
+    }
     let su = s.to_uppercase();
     match su.as_str() {
         "T" => Some(1e12),
@@ -1398,8 +1402,23 @@ pub fn evaluate_bsrc_expr_with_ctx(
     node_voltages: &std::collections::BTreeMap<String, f64>,
     sim: SimContext,
 ) -> Result<f64, ExprError> {
+    evaluate_bsrc_expr_with_params(expr, node_voltages, sim, &std::collections::BTreeMap::new())
+}
+
+/// Like [`evaluate_bsrc_expr_with_ctx`], with resolved `.param` values in
+/// scope (uppercase names — typically `MnaSystem::bsrc_params`). Sim-context
+/// constants (TIME/FREQ/TEMPER) override same-named params.
+pub fn evaluate_bsrc_expr_with_params(
+    expr: &str,
+    node_voltages: &std::collections::BTreeMap<String, f64>,
+    sim: SimContext,
+    params: &std::collections::BTreeMap<String, f64>,
+) -> Result<f64, ExprError> {
     let substituted = substitute_v_refs(expr, node_voltages);
     let mut ctx = EvalContext::default();
+    for (name, value) in params {
+        ctx.params.insert(name.clone(), *value);
+    }
     if let Some(t) = sim.time {
         ctx.params.insert("TIME".to_string(), t);
     }

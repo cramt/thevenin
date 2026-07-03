@@ -490,6 +490,13 @@ pub fn parse_spice_number(s: &str) -> Option<f64> {
 }
 
 fn parse_si_suffix(s: &str) -> f64 {
+    // Unicode micro sign / Greek mu are checked on the raw string: Rust
+    // uppercases both µ (U+00B5) and μ (U+03BC) to Greek capital Μ (U+039C),
+    // which must not collide with ASCII `M` (milli).
+    let raw = s.trim_start();
+    if raw.starts_with('µ') || raw.starts_with('μ') {
+        return 1e-6;
+    }
     let u = s.to_uppercase();
     let u = u.trim_start();
     // Check longer prefixes first to avoid `M` shadowing `MEG`/`MIL`

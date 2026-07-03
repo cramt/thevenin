@@ -304,6 +304,10 @@ pub struct MnaSystem {
     pub behavioral_sources: Vec<BehavioralSourceInstance>,
     /// Resolved behavioral voltage source (B-element with V=) instances for NR iteration.
     pub behavioral_voltage_sources: Vec<BehavioralVoltageSourceInstance>,
+    /// Resolved `.param` values (uppercase names), in scope for behavioral
+    /// source expressions — `B1 a 0 I=Isat*(exp(v(a)/VT)-1)` with
+    /// `.param VT=26m Isat=1e-14` must see both names at eval time.
+    pub bsrc_params: std::collections::BTreeMap<String, f64>,
     /// Resolved XSPICE code model instances.
     pub xspice_instances: Vec<XspiceInstance>,
     /// XSPICE code model registry (shared across instances).
@@ -360,6 +364,7 @@ impl MnaSystem {
             current_sources: Vec::new(),
             behavioral_sources: Vec::new(),
             behavioral_voltage_sources: Vec::new(),
+            bsrc_params: std::collections::BTreeMap::new(),
             xspice_instances: Vec::new(),
             xspice_registry,
             switches: Vec::new(),

@@ -70,7 +70,7 @@ pub(crate) mod simulate;
 pub mod sparse;
 #[cfg(test)]
 mod test_support;
-pub(crate) mod waveform;
+pub mod waveform;
 
 // ── Analysis modules ────────────────────────────────────────────────────────
 pub(crate) mod ac;

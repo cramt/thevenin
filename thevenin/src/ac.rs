@@ -1601,8 +1601,13 @@ pub fn stamp_ac_devices(
         for (name, idx) in mna.node_map.iter() {
             node_voltages.insert(name.to_string(), op_solution[idx]);
         }
-        let i0 = crate::expr::evaluate_bsrc_expr_with_ctx(&bsrc.expr, &node_voltages, sim_ctx)
-            .unwrap_or(0.0)
+        let i0 = crate::expr::evaluate_bsrc_expr_with_params(
+            &bsrc.expr,
+            &node_voltages,
+            sim_ctx,
+            &mna.bsrc_params,
+        )
+        .unwrap_or(0.0)
             * bsrc.tc_factor;
 
         for (name, idx) in mna.node_map.iter() {
@@ -1613,8 +1618,13 @@ pub fn stamp_ac_devices(
             let dv = f64::EPSILON.cbrt() * v_old.abs().max(1.0);
             let mut perturbed = node_voltages.clone();
             *perturbed.get_mut(name).unwrap() = v_old + dv;
-            let i1 = crate::expr::evaluate_bsrc_expr_with_ctx(&bsrc.expr, &perturbed, sim_ctx)
-                .unwrap_or(0.0)
+            let i1 = crate::expr::evaluate_bsrc_expr_with_params(
+                &bsrc.expr,
+                &perturbed,
+                sim_ctx,
+                &mna.bsrc_params,
+            )
+            .unwrap_or(0.0)
                 * bsrc.tc_factor;
             let g = (i1 - i0) / dv;
             if g.abs() > 1e-30 {
@@ -1636,8 +1646,13 @@ pub fn stamp_ac_devices(
         for (name, idx) in mna.node_map.iter() {
             node_voltages.insert(name.to_string(), op_solution[idx]);
         }
-        let f0 = crate::expr::evaluate_bsrc_expr_with_ctx(&bvsrc.expr, &node_voltages, sim_ctx)
-            .unwrap_or(0.0)
+        let f0 = crate::expr::evaluate_bsrc_expr_with_params(
+            &bvsrc.expr,
+            &node_voltages,
+            sim_ctx,
+            &mna.bsrc_params,
+        )
+        .unwrap_or(0.0)
             * bvsrc.tc_factor;
 
         let branch = bvsrc.branch_idx;
@@ -1648,8 +1663,13 @@ pub fn stamp_ac_devices(
             let dv = f64::EPSILON.cbrt() * v_old.abs().max(1.0);
             let mut perturbed = node_voltages.clone();
             *perturbed.get_mut(name).unwrap() = v_old + dv;
-            let f1_raw = crate::expr::evaluate_bsrc_expr_with_ctx(&bvsrc.expr, &perturbed, sim_ctx)
-                .unwrap_or(0.0);
+            let f1_raw = crate::expr::evaluate_bsrc_expr_with_params(
+                &bvsrc.expr,
+                &perturbed,
+                sim_ctx,
+                &mna.bsrc_params,
+            )
+            .unwrap_or(0.0);
             let f1 = if f1_raw.is_finite() {
                 f1_raw * bvsrc.tc_factor
             } else {

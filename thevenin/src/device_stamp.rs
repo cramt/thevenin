@@ -1876,9 +1876,13 @@ impl DeviceVoltageState {
                 node_voltages.insert(name.to_string(), solution[idx]);
             }
 
-            let i0_raw =
-                crate::expr::evaluate_bsrc_expr_with_ctx(&bsrc.expr, &node_voltages, sim_ctx)
-                    .unwrap_or(0.0);
+            let i0_raw = crate::expr::evaluate_bsrc_expr_with_params(
+                &bsrc.expr,
+                &node_voltages,
+                sim_ctx,
+                &mna.bsrc_params,
+            )
+            .unwrap_or(0.0);
             // Apply temperature coefficient scaling
             let i0 = i0_raw * bsrc.tc_factor;
 
@@ -1890,9 +1894,13 @@ impl DeviceVoltageState {
                 let v_old = node_voltages[name];
                 let mut perturbed = node_voltages.clone();
                 *perturbed.get_mut(name).unwrap() = v_old + DV;
-                let i1_raw =
-                    crate::expr::evaluate_bsrc_expr_with_ctx(&bsrc.expr, &perturbed, sim_ctx)
-                        .unwrap_or(0.0);
+                let i1_raw = crate::expr::evaluate_bsrc_expr_with_params(
+                    &bsrc.expr,
+                    &perturbed,
+                    sim_ctx,
+                    &mna.bsrc_params,
+                )
+                .unwrap_or(0.0);
                 let g = (i1_raw * bsrc.tc_factor - i0) / DV;
 
                 if g.abs() > 1e-30 {
@@ -1919,9 +1927,13 @@ impl DeviceVoltageState {
                 node_voltages.insert(name.to_string(), solution[idx]);
             }
 
-            let f0_raw =
-                crate::expr::evaluate_bsrc_expr_with_ctx(&bvsrc.expr, &node_voltages, sim_ctx)
-                    .unwrap_or(0.0);
+            let f0_raw = crate::expr::evaluate_bsrc_expr_with_params(
+                &bvsrc.expr,
+                &node_voltages,
+                sim_ctx,
+                &mna.bsrc_params,
+            )
+            .unwrap_or(0.0);
             // Guard against NaN/Inf from expressions like ln(0) at initial guess,
             // then apply temperature coefficient scaling
             let f0 = if f0_raw.is_finite() {
@@ -1939,9 +1951,13 @@ impl DeviceVoltageState {
                 let v_old = node_voltages[name];
                 let mut perturbed = node_voltages.clone();
                 *perturbed.get_mut(name).unwrap() = v_old + DV;
-                let f1_raw =
-                    crate::expr::evaluate_bsrc_expr_with_ctx(&bvsrc.expr, &perturbed, sim_ctx)
-                        .unwrap_or(0.0);
+                let f1_raw = crate::expr::evaluate_bsrc_expr_with_params(
+                    &bvsrc.expr,
+                    &perturbed,
+                    sim_ctx,
+                    &mna.bsrc_params,
+                )
+                .unwrap_or(0.0);
                 let f1 = if f1_raw.is_finite() {
                     f1_raw * bvsrc.tc_factor
                 } else {

@@ -412,6 +412,14 @@ fn parse_number_with_suffix(s: &str) -> Result<f64, String> {
             .map(|v| v * 1e6)
             .map_err(|_| format!("bad number: {s}"));
     }
+    // Unicode micro sign / Greek mu (multi-byte — handle before the
+    // single-byte suffix slicing below).
+    if let Some(rest) = s.strip_suffix('µ').or_else(|| s.strip_suffix('μ')) {
+        return rest
+            .parse::<f64>()
+            .map(|v| v * 1e-6)
+            .map_err(|_| format!("bad number: {s}"));
+    }
     let (num, mult) = match lower.chars().last() {
         Some('t') => (&s[..s.len() - 1], 1e12),
         Some('g') => (&s[..s.len() - 1], 1e9),
@@ -1147,10 +1155,124 @@ fn resolve_device_param_vec(spec: &str, ctx: &SimContext) -> Option<VecVal> {
     let circuit = ctx.circuit()?;
     for element in &circuit.elements {
         if element.name.eq_ignore_ascii_case(device) {
+            // Device current over the current plot's sweep, like the vectors
+            // ngspice's `set savecurrents` records (`@r1[i]`, `@i1[current]`).
+            let param_lower = param.to_lowercase();
+            if param_lower == "i" || param_lower == "current" {
+                return device_current_vec(element, circuit, ctx);
+            }
             return resolve_element_param_vec_ir(element, param);
         }
     }
     None
+}
+
+/// Compute a device's terminal current at every point of the current plot's
+/// sweep, mirroring what ngspice's `set savecurrents` saves.
+///
+/// Supported kinds (extended on demand): independent current sources (the
+/// prescribed source current), resistors (Ohm's law over the plot's node
+/// voltages), and current-mode behavioural sources (expression re-evaluated
+/// against the plot's node voltages at each sweep point).
+fn device_current_vec(
+    element: &cirq_ir::Element,
+    circuit: &cirq_ir::Circuit,
+    ctx: &SimContext,
+) -> Option<VecVal> {
+    let plot = ctx.current_plot()?;
+    let scale = plot.vecs.first()?;
+    let times = scale.data.try_real()?;
+    let n = times.len();
+
+    // Net-name lookup for an element terminal ("0"/ground nets map to None).
+    let net_name = |terminal: &str| -> Option<String> {
+        let conn = element
+            .connections
+            .iter()
+            .find(|c| c.terminal.eq_ignore_ascii_case(terminal))?;
+        circuit
+            .nets
+            .iter()
+            .find(|net| net.id == conn.net)
+            .map(|net| net.name.clone())
+    };
+    // Voltage waveform of a named net from the plot (ground = all zeros).
+    let node_wave = |name: &str| -> Option<Vec<f64>> {
+        if name == "0" || name.eq_ignore_ascii_case("gnd") {
+            return Some(vec![0.0; n]);
+        }
+        let v = ctx.find_vector(&format!("v({name})"))?;
+        Some(v.data.try_real()?.to_vec())
+    };
+
+    match &element.kind {
+        cirq_ir::ElementKind::CurrentSource => {
+            // The prescribed source current: waveform when present, else DC.
+            let spec = element.source_spec.as_ref()?;
+            if let Some(wf) = &spec.waveform {
+                let tstop = times.last().copied().unwrap_or(0.0);
+                let tstep = if n > 1 { times[1] - times[0] } else { tstop };
+                let tran = thevenin::waveform::TranParams { tstep, tstop };
+                let vals = times
+                    .iter()
+                    .map(|&t| thevenin::waveform::evaluate(wf, t, &tran))
+                    .collect();
+                Some(VecVal::real(vals))
+            } else {
+                Some(VecVal::real(vec![spec.dc.unwrap_or(0.0); n]))
+            }
+        }
+        cirq_ir::ElementKind::Resistor => {
+            let r = element.params.iter().find_map(|(name, v)| {
+                if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("resistance") {
+                    match v {
+                        cirq_ir::Value::Real(x) => Some(*x),
+                        cirq_ir::Value::Integer(x) => Some(*x as f64),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })?;
+            if r == 0.0 {
+                return None;
+            }
+            let vp = node_wave(&net_name("pos")?)?;
+            let vn = node_wave(&net_name("neg")?)?;
+            let vals = vp.iter().zip(vn.iter()).map(|(a, b)| (a - b) / r).collect();
+            Some(VecVal::real(vals))
+        }
+        cirq_ir::ElementKind::BehavioralSource {
+            mode: cirq_ir::BehavioralMode::Current,
+            spec,
+        } => {
+            // Re-evaluate the I= expression against the plot's node voltages
+            // at each sweep point, with resolved .param values in scope.
+            let mut eval_ctx = thevenin::expr::EvalContext::default();
+            for p in circuit.params.iter().chain(circuit.csparams.iter()) {
+                if let cirq_ir::Value::Real(x) = p.value {
+                    eval_ctx.params.insert(p.name.to_uppercase(), x);
+                }
+            }
+            // Node voltage waveforms for every net referenced by the plot.
+            let mut waves: std::collections::BTreeMap<String, Vec<f64>> =
+                std::collections::BTreeMap::new();
+            for net in &circuit.nets {
+                if let Some(w) = node_wave(&net.name) {
+                    waves.insert(net.name.to_lowercase(), w);
+                }
+            }
+            let mut vals = Vec::with_capacity(n);
+            for k in 0..n {
+                let point: std::collections::BTreeMap<String, f64> =
+                    waves.iter().map(|(name, w)| (name.clone(), w[k])).collect();
+                let substituted = thevenin::expr::substitute_v_refs(spec, &point);
+                vals.push(eval_ctx.eval_str(&substituted).ok()?);
+            }
+            Some(VecVal::real(vals))
+        }
+        _ => None,
+    }
 }
 
 /// Mirror of [`resolve_element_param_vec`] over a Cirq IR `Element`.

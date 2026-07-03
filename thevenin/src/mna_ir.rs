@@ -1506,6 +1506,15 @@ fn stamp_circuit(
     let dim = n_nodes + vsource_count;
     let mut mna = MnaSystem::empty(dim, xspice_registry.clone());
     mna.node_map = node_map;
+    // Resolved .param/.csparam values, in scope for behavioral expressions.
+    for p in circuit.params.iter().chain(circuit.csparams.iter()) {
+        let v = match p.value {
+            cirq_ir::Value::Real(x) => x,
+            cirq_ir::Value::Integer(x) => x as f64,
+            _ => continue,
+        };
+        mna.bsrc_params.insert(p.name.to_uppercase(), v);
+    }
     let mut vsource_idx = 0usize;
     let mut internal_idx = mna.node_map.len();
 
