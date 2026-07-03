@@ -80,15 +80,6 @@ struct BjtChargeHistory {
     qbe_prev: f64,
     /// B-C charge at two timesteps ago (for divided-difference LTE).
     qbc_prev: f64,
-    /// Collector-substrate charge at previous timestep (ngspice BJTqsub).
-    /// With the SPICE MJS default of 0 this is the linear charge CJS·vsub,
-    /// where vsub = type·(V(substrate) − V(collector')) and the substrate
-    /// node is ground for 3-terminal instances.
-    qsub: f64,
-    /// C-S charge current at previous timestep (for trapezoidal).
-    cqsub: f64,
-    /// C-S charge at two timesteps ago (for divided-difference LTE).
-    qsub_prev: f64,
 }
 
 /// History state for a MESA junction charge at the previous timestep.
@@ -530,30 +521,6 @@ fn estimate_new_timestep(
                 new_h = new_h.min(h_new);
             }
         }
-
-        // C-S substrate charge LTE (ngspice BJTtrunc includes BJTqsub).
-        if bjt.model.cjs > 0.0 {
-            let sign = bjt.model.bjt_type.sign();
-            let vsub = -sign * bjt.col_prime_idx.map_or(0.0, |i| solution[i]);
-            let q0 = bjt.model.cjs * vsub;
-            let q1 = hist.qsub;
-            let q2 = hist.qsub_prev;
-
-            let vol_tol = abstol + reltol * hist.cqsub.abs().max((q0 - q1).abs() / h);
-            let chg_tol = reltol * q0.abs().max(q1.abs()).max(chgtol) / h;
-            let tol = trtol * vol_tol.max(chg_tol);
-
-            let diff1_0 = (q0 - q1) / h;
-            let diff1_1 = (q1 - q2) / h_prev;
-            let diff2 = (diff1_0 - diff1_1) / (h + h_prev);
-            let lte_est = TRAP_COEFF * diff2.abs() * m;
-
-            if lte_est > 1e-30 {
-                let del = tol / lte_est.max(abstol);
-                let h_new = del.sqrt();
-                new_h = new_h.min(h_new);
-            }
-        }
     }
 
     // LTE for BSIM3SOI-DD intrinsic charges using divided differences.
@@ -935,12 +902,6 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
             let comp = bjt.model.companion(vbe, vbc);
             // Full charge: depletion integral + diffusion charge.
             let (qbe, _, qbc, _) = bjt.model.compute_charges(vbe, vbc, &comp);
-            // C-S substrate cap (ngspice bjtload.c BJTqsub): with the SPICE
-            // MJS default of 0 the junction charge reduces to linear CJS·vsub
-            // in both branches. Substrate node is ground (3-terminal Q).
-            let sign = bjt.model.bjt_type.sign();
-            let vsub = -sign * bjt.col_prime_idx.map_or(0.0, |i| solution[i]);
-            let qsub = bjt.model.cjs * vsub;
             BjtChargeHistory {
                 qbe,
                 cqbe: 0.0, // DC steady state: no charge current
@@ -948,9 +909,6 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                 cqbc: 0.0,
                 qbe_prev: qbe, // No previous history at DC init.
                 qbc_prev: qbc, // No previous history at DC init.
-                qsub,
-                cqsub: 0.0,
-                qsub_prev: qsub,
             }
         })
         .collect();
@@ -1825,23 +1783,8 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                 }
             };
 
-            // C-S substrate cap (linear for MJS=0; see BjtChargeHistory).
-            let sign = bjt.model.bjt_type.sign();
-            let vsub = -sign * bjt.col_prime_idx.map_or(0.0, |i| solution[i]);
-            let qsub = bjt.model.cjs * vsub;
-            let cqsub = match method {
-                IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
-                    (qsub - bjt_charge_histories[bi].qsub) / step_h
-                }
-                IntegrationMethod::Trapezoidal => {
-                    2.0 * (qsub - bjt_charge_histories[bi].qsub) / step_h
-                        - bjt_charge_histories[bi].cqsub
-                }
-            };
-
             let qbe_prev = bjt_charge_histories[bi].qbe;
             let qbc_prev = bjt_charge_histories[bi].qbc;
-            let qsub_prev = bjt_charge_histories[bi].qsub;
             bjt_charge_histories[bi] = BjtChargeHistory {
                 qbe,
                 cqbe,
@@ -1849,9 +1792,6 @@ pub fn run_tran(mut mna: MnaSystem, params: TranRunParams) -> Result<TranOutcome
                 cqbc,
                 qbe_prev,
                 qbc_prev,
-                qsub,
-                cqsub,
-                qsub_prev,
             };
         }
 
@@ -2768,26 +2708,11 @@ fn solve_timestep(
                 let ieq_bc = sign * m * (cqbc - geq_bc * vbc);
                 stamp_current_source(&mut system.rhs, bp, cp, ieq_bc);
 
-                // Stamp C-S substrate charge (ngspice bjtload.c NIintegrate on
-                // BJTqsub, matrix stamps at the substrate/collector' nodes).
-                // Substrate node is ground for 3-terminal instances; with the
-                // SPICE MJS default of 0 the cap is linear CJS.
-                if bjt.model.cjs > 0.0 {
-                    let capsub = bjt.model.cjs;
-                    let vsub = -sign * cp.map_or(0.0, |i| solution[i]);
-                    let qsub = capsub * vsub;
-                    let (geq_sub, cqsub) = match method {
-                        IntegrationMethod::BackwardEuler | IntegrationMethod::Gear => {
-                            (capsub / h, (qsub - hist.qsub) / h)
-                        }
-                        IntegrationMethod::Trapezoidal => {
-                            (2.0 * capsub / h, 2.0 * (qsub - hist.qsub) / h - hist.cqsub)
-                        }
-                    };
-                    stamp_conductance(&mut system.matrix, None, cp, m * geq_sub);
-                    let ieq_sub = sign * m * (cqsub - geq_sub * vsub);
-                    stamp_current_source(&mut system.rhs, None, cp, ieq_sub);
-                }
+                // NOTE: the C-S substrate cap (CJS) is NOT stamped here — it
+                // is lowered as a constant linear CapacitorInstance to ground
+                // in mna.rs push_bjt_caps (correct for the SPICE MJS default
+                // of 0) and handled by the generic capacitor transient path.
+                // Stamping it here as well double-counts it.
 
                 // Stamp geqcb: BE charge cross-coupling from Vbc (ngspice bjtload.c
                 // lines 914, 923, 926, 927). This is a VCCS: current I = geqcb * Vbc

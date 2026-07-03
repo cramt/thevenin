@@ -22,12 +22,14 @@
 #     debug=-1 the same way (Bsim3SoiDdInstance::debug_mod).
 
 # === General circuits ===
-# After the CONSTKoverQ thermal-voltage fix (2026-07-02), rtlinv's first edge
-# moved from 4.3%@t=9ns to 6.8%@t=15ns — but the edge-timing lag still
-# cascades: by t=200ns our output is in the opposite logic state (5.0V vs
-# ngspice's 0.27V). Still a trajectory divergence through multi-edge
-# switching (originally investigated sessions 97-103).
-"general/rtlinv.cir" = "first-edge timing lag cascades to opposite logic state by t=200ns; improved but not fixed by the CONSTKoverQ vt fix (see comment)"
+# rtlinv: un-ignored 2026-07-03 — passes at DEFAULT tolerances. The old
+# "chaotic timing cascade" was four stacked bugs: CONSTKoverQ thermal voltage
+# (legacy KboQ everywhere), PULSE PER defaulting to tr+pw+tf instead of TSTOP
+# (the pulse retriggered at t=86ns — the entire 89% tail), BJT charge
+# integration (absolute CKTstate0 semantics vs incremental), and finally a
+# transient double-count of the CJS substrate cap introduced while chasing
+# the rest (CJS is lowered as a linear CapacitorInstance in mna.rs; it must
+# NOT also be stamped in the BJT transient block).
 # schmitt: un-ignored 2026-07-02 — the CONSTKoverQ fix dropped the error from
 # 31% to a bounded 3.4% worst-case; covered by a tolerances.toml override.
 
