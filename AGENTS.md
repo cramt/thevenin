@@ -16,7 +16,7 @@ A Cargo workspace of focused crates plus a thin CLI:
 - `src/` - the `thevenin-cli` binary
 - `docs/` - language spec, device matrix, architecture, release docs (see below)
 - `examples/` - runnable Rust and `.cirq` examples
-- `ngspice-upstream/` - cloned ngspice C source (reference implementation, gitignored, do not modify)
+- `ngspice-upstream/` - ngspice C source as a git submodule (reference implementation, do not modify; the devShell hook pins it to the committed revision — update by moving the gitlink)
 - `scripts/` - test-harness triage + benchmark helpers
 
 See `README.md` for the full crate-by-crate map.
@@ -49,7 +49,7 @@ pnpm triage         # regenerate triage-report.json
 ```
 
 ### Test fixtures
-`ngspice-upstream/` is gitignored, so any test fixture files sourced from it (e.g. `.cir`,
+`ngspice-upstream/` is a git submodule (may be absent on shallow clones), so any test fixture files sourced from it (e.g. `.cir`,
 `.spice`, model files) **must be copied** into a tracked fixtures directory (e.g.
 `tests/fixtures/` or `<crate>/tests/fixtures/`) before they are referenced by tests. This
 ensures tests work on a clean clone without needing the upstream repo checked out.
