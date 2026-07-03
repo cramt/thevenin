@@ -1,7 +1,8 @@
 # Future Work: Remaining Ignored Tests
 
-As of 2026-07-02, **1 test remains skipped**: `general/rtlinv.cir`.
-The harness stands at 106 passing / 1 ignored.
+As of 2026-07-03, **no tests are skipped**. The harness stands at
+**107 passing / 0 ignored**; `ignore.toml` is empty. This document is a
+historical record of how each skip was resolved.
 
 ## Status Summary
 
@@ -9,7 +10,7 @@ The harness stands at 106 passing / 1 ignored.
 |------|----------|--------|----------------|
 | ~~bsim3soidd/RampVg2.cir~~ | ~~debug=-1 quasi-static semantics~~ | ~~DONE~~ | ~~1~~ |
 | ~~general/mosamp.cir~~ | ~~Level 2 MOSFET~~ | ~~DONE~~ | ~~1~~ |
-| general/rtlinv.cir | BJT saturation-recovery timing | In progress | 1 |
+| ~~general/rtlinv.cir~~ | ~~KoverQ + PER + abs charge (no override)~~ | ~~DONE~~ | ~~1~~ |
 | ~~general/schmitt.cir~~ | ~~KoverQ + CJS + abs charge, tol override~~ | ~~DONE~~ | ~~1~~ |
 | ~~hfet/inverter.cir~~ | ~~regenerated reference (ngspice bug)~~ | ~~DONE~~ | ~~1~~ |
 | ~~bsim1/test.cir~~ | ~~NRD/NRS=1 default missing~~ | ~~DONE~~ | ~~1~~ |
@@ -133,14 +134,16 @@ TSTOP — this alone was rtlinv's entire 89% tail), the never-stamped BJT
 substrate cap (rtlinv sets ccs=2pf), and incremental-vs-absolute charge
 integration (absolute matches ngspice CKTstate0 semantics and wins the A/B).
 
-- **schmitt: PASSING** with a bounded-ringing tolerance override
-  (8 points, ≤28mV absolute on a 1.6V swing).
-- **rtlinv: still ignored** — 94 points, worst 26%: Q1 exits saturation
-  several ns late on the recovery edge (t≈86-100ns). TR·cbc storage
-  magnitude verified identical to ngspice. Next step: per-iteration
-  device-level diff (vbe/vbc/cc/cb/qbc) against an instrumented ngspice
-  around the recovery edge; nixpkgs ngspice-45 reproduces the reference,
-  so a live comparison target exists.
+- **schmitt: PASSING** with a tolerance override for 2 samples at the
+  regenerative snap instants (≤78mV absolute on a 1.6V swing); all other
+  points within 4e-2 rel.
+- **rtlinv: PASSING (2026-07-03) at DEFAULT tolerances.** The apparent
+  residual "recovery lag" turned out to be a self-inflicted double-count
+  of the CJS substrate cap (it is lowered as a linear CapacitorInstance
+  in `mna.rs push_bjt_caps`; the transient-side stamp added during the
+  investigation doubled it to 4pF). Diagnosed with a pure-CCS RC deck vs
+  ngspice-45. With the duplication removed, the KoverQ + PER + absolute-
+  charge fixes fully close the fixture.
 
 **Original root cause (superseded):** Accumulated timestep sequencing differences between thevenin and ngspice's
 transient integration.
@@ -266,13 +269,12 @@ Other `.control` features that still aren't implemented: `setplot new`,
 arbitrary `stop when <expr>` conditions, `wrdata` output, `let` indexing
 on the LHS, `compose` with full ngspice semantics.
 
-## Recommended Tackle Order
+## Recommended Tackle Order — ALL DONE (2026-07-03)
 
-1. rtlinv — per-iteration BJT device diff against instrumented ngspice-45
-   around the saturation-recovery edge (the ONLY remaining ignored test)
+1. ~~rtlinv~~ -- **DONE** (KoverQ + PER=TSTOP + abs charge; no override)
 2. ~~RampVg2~~ -- **DONE** (debug=-1 quasi-static semantics)
 3. ~~Level 2 MOSFET~~ -- **DONE**
 4. ~~HFET~~ -- **DONE** (regenerated reference; ngspice bug)
 5. ~~BSIM1/BSIM2~~ -- **DONE**
-6. ~~schmitt~~ -- **DONE** (KoverQ/CJS/abs-charge + bounded-ringing override)
+6. ~~schmitt~~ -- **DONE** (KoverQ/abs-charge + snap-instant override)
 7. ~~resume-1 .control~~ -- **DONE**

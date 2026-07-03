@@ -1,9 +1,10 @@
 # Plan: 100% ngspice Test Coverage
 
-Current state: **106 harness tests passing, 1 skipped** (1474 total tests passing across
-all test binaries). Goal: eliminate as many skips as possible.
+## GOAL REACHED — 2026-07-03
 
-The only remaining skip is `general/rtlinv.cir` — see the rtlinv section below.
+**All 107 harness tests pass, 0 skipped** (1475 total tests passing across
+all test binaries, 0 skipped anywhere). `ignore.toml` contains no entries.
+This document is now a historical record of how each skip was eliminated.
 
 ## Phase 1: RampVg2 Charge Coupling (bsim3soidd/RampVg2.cir) — DONE
 
@@ -169,11 +170,13 @@ The old "chaotic cascade" diagnosis was wrong. Fixes landed 2026-07-02:
 ringing, ≤28mV absolute on a 1.6V swing), covered by a tolerances.toml
 override (rel 4e-2 / abs 3e-2).
 
-**rtlinv: still ignored (the last one).** 94 points remain, worst 26% —
-our Q1 exits saturation several ns late on the recovery edge. Storage
-charge magnitude (TR·cbc) verified identical to ngspice; the residual is
-in recovery dynamics, and the next step is a per-iteration device-level
-diff against a debug ngspice build around t=86-100ns.
+**rtlinv: PASSING (2026-07-03) at default tolerances.** The residual
+"recovery lag" was a self-inflicted double-count: CJS is lowered as a
+linear CapacitorInstance in `mna.rs push_bjt_caps`, so the transient-side
+substrate-cap stamp added while chasing this bug doubled it to 4pF.
+Isolated with a pure-CCS RC deck (our rise fit ~4pF vs ngspice's exact
+2pF; a plain 2pF capacitor deck matched ngspice to 5 digits). With the
+duplication removed, rtlinv passes with NO tolerance override.
 
 ### BSIM1 — DONE
 
@@ -210,7 +213,6 @@ code produces the correct result. **Not a thevenin bug — ngspice bug.**
 | HFET regenerated reference | +1 (DONE) | 104/107 | 97.2% |
 | schmitt (KoverQ + CJS + abs charge) | +1 (DONE) | 105/107 | 98.1% |
 | Phase 1 (RampVg2, debug=-1) | +1 (DONE) | 106/107 | 99.1% |
-| rtlinv (recovery-edge timing) | +1 | 107/107 | 100% |
+| rtlinv (CJS double-count removed) | +1 (DONE) | 107/107 | **100%** |
 
-Current: **106/107 (99.1%)**. One test remains: `general/rtlinv.cir` —
-BJT saturation-recovery timing, actively tracked in Phase 4 above.
+**Final: 107/107 (100%), 2026-07-03.**

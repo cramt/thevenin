@@ -136,7 +136,7 @@ See [`docs/architecture/raw-file-format.md`](docs/architecture/raw-file-format.m
 
 ## Test coverage
 
-The regression harness runs every test fixture from `ngspice-upstream/tests/` through SPICE → Cirq IR → simulate and diffs against the ngspice reference output — **106 passing, 1 skipped** (`general/rtlinv.cir`, a BJT saturation-recovery timing gap under active investigation). Across the full workspace it's **1474 passing, 1 skipped**. See `thevenin/tests/ignore.toml` for the skip reason and `docs/future-work.md` for the diagnosis.
+The regression harness runs every test fixture from `ngspice-upstream/tests/` through SPICE → Cirq IR → simulate and diffs against the ngspice reference output — **all 107 passing, 0 skipped**. Across the full workspace it's **1475 passing, 0 skipped**. Per-test tolerance overrides (with their justifications) live in `thevenin/tests/tolerances.toml`; `docs/future-work.md` records how each formerly-ignored fixture was resolved.
 
 ## Status
 
