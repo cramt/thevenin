@@ -121,6 +121,27 @@ via `rust-version`.
 - Internal helper functions inside otherwise-public modules — anything
   not re-exported from the crate root is fair game to refactor.
 
+## Security model: `.control` blocks are not sandboxed
+
+Running a netlist is **not** a side-effect-free operation. Both the CLI
+(automatically, when a deck contains a `.control` block) and library callers
+of `thevenin_control::execute_control_block_ir` will execute the deck's
+control commands, which include filesystem sinks and sources:
+
+- `write` / `wrdata` / `print > file` create or truncate arbitrary paths.
+- `source` reads arbitrary paths.
+
+Paths honor `.control` variable interpolation and are **not** confined to any
+base directory — an absolute path or `..` traversal is resolved as written.
+This mirrors stock ngspice behavior (though thevenin exposes no `shell`/`system`
+command, so there is no arbitrary code execution). There is no path jail today.
+
+**Treat netlists from untrusted sources as you would a shell script.** Do not
+call `execute_control_block_ir` on attacker-supplied decks in a context where
+ambient filesystem access is unacceptable (multi-tenant services, wasm hosts
+that assume "simulate" is pure) without your own sandboxing. An opt-in path
+jail is tracked as a post-1.0 hardening item.
+
 ## Reporting compatibility breakage
 
 If a 1.x release breaks your code in a way that violates this document,

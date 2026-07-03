@@ -103,10 +103,19 @@ enum Token {
     Not,
 }
 
+/// Maximum parenthesis nesting depth accepted in an expression. The
+/// recursive-descent evaluator re-enters `parse_ternary` for every open
+/// paren (parenthesized subexpressions and function-call arguments alike), so
+/// unbounded nesting from a crafted input would overflow the native stack.
+/// Mirrors the depth caps guarding the other recursive paths (`MAX_INCLUDE_DEPTH`,
+/// `MAX_RECURSION_DEPTH`). Real netlists nest only a handful of levels deep.
+const MAX_EXPR_NESTING: usize = 256;
+
 fn tokenize(input: &str) -> Result<Vec<Token>, ExprError> {
     let bytes = input.as_bytes();
     let mut tokens = Vec::new();
     let mut i = 0;
+    let mut paren_depth: usize = 0;
 
     while i < bytes.len() {
         let b = bytes[i];
@@ -237,8 +246,19 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ExprError> {
             b'/' => tokens.push(Token::Slash),
             b'%' => tokens.push(Token::Percent),
             b'^' => tokens.push(Token::Power),
-            b'(' => tokens.push(Token::Lparen),
-            b')' => tokens.push(Token::Rparen),
+            b'(' => {
+                paren_depth += 1;
+                if paren_depth > MAX_EXPR_NESTING {
+                    return Err(ExprError::ParseError(format!(
+                        "expression nesting too deep (exceeds {MAX_EXPR_NESTING})"
+                    )));
+                }
+                tokens.push(Token::Lparen);
+            }
+            b')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                tokens.push(Token::Rparen);
+            }
             b',' => tokens.push(Token::Comma),
             b'?' => tokens.push(Token::Question),
             b':' => tokens.push(Token::Colon),
@@ -1451,6 +1471,25 @@ mod tests {
             ctx.params.insert(k.to_uppercase(), v);
         }
         ctx.eval_str(s).unwrap()
+    }
+
+    #[test]
+    fn deeply_nested_parens_are_rejected_not_overflowing() {
+        // A crafted expression with pathological paren nesting must be rejected
+        // by the tokenizer rather than overflowing the recursive-descent
+        // evaluator's native stack. Reachable from untrusted input via B-source
+        // `V=`/`I=` expressions and subcircuit parameter strings.
+        let depth = MAX_EXPR_NESTING + 50;
+        let bomb = format!("{}1{}", "(".repeat(depth), ")".repeat(depth));
+        let ctx = EvalContext::default();
+        let result = ctx.eval_str(&bomb);
+        assert!(
+            result.is_err(),
+            "expected deep nesting to be rejected, got {result:?}"
+        );
+
+        // A legitimately (moderately) nested expression still evaluates.
+        assert_eq!(eval("((((((1+2))))))"), 3.0);
     }
 
     #[test]

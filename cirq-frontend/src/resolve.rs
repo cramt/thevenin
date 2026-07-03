@@ -32,6 +32,7 @@ pub fn resolve_imports(
     search_paths: &[PathBuf],
 ) -> (SourceFile, Vec<Diagnostic>) {
     let mut visited = HashSet::new();
+    let mut in_progress = HashSet::new();
     let mut diags = Vec::new();
 
     let items = resolve_items(
@@ -39,6 +40,7 @@ pub fn resolve_imports(
         base_dir,
         search_paths,
         &mut visited,
+        &mut in_progress,
         &mut diags,
     );
 
@@ -59,6 +61,7 @@ fn resolve_items(
     base_dir: &Path,
     search_paths: &[PathBuf],
     visited: &mut HashSet<PathBuf>,
+    in_progress: &mut HashSet<PathBuf>,
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<TopLevel> {
     let mut result = Vec::new();
@@ -84,6 +87,23 @@ fn resolve_items(
                             }
                         };
 
+                        // Cycle guard: `in_progress` tracks files currently on the
+                        // resolution stack. Unlike the `visited` diamond-dedup set
+                        // (which named imports intentionally bypass so distinct names
+                        // can be re-requested), this is consulted for *every* import.
+                        // Without it, a self- or mutually-referential named import
+                        // re-parses the same file forever and overflows the stack.
+                        if in_progress.contains(&canonical) {
+                            diags.push(
+                                Diagnostic::error(format!(
+                                    "circular import detected: `{}`",
+                                    import.path
+                                ))
+                                .with_span(import.span),
+                            );
+                            continue;
+                        }
+
                         // For named imports we still need to read the file even
                         // if it has been visited before (different names may be
                         // requested). For plain imports, diamond dedup applies.
@@ -95,6 +115,7 @@ fn resolve_items(
 
                         match std::fs::read_to_string(&canonical) {
                             Ok(source) => {
+                                in_progress.insert(canonical.clone());
                                 if import.names.is_empty() {
                                     // Plain import — merge bare items (not inside exports).
                                     let imported_items = parse_and_extract(
@@ -102,6 +123,7 @@ fn resolve_items(
                                         &canonical,
                                         search_paths,
                                         visited,
+                                        in_progress,
                                         diags,
                                     );
                                     result.extend(imported_items);
@@ -114,10 +136,12 @@ fn resolve_items(
                                         import.span,
                                         search_paths,
                                         visited,
+                                        in_progress,
                                         diags,
                                     );
                                     result.extend(imported_items);
                                 }
+                                in_progress.remove(&canonical);
                             }
                             Err(e) => {
                                 diags.push(
@@ -152,6 +176,7 @@ fn parse_and_resolve(
     file_path: &Path,
     search_paths: &[PathBuf],
     visited: &mut HashSet<PathBuf>,
+    in_progress: &mut HashSet<PathBuf>,
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<TopLevel> {
     let tree = match crate::parser::parse(source) {
@@ -171,7 +196,14 @@ fn parse_and_resolve(
     let import_dir = file_path.parent().unwrap_or(Path::new("."));
 
     // Recursively resolve imports within the imported file.
-    resolve_items(sf.items, import_dir, search_paths, visited, diags)
+    resolve_items(
+        sf.items,
+        import_dir,
+        search_paths,
+        visited,
+        in_progress,
+        diags,
+    )
 }
 
 /// Parse an imported file and extract bare (non-exported) top-level
@@ -182,9 +214,10 @@ fn parse_and_extract(
     file_path: &Path,
     search_paths: &[PathBuf],
     visited: &mut HashSet<PathBuf>,
+    in_progress: &mut HashSet<PathBuf>,
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<TopLevel> {
-    let items = parse_and_resolve(source, file_path, search_paths, visited, diags);
+    let items = parse_and_resolve(source, file_path, search_paths, visited, in_progress, diags);
 
     // Keep bare modules, models, circuits, funcs — skip Export blocks.
     items
@@ -210,9 +243,10 @@ fn parse_and_extract_named(
     import_span: cirq_ast::span::Span,
     search_paths: &[PathBuf],
     visited: &mut HashSet<PathBuf>,
+    in_progress: &mut HashSet<PathBuf>,
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<TopLevel> {
-    let items = parse_and_resolve(source, file_path, search_paths, visited, diags);
+    let items = parse_and_resolve(source, file_path, search_paths, visited, in_progress, diags);
 
     let mut result = Vec::new();
     let wanted: std::collections::HashSet<&str> = names.iter().map(|n| n.name.as_str()).collect();
@@ -746,5 +780,73 @@ mod tests {
             .any(|item| matches!(item, TopLevel::Module(m) if m.name.name == "inv"));
         assert!(has_model, "transitively imported model 'nch' not found");
         assert!(has_module, "imported module 'inv' not found");
+    }
+
+    #[test]
+    fn named_import_cycle_terminates_with_diagnostic() {
+        // Two files whose named exports import each other. Before the
+        // in-progress cycle guard, named imports bypassed the `visited`
+        // dedup set entirely and this re-parsed each file forever until the
+        // native stack overflowed. It must now terminate with a diagnostic.
+        let (_sf, diags) = resolve_test(
+            &[
+                (
+                    "a.cirq",
+                    r#"
+                    import { b_cell } from "b.cirq"
+                    export a_cell {
+                        model nch: nmos { vto = 0.4 }
+                    }
+                    "#,
+                ),
+                (
+                    "b.cirq",
+                    r#"
+                    import { a_cell } from "a.cirq"
+                    export b_cell {
+                        model pch: pmos { vto = -0.4 }
+                    }
+                    "#,
+                ),
+                (
+                    "main.cirq",
+                    r#"
+                    import { a_cell } from "a.cirq"
+
+                    circuit test {
+                        R1: resistor(a -> gnd, 1000)
+                    }
+                    "#,
+                ),
+            ],
+            "main.cirq",
+        );
+
+        assert!(
+            diags.iter().any(|d| d.message.contains("circular import")),
+            "expected a circular-import diagnostic, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn named_self_import_terminates() {
+        // A file that names-imports itself must not recurse forever.
+        let (_sf, diags) = resolve_test(
+            &[(
+                "main.cirq",
+                r#"
+                    import { thing } from "main.cirq"
+                    export thing {
+                        model nch: nmos { vto = 0.4 }
+                    }
+                    "#,
+            )],
+            "main.cirq",
+        );
+
+        assert!(
+            diags.iter().any(|d| d.message.contains("circular import")),
+            "expected a circular-import diagnostic for self-import, got: {diags:?}"
+        );
     }
 }
