@@ -1,0 +1,14 @@
+# Isolated spike workspace for the snark + weavy experiment.
+#
+# Kept OUT of the root thevenin workspace (see root Cargo.toml `exclude`) so the
+# main crates stay pinned to facet 0.46 (crates.io) while this sandbox pulls the
+# facet 0.50-rc world that snark/weavy require from Amos' unmerged branch.
+[workspace]
+members = ["spike-weavy", "spike-snark"]
+resolver = "3"
+
+[workspace.dependencies]
+# Both live in the same monorepo branch; cargo resolves the single named
+# package plus its workspace-internal deps from that repo.
+snark = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased" }
+weavy = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased" }
