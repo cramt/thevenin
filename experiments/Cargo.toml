@@ -4,7 +4,7 @@
 # main crates stay pinned to facet 0.46 (crates.io) while this sandbox pulls the
 # facet 0.50-rc world that snark/weavy require from Amos' unmerged branch.
 [workspace]
-members = ["spike-weavy", "spike-snark"]
+members = ["spike-weavy", "spike-snark", "spike-cirq-ast"]
 resolver = "3"
 
 [workspace.dependencies]
@@ -12,3 +12,9 @@ resolver = "3"
 # package plus its workspace-internal deps from that repo.
 snark = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased" }
 weavy = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased" }
+# facet 0.50-rc is what snark's generated AST derives against; pin the same
+# git source so cargo unifies it with snark's copy.
+facet = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased" }
+# The typed-AST codegen (grammar.js + annotations -> Rust AST + lowering). The
+# `typed-ast` feature pulls boa_engine, so grammar.js runs with no node.
+snark-dsl = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased", features = ["typed-ast"] }
