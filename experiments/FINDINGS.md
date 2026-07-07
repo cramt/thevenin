@@ -1,7 +1,7 @@
 # snark + weavy spike — findings
 
 Trying Amos' unmerged `snark-playground-rebased` branch (facet-rs/facet PR #2431)
-against thevenin/cirq, as an exercise + feedback. Three spikes, all green:
+against thevenin/cirq, as an exercise + feedback. Three spikes, validated with the commands below:
 
 | crate | what it proves |
 |-------|----------------|
@@ -12,6 +12,14 @@ against thevenin/cirq, as an exercise + feedback. Three spikes, all green:
 Everything runs in an isolated nested workspace (`experiments/`, own lockfile),
 excluded from the root so thevenin's crates stay on facet 0.46 while this sandbox
 pulls facet 0.50-rc. Toolchain: rustc 1.94.1 (nix devShell).
+
+## Reproducing
+
+From the repo root:
+
+```bash
+nix develop --command bash -lc "cd experiments && just check"
+```
 
 ## What worked well
 
@@ -26,9 +34,10 @@ pulls facet 0.50-rc. Toolchain: rustc 1.94.1 (nix devShell).
 3. **grammar.js via boa = no node.** `snark-dsl` (feature `typed-ast`) evaluates
    grammar.js with boa_engine, so codegen needs no Node toolchain. Matches cirq's
    own "no node needed" stance perfectly.
-4. **tree-sitter compat is real**, including an **external-scanner** grammar
-   (cirq declares `externals: [$.code_body]`) — parsed without special handling
-   for a sample that doesn't hit the external tokens.
+4. **tree-sitter compat is real for this slice**: snark accepted a grammar that
+   declares an **external scanner** (`externals: [$.code_body]`) and parsed a
+   sample that doesn't hit those external tokens. Scanner-backed `code` blocks
+   remain untested.
 5. **weavy is a lovely minimal substrate.** BYO `Op` + one `Step` trait, and
    `Control::CallBlock` gives call frames for free. A `.control` core in ~40 lines.
 6. **Derived cardinality + auto-boxing are great.** `ParamDecl { ty: Option<…>,

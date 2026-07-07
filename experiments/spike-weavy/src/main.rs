@@ -68,10 +68,7 @@ fn main() {
     // .block measure:
     //   let out = 3.3
     let mut blocks: BTreeMap<BlockId, Vec<Op>> = BTreeMap::new();
-    blocks.insert(
-        "measure".to_string(),
-        vec![Op::Let("out".to_string(), 3.3)],
-    );
+    blocks.insert("measure".to_string(), vec![Op::Let("out".to_string(), 3.3)]);
 
     let program = vec![
         Op::Let("vdd".to_string(), 5.0),
@@ -85,7 +82,10 @@ fn main() {
     let mut interp = Control0::default();
     match run(&lowered, &mut interp) {
         Ok(()) => {
-            println!("[spike-weavy] ran {} ops via weavy stepper", interp.output.len());
+            println!(
+                "[spike-weavy] ran {} ops via weavy stepper",
+                interp.output.len()
+            );
             for line in &interp.output {
                 println!("  {line}");
             }

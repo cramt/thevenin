@@ -30,15 +30,27 @@ fn main() -> Result<(), String> {
         "from_tree_sitter_json_str",
         RawGrammarJson::from_tree_sitter_json_str(CIRQ_GRAMMAR_JSON),
     )?;
-    let validated = stage("ValidatedGrammar::from_raw", ValidatedGrammar::from_raw(&raw))?;
+    let validated = stage(
+        "ValidatedGrammar::from_raw",
+        ValidatedGrammar::from_raw(&raw),
+    )?;
     let lexical = LexicalFacts::from_grammar(&validated);
     let parser = stage(
         "normalize_from_validated",
         ParserGrammar::normalize_from_validated(&validated, &lexical),
     )?;
-    let parser = stage("prepare_productions", parser.prepare_productions_for_items())?;
-    let table = stage("ParseTable::from_grammar", ParseTable::from_grammar(&parser))?;
-    let plan = stage("WeavyParsePlan::new", WeavyParsePlan::new(&validated, &parser, &table))?;
+    let parser = stage(
+        "prepare_productions",
+        parser.prepare_productions_for_items(),
+    )?;
+    let table = stage(
+        "ParseTable::from_grammar",
+        ParseTable::from_grammar(&parser),
+    )?;
+    let plan = stage(
+        "WeavyParsePlan::new",
+        WeavyParsePlan::new(&validated, &parser, &table),
+    )?;
 
     let report = stage(
         "parse",

@@ -30,17 +30,32 @@ fn build_and_parse() -> Result<(), String> {
         "from_tree_sitter_json_str",
         RawGrammarJson::from_tree_sitter_json_str(CIRQ_GRAMMAR_JSON),
     )?;
-    let validated = stage("ValidatedGrammar::from_raw", ValidatedGrammar::from_raw(&raw))?;
+    let validated = stage(
+        "ValidatedGrammar::from_raw",
+        ValidatedGrammar::from_raw(&raw),
+    )?;
     let lexical = LexicalFacts::from_grammar(&validated);
     let parser = stage(
         "ParserGrammar::normalize_from_validated",
         ParserGrammar::normalize_from_validated(&validated, &lexical),
     )?;
-    let parser = stage("prepare_productions_for_items", parser.prepare_productions_for_items())?;
-    let table = stage("ParseTable::from_grammar", ParseTable::from_grammar(&parser))?;
-    let plan = stage("WeavyParsePlan::new", WeavyParsePlan::new(&validated, &parser, &table))?;
+    let parser = stage(
+        "prepare_productions_for_items",
+        parser.prepare_productions_for_items(),
+    )?;
+    let table = stage(
+        "ParseTable::from_grammar",
+        ParseTable::from_grammar(&parser),
+    )?;
+    let plan = stage(
+        "WeavyParsePlan::new",
+        WeavyParsePlan::new(&validated, &parser, &table),
+    )?;
 
-    println!("[spike-snark] grammar built: parsing {} bytes of cirq", CIRQ_SAMPLE.len());
+    println!(
+        "[spike-snark] grammar built: parsing {} bytes of cirq",
+        CIRQ_SAMPLE.len()
+    );
     let report = stage(
         "parse_prepared_weavy_with_report",
         parse_prepared_weavy_with_report(&plan, &parser, &table, CIRQ_SAMPLE),
@@ -48,7 +63,10 @@ fn build_and_parse() -> Result<(), String> {
 
     match report.accepted_resolved_tree(&parser, CIRQ_SAMPLE) {
         Some(root) => {
-            println!("[spike-snark] OK — accepted parse, root kind = {:?}", root.kind());
+            println!(
+                "[spike-snark] OK — accepted parse, root kind = {:?}",
+                root.kind()
+            );
             let mut named = 0usize;
             dump(&root, 0, &mut named);
             println!("[spike-snark] {named} named nodes in tree — non-degenerate parse");
@@ -70,7 +88,12 @@ fn dump(n: &snark::parser::ResolvedCstNode, depth: usize, named: &mut usize) {
         }
         *named += 1;
         let field = child.field().map(|f| format!("{f}: ")).unwrap_or_default();
-        println!("{:indent$}{field}{}", "", child.kind(), indent = depth * 2 + 2);
+        println!(
+            "{:indent$}{field}{}",
+            "",
+            child.kind(),
+            indent = depth * 2 + 2
+        );
         dump(child, depth + 1, named);
     }
 }

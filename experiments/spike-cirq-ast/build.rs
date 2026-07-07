@@ -27,6 +27,19 @@ fn main() {
     // grammar — the real grammar and the cargo cache stay untouched, and
     // conditional.cirq has no ternary so runtime parsing is unaffected.
     let src = std::fs::read_to_string(&real_grammar_js).expect("read cirq grammar.js");
+
+    let else_fields = src.matches("field(\"else\"").count();
+    assert_eq!(
+        else_fields, 1,
+        "expected exactly one `else` field in cirq grammar.js; update the spike patch if the grammar changed"
+    );
+
+    let circuit_item_repeats = src.matches("repeat($._circuit_item)").count();
+    assert_eq!(
+        circuit_item_repeats, 2,
+        "expected exactly two bare circuit-item bodies in cirq grammar.js; update the spike patch if the grammar changed"
+    );
+
     let patched = src
         .replace("field(\"else\"", "field(\"else_branch\"")
         // FINDING: snark derives the typed AST purely from field()-labeled children.
