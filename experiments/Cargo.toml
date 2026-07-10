@@ -8,13 +8,17 @@ members = ["spike-weavy", "spike-snark", "spike-cirq-ast"]
 resolver = "3"
 
 [workspace.dependencies]
-# Both live in the same monorepo branch; cargo resolves the single named
-# package plus its workspace-internal deps from that repo.
-snark = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased" }
-weavy = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased" }
-# facet 0.50-rc is what snark's generated AST derives against; pin the same
-# git source so cargo unifies it with snark's copy.
-facet = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased" }
+# All four resolve from Alex's facet fork branch = facet-rs/main (which now
+# carries the merged snark/weavy of PR #2431) + the one keyword-escape commit of
+# PR #2465 (https://github.com/facet-rs/facet/pull/2465). That commit fixes
+# snark-dsl's `rust_field_name`, so the spike no longer needs the build-time
+# grammar patch that renamed cirq's `else` field. As of 2026-07-10 the PR branch
+# is up to date with upstream main (merge-base == main HEAD, behind_by 0).
+# Switch these back to `facet-rs/facet` on whichever branch/tag carries the fix
+# once #2465 lands upstream.
+snark = { git = "https://github.com/cramt/facet", branch = "fix/typed-ast-keyword-fields" }
+weavy = { git = "https://github.com/cramt/facet", branch = "fix/typed-ast-keyword-fields" }
+facet = { git = "https://github.com/cramt/facet", branch = "fix/typed-ast-keyword-fields" }
 # The typed-AST codegen (grammar.js + annotations -> Rust AST + lowering). The
 # `typed-ast` feature pulls boa_engine, so grammar.js runs with no node.
-snark-dsl = { git = "https://github.com/facet-rs/facet", branch = "snark-playground-rebased", features = ["typed-ast"] }
+snark-dsl = { git = "https://github.com/cramt/facet", branch = "fix/typed-ast-keyword-fields", features = ["typed-ast"] }

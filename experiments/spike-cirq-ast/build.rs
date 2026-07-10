@@ -19,20 +19,11 @@ fn main() {
     println!("cargo:rerun-if-changed=cirq_ast.snark.js");
     println!("cargo:rerun-if-changed={}", real_grammar_js.display());
 
-    // WORKAROUND (snark-dsl bug, for feedback): typed_ast::rust_field_name only
-    // dodges the keyword `type` (-> `ty`); every other Rust keyword field name is
-    // emitted raw, so cirq's `field("else", …)` on `ternary_expression` produces
-    // `pub else: …`, which won't parse. Fix belongs in rust_field_name (raw-escape
-    // reserved idents). Here we rename just that field in a build-time COPY of the
-    // grammar — the real grammar and the cargo cache stay untouched, and
-    // conditional.cirq has no ternary so runtime parsing is unaffected.
+    // The snark-dsl keyword-escape bug (typed_ast::rust_field_name emitting a raw
+    // `pub else:` for cirq's `field("else", …)`) is fixed upstream by facet PR
+    // #2465, which this workspace now pins. cirq's `else` field flows straight
+    // through the codegen as `r#else` — no build-time grammar rename needed.
     let src = std::fs::read_to_string(&real_grammar_js).expect("read cirq grammar.js");
-
-    let else_fields = src.matches("field(\"else\"").count();
-    assert_eq!(
-        else_fields, 1,
-        "expected exactly one `else` field in cirq grammar.js; update the spike patch if the grammar changed"
-    );
 
     let circuit_item_repeats = src.matches("repeat($._circuit_item)").count();
     assert_eq!(
@@ -40,17 +31,15 @@ fn main() {
         "expected exactly two bare circuit-item bodies in cirq grammar.js; update the spike patch if the grammar changed"
     );
 
-    let patched = src
-        .replace("field(\"else\"", "field(\"else_branch\"")
-        // FINDING: snark derives the typed AST purely from field()-labeled children.
-        // cirq's grammar leaves circuit bodies as bare `repeat($._circuit_item)`, so
-        // the codegen captures only `name` and DROPS the body. A real migration means
-        // fielding every child the AST needs. Demonstrate the fix for circuit bodies:
-        // `CircuitDecl` then gains `items: Vec<CircuitItem>`.
-        .replace(
-            "repeat($._circuit_item)",
-            "repeat(field(\"item\", $._circuit_item))",
-        );
+    // FINDING (NOT a snark bug): snark derives the typed AST purely from
+    // field()-labeled children. cirq's grammar leaves circuit bodies as bare
+    // `repeat($._circuit_item)`, so the codegen captures only `name` and DROPS the
+    // body. A real migration means fielding every child the AST needs. Demonstrate
+    // the fix for circuit bodies: `CircuitDecl` then gains `items: Vec<CircuitItem>`.
+    let patched = src.replace(
+        "repeat($._circuit_item)",
+        "repeat(field(\"item\", $._circuit_item))",
+    );
     let grammar_js = out.join("cirq_grammar.patched.js");
     std::fs::write(&grammar_js, patched).expect("write patched grammar");
 
