@@ -16,9 +16,14 @@
 //!
 //! Cases are tagged:
 //!   - `Match`          snark MUST equal tree-sitter (a divergence fails the run).
+//!                      Covers the example files + parser probes for constructs
+//!                      the examples miss (ternary, imports, precedence, unary).
+//!                      snark matches tree-sitter on ALL of these — no parser bug.
 //!   - `ScannerBacked`  hits the external scanner; report-only, since snark has
 //!                      no hosted scanner wired yet. Divergence here IS the gate-3
 //!                      finding, not a regression.
+//!   - `Recovery`       malformed input; report-only. Error recovery is heuristic,
+//!                      so snark's recovery tree legitimately differs.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,7 +31,9 @@ use std::{env, fs};
 
 use snark::grammar::RawGrammarJson;
 use snark::lexical::LexicalFacts;
-use snark::lower::weavy::{WeavyParsePlan, parse_prepared_weavy_tree};
+use snark::lower::weavy::{
+    WeavyParsePlan, parse_prepared_weavy_recovering_with_report_and_scanner,
+};
 use snark::parser::{ParseTable, ParserGrammar};
 use snark::validated::ValidatedGrammar;
 
@@ -34,8 +41,16 @@ const CIRQ_GRAMMAR_JSON: &str = include_str!("../../../cirq-grammar/src/grammar.
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tag {
+    /// snark MUST equal tree-sitter — a divergence fails the run.
     Match,
+    /// Hits the external scanner. snark has no hosted scanner, so divergence is
+    /// the gate-3 finding, not a regression (report-only).
     ScannerBacked,
+    /// Malformed input. Error recovery is heuristic and snark's recovery tree
+    /// legitimately differs from tree-sitter's (coarser: `(ERROR)` root or a
+    /// dropped subtree vs tree-sitter's inserted `MISSING` nodes). Report-only —
+    /// matching tree-sitter's exact recovery tree is out of differential scope.
+    Recovery,
 }
 
 /// A prepared cirq grammar: everything the parse entry point needs, built once.
@@ -64,9 +79,15 @@ fn prepare() -> Result<Prepared, String> {
     })
 }
 
+/// snark's named-node s-expression via the RECOVERING parse path — tree-sitter
+/// always recovers (emitting ERROR/MISSING nodes rather than bailing), so the
+/// recovering path is the like-for-like oracle. Scanner is `None`: snark has no
+/// hosted external scanner, which is exactly what the scanner-backed cases probe.
 fn snark_sexp(p: &Prepared, input: &str) -> String {
-    match parse_prepared_weavy_tree(&p.plan, &p.parser, &p.table, input) {
-        Ok(tree) => tree.to_sexp(),
+    match parse_prepared_weavy_recovering_with_report_and_scanner(
+        &p.plan, &p.parser, &p.table, input, None,
+    ) {
+        Ok(report) => report.tree().to_sexp(),
         Err(e) => format!("PARSE-ERR: {e:?}"),
     }
 }
@@ -173,6 +194,51 @@ fn main() {
         corpus.push((name, src, Tag::Match));
     }
 
+    // Structural probes for constructs the example files don't cover — these
+    // exercise snark's PARSER (not the scanner), so any divergence here is a
+    // genuine snark bug. Ternary especially: it's the rule that carried the
+    // keyword-`else` field, and no example or corpus file parses one.
+    let probe_cases: &[(&str, &str)] = &[
+        ("probe/ternary", "circuit t {\n    param x = a ? 1 : 2\n}\n"),
+        (
+            "probe/ternary_nested",
+            "circuit t {\n    param x = a ? b ? 1 : 2 : 3\n}\n",
+        ),
+        (
+            "probe/exp_right_assoc",
+            "circuit t {\n    param x = 2 ** 3 ** 4\n}\n",
+        ),
+        (
+            "probe/precedence",
+            "circuit t {\n    param x = 1 + 2 * 3\n}\n",
+        ),
+        ("probe/unary", "circuit t {\n    param y = !true\n}\n"),
+        ("probe/import_simple", "import \"models/cmos.cirq\"\n"),
+        (
+            "probe/import_alias",
+            "import \"standard_cells.cirq\" as std\n",
+        ),
+        (
+            "probe/import_named",
+            "import { tt } from \"tsmc65nm.cirq\"\n",
+        ),
+    ];
+    for (name, src) in probe_cases {
+        corpus.push((name.to_string(), src.to_string(), Tag::Match));
+    }
+
+    // Malformed inputs — recovery is heuristic, so these are report-only.
+    let recovery_cases: &[(&str, &str)] = &[
+        ("recover/missing_brace", "circuit test {\n    param x = 1\n"),
+        (
+            "recover/missing_paren",
+            "circuit test {\n    R1: resistor(a -> b, 10k\n}\n",
+        ),
+    ];
+    for (name, src) in recovery_cases {
+        corpus.push((name.to_string(), src.to_string(), Tag::Recovery));
+    }
+
     // Scanner-backed code blocks, escalating brace complexity.
     let code_cases: &[(&str, &str)] = &[
         ("code/empty", "circuit demo {\n    code \"rust\" {}\n}\n"),
@@ -196,6 +262,7 @@ fn main() {
     let mut match_fail = 0usize;
     let mut scanner_diverge = 0usize;
     let mut scanner_ok = 0usize;
+    let mut recovery_diverge = 0usize;
 
     println!("=== spike-ts-diff: snark vs tree-sitter over the cirq corpus ===\n");
     for (name, src, tag) in &corpus {
@@ -209,6 +276,7 @@ fn main() {
         let label = match tag {
             Tag::Match => "MATCH-REQUIRED",
             Tag::ScannerBacked => "SCANNER-BACKED",
+            Tag::Recovery => "RECOVERY(info)",
         };
         let verdict = if exact {
             "agree  "
@@ -227,6 +295,7 @@ fn main() {
             match tag {
                 Tag::Match => match_fail += 1,
                 Tag::ScannerBacked => scanner_diverge += 1,
+                Tag::Recovery => recovery_diverge += 1,
             }
         } else if *tag == Tag::ScannerBacked {
             scanner_ok += 1;
@@ -239,13 +308,17 @@ fn main() {
 
     println!("\n=== summary ===");
     println!(
-        "structural corpus: {} example(s), {} unexpected divergence(s)",
+        "structural corpus: {} valid input(s), {} unexpected divergence(s)",
         corpus.iter().filter(|(_, _, t)| *t == Tag::Match).count(),
         match_fail,
     );
     println!(
         "scanner-backed code blocks: {scanner_ok} agree, {scanner_diverge} diverge \
          (snark has no hosted external scanner; divergence is the gate-3 finding)"
+    );
+    println!(
+        "error recovery: {recovery_diverge} diverge (info-only — snark's heuristic \
+         recovery tree differs from tree-sitter's; out of differential scope)"
     );
 
     // Only a MATCH-REQUIRED divergence is a real regression. Scanner divergence is

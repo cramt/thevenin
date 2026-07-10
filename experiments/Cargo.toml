@@ -8,17 +8,16 @@ members = ["spike-weavy", "spike-snark", "spike-cirq-ast", "spike-ts-diff"]
 resolver = "3"
 
 [workspace.dependencies]
-# All four resolve from Alex's facet fork branch = facet-rs/main (which now
-# carries the merged snark/weavy of PR #2431) + the one keyword-escape commit of
-# PR #2465 (https://github.com/facet-rs/facet/pull/2465). That commit fixes
-# snark-dsl's `rust_field_name`, so the spike no longer needs the build-time
-# grammar patch that renamed cirq's `else` field. As of 2026-07-10 the PR branch
-# is up to date with upstream main (merge-base == main HEAD, behind_by 0).
-# Switch these back to `facet-rs/facet` on whichever branch/tag carries the fix
-# once #2465 lands upstream.
-snark = { git = "https://github.com/cramt/facet", branch = "fix/typed-ast-keyword-fields" }
-weavy = { git = "https://github.com/cramt/facet", branch = "fix/typed-ast-keyword-fields" }
-facet = { git = "https://github.com/cramt/facet", branch = "fix/typed-ast-keyword-fields" }
+# All four resolve from `main` on Alex's facet fork. That main = facet-rs/main
+# (the merged snark/weavy of PR #2431) + the keyword-escape fix (fork PR #1,
+# also upstreamed as facet-rs/facet#2465), which fixes snark-dsl's
+# `rust_field_name` so the spike parses cirq's real grammar with no build-time
+# `else`-field rename. The fork's main tracks facet-rs/main, so re-sync it and
+# re-run `just check` when upstream moves. Point back at `facet-rs/facet` once the
+# keyword fix + a real snark/snark-dsl release land upstream.
+snark = { git = "https://github.com/cramt/facet", branch = "main" }
+weavy = { git = "https://github.com/cramt/facet", branch = "main" }
+facet = { git = "https://github.com/cramt/facet", branch = "main" }
 # The typed-AST codegen (grammar.js + annotations -> Rust AST + lowering). The
 # `typed-ast` feature pulls boa_engine, so grammar.js runs with no node.
-snark-dsl = { git = "https://github.com/cramt/facet", branch = "fix/typed-ast-keyword-fields", features = ["typed-ast"] }
+snark-dsl = { git = "https://github.com/cramt/facet", branch = "main", features = ["typed-ast"] }
