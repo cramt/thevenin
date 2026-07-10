@@ -8,6 +8,7 @@ against thevenin/cirq, as an exercise + feedback. Three spikes, validated with t
 | `spike-weavy` | thevenin's `.control` interpreter modeled on weavy's lowered-program substrate — `let`/`print` + a named-block call, with call-frame state surviving block return. |
 | `spike-snark` | cirq's **existing** tree-sitter `grammar.json` parsed by snark into a 52-node, field-labeled CST (params, if/elseif/else, element_inst, nested analysis). |
 | `spike-cirq-ast` | snark-dsl codegen turns cirq's `grammar.js` (+ a 7-line annotations file) into a **typed, spanned AST** (47 types, 1223 lines) and lowers `conditional.cirq` into it. |
+| `spike-ts-diff` | **differential oracle (gate 3):** snark's parse of cirq's committed grammar vs REAL tree-sitter (CLI) over the corpus. All 7 example `.cirq` files match structurally; scanner-backed `code` blocks are where it splits — see below. |
 
 Everything runs in an isolated nested workspace (`experiments/`, own lockfile),
 excluded from the root so thevenin's crates stay on facet 0.46 while this sandbox
@@ -94,9 +95,44 @@ worth a codegen lint: "rule X has unfielded named children not present in its AS
   from vix here; shipping it as `snark::support` (or generating it) would remove a
   copy-paste dependency between every consumer and vix's internals.
 
+## Gate 3 — differential vs real tree-sitter (`spike-ts-diff`)
+
+The 07-07 verdict held snark adoption on three gates; gate 3 was "snark passes
+differentially against the cirq corpus incl. scanner-backed `code` blocks."
+`spike-ts-diff` runs cirq's *committed* `grammar.json` through snark and compares
+its named-node tree against the `tree-sitter` CLI (which compiles `scanner.c`).
+Reproduce: `nix develop --command bash -lc "cd experiments && just ts-diff"`.
+
+**Structural grammar: snark matches tree-sitter on all 7 example `.cirq` files.**
+Node-for-node identical once (a) field labels are dropped — snark's `to_sexp()`
+omits them, tree-sitter prints them — and (b) comment nodes are stripped: the two
+attach `extras` (comments) to different parents, which is benign for AST lowering.
+So for the whole non-scanner language, snark is a faithful drop-in.
+
+**Scanner-backed `code "lang" { … }` blocks: snark passes only without braces.**
+snark runs with *no hosted external scanner*, so `code_body` falls back to cirq's
+placeholder rule `token(prec(-1, /[^}]+/))`. Result, by case:
+
+| input | snark | tree-sitter | verdict |
+|-------|-------|-------------|---------|
+| empty `code "rust" {}` | `(code_decl (string_literal))` | same | agree |
+| brace-free body | `(code_decl … (code_body))` | same | agree |
+| nested braces `{ a: { c } }` | **`PARSE-ERR: NoToken`** | full `(code_body)` | **DIVERGE** |
+| `}` inside a string literal | **`PARSE-ERR: NoToken`** | full `(code_body)` | **DIVERGE** |
+
+The fallback regex stops at the first `}`; the parser then can't close `code_decl`
+and hard-errors. `scanner.c` instead counts brace depth and skips string literals,
+so it swallows the whole body. **This confirms the memory's risk precisely: snark
+cannot parse a realistic `code` block until cirq's `scanner.c` is hosted in snark's
+scanner host — the internal placeholder is a strict subset of the real language.**
+
+Gate 3 status: **partial pass.** Structural corpus ✅; scanner-backed blocks blocked
+on hosting the C scanner (next slice below).
+
 ## Not covered (next slices)
 
+- **Host cirq's `scanner.c` in snark** (`snark-scanner-host`) and re-run `spike-ts-diff`
+  — the one thing standing between snark and a full gate-3 pass. Until then `code`
+  blocks with braces are unparseable.
 - weavy's **async suspend/resume lane** (`weavy::r#async`) for `.control`'s `resume`.
-- snark's typed-AST codegen exercised only on `conditional.cirq`; broader corpus +
-  the external `code "lang" { … }` blocks (which need scanner.c) untested.
 - Comparing the generated AST against hand-written `cirq-ast` field-by-field.

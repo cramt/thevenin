@@ -4,3 +4,9 @@ check:
     cargo run -p spike-weavy
     cargo run -p spike-snark
     cargo run -p spike-cirq-ast
+    cargo run -p spike-ts-diff
+
+# Differential oracle: snark vs real tree-sitter over the cirq corpus (gate 3).
+# Needs the `tree-sitter` CLI (present in the nix devShell).
+ts-diff:
+    cargo run -p spike-ts-diff

@@ -1255,6 +1255,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "spike-ts-diff"
+version = "0.0.0"
+dependencies = [
+ "snark",
+]
+
+[[package]]
 name = "spike-weavy"
 version = "0.0.0"
 dependencies = [
