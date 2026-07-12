@@ -10,3 +10,16 @@ check:
 # Needs the `tree-sitter` CLI (present in the nix devShell).
 ts-diff:
     cargo run -p spike-ts-diff
+
+# Regenerate the NESTED grammar variant (code_body as snark's declarative NESTED
+# primitive, externals dropped) from the committed cirq grammar.json. Run this if
+# the committed grammar's code_body / code_decl / externals change.
+nested-grammar:
+    jq '.externals = [] \
+        | .rules.code_body = {"type":"TOKEN","content":{"type":"NESTED","open":"{","close":"}"}} \
+        | .rules.code_decl.members = [ \
+            .rules.code_decl.members[0], \
+            .rules.code_decl.members[1], \
+            {"type":"FIELD","name":"body","content":{"type":"SYMBOL","name":"code_body"}} \
+          ]' \
+      ../cirq-grammar/src/grammar.json > spike-ts-diff/src/grammar.nested.json
