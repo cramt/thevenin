@@ -7,6 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/cramt/thevenin/compare/thevenin-v0.3.0...thevenin-v0.5.0) - 2026-07-12
+
+### Added
+
+- update ngspice submodule (1a621eb -> 037b657), pass its new convergence test
+- *(hisim)* faithful HiSIM2 I-V core (Phases 2+3), un-ignore golden tests
+- *(hisim)* faithful HiSIM2 constants + full-port plan (Phase 1)
+- add GSHUNT option, complete the .options survey
+- complete Goal C — SPICE importer accepts arbitrary netlists
+- *(cirq)* native measure expression syntax (= expr form)
+- *(expr)* short-circuit ternary `cond ? then : else`
+- *(cirq)* ternary operator + sim-context constants (temper, time, freq, hertz)
+- *(control)* source command, measure command, vector arithmetic in print
+- *(options)* DEFAD/DEFAS/DEFL/DEFW + NOOPALTER + GMINPRIORITY
+- *(numerics)* iterative refinement, TRTOL, PIVTOL/PIVREL
+- *(meas)* ERR/ERR1/ERR2/ERR3 + IF conditional + FILE= output
+- *(transient)* .options METHOD=trap|gear|euler with BDF2 for L/C
+- *(urc)* SPICE U element + URC model with importer-side expansion
+- *(hisim)* port HiSIM2 (LEVEL=68) surface-potential MOSFET (partial)
+- *(bsim2)* port BSIM2 MOSFET (level 5) from ngspice - initial build
+- *(bsim1)* port BSIM1 MOSFET (level 4) from ngspice
+- *(fourier)* .four (DFT harmonics + THD) and .fft (windowed FFT) post-processing of .tran
+- *(vdmos)* port vertical-DMOS power MOSFET from ngspice
+- *(mos3)* port MOSFET Level 3 (semi-empirical short-channel) from ngspice
+- *(output)* ngspice raw file format (binary + ASCII) + CSV + write command
+- *(tline)* add T element (ideal lossless transmission line)
+- *(sens)* AC sensitivity analysis (.sens v(...) ac ...) — tests and verification
+- *(options)* RSHUNT, GMINSTEPS, NOOPITER
+- *(importer)* MOS3 warning, line continuation, .step diagnostic, TEMPER + ternary in brace eval
+- *(switches)* add S/W voltage- and current-controlled switches
+- *(importer)* R/L/C tc=, option scale, .width, graceful unknown directives
+- *(meas)* typed MeasureExpr in IR, add PARAM=/LAST/TD support
+- *(control)* retire SimContext::netlist cache; dispatch .control via Circuit
+- *(control)* implement stop/resume + unignore resume-1.cir (101/0/6)
+- *(mna)* sens Netlist-free; multi-temp on Circuit; SimContext Netlist private
+- *(mna)* add Circuit-input top-level simulate dispatcher; CLI uses it
+- *(mna)* TF / PZ / Noise also fully Netlist-free on Circuit-input path
+- *(mna)* add Circuit-input entry points for tf/pz/noise/sens
+- *(mna)* transient analysis fully Netlist-free on Circuit-input path
+- *(mna)* DC and AC analyses fully Netlist-free on Circuit-input path
+- *(mna)* route harness through mna_ir; complete _with_mna surface
+- *(mna)* route DC/AC/TRAN through mna_ir on Circuit-input path
+- *(mna)* direct IR -> MNA path supports LTRA/TXL/CPL/XSPICE (full coverage)
+- *(mna)* direct IR -> MNA path supports BehavioralSource + Coupling
+- *(mna)* direct IR -> MNA path supports JFET / MESA family
+- *(mna)* direct IR -> MNA path supports MOSFET family
+- *(mna)* direct IR -> MNA path supports BJT (level 1 + VBIC)
+- *(mna)* direct IR -> MNA path supports diodes
+- *(mna)* share OP solve+format between Netlist and IR direct paths
+- *(mna)* assemble MnaSystem directly from Cirq IR (linear subset)
+- *(control)* add IR-shaped .control entry point (Stage 4 / Phase A)
+- *(circuit)* extend direct IR -> MNA path to dependent sources
+- *(circuit)* land direct IR -> MNA path for linear-only DC OP
+- graduate Circuit-input simulation API into thevenin
+- support BSIM4 model binning through Cirq IR round-trip
+- make Cirq IR the default harness route, quarantine 5 round-trip failures
+- route ngspice harness through Cirq IR via THEVENIN_VIA_CIRQ
+- wire .ic/UIC, .nodeset, .meas, multi-temp, and mutual coupling
+
+### Fixed
+
+- guard two stack-overflow DoS paths reachable from untrusted input
+- *(bjt)* remove double-counted substrate cap, un-ignore rtlinv — 0 ignored tests
+- PULSE PER defaults to TSTOP; BJT substrate cap + absolute charge integration
+- *(bsim3soidd)* honor debug=-1 quasi-static semantics, un-ignore RampVg2
+- *(bjt)* use ngspice's CONSTKoverQ thermal voltage, not legacy SPICE3 KboQ
+- *(bsim3soidd)* numerically stable Phi^1.5/Phi^2.5 differences in CAPMOD=3
+- un-ignore hfet/inverter with corrected reference from patched ngspice
+- *(bsim3soidd)* re-resolve XJ sentinel against the model card's TSI
+- *(bsim1)* default NRD/NRS to 1 per ngspice b1set.c, un-ignore bsim1 harness fixture
+- *(raw_output)* explicit plotnames for .four/.fft/.disto; flag unknown
+- *(fourier)* ngspice 200-sample DFT grid, window gain, narrower visibility
+- *(transient)* only count bootstrap-driven BE steps toward Gear budget
+- *(hisim)* drop CLM unit double-conversion; demote checklist to partial
+- *(vdmos)* use raw signed vds in lambda factor
+- *(bsim1)* unconditional dvth_dvbs across Vbs=0 seam
+- *(mna_ir)* repair merge artefact in nr_options_from_circuit boolean dispatch
+- *(hisim)* residual-based convergence + flag in solve_surface_potential
+- *(bsim2)* repair bad rebase merge of bsim1/bsim2 dispatch blocks
+- *(bsim3soi-dd)* correct DELTA_VCSCV from 1e-5 to 4e-4 to match ngspice
+- populate netlist.source on Cirq IR -> Netlist round-trip
+- restore Expr::Brace on Cirq IR -> Netlist round-trip
+- add RHS history coupling for mutual inductors in transient
+
+### Other
+
+- *(release)* unify workspace to 0.5.0 for first crates.io release
+- un-ignore schmitt with bounded-error tolerance; add harness profile mode
+- refresh HiSIM dispatch comments for the faithful port
+- un-ignore bsim2 harness fixture, now passing against ngspice reference
+- *(hisim)* add HiSIM2 golden-reference scaffold (Phase 0)
+- IR-native source DC + waveforms, drop convert_source_spec from the simulator
+- make mna_ir device loading IR-native, drop convert_model/extra_params
+- [**breaking**] remove the legacy Netlist stamping path
+- route in-crate unit tests through the IR path via test_support
+- native ModelParams::from_ir, drop convert_model on Circuit device loads
+- *(thevenin)* neutral ModelParams boundary, Expr-free device layer
+- rustdoc polish, README refresh, getting-started guide
+- polish docs.rs landing pages, examples, and metadata
+- *(thevenin)* demote assemble_mna(&Netlist) to pub(crate)
+- *(thevenin)* mark CircuitSimError #[non_exhaustive]
+- *(release)* README pass, CHANGELOG, api-stability + #[non_exhaustive] on public enums
+- *(bsim2)* set vbb=-3 in integration test model for proper body effect
+- *(bsim2)* rustfmt single-line mos_limit calls
+- *(bsim2)* adjust cutoff threshold for subthreshold conduction
+- *(bsim2)* apply rustfmt + extend ignore.toml note for bsim2/test.cir
+- *(bsim2)* add integration tests + update docs
+- *(switch,fourier)* correct stale documentation
+- *(fourier)* satisfy clippy neg_cmp_op_on_partial_ord + useless_format
+- *(fourier)* relax pure-sine unit-test tolerances for interpolation leakage
+- Merge importer hygiene (R tc=, option scale, .width, unknown directives)
+- Merge doc archival
+- archive cirq-plan and migration plans
+- *(xspice)* add Circuit-input simulate_op_with_xspice, retire Netlist wrapper
+- demote Netlist-shaped simulator APIs to pub(crate)
+- *(stamp)* extend companion bypass to MOS6 (Level 6)
+- *(stamp)* record why BJT companion bypass isn't enabled
+- *(stamp)* companion bypass for Level 1 + Level 2 MOSFETs (ngspice CKTbypass)
+- *(ac)* hoist omega-independent stamps into AcStampCache; bench complex solves
+- *(sparse)* reuse symbolic LU across NR iterations and timesteps
+- *(bsim3soi-dd)* refine RampVg2 diagnosis after chain audit
+- *(soi-dd)* correct RampVg2 diagnosis — physics, not convergence
+- add AC analysis test for coupled inductors
+
 ## [0.3.0](https://github.com/cramt/thevenin/compare/thevenin-v0.2.0...thevenin-v0.3.0) - 2026-04-26
 
 ### Added

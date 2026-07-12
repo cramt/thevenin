@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/cramt/thevenin/compare/cirq-ir-v0.1.0...cirq-ir-v0.5.0) - 2026-07-12
+
+### Added
+
+- complete Goal C — SPICE importer accepts arbitrary netlists
+- *(cirq)* complete Goal B — language registry, native URC, port arrays
+- *(cirq)* native measure expression syntax (= expr form)
+- *(grammar)* tree-sitter-control + scanner finishes bash/js/control 1.0
+- *(control)* source command, measure command, vector arithmetic in print
+- *(meas)* ERR/ERR1/ERR2/ERR3 + IF conditional + FILE= output
+- *(fourier)* .four (DFT harmonics + THD) and .fft (windowed FFT) post-processing of .tran
+- *(vdmos)* port vertical-DMOS power MOSFET from ngspice
+- *(output)* ngspice raw file format (binary + ASCII) + CSV + write command
+- *(tline)* add T element (ideal lossless transmission line)
+- *(switches)* add S/W voltage- and current-controlled switches
+- *(control)* add while, repeat, save commands
+- *(csparam)* support .csparam directive with control-scope seeding
+- *(control)* typed control AST in IR; executor consumes parsed form
+- *(meas)* typed MeasureExpr in IR, add PARAM=/LAST/TD support
+- *(mna)* sens Netlist-free; multi-temp on Circuit; SimContext Netlist private
+- route ngspice harness through Cirq IR via THEVENIN_VIA_CIRQ
+- close remaining SPICE import gaps — nodeset, measure, multi-temp, arithmetic expressions
+
+### Other
+
+- *(release)* unify workspace to 0.5.0 for first crates.io release
+- native ModelParams::from_ir, drop convert_model on Circuit device loads
+- polish docs.rs landing pages, examples, and metadata
+- *(release)* README pass, CHANGELOG, api-stability + #[non_exhaustive] on public enums
+
 ## [0.1.0](https://github.com/cramt/thevenin/releases/tag/cirq-ir-v0.1.0) - 2026-04-26
 
 ### Added

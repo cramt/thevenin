@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/cramt/thevenin/compare/cirq-grammar-v0.1.0...cirq-grammar-v0.5.0) - 2026-07-12
+
+### Added
+
+- *(cirq)* complete Goal B — language registry, native URC, port arrays
+- *(cirq)* compile-time if/elseif/else conditionals
+- *(cirq)* native measure expression syntax (= expr form)
+- *(grammar)* tree-sitter-control + scanner finishes bash/js/control 1.0
+- *(cirq)* ternary operator + sim-context constants (temper, time, freq, hertz)
+- *(cirq-grammar)* inject embedded languages in code blocks
+- *(cirq)* native measure block syntax
+- add export blocks and named imports to Cirq language
+
+### Other
+
+- *(release)* unify workspace to 0.5.0 for first crates.io release
+- polish docs.rs landing pages, examples, and metadata
+- *(cirq-grammar)* scaffold multi-language tree-sitter bindings
+
 ## [0.1.0](https://github.com/cramt/thevenin/releases/tag/cirq-grammar-v0.1.0) - 2026-04-26
 
 ### Added
