@@ -1,6 +1,6 @@
 [package]
 name = "thevenin-xspice"
-version = "0.1.2"
+version.workspace = true
 edition = "2024"
 description = "XSPICE code model framework for thevenin circuit simulator"
 keywords = ["spice", "xspice", "circuit", "code-model", "eda"]

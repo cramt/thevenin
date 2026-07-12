@@ -1,5 +1,11 @@
 //! Parser and generator for SPICE netlists (ngspice dialect).
 //!
+//! **Internal plumbing.** This crate is published only because the public
+//! `thevenin` / `cirq-*` crates depend on it, so crates.io requires it on the
+//! registry. It is *not* part of the stable public surface: its API is not
+//! covered by the workspace semver guarantee and may change in any release.
+//! Depend on `cirq-ir` / `thevenin` directly instead.
+//!
 //! # Quick start
 //!
 //! ```rust

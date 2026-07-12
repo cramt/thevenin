@@ -1,6 +1,6 @@
 [package]
 name = "cirq-ast"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Cirq language AST types and CST-to-AST lowering"
 keywords = ["cirq", "ast", "circuit", "eda", "spice"]

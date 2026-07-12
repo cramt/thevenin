@@ -1,6 +1,6 @@
 [package]
 name = "cirq-control-grammar"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Tree-sitter grammar for the ngspice .control scripting language"
 keywords = ["tree-sitter", "grammar", "ngspice", "control", "spice"]

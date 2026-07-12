@@ -1,6 +1,6 @@
 [package]
 name = "cirq-frontend"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Cirq frontend pipeline: source → AST → IR → Netlist"
 keywords = ["cirq", "compiler", "circuit", "spice", "eda"]
@@ -9,10 +9,10 @@ license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
-cirq-ast = { path = "../cirq-ast", version = "0.1.0" }
-cirq-grammar = { path = "../cirq-grammar", version = "0.1.0" }
-cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
-thevenin-types = { path = "../thevenin-types", version = "0.3.0" }
+cirq-ast = { path = "../cirq-ast", version = "0.5.0" }
+cirq-grammar = { path = "../cirq-grammar", version = "0.5.0" }
+cirq-ir = { path = "../cirq-ir", version = "0.5.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.5.0" }
 thiserror.workspace = true
 tree-sitter = "0.25"
 

@@ -152,14 +152,14 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "cirq-ast"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "cirq-control-grammar"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "cirq-frontend"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "cirq-ast",
  "cirq-grammar",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "cirq-grammar"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "cirq-ir"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "cirq-ast",
  "cirq-control-grammar",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "cirq-spice-import"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "cirq-frontend",
  "cirq-ir",
@@ -2005,7 +2005,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin"
-version = "0.3.0"
+version = "0.5.0"
 dependencies = [
  "approx",
  "cirq-frontend",
@@ -2028,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-cirq"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "cirq-frontend",
  "cirq-ir",
@@ -2040,7 +2040,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-cli"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "cirq-frontend",
  "cirq-ir",
@@ -2058,7 +2058,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-control"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "cirq-frontend",
  "cirq-ir",
@@ -2070,7 +2070,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-test-macro"
-version = "0.1.1"
+version = "0.5.0"
 dependencies = [
  "facet",
  "facet-toml",
@@ -2080,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-types"
-version = "0.3.0"
+version = "0.5.0"
 dependencies = [
  "approx",
  "facet",
@@ -2090,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "thevenin-xspice"
-version = "0.1.2"
+version = "0.5.0"
 
 [[package]]
 name = "thiserror"

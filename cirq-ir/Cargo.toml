@@ -1,6 +1,6 @@
 [package]
 name = "cirq-ir"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Canonical Cirq IR — the resolved, validated semantic representation"
 keywords = ["cirq", "ir", "circuit", "eda", "spice"]
@@ -9,7 +9,7 @@ license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
-cirq-ast = { path = "../cirq-ast", version = "0.1.0" }
-cirq-control-grammar = { path = "../cirq-control-grammar", version = "0.1.0" }
+cirq-ast = { path = "../cirq-ast", version = "0.5.0" }
+cirq-control-grammar = { path = "../cirq-control-grammar", version = "0.5.0" }
 thiserror.workspace = true
 tree-sitter = "0.25"

@@ -1,6 +1,6 @@
 [package]
 name = "thevenin-test-macro"
-version = "0.1.1"
+version.workspace = true
 edition = "2024"
 description = "Proc macro for generating ngspice integration tests"
 license = "BSD-3-Clause"

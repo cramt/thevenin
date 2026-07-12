@@ -1,6 +1,6 @@
 [package]
 name = "thevenin"
-version = "0.3.0"
+version.workspace = true
 edition = "2024"
 description = "Core simulation engine for thevenin: sparse matrices, MNA assembly, solvers"
 keywords = ["spice", "circuit", "simulation", "ngspice", "eda"]
@@ -11,10 +11,10 @@ repository = "https://github.com/cramt/thevenin"
 [dependencies]
 thiserror.workspace = true
 faer.workspace = true
-thevenin-types = { path = "../thevenin-types", version = "0.3.0" }
-thevenin-xspice = { path = "../thevenin-xspice", version = "0.1.2" }
-cirq-ir = { path = "../cirq-ir", version = "0.1.0" }
-cirq-frontend = { path = "../cirq-frontend", version = "0.1.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.5.0" }
+thevenin-xspice = { path = "../thevenin-xspice", version = "0.5.0" }
+cirq-ir = { path = "../cirq-ir", version = "0.5.0" }
+cirq-frontend = { path = "../cirq-frontend", version = "0.5.0" }
 libm = "0.2"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]

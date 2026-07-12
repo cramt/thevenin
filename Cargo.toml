@@ -16,6 +16,11 @@ members = [
 exclude = ["experiments"]
 resolver = "3"
 
+[workspace.package]
+# Single source of truth for the workspace version. The first crates.io
+# release ships every crate at a unified 0.5.0 (not 1.0 — see docs/1.0-checklist.md).
+version = "0.5.0"
+
 [workspace.dependencies]
 thiserror = "2"
 facet = "0.46"
@@ -42,7 +47,7 @@ overflow-checks = true
 
 [package]
 name = "thevenin-cli"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "CLI for thevenin - a Rust rewrite of ngspice circuit simulator"
 license = "BSD-3-Clause"
@@ -50,12 +55,12 @@ repository = "https://github.com/cramt/thevenin"
 publish = false
 
 [dependencies]
-thevenin-types = { path = "thevenin-types", version = "0.3.0" }
-thevenin = { path = "thevenin", version = "0.3.0" }
-thevenin-control = { path = "thevenin-control", version = "0.1.0" }
-cirq-ir = { path = "cirq-ir", version = "0.1.0" }
-cirq-frontend = { path = "cirq-frontend", version = "0.1.0" }
-cirq-spice-import = { path = "cirq-spice-import", version = "0.1.0" }
+thevenin-types = { path = "thevenin-types", version = "0.5.0" }
+thevenin = { path = "thevenin", version = "0.5.0" }
+thevenin-control = { path = "thevenin-control", version = "0.5.0" }
+cirq-ir = { path = "cirq-ir", version = "0.5.0" }
+cirq-frontend = { path = "cirq-frontend", version = "0.5.0" }
+cirq-spice-import = { path = "cirq-spice-import", version = "0.5.0" }
 facet.workspace = true
 
 # figue 4 added an HTML-help feature whose `open_file_command` only has

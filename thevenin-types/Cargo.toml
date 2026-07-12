@@ -1,6 +1,6 @@
 [package]
 name = "thevenin-types"
-version = "0.3.0"
+version.workspace = true
 edition = "2024"
 description = "Types and parser for SPICE netlists (ngspice dialect)"
 keywords = ["spice", "netlist", "parser", "ngspice", "eda"]
