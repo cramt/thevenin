@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/cramt/thevenin/compare/thevenin-types-v0.3.0...thevenin-types-v0.5.0) - 2026-07-12
+
+### Added
+
+- update ngspice submodule (1a621eb -> 037b657), pass its new convergence test
+- complete Goal C — SPICE importer accepts arbitrary netlists
+- *(urc)* SPICE U element + URC model with importer-side expansion
+- *(fourier)* .four (DFT harmonics + THD) and .fft (windowed FFT) post-processing of .tran
+- *(tline)* add T element (ideal lossless transmission line)
+- *(importer)* MOS3 warning, line continuation, .step diagnostic, TEMPER + ternary in brace eval
+- *(switches)* add S/W voltage- and current-controlled switches
+- *(importer)* R/L/C tc=, option scale, .width, graceful unknown directives
+- *(csparam)* support .csparam directive with control-scope seeding
+- close remaining SPICE import gaps — nodeset, measure, multi-temp, arithmetic expressions
+
+### Fixed
+
+- un-ignore hfet/inverter with corrected reference from patched ngspice
+
+### Other
+
+- *(release)* unify workspace to 0.5.0 for first crates.io release
+- *(thevenin)* neutral ModelParams boundary, Expr-free device layer
+- polish docs.rs landing pages, examples, and metadata
+
 ## [0.3.0](https://github.com/cramt/thevenin/compare/thevenin-types-v0.2.0...thevenin-types-v0.3.0) - 2026-04-26
 
 ### Added
