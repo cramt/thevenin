@@ -14,20 +14,21 @@
 //! side here parses the code cases with a NESTED variant of the grammar
 //! (`grammar.nested.json`, code_body→NESTED, externals dropped) while tree-sitter
 //! still uses the real scanner.c. Result: NESTED matches scanner.c node-for-node on
-//! real balanced braces. (A `}` hidden inside a string is a known, accepted limit of
-//! raw NESTED and is deliberately left out of the corpus.)
+//! real balanced braces; the `NestedGap` probes then measure the exact degradation
+//! surface — every construct where a `}` isn't a real bracket and raw NESTED can't
+//! tell (strings, template literals, `//`/`/* */`/`#`/`*` comments).
 //!
 //! Cases are tagged:
-//!   - `Match`          snark MUST equal tree-sitter (a divergence fails the run).
-//!                      Covers the example files + parser probes for constructs
-//!                      the examples miss (ternary, imports, precedence, unary).
-//!                      snark matches tree-sitter on ALL of these — no parser bug.
-//!   - `Nested`         `code` block parsed on the snark side with the declarative
-//!                      NESTED grammar. Agrees with scanner.c node-for-node on balanced
-//!                      braces. Divergence would fail the run — the known non-agreeing
-//!                      cases (empty `{}`, brace-in-string) are kept out of the corpus.
-//!   - `Recovery`       malformed input; report-only. Error recovery is heuristic,
-//!                      so snark's recovery tree legitimately differs.
+//!   - `Match` — snark MUST equal tree-sitter (a divergence fails the run). Covers the
+//!     example files + parser probes the examples miss (ternary, imports, precedence,
+//!     unary); snark matches on all of them — no parser bug.
+//!   - `Nested` — `code` block via the declarative NESTED grammar. MUST agree
+//!     node-for-node with scanner.c on balanced braces — a divergence fails the run.
+//!   - `NestedGap` — `code` block hiding a `}` inside a string-like construct scanner.c
+//!     skips but raw NESTED cannot. EXPECTED to diverge: the full functional cost of
+//!     adopting NESTED. Fails only if one unexpectedly agrees (the gap list went stale).
+//!   - `Recovery` — malformed input; report-only. Error recovery is heuristic, so
+//!     snark's recovery tree legitimately differs.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -53,10 +54,16 @@ enum Tag {
     /// snark MUST equal tree-sitter — a divergence fails the run.
     Match,
     /// `code` block parsed on the snark side with the declarative NESTED grammar.
-    /// snark MUST equal tree-sitter — a divergence fails the run. The corpus holds
-    /// only cases NESTED handles exactly; known non-agreeing cases (empty `{}`,
-    /// brace-in-string) are deliberately excluded.
+    /// snark MUST equal tree-sitter — a divergence fails the run. Holds only cases
+    /// NESTED handles exactly; string-like braces live under `NestedGap`, and the
+    /// benign empty-`{}` case is excluded (upstream NESTED-semantics detail).
     Nested,
+    /// A `code` block whose body hides a `}` inside a string-like construct that
+    /// `scanner.c` skips but raw NESTED cannot see (strings, template literals,
+    /// `//`/`/* */`/`#`/`*` comments). These are EXPECTED to diverge — this is the
+    /// exact degradation surface of adopting NESTED. Report-only; it fails the run
+    /// only if one unexpectedly *agrees* (meaning the gap closed — revisit).
+    NestedGap,
     /// Malformed input. Error recovery is heuristic and snark's recovery tree
     /// legitimately differs from tree-sitter's (coarser: `(ERROR)` root or a
     /// dropped subtree vs tree-sitter's inserted `MISSING` nodes). Report-only —
@@ -279,16 +286,59 @@ fn main() {
         corpus.push((name.to_string(), src.to_string(), Tag::Nested));
     }
 
+    // Degradation surface of adopting NESTED: every construct where `scanner.c`
+    // knows a `}` isn't a real bracket but raw NESTED (delimiter counting only)
+    // does not. One case per guard `scanner.c` implements. All EXPECTED to diverge.
+    let gap_cases: &[(&str, &str)] = &[
+        // double- and single-quoted strings
+        (
+            "gap/string_dq",
+            "circuit demo {\n    code \"js\" {\n        const s = \"}\";\n    }\n    R1: resistor(a -> b, 1k)\n}\n",
+        ),
+        (
+            "gap/string_sq",
+            "circuit demo {\n    code \"js\" {\n        const s = '}';\n    }\n    R1: resistor(a -> b, 1k)\n}\n",
+        ),
+        // JS template literal with a lone `}` (no matching `{`)
+        (
+            "gap/template",
+            "circuit demo {\n    code \"js\" {\n        const t = `}`;\n    }\n    R1: resistor(a -> b, 1k)\n}\n",
+        ),
+        // `//` line comment and `/* */` block comment
+        (
+            "gap/line_comment",
+            "circuit demo {\n    code \"js\" {\n        const x = 1; // }\n    }\n    R1: resistor(a -> b, 1k)\n}\n",
+        ),
+        (
+            "gap/block_comment",
+            "circuit demo {\n    code \"js\" {\n        /* } */ const x = 1;\n    }\n    R1: resistor(a -> b, 1k)\n}\n",
+        ),
+        // bash `#` comment (start-of-line) and ngspice `.control` `*` comment
+        (
+            "gap/hash_comment",
+            "circuit demo {\n    code \"bash\" {\n        echo hi\n        # }\n    }\n    R1: resistor(a -> b, 1k)\n}\n",
+        ),
+        (
+            "gap/star_comment",
+            "circuit demo {\n    code \"control\" {\n        * }\n        .end\n    }\n    R1: resistor(a -> b, 1k)\n}\n",
+        ),
+    ];
+    for (name, src) in gap_cases {
+        corpus.push((name.to_string(), src.to_string(), Tag::NestedGap));
+    }
+
     let mut match_fail = 0usize;
     let mut nested_ok = 0usize;
     let mut nested_diverge = 0usize;
+    let mut gap_diverge = 0usize;
+    let mut gap_unexpected_agree = 0usize;
     let mut recovery_diverge = 0usize;
 
     println!("=== spike-ts-diff: snark vs tree-sitter over the cirq corpus ===\n");
     for (name, src, tag) in &corpus {
-        // `code` cases go through the declarative NESTED grammar (no scanner);
-        // everything else through the committed grammar.
-        let p = if *tag == Tag::Nested {
+        // `code` cases (incl. the gap probes) go through the declarative NESTED
+        // grammar (no scanner); everything else through the committed grammar.
+        let p = if matches!(tag, Tag::Nested | Tag::NestedGap) {
             &prepared_nested
         } else {
             &prepared
@@ -303,17 +353,31 @@ fn main() {
         let label = match tag {
             Tag::Match => "MATCH-REQUIRED",
             Tag::Nested => "NESTED-DECL",
+            Tag::NestedGap => "NESTED-GAP(exp)",
             Tag::Recovery => "RECOVERY(info)",
         };
+        // A gap case diverging is the EXPECTED outcome, so mark it as such rather
+        // than as a scary DIVERGE.
         let verdict = if exact {
             "agree  "
         } else if modulo_comments {
             "agree* "
+        } else if *tag == Tag::NestedGap {
+            "gap(ok)"
         } else {
             "DIVERGE"
         };
         println!("[{verdict}] ({label}) {name}");
-        if !agree {
+        if *tag == Tag::NestedGap {
+            // Expected: gap cases diverge. An *agreement* means NESTED coped with a
+            // construct it shouldn't — surface it so we revisit the degradation list.
+            if agree {
+                gap_unexpected_agree += 1;
+                println!("         UNEXPECTED AGREE — NESTED handled this; revisit the gap list");
+            } else {
+                gap_diverge += 1;
+            }
+        } else if !agree {
             // Raw (un-normalized) snark output makes parse errors legible.
             let raw_sn = snark_sexp(p, src);
             println!("         snark:       {}", elide(&raw_sn, 200));
@@ -322,6 +386,7 @@ fn main() {
             match tag {
                 Tag::Match => match_fail += 1,
                 Tag::Nested => nested_diverge += 1,
+                Tag::NestedGap => unreachable!("handled above"),
                 Tag::Recovery => recovery_diverge += 1,
             }
         } else if *tag == Tag::Nested {
@@ -344,18 +409,25 @@ fn main() {
          {nested_diverge} diverge \
          (snark parses code_body as NESTED — no scanner.c; incl. real nested braces `{{ a:{{c}} }}`)"
     );
+    let gap_total = gap_diverge + gap_unexpected_agree;
+    println!(
+        "NESTED degradation surface: {gap_diverge}/{gap_total} string-like `}}` cases diverge \
+         as expected (strings, template, //, /* */, #, * — scanner.c skips these, raw NESTED \
+         cannot). This is the full functional cost of adopting NESTED."
+    );
     println!(
         "error recovery: {recovery_diverge} diverge (info-only — snark's heuristic \
          recovery tree differs from tree-sitter's; out of differential scope)"
     );
 
-    // MATCH-REQUIRED and NESTED cases must both equal tree-sitter (the corpus holds
-    // only NESTED cases the primitive handles exactly). Error recovery is report-only.
-    let hard_fail = match_fail + nested_diverge;
+    // MATCH-REQUIRED and NESTED cases must equal tree-sitter (the corpus holds only
+    // NESTED cases the primitive handles exactly). A gap case that *agrees* means the
+    // documented degradation list is stale. Error recovery is report-only.
+    let hard_fail = match_fail + nested_diverge + gap_unexpected_agree;
     if hard_fail > 0 {
         eprintln!(
             "\n[spike-ts-diff] FAILED: {match_fail} structural + {nested_diverge} NESTED \
-             case(s) diverged from tree-sitter"
+             diverged, {gap_unexpected_agree} gap case(s) unexpectedly agreed"
         );
         std::process::exit(1);
     }

@@ -193,17 +193,23 @@ scanner.c** — and `nested_braces` *diverged* under the old no-scanner placehol
 raw NESTED handling real balanced braces exactly is the whole result. These are
 MATCH-required: a NESTED divergence now fails the run, same as the structural corpus.
 
-**Deliberately excluded from the corpus (not tracked):**
-- empty `code "x" {}` — NESTED spans the braces, so it yields a `(code_body)` node where
-  the external scanner emits none. An upstream NESTED-semantics detail; will be fixed
-  upstream — not our concern.
-- a `}` inside a string/comment (`const s = "} {"`) — raw NESTED has no string awareness
-  and closes early. Known, accepted limitation; the long-term escape hatch (per Amos) is
-  *not* a Rust scanner trait but a future declarative scanner dialect that lowers to
-  weavy/vix IR.
+**The degradation surface, measured (`NestedGap` probes).** Adopting NESTED regresses on
+exactly one thing: a `}` that isn't a real bracket because it sits inside a construct
+`scanner.c` skips but raw delimiter-counting can't see. The spike now probes all of them
+and confirms each diverges (7/7): double/single-quoted **strings**, JS **template
+literals**, `//` **line** and `/* */` **block** comments, bash `#` comments, and ngspice
+`.control` `*` comments. That's the complete functional cost — nothing outside this list
+(the probe fails if a gap case ever *agrees*, flagging a stale list). The long-term
+escape hatch (per Amos) is *not* a Rust scanner trait but a future declarative scanner
+dialect that lowers to weavy/vix IR.
+
+**Excluded, not a regression:** empty `code "x" {}` — NESTED spans the braces so it yields
+a `(code_body)` node where the external scanner emits none. An upstream NESTED-semantics
+detail, to be fixed upstream.
 
 **Bottom line: no snark PR, no scanner.c, no `cc` — `code_body` is `NESTED`, proven
-against the real scanner.**
+against the real scanner. The only functional cost is a `}` inside a string/comment/
+template, and that surface is now measured, not guessed.**
 
 ## Not covered (next slices)
 
