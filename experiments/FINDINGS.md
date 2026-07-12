@@ -1,7 +1,8 @@
 # snark + weavy spike — findings
 
-Trying Amos' unmerged `snark-playground-rebased` branch (facet-rs/facet PR #2431)
-against thevenin/cirq, as an exercise + feedback. Three spikes, validated with the commands below:
+Trying Amos' snark/weavy work (facet-rs/facet PR #2431, merged; deps pin `cramt/facet`
+main) against thevenin/cirq, as an exercise + feedback. Four spikes, validated with the
+commands below:
 
 | crate | what it proves |
 |-------|----------------|
@@ -35,10 +36,10 @@ nix develop --command bash -lc "cd experiments && just check"
 3. **grammar.js via boa = no node.** `snark-dsl` (feature `typed-ast`) evaluates
    grammar.js with boa_engine, so codegen needs no Node toolchain. Matches cirq's
    own "no node needed" stance perfectly.
-4. **tree-sitter compat is real for this slice**: snark accepted a grammar that
-   declares an **external scanner** (`externals: [$.code_body]`) and parsed a
-   sample that doesn't hit those external tokens. Scanner-backed `code` blocks
-   remain untested.
+4. **tree-sitter compat is real, scanner included.** snark accepted cirq's grammar
+   with its `externals: [$.code_body]` declaration, and the one external token
+   (`code_body`) maps cleanly onto snark's declarative `NESTED` primitive — no
+   `scanner.c`, no `cc` (see gate 3 below).
 5. **weavy is a lovely minimal substrate.** BYO `Op` + one `Step` trait, and
    `Control::CallBlock` gives call frames for free. A `.control` core in ~40 lines.
 6. **Derived cardinality + auto-boxing are great.** `ParamDecl { ty: Option<…>,
@@ -122,68 +123,42 @@ reconstructs it + `MISSING ")"`). Recovery is heuristic and matching tree-sitter
 exact recovery tree is out of differential scope — the harness reports these but
 does not fail on them.
 
-**Scanner-backed `code "lang" { … }` blocks: snark passes only without braces.**
-snark runs with *no hosted external scanner*, so `code_body` falls back to cirq's
-placeholder rule `token(prec(-1, /[^}]+/))`. Result, by case:
+### The `code` block: NESTED, not an external scanner
 
-| input | snark | tree-sitter | verdict |
-|-------|-------|-------------|---------|
-| empty `code "rust" {}` | `(code_decl (string_literal))` | same | agree |
-| brace-free body | `(code_decl … (code_body))` | same | agree |
-| nested braces `{ a: { c } }` | **`PARSE-ERR: NoToken`** | full `(code_body)` | **DIVERGE** |
-| `}` inside a string literal | **`PARSE-ERR: NoToken`** | full `(code_body)` | **DIVERGE** |
+cirq's committed grammar makes `code_body` an *external* token produced by `scanner.c`'s
+brace-depth counter — but it doesn't need to be. snark eliminates external scanners with
+**three declarative lexical primitives**: `RawRuleJson` variants in
+`snark/src/grammar.rs:255`, tagged by `"type"` in grammar.json (SCREAMING_SNAKE):
 
-The fallback regex stops at the first `}`; the parser then can't close `code_decl`
-and hard-errors. `scanner.c` instead counts brace depth and skips string literals,
-so it swallows the whole body. **This confirms the memory's risk precisely: snark
-cannot parse a realistic `code` block until cirq's `scanner.c` is hosted in snark's
-scanner host — the internal placeholder is a strict subset of the real language.**
+| primitive | grammar.json | what it does |
+|-----------|-------------|--------------|
+| `UNTIL`   | `{"type":"UNTIL","markers":[…]}` | raw text up to any marker or EOF (heredocs, line-to-EOL) |
+| `NESTED`  | `{"type":"NESTED","open":"{","close":"}"}` | **balanced delimiter counting — cirq's `code_body`** |
+| `AUTO_CLOSE` | `{"type":"AUTO_CLOSE","tag":…,…}` | implicit-close tag stacks (HTML/XML) |
 
-Gate 3 status: **partial pass** for the *external-scanner* framing — but that framing
-is the wrong one. See below.
+Lowering path: `GrammarExpr::{Until,Nested,AutoClose}` (parser.rs:4568) → `CompiledLexExpr`
+→ `WeavyLexExpr`. Runtime for NESTED: `lex_match.rs:132
+match_nested_delimiters_with_inspection` (called from weavy.rs:13002). So cirq's
+`code_body` becomes a one-liner and `scanner.c` + `externals` + the `cc` build-dep all go
+away:
 
-## Gate 3, resolved: cirq doesn't need an external scanner at all
+```js
+code_decl: ($) => seq("code", field("language", $.string_literal), field("body", $.code_body)),
+code_body: ($) => nested("{", "}"),   // {"type":"NESTED","open":"{","close":"}"}
+```
 
-The 07-12 dig (and Amos confirming) settled the `code_body` question, and the earlier
-"blocked upstream" note here was wrong twice over:
+Two implementation notes: (a) NESTED must be `TOKEN`-wrapped
+(`{"type":"TOKEN","content":{"type":"NESTED",…}}`) — snark seeds terminals only for direct
+String/Pattern/AutoClose or the content of a token root (`parser.rs:812
+seed_terminal_symbols`); a bare NESTED rule errors `MissingTerminalExpression`. (b) NESTED
+must *start* with `open`, so `code_body` now spans the whole `{ … }` including braces
+rather than the interior — a cleaner grammar.
 
-1. **snark DOES execute external scanners.** Verified at cramt/facet main `ce6a9e03`:
-   `weavy.rs::match_external` (~L11394) builds an `ExternalScanRequest` and calls
-   `ExternalScannerHost::scan` (~L11412) mid-parse, feeding the returned `end_byte`
-   in as a lexer candidate. The `ExternalScannerHost` trait is byte-oriented
-   (`&str` + `byte_position` → `end_byte`), so a *native-Rust* host for `code_body`
-   is ~40 lines with no C/FFI. The spike only diverged because it passed `None` for
-   the scanner (`spike-ts-diff` header says so outright).
-
-2. **But you don't host a scanner either.** snark eliminates ~90% of external
-   scanners with **three declarative lexical primitives** — `RawRuleJson` variants in
-   `snark/src/grammar.rs:255`, tagged by `"type"` in grammar.json (SCREAMING_SNAKE):
-
-   | primitive | grammar.json | what it does |
-   |-----------|-------------|--------------|
-   | `UNTIL`   | `{"type":"UNTIL","markers":[…]}` | raw text up to any marker or EOF (heredocs, line-to-EOL) |
-   | `NESTED`  | `{"type":"NESTED","open":"{","close":"}"}` | **balanced delimiter counting — cirq's `code_body`** |
-   | `AUTO_CLOSE` | `{"type":"AUTO_CLOSE","tag":…,…}` | implicit-close tag stacks (HTML/XML) |
-
-   Lowering path: `GrammarExpr::{Until,Nested,AutoClose}` (parser.rs:4568) →
-   `CompiledLexExpr` → `WeavyLexExpr`. Runtime for NESTED:
-   `lex_match.rs:132 match_nested_delimiters_with_inspection` (called from
-   weavy.rs:13002).
-
-   So cirq's `code_body` becomes a one-liner and `scanner.c` + `externals` + the `cc`
-   build-dep all go away:
-
-   ```js
-   code_decl: ($) => seq("code", field("language", $.string_literal), field("body", $.code_body)),
-   code_body: ($) => nested("{", "}"),   // {"type":"NESTED","open":"{","close":"}"}
-   ```
-
-   Two implementation notes: (a) NESTED must be `TOKEN`-wrapped
-   (`{"type":"TOKEN","content":{"type":"NESTED",…}}`) — snark seeds terminals only for
-   direct String/Pattern/AutoClose or the content of a token root (`parser.rs:812
-   seed_terminal_symbols`); a bare NESTED rule errors `MissingTerminalExpression`.
-   (b) NESTED must *start* with `open`, so `code_body` now spans the whole `{ … }`
-   including braces rather than the interior — a cleaner grammar.
+(If a construct ever genuinely needs imperative scanning, snark's parser also *executes* a
+byte-oriented `ExternalScannerHost` trait mid-parse — `&str` + `byte_position` →
+`end_byte`, `weavy.rs::match_external` — so a native-Rust host is ~40 lines with no
+C/FFI. cirq doesn't need it; and per Amos the intended escape hatch is a declarative
+scanner dialect lowering to weavy/vix IR, not a Rust trait.)
 
 **Proven by `spike-ts-diff` (NESTED variant, 2026-07-12).** The spike parses the `code`
 cases on the snark side through a NESTED grammar (`grammar.nested.json`, regenerated by
