@@ -1,0 +1,12 @@
+[package]
+name = "spike-cirq-ast"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+snark.workspace = true
+facet.workspace = true
+
+[build-dependencies]
+snark-dsl.workspace = true

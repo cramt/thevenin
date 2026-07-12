@@ -1,0 +1,23 @@
+# Isolated spike workspace for the snark + weavy experiment.
+#
+# Kept OUT of the root thevenin workspace (see root Cargo.toml `exclude`) so the
+# main crates stay pinned to facet 0.46 (crates.io) while this sandbox pulls the
+# facet 0.50-rc world that snark/weavy require from Amos' unmerged branch.
+[workspace]
+members = ["spike-weavy", "spike-snark", "spike-cirq-ast", "spike-ts-diff"]
+resolver = "3"
+
+[workspace.dependencies]
+# All four resolve from `main` on Alex's facet fork. That main = facet-rs/main
+# (the merged snark/weavy of PR #2431) + the keyword-escape fix (fork PR #1,
+# also upstreamed as facet-rs/facet#2465), which fixes snark-dsl's
+# `rust_field_name` so the spike parses cirq's real grammar with no build-time
+# `else`-field rename. The fork's main tracks facet-rs/main, so re-sync it and
+# re-run `just check` when upstream moves. Point back at `facet-rs/facet` once the
+# keyword fix + a real snark/snark-dsl release land upstream.
+snark = { git = "https://github.com/cramt/facet", branch = "main" }
+weavy = { git = "https://github.com/cramt/facet", branch = "main" }
+facet = { git = "https://github.com/cramt/facet", branch = "main" }
+# The typed-AST codegen (grammar.js + annotations -> Rust AST + lowering). The
+# `typed-ast` feature pulls boa_engine, so grammar.js runs with no node.
+snark-dsl = { git = "https://github.com/cramt/facet", branch = "main", features = ["typed-ast"] }
