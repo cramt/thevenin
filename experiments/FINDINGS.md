@@ -144,8 +144,22 @@ on hosting the C scanner (next slice below).
 
 ## Not covered (next slices)
 
-- **Host cirq's `scanner.c` in snark** (`snark-scanner-host`) and re-run `spike-ts-diff`
-  — the one thing standing between snark and a full gate-3 pass. Until then `code`
-  blocks with braces are unparseable.
+- **Host cirq's `scanner.c` in snark** and re-run `spike-ts-diff` — the one thing
+  standing between snark and a full gate-3 pass. **Blocked upstream (verified
+  2026-07-12 at cramt/facet main `ce6a9e03`):** snark's *parser* does not yet
+  execute external scanners mid-parse. The parse tables model external tokens
+  (`parser.rs`: `ExternalId`, `ScannerSnapshotId`, valid-symbol sets) and
+  `lexical.rs` derives the valid-external masks, but `runtime_input.rs` never
+  invokes a scanner — no `extern "C"`, no `.scan()` in the parse loop. The only
+  compiled-scanner execution lives in `snark-scanner-host`, a `publish = false`
+  **test crate hardcoded to the reduced-CSS fixture** (CSS symbols + path +
+  `CSS_EXTERNAL_SYMBOL_COUNT = 3` baked in) that proves the tree-sitter ABI in
+  isolation. snark's own `docs/architecture/lexer-scanner-abi.md` names the gap:
+  *"the missing pieces are … hardened lexical automata, parser-state masks,
+  **scanner execution state**, and oracle checks … the right boundary for the
+  next runtime work."* So this slice is not implementable in the thevenin spike;
+  it waits on snark growing a scanner-execution runtime (mask → invoke hosted
+  scanner → consume result token). Until then `code` blocks with braces are
+  unparseable and gate 3 stays partial.
 - weavy's **async suspend/resume lane** (`weavy::r#async`) for `.control`'s `resume`.
 - Comparing the generated AST against hand-written `cirq-ast` field-by-field.
