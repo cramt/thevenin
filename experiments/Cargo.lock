@@ -1248,6 +1248,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "spike-control-diff"
+version = "0.0.0"
+dependencies = [
+ "snark",
+]
+
+[[package]]
 name = "spike-snark"
 version = "0.0.0"
 dependencies = [

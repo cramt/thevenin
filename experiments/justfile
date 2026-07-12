@@ -5,11 +5,16 @@ check:
     cargo run -p spike-snark
     cargo run -p spike-cirq-ast
     cargo run -p spike-ts-diff
+    cargo run -p spike-control-diff
 
 # Differential oracle: snark vs real tree-sitter over the cirq corpus (gate 3).
 # Needs the `tree-sitter` CLI (present in the nix devShell).
 ts-diff:
     cargo run -p spike-ts-diff
+
+# Same differential for cirq-control-grammar (no external scanner — pure structural).
+control-diff:
+    cargo run -p spike-control-diff
 
 # Regenerate the NESTED grammar variant (code_body as snark's declarative NESTED
 # primitive, externals dropped) from the committed cirq grammar.json. Run this if

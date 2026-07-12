@@ -1,7 +1,7 @@
 # snark + weavy spike — findings
 
 Trying Amos' snark/weavy work (facet-rs/facet PR #2431, merged; deps pin `cramt/facet`
-main) against thevenin/cirq, as an exercise + feedback. Four spikes, validated with the
+main) against thevenin/cirq, as an exercise + feedback. Five spikes, validated with the
 commands below:
 
 | crate | what it proves |
@@ -10,6 +10,7 @@ commands below:
 | `spike-snark` | cirq's **existing** tree-sitter `grammar.json` parsed by snark into a 52-node, field-labeled CST (params, if/elseif/else, element_inst, nested analysis). |
 | `spike-cirq-ast` | snark-dsl codegen turns cirq's `grammar.js` (+ a 7-line annotations file) into a **typed, spanned AST** (47 types, 1223 lines) and lowers `conditional.cirq` into it. |
 | `spike-ts-diff` | **differential oracle (gate 3):** snark vs REAL tree-sitter (CLI) over the corpus. 15/15 structural inputs (7 examples + 8 parser probes) match; and `code` blocks — parsed on the snark side via the declarative **NESTED** primitive instead of an external scanner — match `scanner.c` node-for-node on balanced braces. See below. |
+| `spike-control-diff` | same differential for **`cirq-control-grammar`**: snark vs real tree-sitter over the grammar's own 35-case corpus. **35/35 agree, 0 divergence** — the control grammar has no external scanner, so it's a pure structural drop-in with nothing to migrate. |
 
 Everything runs in an isolated nested workspace (`experiments/`, own lockfile),
 excluded from the root so thevenin's crates stay on facet 0.46 while this sandbox
@@ -185,6 +186,20 @@ detail, to be fixed upstream.
 **Bottom line: no snark PR, no scanner.c, no `cc` — `code_body` is `NESTED`, proven
 against the real scanner. The only functional cost is a `}` inside a string/comment/
 template, and that surface is now measured, not guessed.**
+
+## `cirq-control-grammar` — the trivial case (`spike-control-diff`)
+
+The `.control` grammar is the easy migration and needed no work at all. It declares
+**no external scanner** (`externals: []`, no `scanner.c` — just a generated `parser.c`),
+so there's nothing to port to a NESTED/UNTIL primitive; blocks already terminate on the
+`end` keyword via ordinary rules, and the grammar is already well-fielded (`name:`,
+`condition:`, `body:`, `count:` …). `spike-control-diff` runs snark's parse of
+`cirq-control-grammar/src/grammar.json` against the `tree-sitter` CLI over the grammar's
+own committed corpus (`test/corpus/*.txt`): **35/35 cases agree node-for-node, zero
+divergence, first try** — if/else, while, foreach, repeat, echo/set/print/save/measure/
+resume, SPICE-suffix numbers, precedence/right-assoc/dotted-op expressions, and comments.
+Reproduce: `just control-diff`. So snark is a clean structural drop-in for the control
+grammar with no migration cost whatsoever.
 
 ## Not covered (next slices)
 
